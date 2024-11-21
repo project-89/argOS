@@ -1,0 +1,33 @@
+{
+  "name": "tinysim",
+  "version": "1.0.0",
+  "description": "TinySim is a powerful Entity-Component-System (ECS) based framework for simulating intelligent agents in complex environments. Built on BitECS, it provides a flexible, performant foundation for creating realistic agent-based simulations.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "start": "tsx src/examples/basic-conversation.ts",
+    "dev": "tsx watch src/examples/basic-conversation.ts",
+    "test": "jest"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@ai-sdk/google": "^1.0.1",
+    "ai": "^4.0.2",
+    "bitecs": "github:NateTheGreatt/bitecs#next-simple",
+    "chalk": "^5.3.0",
+    "dotenv": "^16.4.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/dotenv": "^6.1.1",
+    "@types/jest": "^29.0.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "tsx": "^4.19.2"
+  },
+  "type": "module"
+}
