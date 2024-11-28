@@ -46,7 +46,7 @@ export const ThinkingSystem = async (world: World) => {
     }
 
     // Keep thought history at a reasonable size (last 10 thoughts)
-    if (Memory.thoughts[eid].length > 10) {
+    if (Memory.thoughts[eid].length > 100) {
       Memory.thoughts[eid].shift();
     }
   }
