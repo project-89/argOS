@@ -5,20 +5,44 @@ export const Agent = {
   systemPrompt: [] as string[], // Base personality/behavior prompt
   active: [] as number[], // Is agent currently active
   platform: [] as string[], // Which platform this agent operates on
+  appearance: [] as string[], // Physical description of the agent
 };
 
-// Communication capabilities
-export const AgentCommunication = {
-  currentConversation: [] as number[], // Current conversation ID
-  lastResponse: [] as string[], // Last message sent
-  context: [] as string[], // Current conversation context
-  messageHistory: [] as string[][], // Recent message history
+// Memory component for storing thoughts and experiences
+export const Memory = {
+  thoughts: [] as string[][], // Array of thought history
+  lastThought: [] as string[], // Most recent thought
+  experiences: [] as Array<{
+    type: string;
+    content: string;
+    timestamp: number;
+  }>[],
 };
 
-// Cognitive state
-export const AgentCognition = {
-  goals: [] as string[][], // Array of goals for each agent
-  memory: [] as string[][], // Long-term memory storage
-  attention: [] as number[], // What the agent is focused on
-  emotionalState: [] as string[], // Current emotional state
+// Room component for spatial organization
+export const Room = {
+  id: [] as string[], // Room identifier
+  name: [] as string[], // Room name
+  description: [] as string[], // Room description
+  occupants: [] as number[][], // Array of entity IDs in the room
+};
+
+// Perception component for storing what an agent perceives
+export const Perception = {
+  currentStimuli: [] as any[][], // Current perceptions/stimuli
+  lastProcessedTime: [] as number[], // When we last processed perceptions
+};
+
+// Action component for handling agent actions and tool usage
+export const Action = {
+  pendingAction: [] as ({
+    tool: string;
+    parameters: Record<string, string>;
+  } | null)[],
+  lastActionTime: [] as number[],
+  availableTools: [] as Array<{
+    name: string;
+    description: string;
+    parameters: string[];
+  }>[],
 };

@@ -1,18 +1,24 @@
 import { World } from "../types/bitecs";
-import { PerceptionSystem } from "../systems/PerceptionSystem";
 import { ConversationSystem } from "../systems/ConversationSystem";
 import { logger } from "../utils/logger";
+import { ThinkingSystem } from "../systems/CognitionSystem";
+
+type Systems = (world: World) => Promise<World>;
 
 export class SimulationRuntime {
   private world: World;
   private isRunning: boolean = false;
   private updateInterval: number = 1000; // 1 second default
-
-  constructor(world: World, config?: { updateInterval?: number }) {
+  private systems: Systems[] = [];
+  constructor(
+    world: World,
+    config?: { updateInterval?: number; systems: Systems[] }
+  ) {
     this.world = world;
     if (config?.updateInterval) {
       this.updateInterval = config.updateInterval;
     }
+    this.systems = config?.systems || [];
   }
 
   async start() {
@@ -31,8 +37,9 @@ export class SimulationRuntime {
 
     try {
       // Run systems in order
-      await PerceptionSystem(this.world);
-      await ConversationSystem(this.world);
+      for (const system of this.systems) {
+        await system(this.world);
+      }
 
       // Schedule next update
       setTimeout(() => this.update(), this.updateInterval);
