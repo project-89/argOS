@@ -1,10 +1,10 @@
-# TinySim System Examples and Categories
+# ArgOS System Examples and Categories
 
-While our system architecture document explains the theory, this guide provides concrete examples and a comprehensive listing of TinySim's systems. Understanding these systems and how they work together is crucial for building sophisticated simulations.
+While our system architecture document explains the theory, this guide provides concrete examples and a comprehensive listing of ArgOS's systems. Understanding these systems and how they work together is crucial for building sophisticated simulations.
 
 ## Core Processing Systems
 
-These fundamental systems handle the basic operations that keep our simulation running. They're the workhorses of TinySim, processing the most frequently updated components.
+These fundamental systems handle the basic operations that keep our simulation running. They're the workhorses of ArgOS, processing the most frequently updated components.
 
 ### MovementSystem
 
@@ -59,7 +59,7 @@ Handles hierarchical transformations when entities are parented to others. For e
 
 ## Agent Systems
 
-Agent systems are where TinySim's sophistication really shines. These systems work together to create believable, intelligent behavior.
+Agent systems are where ArgOS's sophistication really shines. These systems work together to create believable, intelligent behavior.
 
 ### CognitiveSystem
 
@@ -199,4 +199,4 @@ During a conversation between agents:
 5. **DecisionSystem** chooses responses
 6. **CommunicationSystem** handles the interaction
 
-These examples show how TinySim's systems work together to create complex, emergent behaviors from simple, focused components.
+These examples show how ArgOS's systems work together to create complex, emergent behaviors from simple, focused components.

@@ -1,6 +1,6 @@
-# Tool Interaction and API Usage in TinySim
+# Tool Interaction and API Usage in ArgOS
 
-TinySim agents can interact with real-world tools and APIs through a specialized tool interaction system. This system bridges the gap between the agent's cognitive processes and actual tool functionality.
+ArgOS agents can interact with real-world tools and APIs through a specialized tool interaction system. This system bridges the gap between the agent's cognitive processes and actual tool functionality.
 
 ## Tool Abstraction Layer
 

@@ -1,6 +1,6 @@
-# Story Continuation in TinySim
+# Story Continuation in ArgOS
 
-Story continuation in TinySim represents how agents maintain coherent narratives of their experiences and use these to guide future behavior. This isn't just about remembering what happened - it's about understanding the narrative flow of events and using that understanding to generate appropriate continuations of ongoing situations.
+Story continuation in ArgOS represents how agents maintain coherent narratives of their experiences and use these to guide future behavior. This isn't just about remembering what happened - it's about understanding the narrative flow of events and using that understanding to generate appropriate continuations of ongoing situations.
 
 ## Narrative Understanding
 

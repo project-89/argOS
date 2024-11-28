@@ -1,6 +1,6 @@
-# Story Continuation Integration in TinySim
+# Story Continuation Integration in ArgOS
 
-The story continuation system sits at a fascinating intersection in TinySim's cognitive architecture. While it might appear to be a separate system, it's actually deeply integrated into the agent's internal cognitive processes, functioning as a bridge between perception, memory, and action generation.
+The story continuation system sits at a fascinating intersection in ArgOS's cognitive architecture. While it might appear to be a separate system, it's actually deeply integrated into the agent's internal cognitive processes, functioning as a bridge between perception, memory, and action generation.
 
 ## Position in the Cognitive Stack
 

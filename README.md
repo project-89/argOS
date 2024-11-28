@@ -1,10 +1,10 @@
-# Project 89 - TinySim
+# Project 89 - ArgOS
 
 A sophisticated agent simulation system built on BitECS, featuring autonomous agents with advanced cognitive architectures, capable of dynamic interactions, self-spawning, and emergent narrative generation.
 
 ## Overview
 
-TinySim is an experimental platform for creating and running autonomous agent simulations. It uses a custom cognitive architecture that enables agents to:
+ArgOS is an experimental platform for creating and running autonomous agent simulations. It uses a custom cognitive architecture that enables agents to:
 
 - Process sensory input and context
 - Maintain different types of memory (working, episodic, semantic, procedural)

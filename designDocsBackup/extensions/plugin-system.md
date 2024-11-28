@@ -1,10 +1,10 @@
-# TinySim Plugin Architecture
+# ArgOS Plugin Architecture
 
-The Plugin Architecture in TinySim provides a powerful and flexible way to extend the simulation's capabilities. Rather than modifying core systems, developers can create plugins that seamlessly integrate new behaviors, components, and systems.
+The Plugin Architecture in ArgOS provides a powerful and flexible way to extend the simulation's capabilities. Rather than modifying core systems, developers can create plugins that seamlessly integrate new behaviors, components, and systems.
 
 ## Understanding Plugins
 
-A plugin in TinySim isn't just a module of code - it's a self-contained extension that can:
+A plugin in ArgOS isn't just a module of code - it's a self-contained extension that can:
 
 - Add new components and systems
 - Modify existing system behavior
@@ -103,7 +103,7 @@ Here's an example of creating a custom plugin:
 
 ## Plugin Integration
 
-Plugins integrate deeply with TinySim's core systems:
+Plugins integrate deeply with ArgOS's core systems:
 
 ### Component Integration
 
@@ -185,7 +185,7 @@ Plugins can communicate with each other and core systems:
 ### Plugin Development Guidelines
 
 1. **Isolation**: Plugins should be self-contained and minimize dependencies
-2. **Performance**: Follow TinySim's performance patterns
+2. **Performance**: Follow ArgOS's performance patterns
 3. **Documentation**: Provide clear documentation and examples
 4. **Testing**: Include comprehensive tests
 5. **Version Control**: Use semantic versioning

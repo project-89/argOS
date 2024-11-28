@@ -2,11 +2,11 @@
 
 ## Emotional Learning
 
-One of the most sophisticated aspects of TinySim's emotional system is how agents learn from their emotional experiences. This isn't just about remembering what happened - it's about developing emotional intelligence and adapting emotional responses based on experience.
+One of the most sophisticated aspects of ArgOS's emotional system is how agents learn from their emotional experiences. This isn't just about remembering what happened - it's about developing emotional intelligence and adapting emotional responses based on experience.
 
 ### The Learning Process
 
-Emotional learning in TinySim mirrors how humans develop emotional intelligence. When an agent encounters a situation, they don't just react - they learn from the experience. This learning happens through several mechanisms:
+Emotional learning in ArgOS mirrors how humans develop emotional intelligence. When an agent encounters a situation, they don't just react - they learn from the experience. This learning happens through several mechanisms:
 
     export const EmotionalLearningSystem = defineSystem((world) => {
         const entities = query(world, [

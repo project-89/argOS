@@ -1,10 +1,10 @@
-# Emotional Processing in TinySim
+# Emotional Processing in ArgOS
 
-The emotional system in TinySim goes far beyond simple state tracking. Instead of treating emotions as mere tags or numerical values, we've created a sophisticated emotional processing system that models how emotions arise, interact, evolve, and influence behavior. This system is crucial for creating agents that feel genuinely alive and respond believably to their experiences.
+The emotional system in ArgOS goes far beyond simple state tracking. Instead of treating emotions as mere tags or numerical values, we've created a sophisticated emotional processing system that models how emotions arise, interact, evolve, and influence behavior. This system is crucial for creating agents that feel genuinely alive and respond believably to their experiences.
 
-## Understanding Emotions in TinySim
+## Understanding Emotions in ArgOS
 
-Real emotions aren't discrete states - they're complex, overlapping patterns of response that emerge from our experiences and influence our perception, decision-making, and behavior. TinySim's emotional system mirrors this complexity by modeling emotions as dynamic, interconnected processes rather than simple states.
+Real emotions aren't discrete states - they're complex, overlapping patterns of response that emerge from our experiences and influence our perception, decision-making, and behavior. ArgOS's emotional system mirrors this complexity by modeling emotions as dynamic, interconnected processes rather than simple states.
 
 When an agent experiences an event, their emotional response isn't just a direct mapping from stimulus to emotion. Instead, the emotional system considers:
 

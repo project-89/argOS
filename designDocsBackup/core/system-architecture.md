@@ -1,10 +1,10 @@
-# System Architecture in TinySim
+# System Architecture in ArgOS
 
-The system architecture in TinySim represents the behavioral engine of our simulation. While components store data and entities provide identity, systems are where the magic happens - they're responsible for bringing our simulation to life through carefully orchestrated processing of component data.
+The system architecture in ArgOS represents the behavioral engine of our simulation. While components store data and entities provide identity, systems are where the magic happens - they're responsible for bringing our simulation to life through carefully orchestrated processing of component data.
 
 ## Understanding Systems
 
-In TinySim, a system isn't just a function that processes data - it's a specialized piece of logic that operates within specific constraints and guarantees. Think of systems like specialized workers in a factory, each with their own specific job but working together in a carefully choreographed dance.
+In ArgOS, a system isn't just a function that processes data - it's a specialized piece of logic that operates within specific constraints and guarantees. Think of systems like specialized workers in a factory, each with their own specific job but working together in a carefully choreographed dance.
 
 Each system follows what we call the "Pure Processing Principle": it should be possible to run the system multiple times on the same input and get the same output, with no hidden state or side effects. This principle is crucial for debugging, testing, and parallel processing.
 
@@ -108,7 +108,7 @@ Commands provide:
 
 ## System Development
 
-Creating new systems in TinySim follows a clear pattern:
+Creating new systems in ArgOS follows a clear pattern:
 
 ### System Template
 

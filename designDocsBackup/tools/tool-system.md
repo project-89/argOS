@@ -1,10 +1,10 @@
-# Tool System in TinySim
+# Tool System in ArgOS
 
-The tool system in TinySim represents a sophisticated approach to modeling how agents interact with and use objects in their environment. Unlike simple inventory systems, our tool system models not just possession, but understanding, capability, and mastery of tools.
+The tool system in ArgOS represents a sophisticated approach to modeling how agents interact with and use objects in their environment. Unlike simple inventory systems, our tool system models not just possession, but understanding, capability, and mastery of tools.
 
 ## Understanding Tools
 
-In TinySim, a tool isn't just an object - it's a capability enhancer that changes what an agent can do. When an agent picks up a hammer, they don't just possess a hammer-shaped object; they gain the ability to drive nails, remove nails, and potentially even use it as a lever or weight. This rich modeling of tool capabilities enables emergent behaviors and creative tool use.
+In ArgOS, a tool isn't just an object - it's a capability enhancer that changes what an agent can do. When an agent picks up a hammer, they don't just possess a hammer-shaped object; they gain the ability to drive nails, remove nails, and potentially even use it as a lever or weight. This rich modeling of tool capabilities enables emergent behaviors and creative tool use.
 
 ## Tool Components
 
@@ -93,7 +93,7 @@ This sophisticated system models how agents learn to use tools better over time:
 
 ## Tool Categories
 
-TinySim supports various categories of tools, each with their own characteristics:
+ArgOS supports various categories of tools, each with their own characteristics:
 
 ### Physical Tools
 
@@ -168,7 +168,7 @@ Agents can learn about tools from other agents:
 
 ## Integration with Other Systems
 
-The tool system integrates deeply with other TinySim systems:
+The tool system integrates deeply with other ArgOS systems:
 
 ### Cognitive Integration
 
@@ -212,4 +212,4 @@ Let's look at some complex tool use scenarios:
 
     examples/tools/tool_innovation.ts
 
-These examples demonstrate how the tool system enables rich, emergent behaviors in TinySim simulations.
+These examples demonstrate how the tool system enables rich, emergent behaviors in ArgOS simulations.

@@ -1,10 +1,10 @@
-# Cognitive Flow in TinySim: From Stimulus to Response
+# Cognitive Flow in ArgOS: From Stimulus to Response
 
-Understanding how information flows through TinySim's cognitive architecture is crucial for grasping how our agents think and behave. This document provides a detailed exploration of the complete cognitive pipeline, from initial stimulus to final action.
+Understanding how information flows through ArgOS's cognitive architecture is crucial for grasping how our agents think and behave. This document provides a detailed exploration of the complete cognitive pipeline, from initial stimulus to final action.
 
 ## The Nature of Stimuli
 
-In TinySim, stimuli aren't simple data points - they're rich information packages that can originate from multiple sources:
+In ArgOS, stimuli aren't simple data points - they're rich information packages that can originate from multiple sources:
 
 External Stimuli come from the environment:
 

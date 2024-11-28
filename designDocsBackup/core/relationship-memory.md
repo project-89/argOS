@@ -1,12 +1,12 @@
-# Relationship Memory in TinySim
+# Relationship Memory in ArgOS
 
-One of the most sophisticated aspects of TinySim's relationship system is how it handles relationship memory. Unlike simple relationship systems that only track current states, our relationship memory system creates a rich tapestry of shared experiences, emotional associations, and learned patterns that influence how entities interact over time.
+One of the most sophisticated aspects of ArgOS's relationship system is how it handles relationship memory. Unlike simple relationship systems that only track current states, our relationship memory system creates a rich tapestry of shared experiences, emotional associations, and learned patterns that influence how entities interact over time.
 
 ## Understanding Relationship Memory
 
 Think about how human relationships work - they're not just about current feelings or status, but about the accumulated history of interactions, shared experiences, and learned patterns of behavior. When you interact with a close friend, your behavior is influenced not just by your current relationship status, but by years of shared experiences, inside jokes, learned preferences, and mutual understanding.
 
-TinySim models this complexity through a sophisticated relationship memory system that operates at multiple levels:
+ArgOS models this complexity through a sophisticated relationship memory system that operates at multiple levels:
 
 ### Episodic Relationship Memory
 

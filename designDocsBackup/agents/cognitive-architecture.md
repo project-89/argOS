@@ -1,6 +1,6 @@
-# TinySim Cognitive Architecture
+# ArgOS Cognitive Architecture
 
-The cognitive architecture in TinySim represents one of its most sophisticated subsystems. While traditional agent simulations often treat agents as simple state machines, our cognitive architecture creates rich internal mental states that drive believable, emergent behaviors.
+The cognitive architecture in ArgOS represents one of its most sophisticated subsystems. While traditional agent simulations often treat agents as simple state machines, our cognitive architecture creates rich internal mental states that drive believable, emergent behaviors.
 
 ## Core Mental Components
 
@@ -8,7 +8,7 @@ The cognitive system is built from several key component types that work togethe
 
 ### Memory Component
 
-Memory in TinySim isn't just a simple data store - it's structured to mirror how human memory actually works. We implement both episodic and semantic memory systems:
+Memory in ArgOS isn't just a simple data store - it's structured to mirror how human memory actually works. We implement both episodic and semantic memory systems:
 
 Episodic Memory stores personal experiences and events. For example, when an agent interacts with another agent, the memory component creates an "episode" containing:
 
@@ -26,7 +26,7 @@ Semantic Memory holds general knowledge and facts about the world. This includes
 
 ### Emotional Component
 
-Emotions in TinySim aren't just tags - they're dynamic states that influence decision-making and behavior. The emotional system tracks:
+Emotions in ArgOS aren't just tags - they're dynamic states that influence decision-making and behavior. The emotional system tracks:
 
 Current Emotional State - A weighted combination of base emotions like:
 
@@ -57,7 +57,7 @@ This system helps create more realistic behavior by limiting what an agent can p
 
 ### Goal Component
 
-Goals in TinySim are hierarchical and dynamic. The goal system maintains:
+Goals in ArgOS are hierarchical and dynamic. The goal system maintains:
 
 Goal Hierarchy:
 

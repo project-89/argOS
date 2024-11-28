@@ -1,6 +1,6 @@
-# Perception System in TinySim
+# Perception System in ArgOS
 
-The Perception System represents how agents sense and understand their environment. Unlike simple radius-based awareness, TinySim's perception system creates rich, contextual awareness that mirrors how real intelligence processes sensory information.
+The Perception System represents how agents sense and understand their environment. Unlike simple radius-based awareness, ArgOS's perception system creates rich, contextual awareness that mirrors how real intelligence processes sensory information.
 
 ## Understanding Perception
 

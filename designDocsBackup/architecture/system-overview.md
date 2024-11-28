@@ -1,14 +1,14 @@
-# TinySim: A Comprehensive System Overview
+# ArgOS: A Comprehensive System Overview
 
-TinySim represents a new approach to simulating intelligent agents by combining high-performance Entity-Component-System (ECS) architecture with sophisticated cognitive modeling. Let's explore how all the pieces work together to create rich, emergent behaviors.
+ArgOS represents a new approach to simulating intelligent agents by combining high-performance Entity-Component-System (ECS) architecture with sophisticated cognitive modeling. Let's explore how all the pieces work together to create rich, emergent behaviors.
 
 ## The Core Architecture
 
-At its heart, TinySim is built on a fundamental insight: complex behavior emerges from the interaction of simple, well-defined systems. Rather than trying to model intelligence as a monolithic system, we break it down into distinct, interacting components that each handle specific aspects of cognition and behavior.
+At its heart, ArgOS is built on a fundamental insight: complex behavior emerges from the interaction of simple, well-defined systems. Rather than trying to model intelligence as a monolithic system, we break it down into distinct, interacting components that each handle specific aspects of cognition and behavior.
 
 ### The Data Foundation
 
-Everything in TinySim starts with how we store and manage data. Instead of traditional object-oriented approaches where each agent would be a complex object with methods and properties, we separate data (components) from behavior (systems). This isn't just a technical choice - it fundamentally shapes how we can model and process agent behavior.
+Everything in ArgOS starts with how we store and manage data. Instead of traditional object-oriented approaches where each agent would be a complex object with methods and properties, we separate data (components) from behavior (systems). This isn't just a technical choice - it fundamentally shapes how we can model and process agent behavior.
 
 For example, when an agent forms a memory, we don't store that memory as a property of an agent object. Instead:
 
@@ -65,7 +65,7 @@ When the simulation runs, it follows a sophisticated but deterministic processin
 
 ### The Time System
 
-Time in TinySim isn't just a simple counter - it's a sophisticated system that manages multiple timescales and ensures causality is maintained. The time system:
+Time in ArgOS isn't just a simple counter - it's a sophisticated system that manages multiple timescales and ensures causality is maintained. The time system:
 
 1. Manages the main simulation tick rate
 2. Handles scheduled events and delays
@@ -75,11 +75,11 @@ Time in TinySim isn't just a simple counter - it's a sophisticated system that m
 
 ## Cognitive Architecture in Detail
 
-The cognitive architecture is where TinySim really shines. Instead of using simple decision trees or state machines, we model cognition as an emergent property of interacting systems:
+The cognitive architecture is where ArgOS really shines. Instead of using simple decision trees or state machines, we model cognition as an emergent property of interacting systems:
 
 ### Memory Systems
 
-Memory in TinySim works much like human memory:
+Memory in ArgOS works much like human memory:
 
 1. **Short-term Memory Buffer**
 
@@ -154,7 +154,7 @@ The decision system integrates information from all other systems:
 
 ## Social Architecture
 
-Social interaction in TinySim is particularly sophisticated:
+Social interaction in ArgOS is particularly sophisticated:
 
 ### Relationship System
 

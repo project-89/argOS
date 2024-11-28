@@ -1,12 +1,12 @@
-# ECS Architecture in TinySim
+# ECS Architecture in ArgOS
 
-Entity-Component-System (ECS) architecture forms the backbone of TinySim, but our implementation goes beyond traditional ECS patterns to support sophisticated agent simulation. By building on BitECS, we've created a system that's both highly performant and remarkably flexible.
+Entity-Component-System (ECS) architecture forms the backbone of ArgOS, but our implementation goes beyond traditional ECS patterns to support sophisticated agent simulation. By building on BitECS, we've created a system that's both highly performant and remarkably flexible.
 
-## Understanding ECS in TinySim
+## Understanding ECS in ArgOS
 
 Traditional object-oriented programming encourages us to think of objects as self-contained units with both data and behavior. A typical agent might be a class with properties like position and methods like move(). While intuitive, this approach becomes problematic at scale, especially when simulating thousands of agents with complex behaviors.
 
-TinySim's ECS architecture takes a radically different approach. Instead of bundling data and behavior together, we split them into three distinct concepts:
+ArgOS's ECS architecture takes a radically different approach. Instead of bundling data and behavior together, we split them into three distinct concepts:
 
 Entities are simply numeric identifiers - nothing more. Think of them as the social security numbers of our simulation world. They don't contain data or behavior; they just provide a way to reference specific simulation elements. This simplicity is powerful - it means entities have zero overhead and can be created or destroyed instantly.
 
@@ -16,7 +16,7 @@ Systems are where behavior lives. They operate on sets of components, processing
 
 ## Component Design
 
-Component design in TinySim requires a different mindset from traditional OOP. Let's look at a concrete example:
+Component design in ArgOS requires a different mindset from traditional OOP. Let's look at a concrete example:
 
 Traditional OOP approach:
 
@@ -37,7 +37,7 @@ Memory Efficiency: Components only exist for entities that need them, and their 
 
 ## System Implementation
 
-Systems in TinySim are pure functions that operate on sets of components. This purity makes them predictable, testable, and easy to optimize. Here's how a typical system works:
+Systems in ArgOS are pure functions that operate on sets of components. This purity makes them predictable, testable, and easy to optimize. Here's how a typical system works:
 
 1. Query Phase: The system requests entities with specific component combinations. For example, a movement system might query for entities with both Position and Velocity components.
 
@@ -51,7 +51,7 @@ This approach enables sophisticated behaviors while maintaining high performance
 
 ## Relationships and Hierarchies
 
-One common concern with ECS is handling relationships between entities. TinySim solves this through a sophisticated relationship component system that supports:
+One common concern with ECS is handling relationships between entities. ArgOS solves this through a sophisticated relationship component system that supports:
 
 Parent-Child Relationships: Essential for tool usage, inventory systems, and spatial hierarchies.
 

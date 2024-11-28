@@ -1,10 +1,10 @@
-# Event System in TinySim
+# Event System in ArgOS
 
-The Event System is the nervous system of our simulation, enabling complex interactions and coordinated behaviors across all other systems. Unlike simple message passing, TinySim's event system provides sophisticated event propagation, temporal management, and causal tracking.
+The Event System is the nervous system of our simulation, enabling complex interactions and coordinated behaviors across all other systems. Unlike simple message passing, ArgOS's event system provides sophisticated event propagation, temporal management, and causal tracking.
 
 ## Understanding Events
 
-In TinySim, events aren't just messages - they're rich objects that capture the full context of what's happening in the simulation. When an agent picks up a tool, for instance, this isn't just a state change. It's an event that carries information about:
+In ArgOS, events aren't just messages - they're rich objects that capture the full context of what's happening in the simulation. When an agent picks up a tool, for instance, this isn't just a state change. It's an event that carries information about:
 
 - Who initiated the action
 - What exactly happened
@@ -128,7 +128,7 @@ This system handles how events spread through the simulation:
 
 ## Event Types and Hierarchies
 
-Events in TinySim are organized into a sophisticated hierarchy:
+Events in ArgOS are organized into a sophisticated hierarchy:
 
 ### Physical Events
 

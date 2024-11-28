@@ -1,6 +1,6 @@
-# Relationship System in TinySim
+# Relationship System in ArgOS
 
-Understanding relationships between entities is fundamental to creating believable simulations. In TinySim, relationships aren't just simple references between entities - they're rich, dynamic structures that capture the complex ways entities can interact and influence each other.
+Understanding relationships between entities is fundamental to creating believable simulations. In ArgOS, relationships aren't just simple references between entities - they're rich, dynamic structures that capture the complex ways entities can interact and influence each other.
 
 ## The Philosophy of Relationships
 
@@ -8,7 +8,7 @@ Traditional game engines often treat relationships as simple parent-child hierar
 
 Think about how humans form and maintain relationships. A friendship isn't just a binary state - it has a history, an emotional context, shared experiences, and varying levels of trust and intimacy. A tool isn't just "owned" by an agent - the agent has learned how to use it, has memories associated with it, and might even have emotional attachments to it.
 
-TinySim's relationship system captures these nuances by treating relationships themselves as first-class entities in our ECS architecture. This means relationships can have their own components, can be processed by systems, and can evolve over time just like any other aspect of our simulation.
+ArgOS's relationship system captures these nuances by treating relationships themselves as first-class entities in our ECS architecture. This means relationships can have their own components, can be processed by systems, and can evolve over time just like any other aspect of our simulation.
 
 ## Relationship as Components
 
@@ -89,7 +89,7 @@ For example, if Agent A trusts Agent B, and Agent B trusts Agent C, this might i
 
 ## Emotional Context
 
-Relationships in TinySim aren't just logical connections - they have emotional weight. When an agent interacts with another agent or object they have a relationship with, their emotional state is influenced by that relationship:
+Relationships in ArgOS aren't just logical connections - they have emotional weight. When an agent interacts with another agent or object they have a relationship with, their emotional state is influenced by that relationship:
 
     export const EmotionalContextSystem = defineSystem((world) => {
         const interactions = query(world, [Interaction, Participant])

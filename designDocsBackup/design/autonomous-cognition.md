@@ -1,10 +1,10 @@
-# Autonomous Cognition in TinySim
+# Autonomous Cognition in ArgOS
 
-TinySim's approach to autonomous cognition represents a significant advancement in agent simulation. Rather than relying on scripted behaviors or simple state machines, we've created a system where genuine autonomous thinking emerges from the interaction of sophisticated cognitive subsystems.
+ArgOS's approach to autonomous cognition represents a significant advancement in agent simulation. Rather than relying on scripted behaviors or simple state machines, we've created a system where genuine autonomous thinking emerges from the interaction of sophisticated cognitive subsystems.
 
 ## The Nature of Autonomous Thought
 
-In traditional AI systems, "thinking" is often just a sequence of predefined responses to stimuli. TinySim takes a radically different approach. Just as human thoughts arise from the complex interplay of emotions, memories, goals, and current context, our agents' thoughts emerge from the dynamic interaction of multiple cognitive systems.
+In traditional AI systems, "thinking" is often just a sequence of predefined responses to stimuli. ArgOS takes a radically different approach. Just as human thoughts arise from the complex interplay of emotions, memories, goals, and current context, our agents' thoughts emerge from the dynamic interaction of multiple cognitive systems.
 
 When an agent encounters a situation, they don't just process it through a decision tree. Instead, the experience flows through multiple layers of cognitive processing, each adding depth and context to the agent's understanding and response.
 
@@ -20,19 +20,19 @@ Simultaneously, the emotional system responds to the discovery. Perhaps exciteme
 
 ## Spontaneous Thought Generation
 
-One of TinySim's most sophisticated features is its ability to generate genuine spontaneous thoughts. These aren't random - they emerge naturally from the agent's current state and history. An agent might suddenly remember a relevant past experience, realize a new way to use a tool, or generate a novel goal based on recognized opportunities.
+One of ArgOS's most sophisticated features is its ability to generate genuine spontaneous thoughts. These aren't random - they emerge naturally from the agent's current state and history. An agent might suddenly remember a relevant past experience, realize a new way to use a tool, or generate a novel goal based on recognized opportunities.
 
 This process mirrors how human thoughts often seem to "pop into our heads." The thought generation system constantly monitors the agent's state - their goals, emotions, recent experiences, and current context. When certain patterns or connections reach a threshold of activation, new thoughts emerge.
 
 ## The Role of Goals
 
-Goals in TinySim aren't just task lists - they're dynamic structures that evolve with the agent's experiences and understanding. An initial goal like "explore the environment" might spawn sub-goals based on discoveries, merge with other goals when synergies are recognized, or transform entirely when new opportunities are perceived.
+Goals in ArgOS aren't just task lists - they're dynamic structures that evolve with the agent's experiences and understanding. An initial goal like "explore the environment" might spawn sub-goals based on discoveries, merge with other goals when synergies are recognized, or transform entirely when new opportunities are perceived.
 
 The goal system maintains a complex hierarchy of objectives, from immediate tasks to long-term aspirations. These goals actively influence perception (directing attention to relevant features), memory retrieval (surfacing relevant past experiences), and emotional state (generating satisfaction or frustration based on progress).
 
 ## Emotional Intelligence
 
-Emotions in TinySim serve as more than just response modifiers. They're an integral part of the cognitive process, influencing:
+Emotions in ArgOS serve as more than just response modifiers. They're an integral part of the cognitive process, influencing:
 
 Memory Formation and Recall: Strong emotions make memories more vivid and easier to recall, just as they do in human cognition.
 
@@ -44,7 +44,7 @@ Learning: Emotional context helps determine what experiences are worth rememberi
 
 ## The Integration Challenge
 
-Creating truly autonomous cognition requires careful balance. Too much structure leads to rigid, predictable behavior. Too little structure results in chaos. TinySim achieves this balance through what we call "structured emergence" - providing sophisticated cognitive components that interact in well-defined ways, but allowing the specific patterns of thought and behavior to emerge from these interactions.
+Creating truly autonomous cognition requires careful balance. Too much structure leads to rigid, predictable behavior. Too little structure results in chaos. ArgOS achieves this balance through what we call "structured emergence" - providing sophisticated cognitive components that interact in well-defined ways, but allowing the specific patterns of thought and behavior to emerge from these interactions.
 
 ## Future Directions
 

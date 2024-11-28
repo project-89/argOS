@@ -1,6 +1,6 @@
-# Social System in TinySim
+# Social System in ArgOS
 
-The Social System represents how agents interact, form groups, and influence each other's behavior. Unlike simple interaction systems that just pass messages between agents, TinySim's social system creates rich, emergent social behaviors through the complex interplay of relationships, emotions, status, and group dynamics.
+The Social System represents how agents interact, form groups, and influence each other's behavior. Unlike simple interaction systems that just pass messages between agents, ArgOS's social system creates rich, emergent social behaviors through the complex interplay of relationships, emotions, status, and group dynamics.
 
 ## Understanding Social Interaction
 

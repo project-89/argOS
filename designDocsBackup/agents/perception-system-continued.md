@@ -2,7 +2,7 @@
 
 ## Perceptual Learning
 
-Just as humans learn to perceive their environment more effectively over time, TinySim agents develop their perceptual capabilities through experience:
+Just as humans learn to perceive their environment more effectively over time, ArgOS agents develop their perceptual capabilities through experience:
 
 ### PerceptualLearningSystem
 

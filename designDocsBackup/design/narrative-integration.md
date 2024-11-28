@@ -1,8 +1,8 @@
-# Narrative Integration in TinySim
+# Narrative Integration in ArgOS
 
 ## Understanding Narrative Flow
 
-In TinySim, narrative and story continuation aren't separate systems that get "called" - they emerge naturally from how agents process and respond to their experiences. Think of it like human consciousness - we don't explicitly decide to "continue our story"; our actions and responses naturally flow from our understanding of our current situation, memories, and goals.
+In ArgOS, narrative and story continuation aren't separate systems that get "called" - they emerge naturally from how agents process and respond to their experiences. Think of it like human consciousness - we don't explicitly decide to "continue our story"; our actions and responses naturally flow from our understanding of our current situation, memories, and goals.
 
 ## The Narrative Loop
 

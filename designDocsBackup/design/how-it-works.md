@@ -1,10 +1,10 @@
-# How TinySim Actually Works: A Deep Dive
+# How ArgOS Actually Works: A Deep Dive
 
-Let's walk through exactly how TinySim processes information and generates behavior, from the moment a stimulus enters the system to the final output of agent actions.
+Let's walk through exactly how ArgOS processes information and generates behavior, from the moment a stimulus enters the system to the final output of agent actions.
 
 ## The Core Loop
 
-At its heart, TinySim operates on a continuous loop of:
+At its heart, ArgOS operates on a continuous loop of:
 
 1. Receiving input (stimuli, events, changes in environment)
 2. Processing that input through various cognitive and emotional systems
@@ -44,7 +44,7 @@ This stimulus package gets processed through multiple layers:
 
 ## The Cognitive Dance
 
-This is where TinySim's sophistication really shows. Rather than simply running through a decision tree, the enriched stimulus triggers a complex interplay of systems:
+This is where ArgOS's sophistication really shows. Rather than simply running through a decision tree, the enriched stimulus triggers a complex interplay of systems:
 
 ### Memory Activation
 
@@ -76,7 +76,7 @@ The agent's goals actively participate in processing:
 
 ## Response Generation
 
-This is where TinySim really differs from simpler systems. Responses emerge from the interaction of all these systems rather than being selected from a predefined list.
+This is where ArgOS really differs from simpler systems. Responses emerge from the interaction of all these systems rather than being selected from a predefined list.
 
 ### The Emergence Process
 
@@ -153,6 +153,6 @@ This complex process creates agents that:
 - Develop meaningful relationships
 - Pursue goals effectively
 
-Rather than feeling like simple automatons, TinySim agents exhibit rich, emergent behavior that arises from the sophisticated interaction of these systems.
+Rather than feeling like simple automatons, ArgOS agents exhibit rich, emergent behavior that arises from the sophisticated interaction of these systems.
 
 [Continue with specific examples and implementation details...]

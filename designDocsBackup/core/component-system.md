@@ -1,10 +1,10 @@
-# Component System in TinySim
+# Component System in ArgOS
 
-The component system is where TinySim really shines in terms of both performance and flexibility. While many ECS implementations treat components as simple data bags, we've created a sophisticated component system that enables complex behaviors while maintaining the performance benefits of data-oriented design.
+The component system is where ArgOS really shines in terms of both performance and flexibility. While many ECS implementations treat components as simple data bags, we've created a sophisticated component system that enables complex behaviors while maintaining the performance benefits of data-oriented design.
 
 ## Core Component Philosophy
 
-Think of components in TinySim not as properties of objects, but as aspects of existence. In the real world, an object doesn't "have" a position - it exists at a position. It doesn't "have" a velocity - it is in motion. This philosophical shift helps us design more efficient and logical component structures.
+Think of components in ArgOS not as properties of objects, but as aspects of existence. In the real world, an object doesn't "have" a position - it exists at a position. It doesn't "have" a velocity - it is in motion. This philosophical shift helps us design more efficient and logical component structures.
 
 When we model components this way, we naturally arrive at a Structure of Arrays (SoA) design rather than an Array of Structures (AoS). This isn't just a technical detail - it fundamentally changes how we think about and process data in our simulation.
 
@@ -71,7 +71,7 @@ By treating relationships as components, we can:
 
 ## Component Lifecycle
 
-Components in TinySim aren't static - they have a sophisticated lifecycle that includes:
+Components in ArgOS aren't static - they have a sophisticated lifecycle that includes:
 
 ### Creation and Initialization
 

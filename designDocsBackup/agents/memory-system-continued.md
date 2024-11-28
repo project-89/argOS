@@ -2,7 +2,7 @@
 
 ## Memory Consolidation Process
 
-Memory consolidation in TinySim mirrors how human brains process and store information. Just as humans consolidate short-term memories into long-term storage during rest periods, our agents undergo sophisticated memory processing that strengthens important memories while allowing less significant ones to fade.
+Memory consolidation in ArgOS mirrors how human brains process and store information. Just as humans consolidate short-term memories into long-term storage during rest periods, our agents undergo sophisticated memory processing that strengthens important memories while allowing less significant ones to fade.
 
 ### ConsolidationSystem
 

@@ -1,12 +1,12 @@
-# Goal System in TinySim
+# Goal System in ArgOS
 
-The Goal System represents how agents form, prioritize, and pursue objectives. Unlike simple task systems where agents work through predefined lists, TinySim's goal system creates dynamic, emergent behavior through a sophisticated interplay of desires, opportunities, and constraints.
+The Goal System represents how agents form, prioritize, and pursue objectives. Unlike simple task systems where agents work through predefined lists, ArgOS's goal system creates dynamic, emergent behavior through a sophisticated interplay of desires, opportunities, and constraints.
 
-## Understanding Goals in TinySim
+## Understanding Goals in ArgOS
 
 In real life, goals aren't just items on a to-do list. They're complex, interconnected desires that compete for attention and resources. A person might simultaneously want to advance their career, maintain relationships, learn new skills, and take care of their health. These goals interact, sometimes supporting each other and sometimes conflicting.
 
-TinySim models this complexity by treating goals as dynamic, evolving structures that exist within a rich context of other goals, emotional states, and environmental conditions. When an agent considers what to do next, they don't just pick the "top" goal - they weigh multiple factors including:
+ArgOS models this complexity by treating goals as dynamic, evolving structures that exist within a rich context of other goals, emotional states, and environmental conditions. When an agent considers what to do next, they don't just pick the "top" goal - they weigh multiple factors including:
 
 - The relative importance of different goals
 - Current opportunities and constraints

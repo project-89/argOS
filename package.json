@@ -1,7 +1,7 @@
 {
-  "name": "tinysim",
+  "name": "argos",
   "version": "1.0.0",
-  "description": "TinySim is a powerful Entity-Component-System (ECS) based framework for simulating intelligent agents in complex environments. Built on BitECS, it provides a flexible, performant foundation for creating realistic agent-based simulations.",
+  "description": "ArgOS is a powerful Entity-Component-System (ECS) based framework for simulating intelligent agents in complex environments. Built on BitECS, it provides a flexible, performant foundation for creating realistic agent-based simulations.",
   "main": "index.js",
   "directories": {
     "doc": "docs"

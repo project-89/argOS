@@ -1,8 +1,8 @@
-# Memory System in TinySim
+# Memory System in ArgOS
 
-The memory system in TinySim goes beyond simple data storage to model how intelligent agents actually form, maintain, and use memories. This sophisticated approach enables agents to learn from experiences, develop preferences, and make informed decisions based on past events.
+The memory system in ArgOS goes beyond simple data storage to model how intelligent agents actually form, maintain, and use memories. This sophisticated approach enables agents to learn from experiences, develop preferences, and make informed decisions based on past events.
 
-## Understanding Memory in TinySim
+## Understanding Memory in ArgOS
 
 Human memory isn't like computer storage - it's dynamic, associative, and often imperfect. Our memory system mirrors these characteristics to create more realistic agent behavior. When an agent experiences something, the memory isn't stored as raw data - it's processed, contextualized, and integrated with existing knowledge.
 

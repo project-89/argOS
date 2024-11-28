@@ -1,6 +1,6 @@
-# Decision Making System in TinySim
+# Decision Making System in ArgOS
 
-The Decision Making System represents the cognitive heart of our agents - it's where all our sophisticated subsystems come together to produce meaningful, contextual behavior. Unlike simple decision trees or state machines, TinySim's decision making system creates rich, nuanced choices that emerge from the interplay of emotions, memories, goals, and current context.
+The Decision Making System represents the cognitive heart of our agents - it's where all our sophisticated subsystems come together to produce meaningful, contextual behavior. Unlike simple decision trees or state machines, ArgOS's decision making system creates rich, nuanced choices that emerge from the interplay of emotions, memories, goals, and current context.
 
 ## Understanding Decision Making
 
