@@ -1,134 +1,132 @@
-# TinySim: ECS-Based Agent Simulation Framework
+# Project 89 - TinySim
 
-TinySim is a powerful Entity-Component-System (ECS) based framework for simulating intelligent agents in complex environments. Built on BitECS, it provides a flexible, performant foundation for creating realistic agent-based simulations.
+A sophisticated agent simulation system built on BitECS, featuring autonomous agents with advanced cognitive architectures, capable of dynamic interactions, self-spawning, and emergent narrative generation.
 
-## Key Features
+## Overview
 
-- **ECS Architecture**: Built on BitECS for optimal performance and flexibility
-- **Cognitive Agents**: Rich agent modeling with memory, emotions, and decision-making
-- **Tool System**: Extensible tool framework for agent capabilities
-- **Relationship Management**: Complex social and hierarchical relationships
-- **Event System**: Robust event handling and temporal simulation
-- **Plugin Architecture**: Easy extension through plugins and custom components
+TinySim is an experimental platform for creating and running autonomous agent simulations. It uses a custom cognitive architecture that enables agents to:
 
-## Quick Start
+- Process sensory input and context
+- Maintain different types of memory (working, episodic, semantic, procedural)
+- Execute complex cognitive functions (planning, reasoning, decision making)
+- Generate contextual responses and actions
+- Maintain emotional states and belief systems
+- Interact with other agents and their environment
 
-### Installation
+## Current Features
 
-Install via npm:
+- **Entity Component System (BitECS)**
 
-    npm install tinysim
+  - Efficient agent state management
+  - Component-based architecture
+  - Fast query system
 
-### Basic Usage
+- **Agent Systems**
 
-See examples/quickstart.ts for a basic example:
+  - Thinking System (cognitive processing)
+  - Room System (environment management)
+  - Action System (behavior execution)
+  - Perception System (stimuli processing)
 
-    examples/quickstart.ts
+- **Memory Management**
 
-## Core Concepts
+  - Thought history
+  - Experience tracking
+  - Context awareness
 
-TinySim is built around several key concepts:
+- **Action Framework**
+  - Speech capabilities
+  - Environment interaction
+  - Tool usage system
 
-### Entities
+## Getting Started
 
-- Unique numerical identifiers
-- Can represent agents, objects, or abstract concepts
-- Defined by their components
+1. Install dependencies:
 
-### Components
+```bash
+npm install
+```
 
-- Pure data containers
-- Define entity attributes and capabilities
-- Stored in efficient Structure of Arrays (SoA) format
+2. Run the basic conversation example:
 
-### Systems
+```bash
+npm run start
+```
 
-- Process entities with specific components
-- Handle logic and behavior
-- Run in a deterministic order
+This will start a simulation with two agents in a room, demonstrating basic interaction capabilities.
 
-### Relationships
+## Architecture
 
-- Connect entities meaningfully
-- Support hierarchies and complex social networks
-- Enable dynamic interactions
+The system is built on several core components:
 
-## Documentation Structure
+1. **World State**
 
-The documentation is organized into several key sections:
+   - Resource management
+   - Narrative state tracking
+   - Population management
 
-1. **Core Concepts**
+2. **Agent Components**
 
-   - ECS Architecture Overview
-   - Component System
-   - Entity Relationships
-   - System Architecture
+   - Core agent properties
+   - Memory systems
+   - Action capabilities
+   - Relationship tracking
 
-2. **Agent Architecture**
+3. **Systems**
+   - Cognitive processing
+   - Environmental interaction
+   - Action execution
+   - State management
 
-   - Cognitive Model
-   - Memory Systems
-   - Tool Usage
-   - Social Interaction
+For a detailed architectural overview, see `DESIGN_DOC.md`.
 
-3. **World Architecture**
+## Development Status
 
-   - State Management
-   - Rule Systems
-   - Event Handling
-   - Time Management
+Currently implemented:
 
-4. **Tool System**
+- [x] Basic agent interactions and conversations
+- [x] Simple Thought generation with LLM integration
+- [x] Basic Environment awareness and room system
+- [x] Basic action and perception system
+- [x] Simple Memory tracking (thoughts and experiences)
+- [x] Speech and examination tools
 
-   - Tool Components
-   - Tool Composition
-   - Creating New Tools
-   - Tool Integration
+In progress:
 
-5. **Extension Guide**
-   - Creating Components
-   - Building Systems
-   - Tool Development
-   - Plugin Architecture
+- [ ] Physical actions and body awareness
+- [ ] Enhanced agent perception (sight, sound, smell)
+- [ ] Long term vector memory
+- [ ] Goal setting and planning system
+- [ ] Multi-agent coordination
+- [ ] Core memory systems (childhood, significant experiences)
+- [ ] Relationship formation and tracking
 
-## Examples
+Planned features:
 
-Find complete examples in the /examples directory:
+- [ ] Self-spawning capabilities (agent reproduction)
+- [ ] Dynamic narrative generation
+- [ ] World generation from text prompts
+- [ ] World state as entity relationships
+- [ ] Meta-agent for narrative control
+- [ ] Tool system for world modification
+- [ ] Long-term persistence and database integration
+- [ ] Advanced memory hierarchies
+  - Working memory
+  - Episodic memory
+  - Semantic memory
+  - Procedural memory
 
-- Basic agent creation
-- Multi-agent interactions
-- Custom tool development
-- Complex scenarios
-- Performance optimization
+## Running Examples
+
+The project includes several example scenarios:
+
+- `basic-conversation.ts`: Two agents engaging in basic interaction
+- `thinking-agent.ts`: Demonstration of the cognitive architecture
 
 ## Contributing
 
-We welcome contributions! Please see our Contributing Guide (docs/contributing/overview.md) for:
-
-- Development setup
-- Code standards
-- Testing guidelines
-- Documentation rules
-
-## Performance Considerations
-
-TinySim is designed for high performance:
-
-- Uses Structure of Arrays (SoA) for optimal memory layout
-- Efficient component queries
-- Minimal garbage collection impact
-- Support for parallel processing
+This is an experimental project in active development. Feel free to explore and experiment with the codebase.
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Support
-
-- GitHub Issues: Report bugs and feature requests
-- Documentation: Comprehensive guides and API reference
-- Community: Join our Discord for discussions
-
-## Roadmap
-
-See our project roadmap (docs/roadmap.md) for upcoming features and improvements.
+MIT
