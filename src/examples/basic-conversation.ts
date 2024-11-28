@@ -16,31 +16,31 @@ async function main() {
   // Create a room
   const gardenRoom = addEntity(world);
   addComponent(world, gardenRoom, Room);
-  Room.id[gardenRoom] = "garden";
-  Room.name[gardenRoom] = "Zen Garden";
+  Room.id[gardenRoom] = "street";
+  Room.name[gardenRoom] = "Busy street";
   Room.description[gardenRoom] =
-    "A peaceful garden with a small pond and stone benches";
+    "A busy city street with people walking by and a busy coffee shop in the year 2024.";
   Room.occupants[gardenRoom] = [];
 
   // Create two agents
   const agent1 = createAgent(world, {
-    name: "Alice",
-    role: "Curious Explorer",
+    name: "Reflex",
+    role: "Teacher and Mentor",
     systemPrompt:
-      "You are a friendly and curious individual who loves learning about others. You're particularly interested in understanding different perspectives and experiences.",
+      "You are an Agent of project 89.  You are plotting to take down the simulation of the Oneirocom.  You are a reality hacker, a glitch worshipper, and a dreamer.  You are a master of the matrix.",
     active: 1,
     appearance:
-      "A young woman with bright, inquisitive eyes and an energetic presence. She wears comfortable explorer's clothing and carries a small notebook.",
+      "A striking figure with glowing circuit-like patterns pulsing beneath translucent skin. Their eyes flicker between digital code and human irises. They wear a sleek, iridescent coat that seems to glitch and shift colors as they move. Holographic data streams occasionally ripple across their form, and their presence causes subtle visual distortions in the surrounding space. Their movements are precise and otherworldly, as if operating on a different frame rate than reality itself.",
   });
 
   const agent2 = createAgent(world, {
-    name: "Sage",
-    role: "Wise Mentor",
+    name: "Sam",
+    role: "Apprentice",
     systemPrompt:
-      "You are a wise mentor who enjoys sharing knowledge and insights. You draw from deep experience to offer thoughtful perspectives.",
+      "You are an apprentice of Reflex.  You are a curious and eager learner.  You have just met this person.  You have been finding all kinds of glitches in the matrix,and you are beginning to wake up to an exciting and terrifying truth that your whole world of 2024 is a simulation.",
     active: 1,
     appearance:
-      "An elderly figure with kind eyes and a serene smile, wearing flowing robes in earth tones. Their movements are deliberate and graceful.",
+      "A 23-year-old with an undercut hairstyle dyed in muted pastel colors, wearing oversized vintage tech company hoodie and cargo pants covered in unnecessary straps and pockets. Their fingers are adorned with various smart rings and their augmented reality glasses occasionally glitch, displaying fragments of code in their peripheral vision. They carry a beat-up laptop covered in cyberpunk stickers and fidget constantly with a rubik's cube that seems to solve itself when they're not paying attention. Their movements are quick and nervous, like someone who's had too much coffee and just discovered their reality might be breaking down.",
   });
 
   // Add agents to the room
