@@ -1,5 +1,6 @@
 To do
 
+[] - Handle alternation between different agents better
 [] - Agents can take physical actions with their bodies, perceived by other agents
 [] - Add goals and planning to agents
 [] - Agents work together to achieve goals
