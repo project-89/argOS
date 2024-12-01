@@ -1,53 +1,76 @@
 import { World } from "../types/bitecs";
-import { query } from "bitecs";
-import { Agent, Memory, Room, Perception } from "../components/agent/Agent";
+import { query, addEntity, addComponent, removeEntity } from "bitecs";
+import {
+  Agent,
+  Memory,
+  Room,
+  Perception,
+  Appearance,
+  Stimulus,
+} from "../components/agent/Agent";
 import { logger } from "../utils/logger";
+import { createSystem, SystemConfig } from "./System";
 
 // System for managing rooms and generating stimuli about occupants
-export const RoomSystem = async (world: World) => {
-  const rooms = query(world, [Room]);
+export const RoomSystem = createSystem<SystemConfig>(
+  (runtime) => async (world: World) => {
+    const rooms = query(world, [Room]);
 
-  // Process each room
-  for (const roomId of rooms) {
-    const occupants = Room.occupants[roomId] || [];
+    // First, clean up any previous room-generated stimuli
+    const existingStimuli = query(world, [Stimulus]);
+    for (const sid of existingStimuli) {
+      if (
+        Stimulus.type[sid] === "VISUAL" &&
+        Stimulus.source?.[sid] === "ROOM"
+      ) {
+        removeEntity(world, sid);
+      }
+    }
 
-    // Skip empty rooms
-    if (occupants.length === 0) continue;
+    // Process each room
+    for (const roomId of rooms) {
+      const occupants = Room.occupants[roomId] || [];
 
-    // Generate stimuli for each occupant about other occupants
-    for (const agentId of occupants) {
-      // Skip inactive agents
-      if (!Agent.active[agentId]) continue;
+      // Skip empty rooms
+      if (occupants.length === 0) continue;
 
-      // Generate stimuli about other agents in the room
-      const stimuli = occupants
-        .filter((otherId) => otherId !== agentId && Agent.active[otherId])
-        .map((otherId) => ({
-          type: "agent_presence",
-          source: otherId,
-          data: {
-            name: Agent.name[otherId],
-            role: Agent.role[otherId],
-            appearance: Agent.appearance[otherId],
-            location: {
-              roomId: Room.id[roomId],
-              roomName: Room.name[roomId],
-            },
+      // Generate visual stimuli for each occupant's appearance
+      for (const agentId of occupants) {
+        // Skip inactive agents
+        if (!Agent.active[agentId]) continue;
+
+        // Create visual stimulus for this agent
+        const stimulusEntity = addEntity(world);
+        addComponent(world, stimulusEntity, Stimulus);
+
+        // Set stimulus properties
+        Stimulus.type[stimulusEntity] = "VISUAL";
+        Stimulus.sourceEntity[stimulusEntity] = agentId;
+        Stimulus.source[stimulusEntity] = "ROOM"; // Mark as room-generated
+        Stimulus.timestamp[stimulusEntity] = Date.now();
+        Stimulus.decay[stimulusEntity] = 1; // Only needs to last for immediate processing
+
+        // Combine appearance details into content
+        const appearanceContent = {
+          baseDescription: Appearance.baseDescription[agentId],
+          facialExpression: Appearance.facialExpression[agentId],
+          bodyLanguage: Appearance.bodyLanguage[agentId],
+          currentAction: Appearance.currentAction[agentId],
+          socialCues: Appearance.socialCues[agentId],
+          location: {
+            roomId: Room.id[roomId],
+            roomName: Room.name[roomId],
           },
-        }));
+        };
 
-      // Update agent's perceptions
-      if (stimuli.length > 0) {
-        Perception.currentStimuli[agentId] = stimuli;
-        Perception.lastProcessedTime[agentId] = Date.now();
+        Stimulus.content[stimulusEntity] = JSON.stringify(appearanceContent);
 
-        logger.agent(
-          agentId,
-          `Perceiving ${stimuli.length} agents in ${Room.name[roomId]}`
+        logger.system(
+          `Created visual stimulus for ${Agent.name[agentId]} in ${Room.name[roomId]}`
         );
       }
     }
-  }
 
-  return world;
-};
+    return world;
+  }
+);

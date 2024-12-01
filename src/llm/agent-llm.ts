@@ -1,15 +1,23 @@
 import { generateText } from "ai";
 import { geminiFlashModel } from "../config/ai-config";
+import { GENERATE_THOUGHT, PROCESS_STIMULUS } from "../templates";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { Agent } from "../components/agent/Agent";
 import { World } from "../types/bitecs";
 import { PROMPT_TEMPLATES } from "../templates/prompts";
 import { AgentState } from "../types/cognitive";
 
-interface ThoughtResponse {
+export interface ThoughtResponse {
   thought: string;
   action?: {
     tool: string;
-    parameters: Record<string, string>;
+    parameters: Record<string, any>;
+  };
+  appearance?: {
+    facialExpression?: string;
+    bodyLanguage?: string;
+    currentAction?: string;
+    socialCues?: string;
   };
 }
 
@@ -45,7 +53,15 @@ export function composeFromTemplate(
   template: string,
   state: Record<string, any>
 ): string {
-  return template.replace(/\${(\w+)}/g, (_, key) => state[key] || "");
+  return template.replace(/\{([^}]+)\}/g, (match, path) => {
+    const value = path
+      .split(".")
+      .reduce((obj: Record<string, any>, key: string) => obj?.[key], state);
+    if (typeof value === "object") {
+      return JSON.stringify(value, null, 2);
+    }
+    return value ?? match;
+  });
 }
 
 export async function generateThought(state: {
@@ -53,19 +69,14 @@ export async function generateThought(state: {
   thoughtHistory: string[];
   name: string;
   role: string;
-  perceptions: Array<{
-    type: string;
-    source: number;
-    data: {
-      name: string;
-      role: string;
-      appearance: string;
-      location: {
-        roomId: string;
-        roomName: string;
-      };
-    };
-  }>;
+  perceptions: {
+    narrative: string;
+    raw: Array<{
+      type: string;
+      source: number;
+      data: any;
+    }>;
+  };
   experiences: Array<{
     type: string;
     content: string;
@@ -75,75 +86,36 @@ export async function generateThought(state: {
     name: string;
     description: string;
     parameters: string[];
+    schema: any;
   }>;
 }): Promise<ThoughtResponse> {
   try {
-    const prompt = composeFromTemplate(
-      `
-\${systemPrompt}
-
-Name: \${name}
-Role: \${role}
-
-Previous thoughts:
-\${thoughtHistory}
-
-Current environment:
-\${environment}
-
-Recent experiences:
-\${experiences}
-
-Available actions:
-\${tools}
-
-Based on your current state, generate your next thought and optionally choose an action to take.
-Remember to stay in character and maintain context.
-
-Respond with a JSON object containing:
-1. A "thought" field expressing your internal monologue
-2. Optionally, an "action" object if you want to do something, containing:
-   - "tool": one of the available tool names
-   - "parameters": an object with the required parameters for the tool
-
-Example response:
-{
-  "thought": "I notice someone new has entered the room. I should greet them.",
-  "action": {
-    "tool": "speak",
-    "parameters": {
-      "message": "Hello there! Welcome to our gathering."
-    }
-  }
-}`,
-      {
-        ...state,
-        thoughtHistory: state.thoughtHistory.join("\n"),
-        environment:
-          state.perceptions.length > 0
-            ? `You are in ${state.perceptions[0].data.location.roomName}. Present with you:\n` +
-              state.perceptions
-                .map(
-                  (p) =>
-                    `- ${p.data.name} (${p.data.role}): ${p.data.appearance}`
-                )
-                .join("\n")
-            : "You are alone.",
-        experiences:
-          state.experiences
-            .slice(-3)
-            .map((e) => `- ${e.content}`)
-            .join("\n") || "No recent experiences",
-        tools: state.availableTools
-          .map(
-            (t) =>
-              `- ${t.name}: ${t.description} (Parameters: ${t.parameters.join(
-                ", "
-              )})`
-          )
-          .join("\n"),
-      }
-    );
+    const prompt = composeFromTemplate(GENERATE_THOUGHT, {
+      ...state,
+      thoughtHistory: state.thoughtHistory.join("\n"),
+      perceptions: {
+        narrative: state.perceptions.narrative,
+        raw: JSON.stringify(state.perceptions.raw, null, 2),
+      },
+      experiences: state.experiences
+        .map(
+          (e) => `[${new Date(e.timestamp).toLocaleTimeString()}] ${e.content}`
+        )
+        .join("\n"),
+      tools: state.availableTools
+        .map((t) => `${t.name}: ${t.description}`)
+        .join("\n"),
+      toolSchemas: JSON.stringify(
+        Object.fromEntries(
+          state.availableTools.map((tool) => [
+            tool.name,
+            zodToJsonSchema(tool.schema, { name: tool.name }),
+          ])
+        ),
+        null,
+        2
+      ),
+    });
 
     const { text } = await generateText({
       model: geminiFlashModel,
@@ -154,10 +126,32 @@ Example response:
       // Clean the text of markdown code blocks
       const cleanText = text.replace(/```json\n|\n```/g, "").trim();
       const response = JSON.parse(cleanText) as ThoughtResponse;
+
+      // Validate the action parameters against the schema if an action is present
+      if (response.action) {
+        const tool = state.availableTools.find(
+          (t) => t.name === response.action?.tool
+        );
+        if (tool) {
+          try {
+            // Parse will throw if validation fails
+            tool.schema.parse(response.action.parameters);
+          } catch (validationError) {
+            console.error(
+              "Action parameters failed schema validation:",
+              validationError
+            );
+            // Return just the thought without the invalid action
+            return { thought: response.thought };
+          }
+        }
+      }
+
       return {
         thought:
           response.thought || "I have nothing to think about at the moment.",
         action: response.action,
+        appearance: response.appearance,
       };
     } catch (parseError) {
       console.error("Error parsing thought response:", parseError);
@@ -182,18 +176,10 @@ export async function processStimulus(
 ): Promise<string> {
   const { text } = await generateText({
     model: geminiFlashModel,
-    prompt: composeFromTemplate(PROMPT_TEMPLATES.PROCESS_STIMULUS, {
+    prompt: composeFromTemplate(PROCESS_STIMULUS, {
       ...agentState,
       stimulus: JSON.stringify(stimulus),
     }),
-  });
-  return text;
-}
-
-export async function decideAction(agentState: any): Promise<string | null> {
-  const { text } = await generateText({
-    model: geminiFlashModel,
-    prompt: composeFromTemplate(PROMPT_TEMPLATES.AUTONOMOUS_ACTION, agentState),
   });
   return text;
 }

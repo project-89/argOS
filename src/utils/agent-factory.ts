@@ -1,8 +1,9 @@
 import { addEntity, addComponent } from "bitecs";
-import { Action, Agent, Memory } from "../components/agent/Agent";
+import { Action, Agent, Memory, Appearance } from "../components/agent/Agent";
 import { AgentConfig } from "../types/agent";
 import { logger } from "../utils/logger";
 import { World } from "../types/bitecs";
+import { availableTools } from "../types/tools";
 
 export function createAgent(world: World, config: AgentConfig) {
   const {
@@ -20,6 +21,7 @@ export function createAgent(world: World, config: AgentConfig) {
   addComponent(world, eid, Agent);
   addComponent(world, eid, Memory);
   addComponent(world, eid, Action);
+  addComponent(world, eid, Appearance);
 
   // Initialize core properties
   Agent.name[eid] = name;
@@ -29,9 +31,19 @@ export function createAgent(world: World, config: AgentConfig) {
   Agent.platform[eid] = platform;
   Agent.appearance[eid] = appearance;
 
+  // Initialize appearance
+  Appearance.baseDescription[eid] = appearance;
+  Appearance.facialExpression[eid] = "neutral";
+  Appearance.bodyLanguage[eid] = "relaxed";
+  Appearance.currentAction[eid] = "standing";
+  Appearance.socialCues[eid] = "open to interaction";
+  Appearance.lastUpdate[eid] = Date.now();
+
   // Initialize memory
   Memory.thoughts[eid] = [];
   Memory.lastThought[eid] = "";
+
+  Action.availableTools[eid] = availableTools;
 
   logger.system(`Created agent: ${name} (${role})`);
 

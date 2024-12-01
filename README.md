@@ -121,7 +121,6 @@ Planned features:
 The project includes several example scenarios:
 
 - `basic-conversation.ts`: Two agents engaging in basic interaction
-- `thinking-agent.ts`: Demonstration of the cognitive architecture
 
 ## Contributing
 

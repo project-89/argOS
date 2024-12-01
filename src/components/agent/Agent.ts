@@ -37,12 +37,34 @@ export const Perception = {
 export const Action = {
   pendingAction: [] as ({
     tool: string;
-    parameters: Record<string, string>;
+    parameters: any; // Using any since parameters vary by action type
   } | null)[],
   lastActionTime: [] as number[],
   availableTools: [] as Array<{
     name: string;
     description: string;
     parameters: string[];
+    schema: any;
   }>[],
+};
+
+// Dynamic appearance component for handling physical state and social cues
+export const Appearance = {
+  baseDescription: [] as string[], // Static physical description
+  facialExpression: [] as string[], // Current facial expression
+  bodyLanguage: [] as string[], // Current body posture/gestures
+  currentAction: [] as string[], // What the agent is visibly doing
+  socialCues: [] as string[], // Social signals being displayed
+  lastUpdate: [] as number[], // When appearance was last updated
+};
+
+// Stimulus component for broadcasting events in the environment
+export const Stimulus = {
+  type: [] as string[], // Type of stimulus (VISUAL, AUDITORY, etc)
+  sourceEntity: [] as number[], // Entity ID of the source
+  source: [] as string[], // System that generated the stimulus (ROOM, AGENT, etc)
+  content: [] as string[], // The actual stimulus content
+  timestamp: [] as number[], // When the stimulus was created
+  decay: [] as number[], // Number of engine loops this stimulus will last
+  roomId: [] as string[], // The room where this stimulus occurred
 };
