@@ -17,25 +17,37 @@ const colorArray = [
 
 export const logger = {
   system: (message: string) => {
-    if (!chalk) return console.log(message);
-    return console.log(chalk.gray(`[System] ${message}`));
+    if (!chalk) return console.log(message + "\n");
+    return console.log(chalk.gray(`[System] ${message}`) + "\n");
+  },
+
+  emphasize: (message: string) => {
+    if (!chalk) return console.log(message + "\n");
+    return console.log(chalk.bold(chalk.bgMagentaBright(message)) + "\n");
   },
 
   agent: (agentId: number, message: string) => {
     if (!chalk || !colorArray)
-      return console.log(`[Agent${agentId}] ${message}`);
+      return console.log(`[Agent${agentId}] ${message}\n`);
     // Use modulo to cycle through colors
     const colorFn = colorArray[agentId % colorArray.length];
-    console.log(colorFn(`[Agent${agentId}] ${message}`));
+    console.log(colorFn(`[Agent${agentId}] ${message}`) + "\n");
+  },
+
+  agentBold: (agentId: number, message: string) => {
+    if (!chalk || !colorArray)
+      return console.log(`[Agent${agentId}] ${message}\n`);
+    const colorFn = colorArray[agentId % colorArray.length];
+    console.log(colorFn(chalk.bold(`[Agent${agentId}] ${message}`)) + "\n");
   },
 
   conversation: (message: string) => {
-    if (!chalk) return console.log(message);
-    return console.log(chalk.cyan(`[Conversation] ${message}`));
+    if (!chalk) return console.log(message + "\n");
+    return console.log(chalk.cyan(`[Conversation] ${message}`) + "\n");
   },
 
   error: (message: string) => {
-    if (!chalk) return console.log(`ERROR: ${message}`);
-    return console.log(chalk.red(`[Error] ${message}`));
+    if (!chalk) return console.log(`ERROR: ${message}\n`);
+    return console.log(chalk.red(`[Error] ${message}`) + "\n");
   },
 };
