@@ -13,9 +13,13 @@ import {
   generateThought,
   processStimulus,
   ThoughtResponse,
+  ProcessStimulusState,
+  AgentState,
 } from "../llm/agent-llm";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
+import { createVisualStimulus } from "../utils/stimulus-utils";
+import { SimulationRuntime } from "../runtime/SimulationRuntime";
 
 interface ThinkingSystemConfig extends SystemConfig {
   actionInterface?: {
@@ -39,50 +43,24 @@ function findAgentRoom(world: World, agentId: number): number | null {
   return null;
 }
 
-// Helper to process stimuli into perceptions
-async function processRoomStimuli(
-  world: World,
+// Helper to process perceptions
+async function processPerceptions(
   eid: number,
-  roomId: number
-): Promise<string> {
-  const currentTime = Date.now();
-  const recentTimeWindow = 5000; // Consider stimuli from last 5 seconds
-
-  const currentStimuli = query(world, [Stimulus])
-    .map((sid) => ({
-      type: Stimulus.type[sid],
-      sourceEntity: Stimulus.sourceEntity[sid],
-      source: Stimulus.source[sid],
-      content: JSON.parse(Stimulus.content[sid]),
-      timestamp: Stimulus.timestamp[sid],
-      roomId: Stimulus.roomId[sid],
-    }))
-    .filter(
-      (s) =>
-        s.roomId === Room.id[roomId] &&
-        s.sourceEntity !== eid &&
-        currentTime - s.timestamp < recentTimeWindow
-    )
-    .sort((a, b) => b.timestamp - a.timestamp); // Most recent first
-
-  const agentState = {
+  perceptions: any[],
+  world: World
+) {
+  const agentState: ProcessStimulusState = {
     name: Agent.name[eid],
     role: Agent.role[eid],
     systemPrompt: Agent.systemPrompt[eid],
+    stimulus: perceptions.map((p) => ({
+      type: p.type,
+      source: p.sourceEntity,
+      data: p.content,
+    })),
   };
 
-  const narrativePerception =
-    currentStimuli.length > 0
-      ? await processStimulus(agentState, currentStimuli)
-      : "You perceive nothing of note.";
-
-  Memory.experiences[eid].push({
-    type: "perception",
-    content: narrativePerception,
-    timestamp: Date.now(),
-  });
-
-  return narrativePerception;
+  return await processStimulus(agentState);
 }
 
 // Helper to emit appearance changes as visual stimuli
@@ -90,8 +68,7 @@ function emitAppearanceStimulus(
   world: World,
   eid: number,
   roomId: number,
-  appearance: Record<string, string>,
-  currentTime: number
+  appearance: Record<string, string>
 ) {
   // Update appearance component
   Object.entries(appearance).forEach(([key, value]) => {
@@ -112,103 +89,96 @@ function emitAppearanceStimulus(
       }
     }
   });
-  Appearance.lastUpdate[eid] = currentTime;
+  Appearance.lastUpdate[eid] = Date.now();
 
-  // Emit appearance change stimulus
-  const appearanceStimulus = addEntity(world);
-  addComponent(world, appearanceStimulus, Stimulus);
-  Stimulus.type[appearanceStimulus] = "VISUAL";
-  Stimulus.sourceEntity[appearanceStimulus] = eid;
-  Stimulus.source[appearanceStimulus] = "AGENT";
-  Stimulus.content[appearanceStimulus] = JSON.stringify({
-    name: Agent.name[eid],
-    role: Agent.role[eid],
-    appearance: Agent.appearance[eid],
-    ...appearance,
-    location: {
-      roomId: Room.id[roomId],
-      roomName: Room.name[roomId],
+  // Create visual stimulus for appearance change
+  createVisualStimulus(world, {
+    sourceEntity: eid,
+    roomId: Room.id[roomId],
+    appearance: true,
+    data: {
+      ...appearance,
+      location: {
+        roomId: Room.id[roomId],
+        roomName: Room.name[roomId],
+      },
     },
   });
-  Stimulus.timestamp[appearanceStimulus] = currentTime;
-  Stimulus.roomId[appearanceStimulus] = Room.id[roomId];
-  Stimulus.decay[appearanceStimulus] = 1;
 }
 
-export const ThinkingSystem = createSystem<ThinkingSystemConfig>(
-  (runtime, config) => async (world: World) => {
-    const agents = query(world, [Agent, Memory]);
-    logger.system(`ThinkingSystem starting with ${agents.length} agents`);
+export const ThinkingSystem = createSystem((runtime: SimulationRuntime) => {
+  return async (world: World) => {
+    const agents = query(world, [Agent]);
+    const stimuli = query(world, [Stimulus]);
 
-    // Process each agent's thoughts sequentially
     for (const eid of agents) {
-      // Skip inactive agents
       if (!Agent.active[eid]) continue;
 
-      // Ensure agent is in a room
-      const roomId = findAgentRoom(world, eid);
-      if (roomId === null) continue;
+      // Get agent's perceptions
+      const agentRoom = findAgentRoom(world, eid);
+      if (!agentRoom) continue;
 
-      // Initialize memory if needed
-      Memory.thoughts[eid] = Memory.thoughts[eid] || [];
-      Memory.experiences[eid] = Memory.experiences[eid] || [];
+      const roomId = Room.id[agentRoom];
+      const perceptions = stimuli
+        .filter((sid) => Stimulus.roomId[sid] === roomId)
+        .map((sid) => ({
+          type: Stimulus.type[sid],
+          sourceEntity: Stimulus.sourceEntity[sid],
+          source: Stimulus.source[sid],
+          content: JSON.parse(Stimulus.content[sid]),
+          timestamp: Stimulus.timestamp[sid],
+          roomId: Stimulus.roomId[sid],
+        }));
 
-      // 1. Process current stimuli into perceptions
-      const narrativePerception = await processRoomStimuli(world, eid, roomId);
+      // Process perceptions
+      const processedPerceptions = await processPerceptions(
+        eid,
+        perceptions,
+        world
+      );
 
-      // 2. Generate thought and get response
-      const agentState = {
+      // Emit perception event
+      runtime.emit("agentThought", eid, {
+        type: "PERCEPTION",
+        data: processedPerceptions,
+        actionType: "THOUGHT",
+      });
+
+      // Generate thought
+      const thought = await generateThought({
         name: Agent.name[eid],
         role: Agent.role[eid],
         systemPrompt: Agent.systemPrompt[eid],
-        thoughtHistory: Memory.thoughts[eid],
+        thoughtHistory: Memory.thoughts[eid] || [],
         perceptions: {
-          narrative: narrativePerception,
-          raw: query(world, [Stimulus])
-            .map((sid) => ({
-              type: Stimulus.type[sid],
-              source: Stimulus.sourceEntity[sid],
-              data: JSON.parse(Stimulus.content[sid]),
-            }))
-            .filter((s) => s.source !== eid),
+          narrative: processedPerceptions,
+          raw: perceptions.map((p) => ({
+            type: p.type,
+            source: p.sourceEntity,
+            data: p.content,
+          })),
         },
-        experiences: Memory.experiences[eid],
+        experiences: Memory.experiences[eid] || [],
         availableTools: runtime.getAvailableTools(),
-      };
+      });
 
-      // Generate thought and handle its effects
-      const response = await generateThought(agentState);
-      logger.agent(eid, `Thought: ${response.thought}`);
-      logger.agent(eid, `Action: ${JSON.stringify(response.action)}`);
-      logger.agent(eid, `Appearance: ${JSON.stringify(response.appearance)}`);
+      // Emit thought event
+      runtime.emit("agentThought", eid, {
+        type: "THOUGHT",
+        data: thought,
+        actionType: "THOUGHT",
+      });
 
-      // Store the thought
-      Memory.lastThought[eid] = response.thought;
-      Memory.thoughts[eid].push(response.thought);
-
-      // Keep thought history at a reasonable size
-      if (Memory.thoughts[eid].length > 100) {
-        Memory.thoughts[eid].shift();
-      }
-
-      // 3. Handle appearance changes if any
-      if (response.appearance) {
-        emitAppearanceStimulus(
-          world,
+      // Execute action if one was generated
+      if (thought.action) {
+        await runtime.executeAction(
+          thought.action.tool,
           eid,
-          roomId,
-          response.appearance,
-          Date.now()
+          thought.action.parameters
         );
-      }
-
-      // 4. Queue action if one was chosen
-      if (response.action) {
-        logger.agent(eid, `Queuing action: ${response.action.tool}`);
-        Action.pendingAction[eid] = response.action;
       }
     }
 
     return world;
-  }
-);
+  };
+});

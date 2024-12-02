@@ -1,13 +1,31 @@
 import { z } from "zod";
 import { World } from "../types/bitecs";
-import { addComponent, addEntity } from "bitecs";
-import { Agent, Memory, Room, Stimulus } from "../components/agent/Agent";
+import { Memory, Room, Agent } from "../components/agent/Agent";
 import { logger } from "../utils/logger";
 import { findAgentRoom } from "../utils/world-utils";
+import {
+  createVisualStimulus,
+  createAuditoryStimulus,
+} from "../utils/stimulus-utils";
 
 export const schema = z.object({
   message: z.string(),
-  tone: z.enum(["neutral", "gentle", "firm"]).optional(),
+  tone: z
+    .enum([
+      "neutral",
+      "gentle",
+      "firm",
+      "concerned",
+      "excited",
+      "nervous",
+      "thoughtful",
+      "curious",
+      "worried",
+      "confident",
+      "hesitant",
+      "urgent",
+    ])
+    .optional(),
   target: z.string().optional(),
 });
 
@@ -26,33 +44,38 @@ export async function execute(
   const roomId = findAgentRoom(world, eid);
   if (roomId === null) return;
 
-  const { message, tone = "neutral" } = parameters;
+  const { message, tone = "neutral", target } = parameters;
 
-  // Log the speech
+  // Log the speech with agent name
+  const agentName = Agent.name[eid];
   logger.agent(eid, `Says: ${message}`);
 
-  // Create speech stimulus in the room
-  const speechStimulus = addEntity(world);
-  addComponent(world, speechStimulus, Stimulus);
-  Stimulus.type[speechStimulus] = "SPEECH";
-  Stimulus.sourceEntity[speechStimulus] = eid;
-  Stimulus.source[speechStimulus] = "AGENT";
-  Stimulus.content[speechStimulus] = JSON.stringify({
-    name: Agent.name[eid],
-    role: Agent.role[eid],
-    appearance: Agent.appearance[eid],
+  // Create visual stimulus for speaking action
+  createVisualStimulus(world, {
+    sourceEntity: eid,
+    roomId: Room.id[roomId],
+    appearance: true,
+    data: {
+      action: "speaking",
+      target,
+      tone,
+      message,
+      agentId: eid,
+      agentName,
+      actionType: "SPEECH",
+    },
+    decay: 1,
+  });
+
+  // Create auditory stimulus for the speech content
+  createAuditoryStimulus(world, {
+    sourceEntity: eid,
+    roomId: Room.id[roomId],
     message,
     tone,
-    location: {
-      roomId: Room.id[roomId],
-      roomName: Room.name[roomId],
-    },
   });
-  Stimulus.timestamp[speechStimulus] = Date.now();
-  Stimulus.roomId[speechStimulus] = Room.id[roomId];
-  Stimulus.decay[speechStimulus] = 1;
 
-  // Create memory for speaker
+  // Record the experience
   Memory.experiences[eid] = Memory.experiences[eid] || [];
   Memory.experiences[eid].push({
     type: "speech",
