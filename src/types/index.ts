@@ -1,5 +1,11 @@
 export interface SimulationEvent {
-  type: "LOG" | "AGENT_STATE" | "SYSTEM_STATE" | "AGENT_ACTION" | "ERROR";
+  type:
+    | "LOG"
+    | "AGENT_STATE"
+    | "SYSTEM_STATE"
+    | "AGENT_ACTION"
+    | "ERROR"
+    | "PERCEPTION";
   category?: string;
   data: any;
   timestamp: number;

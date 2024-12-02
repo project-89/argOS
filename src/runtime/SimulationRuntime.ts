@@ -4,6 +4,7 @@ import { actions as defaultActions } from "../actions";
 import { System, SystemFactory } from "../systems/System";
 import { EventEmitter } from "events";
 import { Agent, Memory, Action, Perception } from "../components/agent/Agent";
+import chalk from "chalk";
 
 type ActionModule = {
   schema: any;
@@ -48,7 +49,8 @@ export class SimulationRuntime extends EventEmitter {
     // Initialize systems
     if (config?.systems) {
       this.systems = config.systems.map((system) => {
-        return system.create(this);
+        const sys = system.create(this);
+        return sys;
       });
     }
 
@@ -69,7 +71,10 @@ export class SimulationRuntime extends EventEmitter {
       }) as LoggerMethod | LoggerAgentMethod;
     });
 
-    logger.system(`Available actions: ${Object.keys(this.actions).join(", ")}`);
+    const actionList = Object.keys(this.actions)
+      .map((name) => chalk.green(name))
+      .join(", ");
+    logger.system(`Available actions: ${actionList}`);
   }
 
   getAvailableTools() {
@@ -78,9 +83,13 @@ export class SimulationRuntime extends EventEmitter {
 
   async executeAction(tool: string, eid: number, parameters: any) {
     const action = this.actions[tool];
+    const agentName = Agent.name[eid];
+
     if (action) {
+      logger.system(`${chalk.cyan(agentName)} executing ${chalk.green(tool)}`);
       await action.execute(this.world, eid, parameters);
       this.emit("agentAction", eid, { tool, parameters });
+      logger.system(`${chalk.cyan(agentName)} completed ${chalk.green(tool)}`);
     } else {
       const error = new Error(`Unknown action: ${tool}`);
       this.emit("error", error);
@@ -90,7 +99,9 @@ export class SimulationRuntime extends EventEmitter {
 
   async start() {
     this.isRunning = true;
-    logger.system("Starting simulation runtime...");
+    logger.system(chalk.bold.green("Starting simulation runtime..."));
+    logger.system(`Update interval: ${chalk.yellow(this.updateInterval)}ms`);
+    logger.system(`Active systems: ${this.systems.length}`);
     this.update();
   }
 
@@ -100,17 +111,43 @@ export class SimulationRuntime extends EventEmitter {
       clearTimeout(this.updateTimeout);
       this.updateTimeout = null;
     }
-    logger.system("Stopping simulation runtime...");
+    logger.system(chalk.bold.red("Stopping simulation runtime..."));
   }
 
   private async update() {
     if (!this.isRunning) return;
 
     try {
+      const startTime = Date.now();
+
       for (const system of this.systems) {
         await system(this.world);
       }
-      this.emit("stateUpdate", this.getState());
+
+      const state = this.getState();
+      this.emit("stateUpdate", state);
+
+      // Log active agents and their states
+      const activeAgents = state.agents.filter((a) => a.active);
+      if (activeAgents.length > 0) {
+        logger.system(
+          `Active agents: ${activeAgents
+            .map((a) => chalk.cyan(a.name))
+            .join(", ")}`
+        );
+      }
+
+      const updateTime = Date.now() - startTime;
+      if (updateTime > this.updateInterval * 0.5) {
+        logger.system(
+          chalk.yellow(
+            `Warning: Update took ${updateTime}ms (${Math.round(
+              (updateTime / this.updateInterval) * 100
+            )}% of interval)`
+          )
+        );
+      }
+
       this.updateTimeout = setTimeout(() => this.update(), this.updateInterval);
     } catch (error) {
       this.emit("error", error);
@@ -124,11 +161,11 @@ export class SimulationRuntime extends EventEmitter {
   }
 
   getAgentById(id: number) {
-    // TODO: Implement proper agent lookup from world
     return {
       id,
-      name: `Agent ${id}`,
-      // Add other agent properties as needed
+      name: Agent.name[id],
+      role: Agent.role[id],
+      active: Agent.active[id],
     };
   }
 

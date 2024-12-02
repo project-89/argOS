@@ -1,19 +1,5 @@
 import chalk from "chalk";
-
-const colorArray = [
-  chalk.blue,
-  chalk.green,
-  chalk.yellow,
-  chalk.magenta,
-  chalk.cyan,
-  chalk.red,
-  chalk.white,
-  chalk.blueBright,
-  chalk.greenBright,
-  chalk.yellowBright,
-  chalk.magentaBright,
-  chalk.cyanBright,
-];
+import { getChalkColor } from "./colors";
 
 export const logger = {
   system: (message: string) => {
@@ -26,19 +12,18 @@ export const logger = {
     return console.log(chalk.bold(chalk.bgMagentaBright(message)) + "\n");
   },
 
-  agent: (agentId: number, message: string) => {
-    if (!chalk || !colorArray)
-      return console.log(`[Agent${agentId}] ${message}\n`);
-    // Use modulo to cycle through colors
-    const colorFn = colorArray[agentId % colorArray.length];
-    console.log(colorFn(`[Agent${agentId}] ${message}`) + "\n");
+  agent: (agentId: number, message: string, agentName?: string) => {
+    if (!chalk) return console.log(`[Agent${agentId}] ${message}\n`);
+    const name = agentName || `Agent${agentId}`;
+    const colorFn = getChalkColor(name);
+    console.log(colorFn(`[${name}] ${message}`) + "\n");
   },
 
-  agentBold: (agentId: number, message: string) => {
-    if (!chalk || !colorArray)
-      return console.log(`[Agent${agentId}] ${message}\n`);
-    const colorFn = colorArray[agentId % colorArray.length];
-    console.log(colorFn(chalk.bold(`[Agent${agentId}] ${message}`)) + "\n");
+  agentBold: (agentId: number, message: string, agentName?: string) => {
+    if (!chalk) return console.log(`[Agent${agentId}] ${message}\n`);
+    const name = agentName || `Agent${agentId}`;
+    const colorFn = getChalkColor(name);
+    console.log(colorFn(chalk.bold(`[${name}] ${message}`)) + "\n");
   },
 
   conversation: (message: string) => {

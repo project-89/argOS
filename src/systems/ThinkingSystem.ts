@@ -21,17 +21,6 @@ import { createSystem, SystemConfig } from "./System";
 import { createVisualStimulus } from "../utils/stimulus-utils";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 
-interface ThinkingSystemConfig extends SystemConfig {
-  actionInterface?: {
-    getAvailableTools: () => Array<{
-      name: string;
-      description: string;
-      parameters: string[];
-      schema: any;
-    }>;
-  };
-}
-
 // Helper to find agent's current room
 function findAgentRoom(world: World, agentId: number): number | null {
   const rooms = query(world, [Room]);

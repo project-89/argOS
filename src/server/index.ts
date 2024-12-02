@@ -66,9 +66,13 @@ export class SimulationServer {
       // Try to extract clean message from JSON if needed
       let cleanMessage = message;
       try {
-        const parsed = JSON.parse(message);
-        if (parsed.message) {
-          cleanMessage = parsed.message;
+        if (typeof message === "string") {
+          const parsed = JSON.parse(message);
+          if (parsed.message) {
+            cleanMessage = parsed.message;
+          }
+        } else if (typeof message === "object" && message !== null) {
+          cleanMessage = message.message || JSON.stringify(message);
         }
       } catch (e) {
         // Not JSON, use as is
@@ -77,18 +81,25 @@ export class SimulationServer {
       this.broadcast({
         type: "LOG",
         category: level,
-        data: { message: cleanMessage },
+        data: {
+          message: cleanMessage,
+          agentName: message.agentName,
+        },
         timestamp: Date.now(),
       });
     });
 
     this.runtime.on("agentAction", (agentId, action) => {
       const agent = this.runtime.getAgentById(agentId);
+      console.log("Broadcasting agent action:", { agentId, agent, action });
       this.broadcast({
         type: "AGENT_ACTION",
         data: {
           agentId,
           agentName: agent?.name,
+          message: action.parameters?.message,
+          tool: action.tool,
+          actionType: action.tool?.toUpperCase(),
         },
         timestamp: Date.now(),
       });
@@ -96,14 +107,44 @@ export class SimulationServer {
 
     this.runtime.on("agentThought", (agentId, thought) => {
       const agent = this.runtime.getAgentById(agentId);
+
+      let thoughtContent = "";
+      try {
+        if (typeof thought === "string") {
+          thoughtContent = thought;
+        } else if (typeof thought === "object") {
+          if (thought.data?.thought) {
+            thoughtContent = thought.data.thought;
+          } else if (thought.thought) {
+            thoughtContent = thought.thought;
+          }
+        }
+      } catch (e) {
+        thoughtContent = JSON.stringify(thought);
+      }
+
       this.broadcast({
         type: "AGENT_STATE",
         data: {
           agentId,
           agentName: agent?.name,
+          thought: thoughtContent,
         },
         timestamp: Date.now(),
       });
+
+      // If there's appearance info, send it as a separate event
+      if (thought.appearance) {
+        this.broadcast({
+          type: "AGENT_STATE",
+          data: {
+            agentId,
+            agentName: agent?.name,
+            appearance: thought.appearance,
+          },
+          timestamp: Date.now(),
+        });
+      }
     });
 
     this.runtime.on("stateUpdate", (state) => {
