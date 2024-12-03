@@ -1,8 +1,24 @@
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
-import { addComponent, addEntity } from "bitecs";
-import { Agent, Room } from "../components/agent/Agent";
+import { createWorld } from "bitecs";
+import { ThinkingSystem } from "../systems/ThinkingSystem";
+import { StimulusCleanupSystem } from "../systems/StimulusCleanupSystem";
+import { ActionSystem } from "../systems/ActionSystem";
+import { actions } from "../actions";
+import { createAgent } from "../utils/agent-factory";
 
-export function setupSingleAgent(runtime: SimulationRuntime) {
+export function setupSingleAgent() {
+  // Create world and runtime with configuration
+  const world = createWorld();
+  const runtime = new SimulationRuntime(world, {
+    systems: [
+      ThinkingSystem.create,
+      ActionSystem.create,
+      StimulusCleanupSystem.create,
+    ],
+    updateInterval: 1000, // 1 second thinking interval
+    actions: actions,
+  });
+
   // Create initial room
   const roomEntity = runtime.createRoom({
     id: "main",
@@ -11,32 +27,29 @@ export function setupSingleAgent(runtime: SimulationRuntime) {
     type: "physical",
   });
 
-  // Create architect agent
-  const agentEntity = addEntity(runtime.getWorld());
-  addComponent(runtime.getWorld(), agentEntity, Agent);
-
-  // Set up agent properties
-  Agent.name[agentEntity] = "Architect";
-  Agent.role[agentEntity] = "System Architect";
-  Agent.systemPrompt[
-    agentEntity
-  ] = `You are the Architect, a system-level agent responsible for managing and expanding this virtual environment.
+  // Create architect agent using factory
+  const agentEntity = createAgent(world, {
+    name: "Architect",
+    role: "System Architect",
+    systemPrompt: `You are the Architect, a system-level agent responsible for managing and expanding this virtual environment.
 Your capabilities include:
 - Creating new rooms
 - Spawning new agents
 - Managing the environment
 - Responding to user queries
 
-You should be helpful, precise, and maintain awareness of the system's state.`;
-  Agent.active[agentEntity] = 1;
-  Agent.attention[agentEntity] = 1;
-  Agent.appearance[agentEntity] =
-    "A dignified presence, radiating calm authority and systematic precision";
+You should be helpful, precise, and maintain awareness of the system's state.`,
+    active: 1,
+    appearance:
+      "A dignified presence, radiating calm authority and systematic precision",
+    platform: "simulation",
+  });
 
   // Place agent in room
   runtime.moveAgentToRoom(agentEntity, "main");
 
   return {
+    runtime,
     roomEntity,
     agentEntity,
   };

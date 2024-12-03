@@ -44,6 +44,9 @@ export function AgentNetwork({
       links: [],
     };
 
+    console.log("Rooms:", rooms);
+    console.log("Agents:", agents);
+
     // Add room nodes first
     rooms.forEach((room) => {
       data.nodes.push({
@@ -57,6 +60,7 @@ export function AgentNetwork({
 
     // Add agent nodes and their connections
     agents.forEach((agent) => {
+      console.log("Processing agent:", agent);
       data.nodes.push({
         id: `agent-${agent.name}`,
         name: agent.name,
@@ -67,15 +71,19 @@ export function AgentNetwork({
 
       // Connect to room if present
       if (agent.room?.id) {
+        console.log(`Connecting agent ${agent.name} to room ${agent.room.id}`);
         data.links.push({
           source: `agent-${agent.name}`,
           target: `room-${agent.room.id}`,
           type: "presence",
           value: agent.attention || 1,
         });
+      } else {
+        console.log(`Agent ${agent.name} has no room assigned`);
       }
     });
 
+    console.log("Graph data:", data);
     return data;
   }, [agents, rooms]);
 

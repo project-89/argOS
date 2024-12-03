@@ -47,13 +47,13 @@ const DEFAULT_CONFIG: RuntimeConfig = {
 export class SimulationRuntime extends EventEmitter {
   private world: World;
   private systems: ((world: World) => Promise<World>)[];
-  private isRunning: boolean = false;
+  private _isRunning = false;
   private updateInterval: number;
   private observers: (() => void)[] = [];
   public actions: Record<string, ActionModule>;
 
-  get running(): boolean {
-    return this.isRunning;
+  get isRunning() {
+    return this._isRunning;
   }
 
   constructor(world: World, config: Partial<RuntimeConfig> = {}) {
@@ -206,13 +206,14 @@ export class SimulationRuntime extends EventEmitter {
   }
 
   async start() {
-    this.isRunning = true;
+    this._isRunning = true;
     this.emit("stateChanged", { isRunning: true });
+    this.emitWorldState();
     this.run();
   }
 
   stop() {
-    this.isRunning = false;
+    this._isRunning = false;
     this.emit("stateChanged", { isRunning: false });
   }
 
@@ -272,6 +273,9 @@ export class SimulationRuntime extends EventEmitter {
     Room.type[roomEntity] = roomData.type || "physical";
     Room.occupants[roomEntity] = [];
 
+    logger.system(
+      `Created room: ${Room.name[roomEntity]} (${Room.id[roomEntity]})`
+    );
     this.emit("roomCreated", { roomId: Room.id[roomEntity] });
     return roomEntity;
   }
@@ -286,19 +290,31 @@ export class SimulationRuntime extends EventEmitter {
       return;
     }
 
+    // Initialize occupants array if it doesn't exist
+    if (!Room.occupants[roomEntity]) {
+      Room.occupants[roomEntity] = [];
+    }
+
     // Update room occupants
     const currentRoom = Object.keys(Room.occupants)
       .map(Number)
-      .find((eid) => Room.occupants[eid].includes(agentId));
+      .find((eid) => Room.occupants[eid]?.includes(agentId));
 
     if (currentRoom) {
       Room.occupants[currentRoom] = Room.occupants[currentRoom].filter(
         (id) => id !== agentId
       );
+      logger.system(
+        `Removed agent ${agentId} from room ${Room.name[currentRoom]}`
+      );
     }
 
     Room.occupants[roomEntity].push(agentId);
+    logger.system(`Added agent ${agentId} to room ${Room.name[roomEntity]}`);
     this.emit("agentMoved", { agentId, roomId });
+
+    // Emit updated world state after moving agent
+    this.emitWorldState();
   }
 
   // Action Management
@@ -321,6 +337,14 @@ export class SimulationRuntime extends EventEmitter {
       rooms: this.getRooms(),
       timestamp: Date.now(),
     };
+  }
+
+  emitWorldState() {
+    this.emit("worldState", {
+      agents: this.getAgents(),
+      rooms: this.getRooms(),
+      timestamp: Date.now(),
+    });
   }
 
   private getAgents() {
@@ -367,13 +391,5 @@ export class SimulationRuntime extends EventEmitter {
     return Object.keys(Stimulus.roomId)
       .map(Number)
       .filter((eid) => Stimulus.roomId[eid] === Room.id[roomId]);
-  }
-
-  private emitWorldState() {
-    this.emit("worldState", {
-      agents: this.getAgents(),
-      rooms: this.getRooms(),
-      timestamp: Date.now(),
-    });
   }
 }

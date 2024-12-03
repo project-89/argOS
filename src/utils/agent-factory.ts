@@ -30,6 +30,7 @@ export function createAgent(world: World, config: AgentConfig) {
   Agent.active[eid] = active;
   Agent.platform[eid] = platform;
   Agent.appearance[eid] = appearance;
+  Agent.attention[eid] = 1;
 
   // Initialize appearance
   Appearance.baseDescription[eid] = appearance;
