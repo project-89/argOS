@@ -2,7 +2,7 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { CommandBar } from "./components/CommandBar";
 import { AgentNetwork } from "./components/AgentNetwork";
-import { Environment } from "./components/Environment";
+import { ChatInterface } from "./components/ChatInterface";
 import { Inspector } from "./components/Inspector";
 import { Timeline } from "./components/Timeline";
 import { SimulationEvent } from "../../types";
@@ -10,6 +10,7 @@ import { SimulationEvent } from "../../types";
 interface SimulationState {
   isRunning: boolean;
   agents: any[];
+  rooms: any[];
   logs: SimulationEvent[];
 }
 
@@ -17,6 +18,7 @@ export function ModernUI() {
   const [state, setState] = useState<SimulationState>({
     isRunning: false,
     agents: [],
+    rooms: [],
     logs: [],
   });
   const [ws, setWs] = useState<WebSocket | null>(null);
@@ -50,6 +52,7 @@ export function ModernUI() {
               ...prev,
               isRunning: message.data.isRunning,
               agents: message.data.agents || prev.agents,
+              rooms: message.data.rooms || prev.rooms,
             };
           case "LOG":
           case "AGENT_ACTION":
@@ -74,32 +77,47 @@ export function ModernUI() {
     }
   };
 
+  const handleChatMessage = (message: string) => {
+    if (ws && isConnected) {
+      ws.send(
+        JSON.stringify({
+          type: "CHAT",
+          data: {
+            message,
+            target: selectedAgent,
+          },
+        })
+      );
+    }
+  };
+
   return (
     <div className="h-screen flex flex-col">
-      {/* Command Bar */}
       <CommandBar
         isRunning={state.isRunning}
         isConnected={isConnected}
         onCommand={sendCommand}
       />
 
-      {/* Main Content */}
       <div className="flex-1 flex">
-        {/* Agent Network */}
         <div className="w-1/4 border-r border-cyan-900/30">
           <AgentNetwork
             agents={state.agents}
+            rooms={state.rooms}
             selectedAgent={selectedAgent}
             onSelectAgent={setSelectedAgent}
           />
         </div>
 
-        {/* Environment */}
         <div className="flex-1 border-r border-cyan-900/30">
-          <Environment agents={state.agents} logs={state.logs} />
+          <ChatInterface
+            selectedAgent={selectedAgent}
+            agents={state.agents}
+            logs={state.logs}
+            onSendMessage={handleChatMessage}
+          />
         </div>
 
-        {/* Inspector */}
         <div className="w-1/4">
           <Inspector
             selectedAgent={selectedAgent}
@@ -109,7 +127,6 @@ export function ModernUI() {
         </div>
       </div>
 
-      {/* Timeline */}
       <div className="h-32 border-t border-cyan-900/30">
         <Timeline logs={state.logs} isRunning={state.isRunning} />
       </div>

@@ -6,6 +6,7 @@ export const Agent = {
   active: [] as number[], // Is agent currently active
   platform: [] as string[], // Which platform this agent operates on
   appearance: [] as string[], // Physical description of the agent
+  attention: [] as number[], // Current attention/presence level (0-1)
 };
 
 // Memory component for storing thoughts and experiences
@@ -19,12 +20,15 @@ export const Memory = {
   }>[],
 };
 
+export type RoomType = "physical" | "discord" | "twitter" | "private";
+
 // Room component for spatial organization
 export const Room = {
   id: [] as string[], // Room identifier
   name: [] as string[], // Room name
   description: [] as string[], // Room description
   occupants: [] as number[][], // Array of entity IDs in the room
+  type: [] as RoomType[], // Room type (physical, discord, twitter, private)
 };
 
 // Perception component for storing what an agent perceives

@@ -71,21 +71,62 @@ ArgOS requires a sophisticated interface to manage and monitor complex agent swa
     - Circular (room-based clustering)
   - Group/ungroup clusters
 
-### 3. Room View (Center Panel)
+### 3. Chat Interface (Center Panel)
 
-- **Active Room Display**
+- **Contextual Chat Display**
+
+  - Adapts based on selection:
+    - Room Chat: When room selected
+    - Agent Chat: When agent selected
+    - God Chat: When no selection (system level)
+
+- **Room Chat Mode**
 
   - Real-time activity stream
   - Present agents with attention levels
-  - Stimulus visualization
-  - Interaction history
-  - Environmental context
+  - Filterable stimulus types:
+    - Speech/Messages
+    - Visual actions
+    - Cognitive processes
+    - Environmental changes
+  - Participant list with attention indicators
+  - Room context and description
 
-- **Room Join/Leave**
-  - Join button for each room
-  - Shows current participant count
-  - Attention level indicator
-  - Quick-switch between rooms
+- **Agent Chat Mode**
+
+  - Direct communication with agent
+  - Agent's thought stream
+  - Current perceptions across all rooms
+  - Memory access and query
+  - Relationship insights
+  - Action history
+
+- **God Chat Mode**
+
+  - System-level commands
+  - Agent creation and management
+  - Room creation and configuration
+  - Scenario building
+  - Simulation control
+  - Environment modification
+
+- **Chat Controls**
+
+  - Stimulus type filters
+  - Time range filters
+  - Search within chat
+  - Export conversation
+  - Clear chat
+  - Pin important messages
+
+- **Interactive Elements**
+  - Click agent names to switch to agent chat
+  - Click room references to switch rooms
+  - Click stimuli for detailed view
+  - Drag & drop support for:
+    - Moving agents between rooms
+    - Creating new rooms
+    - Setting up relationships
 
 ### 4. Inspector Panel (Right Panel)
 

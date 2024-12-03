@@ -1,6 +1,6 @@
 import { World } from "../types/bitecs";
 import { addComponent, addEntity } from "bitecs";
-import { Agent, Stimulus } from "../components/agent/Agent";
+import { Agent, Room, Stimulus } from "../components/agent/Agent";
 import { STIMULUS_DECAY, DEFAULT_DECAY_BY_TYPE } from "./stimulus-constants";
 
 // Base types for all stimuli
@@ -17,6 +17,15 @@ interface BaseStimulusOptions {
   decay?: number;
 }
 
+// Helper to find room entity by ID
+function findRoomEntity(roomId: string): number {
+  return (
+    Number(
+      Object.keys(Room.id).find((eid) => Room.id[Number(eid)] === roomId)
+    ) || 0
+  );
+}
+
 /**
  * Core utility to create a basic stimulus entity
  */
@@ -27,7 +36,7 @@ export function createStimulus(
   content: Record<string, any>
 ) {
   const { sourceEntity, roomId } = options;
-  // Use provided decay or default for the stimulus type
+  const roomEntity = findRoomEntity(roomId);
   const decay = options.decay ?? DEFAULT_DECAY_BY_TYPE[type];
 
   const stimulus = addEntity(world);
@@ -39,7 +48,16 @@ export function createStimulus(
   Stimulus.content[stimulus] = JSON.stringify({
     name: Agent.name[sourceEntity],
     role: Agent.role[sourceEntity],
+    timestamp: Date.now(),
+    category: getStimulusCategory(type),
     ...content,
+    metadata: {
+      sourceName: Agent.name[sourceEntity],
+      sourceRole: Agent.role[sourceEntity],
+      roomName: Room.name[roomEntity] || "Unknown Room",
+      decay,
+      ...content.metadata,
+    },
   });
   Stimulus.timestamp[stimulus] = Date.now();
   Stimulus.roomId[stimulus] = roomId;
@@ -48,22 +66,50 @@ export function createStimulus(
   return stimulus;
 }
 
+// Helper function to get UI-friendly category
+function getStimulusCategory(type: StimulusType): string {
+  switch (type) {
+    case "VISUAL":
+      return "Observation";
+    case "AUDITORY":
+      return "Speech";
+    case "COGNITIVE":
+      return "Thought";
+    case "TECHNICAL":
+      return "Technical";
+    case "ENVIRONMENTAL":
+      return "Environment";
+    default:
+      return "Other";
+  }
+}
+
 /**
  * Creates a visual stimulus for an action
  */
 export function createVisualStimulus(
   world: World,
   options: BaseStimulusOptions & {
-    appearance?: boolean; // Whether to include appearance data
+    appearance?: boolean;
     data: Record<string, any>;
+    context?: Record<string, any>;
   }
 ) {
+  const roomEntity = findRoomEntity(options.roomId);
   const content = {
     ...(options.appearance
       ? { appearance: Agent.appearance[options.sourceEntity] }
       : {}),
     ...options.data,
-    location: { roomId: options.roomId },
+    context: options.context,
+    location: {
+      roomId: options.roomId,
+      roomName: Room.name[roomEntity] || "Unknown Room",
+    },
+    metadata: {
+      hasAppearance: !!options.appearance,
+      roomContext: Room.description[roomEntity],
+    },
   };
 
   return createStimulus(world, "VISUAL", options, content);
@@ -78,6 +124,7 @@ export function createCognitiveStimulus(
     activity: string;
     focus: string;
     intensity?: "light" | "moderate" | "deep";
+    context?: Record<string, any>;
   }
 ) {
   const content = {
@@ -85,6 +132,11 @@ export function createCognitiveStimulus(
       activity: options.activity,
       focus: options.focus,
       intensity: options.intensity || "moderate",
+    },
+    context: options.context,
+    metadata: {
+      intensity: options.intensity || "moderate",
+      isDeepThought: options.intensity === "deep",
     },
   };
 
@@ -105,11 +157,17 @@ export function createAuditoryStimulus(
   options: BaseStimulusOptions & {
     message: string;
     tone?: string;
+    target?: number; // Target agent if directed speech
   }
 ) {
   const content = {
     speech: options.message,
     tone: options.tone,
+    metadata: {
+      isDirected: !!options.target,
+      targetName: options.target ? Agent.name[options.target] : undefined,
+      targetRole: options.target ? Agent.role[options.target] : undefined,
+    },
   };
 
   return createStimulus(world, "AUDITORY", options, content);

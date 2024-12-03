@@ -1,267 +1,125 @@
 import express from "express";
 import { createServer } from "http";
 import { WebSocket, WebSocketServer } from "ws";
-import { SimulationRuntime } from "../runtime/SimulationRuntime";
-import { createWorld } from "bitecs";
-import { ThinkingSystem } from "../systems/ThinkingSystem";
-import { RoomSystem } from "../systems/RoomSystem";
-import { ActionSystem } from "../systems/ActionSystem";
-import { StimulusCleanupSystem } from "../systems/StimulusCleanupSystem";
-import { actions } from "../actions";
-import { Agent, Memory, Action, Perception } from "../components/agent/Agent";
-import path from "path";
 import cors from "cors";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { createWorld } from "bitecs";
+import { SimulationRuntime } from "../runtime/SimulationRuntime";
+import { setupSingleAgent } from "../examples/single-agent-setup";
+import { ClientMessage, ServerMessage } from "../types";
+import { logger } from "../utils/logger";
 
 const app = express();
 app.use(cors());
 
-// Serve static files from the client directory in development
-if (process.env.NODE_ENV === "development") {
-  app.use(express.static(path.join(__dirname, "../../src/client")));
-} else {
-  app.use(express.static(path.join(__dirname, "../../dist")));
+const server = createServer(app);
+const wss = new WebSocketServer({ server });
+
+// Create world and runtime
+const world = createWorld();
+const runtime = new SimulationRuntime(world);
+
+// Set up initial scenario with single agent
+const { agentEntity, roomEntity } = setupSingleAgent(runtime);
+
+// Track connected clients
+const clients = new Set<WebSocket>();
+
+// Broadcast to all clients
+function broadcast(message: ServerMessage) {
+  clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(message));
+    }
+  });
 }
 
-const server = createServer(app);
-const wss = new WebSocketServer({
-  server,
-  path: "/ws",
+// Handle runtime events
+runtime.on("worldState", (state) => {
+  broadcast({
+    type: "WORLD_STATE",
+    data: state,
+    timestamp: Date.now(),
+  });
 });
 
-interface SimulationEvent {
-  type: "LOG" | "AGENT_STATE" | "SYSTEM_STATE" | "AGENT_ACTION" | "ERROR";
-  category?: string;
-  data: any;
-  timestamp: number;
-}
+runtime.on("log", (category, data) => {
+  broadcast({
+    type: "LOG",
+    category,
+    data,
+    timestamp: Date.now(),
+  });
+});
 
-export class SimulationServer {
-  private runtime: SimulationRuntime;
-  private clients: Set<WebSocket> = new Set();
-  private isRunning: boolean = false;
+runtime.on("error", (error) => {
+  broadcast({
+    type: "ERROR",
+    data: { message: error.message },
+    timestamp: Date.now(),
+  });
+});
 
-  constructor() {
-    const world = createWorld();
-    this.runtime = new SimulationRuntime(world, {
-      updateInterval: 3000,
-      systems: [
-        RoomSystem,
-        ThinkingSystem,
-        ActionSystem,
-        StimulusCleanupSystem,
-      ],
-      actions,
-    });
+// WebSocket connection handling
+wss.on("connection", (ws) => {
+  clients.add(ws);
+  logger.system("Client connected");
 
-    this.setupWebSocket();
-    this.setupRuntimeEvents();
-  }
+  // Send initial state
+  ws.send(
+    JSON.stringify({
+      type: "SYSTEM_STATE",
+      data: {
+        isRunning: runtime.running,
+        agents: runtime.getWorldState().agents,
+        rooms: runtime.getWorldState().rooms,
+      },
+      timestamp: Date.now(),
+    })
+  );
 
-  private setupRuntimeEvents() {
-    this.runtime.on("log", (level, message) => {
-      // Try to extract clean message from JSON if needed
-      let cleanMessage = message;
-      try {
-        if (typeof message === "string") {
-          const parsed = JSON.parse(message);
-          if (parsed.message) {
-            cleanMessage = parsed.message;
-          }
-        } else if (typeof message === "object" && message !== null) {
-          cleanMessage = message.message || JSON.stringify(message);
-        }
-      } catch (e) {
-        // Not JSON, use as is
-      }
-
-      this.broadcast({
-        type: "LOG",
-        category: level,
-        data: {
-          message: cleanMessage,
-          agentName: message.agentName,
-        },
-        timestamp: Date.now(),
-      });
-    });
-
-    this.runtime.on("agentAction", (agentId, action) => {
-      const agent = this.runtime.getAgentById(agentId);
-
-      this.broadcast({
-        type: "AGENT_ACTION",
-        data: {
-          agentId,
-          agentName: agent?.name,
-          message: action.parameters?.message,
-          tool: action.tool,
-          actionType: action.tool?.toUpperCase(),
-        },
-        timestamp: Date.now(),
-      });
-    });
-
-    this.runtime.on("agentThought", (agentId, thought) => {
-      const agent = this.runtime.getAgentById(agentId);
-
-      let thoughtContent = "";
-      try {
-        if (typeof thought === "string") {
-          thoughtContent = thought;
-        } else if (typeof thought === "object") {
-          if (thought.data?.thought) {
-            thoughtContent = thought.data.thought;
-          } else if (thought.thought) {
-            thoughtContent = thought.thought;
-          }
-        }
-      } catch (e) {
-        thoughtContent = JSON.stringify(thought);
-      }
-
-      this.broadcast({
-        type: "AGENT_STATE",
-        data: {
-          agentId,
-          agentName: agent?.name,
-          thought: thoughtContent,
-        },
-        timestamp: Date.now(),
-      });
-
-      // If there's appearance info, send it as a separate event
-      if (thought.appearance) {
-        this.broadcast({
-          type: "AGENT_STATE",
-          data: {
-            agentId,
-            agentName: agent?.name,
-            appearance: thought.appearance,
-          },
-          timestamp: Date.now(),
-        });
-      }
-    });
-
-    this.runtime.on("stateUpdate", (state) => {
-      const agents = state.agents.map((agent: any) => ({
-        ...agent,
-        active: Agent.active[agent.eid],
-        lastThought: Memory.lastThought[agent.eid],
-        experiences: Memory.experiences[agent.eid],
-        pendingAction: Action.pendingAction[agent.eid],
-        currentStimuli: Perception.currentStimuli[agent.eid],
-      }));
-
-      this.broadcast({
-        type: "SYSTEM_STATE",
-        data: { ...state, agents },
-        timestamp: Date.now(),
-      });
-    });
-
-    this.runtime.on("error", (error) => {
-      this.broadcast({
-        type: "ERROR",
-        data: { message: error.message },
-        timestamp: Date.now(),
-      });
-    });
-  }
-
-  private setupWebSocket() {
-    wss.on("connection", (ws) => {
-      this.clients.add(ws);
-
-      ws.on("message", async (message) => {
-        const command = JSON.parse(message.toString());
-        switch (command.type) {
-          case "START":
-            await this.runtime.start();
-            this.isRunning = true;
-            break;
-          case "PAUSE":
-            this.runtime.stop();
-            this.isRunning = false;
-            break;
-          case "STOP":
-            this.runtime.stop();
-            this.isRunning = false;
-            this.broadcast({
-              type: "SYSTEM_STATE",
-              data: { isRunning: false, agents: [] },
-              timestamp: Date.now(),
-            });
-            // Create new runtime instance
-            const world = createWorld();
-            this.runtime = new SimulationRuntime(world, {
-              updateInterval: 3000,
-              systems: [
-                RoomSystem,
-                ThinkingSystem,
-                ActionSystem,
-                StimulusCleanupSystem,
-              ],
-              actions,
-            });
-            this.setupRuntimeEvents();
-            break;
-          case "RESET":
-            await this.loadScenario(async (runtime) => {
-              const world = createWorld();
-              this.runtime = new SimulationRuntime(world, {
-                updateInterval: 3000,
-                systems: [
-                  RoomSystem,
-                  ThinkingSystem,
-                  ActionSystem,
-                  StimulusCleanupSystem,
-                ],
-                actions,
-              });
-              this.setupRuntimeEvents();
-            });
-            break;
-        }
-      });
-
-      ws.on("close", () => {
-        this.clients.delete(ws);
-      });
-    });
-  }
-
-  private broadcast(event: SimulationEvent) {
-    const message = JSON.stringify(event);
-    this.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    });
-  }
-
-  async loadScenario(setupFn: (runtime: SimulationRuntime) => Promise<void>) {
-    this.runtime.stop();
+  ws.on("message", async (data) => {
     try {
-      await setupFn(this.runtime);
+      const message: ClientMessage = JSON.parse(data.toString());
+
+      switch (message.type) {
+        case "CHAT":
+          // Handle chat messages
+          if (message.data.target) {
+            // Direct message to agent
+            logger.system(
+              `Message to ${message.data.target}: ${message.data.message}`
+            );
+            // TODO: Route message to specific agent
+          } else {
+            // Message to room
+            logger.system(`Message to main room: ${message.data.message}`);
+            // TODO: Route message to room
+          }
+          break;
+
+        case "START":
+          runtime.start();
+          break;
+        case "STOP":
+          runtime.stop();
+          break;
+        case "RESET":
+          runtime.reset();
+          setupSingleAgent(runtime);
+          break;
+      }
     } catch (error) {
-      this.runtime.emit("error", error);
+      logger.error(`Error processing message: ${error}`);
     }
-  }
-}
+  });
 
-// Start the server
+  ws.on("close", () => {
+    clients.delete(ws);
+    logger.system("Client disconnected");
+  });
+});
+
 const PORT = process.env.PORT || 3000;
-const simServer = new SimulationServer();
-
-// Load the basic conversation scenario
-import { setupBasicConversation } from "../examples/basic-conversation";
-simServer.loadScenario(setupBasicConversation);
-
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.system(`Server running on port ${PORT}`);
 });
