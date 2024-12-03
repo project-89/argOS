@@ -48,6 +48,44 @@ The Agent Cognition Architecture is a unified system for modeling intelligent ag
    - Social contexts influence agent behavior
    - Attention patterns affect relationship development
 
+### Cross-Room Cognitive Model
+
+The system implements a unified cognitive model where agents maintain global awareness and memory across all rooms they inhabit. This creates a more realistic and sophisticated agent that can leverage experiences and relationships across different contexts.
+
+1. **Unified Memory System**
+
+   - Single, global memory store across all rooms
+   - Memories tagged with room context but globally accessible
+   - Experiences in one room can inform decisions in others
+   - Relationship information persists across all interactions
+
+2. **Multi-Room Stimulus Processing**
+
+   - Simultaneous stimulus reception from all present rooms
+   - Attention-weighted processing priority
+   - Cross-room context awareness
+   - Ability to recognize patterns across different spaces
+
+3. **Global Thought Stream**
+
+   - Single thought stream incorporating all room contexts
+   - Decision making informed by total environmental awareness
+   - Ability to connect information between rooms
+   - Context-aware response generation
+
+4. **Relationship Building**
+
+   - Relationships develop from interactions across all rooms
+   - Social graph maintains global connection strength
+   - Trust and familiarity persist across contexts
+   - Cross-room interaction history
+
+5. **Attention Management**
+   - Configurable attention distribution across rooms
+   - Dynamic priority adjustment based on activity
+   - Interrupt system for critical events
+   - Background monitoring of low-priority rooms
+
 This architecture provides a flexible foundation for modeling complex agent interactions while maintaining realistic limitations and behaviors. It can scale from simple simulations to complex multi-platform agent networks while keeping a consistent underlying model.
 
 ### System Architecture Diagram
