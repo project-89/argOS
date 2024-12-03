@@ -7,8 +7,14 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useSimulationStore } from "../../../state/simulation";
 
 export function ModernLayout() {
-  const { agents, rooms, selectedAgent, setSelectedAgent } =
-    useSimulationStore();
+  const {
+    agents,
+    rooms,
+    selectedAgent,
+    selectedRoom,
+    setSelectedAgent,
+    setSelectedRoom,
+  } = useSimulationStore();
 
   return (
     <div className="h-full flex flex-col bg-gray-900 text-gray-300">
@@ -19,10 +25,14 @@ export function ModernLayout() {
               agents={agents}
               rooms={rooms}
               selectedAgent={selectedAgent}
-              selectedRoom={null}
+              selectedRoom={selectedRoom}
               onNodeSelect={(nodeType, id) => {
                 if (nodeType === "agent") {
                   setSelectedAgent(id);
+                  setSelectedRoom(null);
+                } else if (nodeType === "room") {
+                  setSelectedRoom(id);
+                  setSelectedAgent(null);
                 }
               }}
             />
@@ -33,7 +43,7 @@ export function ModernLayout() {
           <Panel defaultSize={50} minSize={30}>
             <ChatInterface
               selectedAgent={selectedAgent}
-              selectedRoom={null}
+              selectedRoom={selectedRoom}
               agents={agents}
               rooms={rooms}
               logs={[]}
@@ -46,7 +56,7 @@ export function ModernLayout() {
           <Panel defaultSize={25} minSize={20}>
             <Inspector
               selectedAgent={selectedAgent}
-              selectedRoom={null}
+              selectedRoom={selectedRoom}
               agents={agents}
               rooms={rooms}
               logs={[]}

@@ -8,7 +8,8 @@ export interface SimulationEvent {
     | "PERCEPTION"
     | "WORLD_STATE"
     | "ROOM_UPDATE"
-    | "NETWORK_UPDATE";
+    | "NETWORK_UPDATE"
+    | "ROOM_STIMULUS";
   category?: "thought" | "experience" | "perception" | "system" | string;
   data: any;
   timestamp: number;

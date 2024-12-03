@@ -13,6 +13,7 @@ export const Agent = {
 export const Memory = {
   thoughts: [] as string[][], // Array of thought history
   lastThought: [] as string[], // Most recent thought
+  perceptions: [] as string[][],
   experiences: [] as Array<{
     type: string;
     content: string;

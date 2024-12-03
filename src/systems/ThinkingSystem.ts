@@ -141,12 +141,6 @@ export const ThinkingSystem = createSystem<SystemConfig>(
 
       logger.system(`${agentName} processed perceptions: ${perceptions}`);
 
-      runtime.emit("agentThought", eid, {
-        type: "PERCEPTION",
-        data: perceptions,
-        actionType: "THOUGHT",
-      });
-
       // Generate thought based on perceptions
       const agentState: AgentState = {
         name: agentName,
@@ -172,6 +166,10 @@ export const ThinkingSystem = createSystem<SystemConfig>(
       // Update memory with new thought
       Memory.lastThought[eid] = thought.thought;
       Memory.thoughts[eid] = [...(Memory.thoughts[eid] || []), thought.thought];
+      Memory.perceptions[eid] = [
+        ...(Memory.perceptions[eid] || []),
+        ...perceptions,
+      ];
       runtime.emit("agentThought", eid, thought);
 
       // Queue action for ActionSystem instead of executing immediately

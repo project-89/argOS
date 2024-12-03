@@ -5,12 +5,14 @@ import { StimulusCleanupSystem } from "../systems/StimulusCleanupSystem";
 import { ActionSystem } from "../systems/ActionSystem";
 import { actions } from "../actions";
 import { createAgent } from "../utils/agent-factory";
+import { RoomSystem } from "../systems/RoomSystem";
 
 export function setupSingleAgent() {
   // Create world and runtime with configuration
   const world = createWorld();
   const runtime = new SimulationRuntime(world, {
     systems: [
+      RoomSystem.create,
       ThinkingSystem.create,
       ActionSystem.create,
       StimulusCleanupSystem.create,

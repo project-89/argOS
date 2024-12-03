@@ -106,6 +106,9 @@ export class SimulationRuntime extends EventEmitter {
   }
 
   private setupObservers() {
+    // Clean up any existing observers first
+    this.cleanup();
+
     // Observe room creation
     this.observers.push(
       observe(this.world, onAdd(Room), (eid) => {
@@ -167,6 +170,12 @@ export class SimulationRuntime extends EventEmitter {
       observe(this.world, onSet(Memory), (eid, params) => {
         const agentName = Agent.name[eid];
 
+        console.log(
+          "################Memory changed for agent",
+          agentName,
+          params
+        );
+
         // Emit thought changes
         if (params.lastThought) {
           this.emit("LOG", {
@@ -202,6 +211,56 @@ export class SimulationRuntime extends EventEmitter {
       })
     );
 
+    // Observe stimulus creation
+    this.observers.push(
+      observe(this.world, onAdd(Stimulus), (eid) => {
+        const roomId = Stimulus.roomId[eid];
+        const type = Stimulus.type[eid];
+        const sourceEntity = Stimulus.sourceEntity[eid];
+        const content = Stimulus.content[eid]
+          ? JSON.parse(Stimulus.content[eid])
+          : {};
+        const timestamp = Stimulus.timestamp[eid];
+
+        // Emit room-specific stimulus event
+        this.emit("LOG", {
+          type: "ROOM_STIMULUS",
+          data: {
+            id: eid,
+            type,
+            sourceEntity,
+            content,
+            timestamp,
+            roomId,
+            metadata: {
+              category: this.getStimulusCategory(type),
+              sourceName: sourceEntity ? Agent.name[sourceEntity] : "System",
+              decay: Stimulus.decay[eid],
+            },
+          },
+          timestamp: Date.now(),
+        });
+
+        // Also notify room subscribers
+        const subscribers = this.roomSubscriptions.get(roomId);
+        if (subscribers) {
+          const data = {
+            type: "ROOM_STIMULUS",
+            data: {
+              id: eid,
+              type,
+              sourceEntity,
+              content,
+              timestamp,
+              roomId,
+            },
+            timestamp: Date.now(),
+          };
+          subscribers.forEach((callback) => callback(data));
+        }
+      })
+    );
+
     // Observe Perception changes
     this.observers.push(
       observe(this.world, onSet(Perception), (eid, params) => {
@@ -212,7 +271,7 @@ export class SimulationRuntime extends EventEmitter {
           if (!roomId) return;
 
           // Emit each new stimulus as a perception event
-          params.currentStimuli.forEach((stimulus: StimulusType) => {
+          params.currentStimuli.forEach((stimulus: any) => {
             this.emit("LOG", {
               type: "AGENT_STATE",
               category: "perception",
@@ -226,119 +285,6 @@ export class SimulationRuntime extends EventEmitter {
               timestamp: Date.now(),
             });
           });
-        }
-      })
-    );
-
-    // Observe stimulus creation
-    this.observers.push(
-      observe(this.world, onAdd(Stimulus), (eid) => {
-        const roomId = Stimulus.roomId[eid];
-        const type = Stimulus.type[eid];
-        const sourceEntity = Stimulus.sourceEntity[eid];
-        const content = Stimulus.content[eid]
-          ? JSON.parse(Stimulus.content[eid])
-          : {};
-        const timestamp = Stimulus.timestamp[eid];
-
-        // Emit room-specific stimulus event
-        this.emit("roomStimulus", {
-          roomId,
-          stimulus: {
-            id: eid,
-            type,
-            sourceEntity,
-            content,
-            timestamp,
-            metadata: {
-              category: this.getStimulusCategory(type),
-              sourceName: sourceEntity ? Agent.name[sourceEntity] : "System",
-              decay: Stimulus.decay[eid],
-            },
-          },
-        });
-
-        // Also emit general stimulus event
-        this.emit("stimulus", {
-          id: eid,
-          type,
-          sourceEntity,
-          content,
-          timestamp,
-          roomId,
-          metadata: {
-            category: this.getStimulusCategory(type),
-            sourceName: sourceEntity ? Agent.name[sourceEntity] : "System",
-            decay: Stimulus.decay[eid],
-          },
-        });
-      })
-    );
-
-    // Room stimuli observer
-    this.observers.push(
-      observe(this.world, onAdd(Stimulus), (eid) => {
-        const roomId = Stimulus.roomId[eid];
-        const subscribers = this.roomSubscriptions.get(roomId);
-        if (subscribers) {
-          const data = {
-            type: "ROOM_STIMULUS",
-            data: {
-              id: eid,
-              type: Stimulus.type[eid],
-              sourceEntity: Stimulus.sourceEntity[eid],
-              content: Stimulus.content[eid]
-                ? JSON.parse(Stimulus.content[eid])
-                : {},
-              timestamp: Stimulus.timestamp[eid],
-              roomId: roomId,
-            },
-            timestamp: Date.now(),
-          };
-          subscribers.forEach((callback) => callback(data));
-        }
-      })
-    );
-
-    // Agent thought observer
-    this.observers.push(
-      observe(this.world, onSet(Memory), (eid, params) => {
-        const subscribers = this.agentSubscriptions.get(eid);
-        if (
-          subscribers &&
-          (params.lastThought || params.thoughts || params.experiences)
-        ) {
-          const data = {
-            type: "AGENT_STATE",
-            data: {
-              id: eid,
-              name: Agent.name[eid],
-              lastThought: params.lastThought || Memory.lastThought[eid],
-              thoughts: params.thoughts || Memory.thoughts[eid],
-              experiences: params.experiences || Memory.experiences[eid],
-            },
-            timestamp: Date.now(),
-          };
-          subscribers.forEach((callback) => callback(data));
-        }
-      })
-    );
-
-    // Agent perception observer
-    this.observers.push(
-      observe(this.world, onSet(Perception), (eid, params) => {
-        const subscribers = this.agentSubscriptions.get(eid);
-        if (subscribers && params.currentStimuli) {
-          const data = {
-            type: "AGENT_PERCEPTION",
-            data: {
-              id: eid,
-              name: Agent.name[eid],
-              currentStimuli: params.currentStimuli,
-            },
-            timestamp: Date.now(),
-          };
-          subscribers.forEach((callback) => callback(data));
         }
       })
     );
