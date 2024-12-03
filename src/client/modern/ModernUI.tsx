@@ -1,11 +1,13 @@
 import * as React from "react";
 import { useState, useEffect } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { CommandBar } from "./components/CommandBar";
 import { AgentNetwork } from "./components/AgentNetwork";
 import { ChatInterface } from "./components/ChatInterface";
 import { Inspector } from "./components/Inspector";
 import { Timeline } from "./components/Timeline";
 import { SimulationEvent } from "../../types";
+import "./styles/panels.css";
 
 interface SimulationState {
   isRunning: boolean;
@@ -99,37 +101,47 @@ export function ModernUI() {
         onCommand={sendCommand}
       />
 
-      <div className="flex-1 flex">
-        <div className="w-1/4 border-r border-cyan-900/30">
-          <AgentNetwork
-            agents={state.agents}
-            rooms={state.rooms}
-            selectedAgent={selectedAgent}
-            onSelectAgent={setSelectedAgent}
-          />
-        </div>
+      <PanelGroup direction="vertical" className="flex-1">
+        <Panel defaultSize={85} minSize={50}>
+          <PanelGroup direction="horizontal">
+            <Panel defaultSize={25} minSize={20}>
+              <AgentNetwork
+                agents={state.agents}
+                rooms={state.rooms}
+                selectedAgent={selectedAgent}
+                onSelectAgent={setSelectedAgent}
+              />
+            </Panel>
 
-        <div className="flex-1 border-r border-cyan-900/30">
-          <ChatInterface
-            selectedAgent={selectedAgent}
-            agents={state.agents}
-            logs={state.logs}
-            onSendMessage={handleChatMessage}
-          />
-        </div>
+            <PanelResizeHandle className="w-1 bg-cyan-900/30 hover:bg-cyan-500/50 transition-colors" />
 
-        <div className="w-1/4">
-          <Inspector
-            selectedAgent={selectedAgent}
-            agents={state.agents}
-            logs={state.logs}
-          />
-        </div>
-      </div>
+            <Panel defaultSize={50} minSize={30}>
+              <ChatInterface
+                selectedAgent={selectedAgent}
+                agents={state.agents}
+                logs={state.logs}
+                onSendMessage={handleChatMessage}
+              />
+            </Panel>
 
-      <div className="h-32 border-t border-cyan-900/30">
-        <Timeline logs={state.logs} isRunning={state.isRunning} />
-      </div>
+            <PanelResizeHandle className="w-1 bg-cyan-900/30 hover:bg-cyan-500/50 transition-colors" />
+
+            <Panel defaultSize={25} minSize={20}>
+              <Inspector
+                selectedAgent={selectedAgent}
+                agents={state.agents}
+                logs={state.logs}
+              />
+            </Panel>
+          </PanelGroup>
+        </Panel>
+
+        <PanelResizeHandle className="h-1 bg-cyan-900/30 hover:bg-cyan-500/50 transition-colors" />
+
+        <Panel defaultSize={15} minSize={10}>
+          <Timeline logs={state.logs} isRunning={state.isRunning} />
+        </Panel>
+      </PanelGroup>
     </div>
   );
 }
