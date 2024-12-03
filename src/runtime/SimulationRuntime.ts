@@ -10,17 +10,16 @@ import {
   onSet,
   query,
 } from "bitecs";
-import { EventEmitter } from "events";
-import {
-  Room,
-  Agent,
-  Memory,
-  Stimulus,
-  Perception,
-} from "../components/agent/Agent";
 import { WorldState, Room as RoomType } from "../types";
 import { logger } from "../utils/logger";
 import { StimulusType } from "../utils/stimulus-utils";
+import {
+  Agent,
+  Memory,
+  Perception,
+  Room,
+  Stimulus,
+} from "../components/agent/Agent";
 
 export type ActionModule = {
   schema: any;
@@ -51,6 +50,24 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   components: [Room, Agent, Memory, Stimulus, Perception],
 };
 
+// Remove EventEmitter import and create minimal event system
+class EventEmitter {
+  private events: { [key: string]: Function[] } = {};
+
+  on(event: string, callback: Function) {
+    if (!this.events[event]) {
+      this.events[event] = [];
+    }
+    this.events[event].push(callback);
+  }
+
+  emit(event: string, ...args: any[]) {
+    if (this.events[event]) {
+      this.events[event].forEach((callback) => callback(...args));
+    }
+  }
+}
+
 export class SimulationRuntime extends EventEmitter {
   private world: World;
   private systems: ((world: World) => Promise<World>)[];
@@ -58,6 +75,10 @@ export class SimulationRuntime extends EventEmitter {
   private updateInterval: number;
   private observers: (() => void)[] = [];
   public actions: Record<string, ActionModule>;
+
+  // Subscription tracking
+  private roomSubscriptions = new Map<string, Set<(data: any) => void>>();
+  private agentSubscriptions = new Map<number, Set<(data: any) => void>>();
 
   get isRunning() {
     return this._isRunning;
@@ -251,6 +272,74 @@ export class SimulationRuntime extends EventEmitter {
             decay: Stimulus.decay[eid],
           },
         });
+      })
+    );
+
+    // Room stimuli observer
+    this.observers.push(
+      observe(this.world, onAdd(Stimulus), (eid) => {
+        const roomId = Stimulus.roomId[eid];
+        const subscribers = this.roomSubscriptions.get(roomId);
+        if (subscribers) {
+          const data = {
+            type: "ROOM_STIMULUS",
+            data: {
+              id: eid,
+              type: Stimulus.type[eid],
+              sourceEntity: Stimulus.sourceEntity[eid],
+              content: Stimulus.content[eid]
+                ? JSON.parse(Stimulus.content[eid])
+                : {},
+              timestamp: Stimulus.timestamp[eid],
+              roomId: roomId,
+            },
+            timestamp: Date.now(),
+          };
+          subscribers.forEach((callback) => callback(data));
+        }
+      })
+    );
+
+    // Agent thought observer
+    this.observers.push(
+      observe(this.world, onSet(Memory), (eid, params) => {
+        const subscribers = this.agentSubscriptions.get(eid);
+        if (
+          subscribers &&
+          (params.lastThought || params.thoughts || params.experiences)
+        ) {
+          const data = {
+            type: "AGENT_STATE",
+            data: {
+              id: eid,
+              name: Agent.name[eid],
+              lastThought: params.lastThought || Memory.lastThought[eid],
+              thoughts: params.thoughts || Memory.thoughts[eid],
+              experiences: params.experiences || Memory.experiences[eid],
+            },
+            timestamp: Date.now(),
+          };
+          subscribers.forEach((callback) => callback(data));
+        }
+      })
+    );
+
+    // Agent perception observer
+    this.observers.push(
+      observe(this.world, onSet(Perception), (eid, params) => {
+        const subscribers = this.agentSubscriptions.get(eid);
+        if (subscribers && params.currentStimuli) {
+          const data = {
+            type: "AGENT_PERCEPTION",
+            data: {
+              id: eid,
+              name: Agent.name[eid],
+              currentStimuli: params.currentStimuli,
+            },
+            timestamp: Date.now(),
+          };
+          subscribers.forEach((callback) => callback(data));
+        }
       })
     );
   }
@@ -468,5 +557,68 @@ export class SimulationRuntime extends EventEmitter {
     return Object.keys(Stimulus.roomId)
       .map(Number)
       .filter((eid) => Stimulus.roomId[eid] === Room.id[roomId]);
+  }
+
+  // Room subscriptions
+  subscribeToRoom(roomId: string, callback: (data: any) => void) {
+    if (!this.roomSubscriptions.has(roomId)) {
+      this.roomSubscriptions.set(roomId, new Set());
+    }
+    this.roomSubscriptions.get(roomId)?.add(callback);
+
+    // Immediately send current room state
+    const roomEntity = this.findRoomByStringId(roomId);
+    if (roomEntity) {
+      callback({
+        type: "ROOM_STATE",
+        data: {
+          id: Room.id[roomEntity],
+          name: Room.name[roomEntity],
+          description: Room.description[roomEntity],
+          occupants: Room.occupants[roomEntity],
+          stimuli: this.getRoomStimuli(roomEntity),
+        },
+        timestamp: Date.now(),
+      });
+    }
+
+    return () => {
+      this.roomSubscriptions.get(roomId)?.delete(callback);
+    };
+  }
+
+  // Agent subscriptions
+  subscribeToAgent(agentId: number, callback: (data: any) => void) {
+    if (!this.agentSubscriptions.has(agentId)) {
+      this.agentSubscriptions.set(agentId, new Set());
+    }
+    this.agentSubscriptions.get(agentId)?.add(callback);
+
+    // Immediately send current agent state
+    callback({
+      type: "AGENT_STATE",
+      data: {
+        id: agentId,
+        name: Agent.name[agentId],
+        thoughts: Memory.thoughts[agentId],
+        lastThought: Memory.lastThought[agentId],
+        experiences: Memory.experiences[agentId],
+        currentStimuli: Perception.currentStimuli[agentId],
+      },
+      timestamp: Date.now(),
+    });
+
+    return () => {
+      this.agentSubscriptions.get(agentId)?.delete(callback);
+    };
+  }
+
+  // Helper to find room by string ID
+  private findRoomByStringId(roomId: string): number | null {
+    return (
+      Object.keys(Room.id)
+        .map(Number)
+        .find((eid) => Room.id[eid] === roomId) ?? null
+    );
   }
 }

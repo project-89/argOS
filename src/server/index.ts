@@ -1,10 +1,18 @@
+import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import { WebSocket, WebSocketServer } from "ws";
 import cors from "cors";
 import { setupSingleAgent } from "../examples/single-agent-setup";
-import { ClientMessage, ServerMessage } from "../types";
+import { ClientMessage } from "../types";
 import { logger } from "../utils/logger";
+
+// Validate required environment variables
+if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  throw new Error(
+    "GOOGLE_GENERATIVE_AI_API_KEY is required but not set in environment variables"
+  );
+}
 
 const app = express();
 app.use(cors());
@@ -18,59 +26,28 @@ const { runtime, agentEntity, roomEntity } = setupSingleAgent();
 // Track connected clients
 const clients = new Set<WebSocket>();
 
-// Broadcast to all clients
-function broadcast(message: ServerMessage) {
-  clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(message));
-    }
-  });
-}
-
-// Handle runtime events
-runtime.on("worldState", (state) => {
-  broadcast({
-    type: "SYSTEM_STATE",
-    data: {
-      ...state,
-      isRunning: runtime.isRunning,
-    },
-    timestamp: Date.now(),
-  });
-});
-
-runtime.on("log", (category, data) => {
-  broadcast({
-    type: "LOG",
-    category,
-    data,
-    timestamp: Date.now(),
-  });
-});
-
 // Handle WebSocket connections
 wss.on("connection", (ws) => {
   clients.add(ws);
   logger.system("Client connected");
 
   // Send initial world state
+  const worldState = runtime.getWorldState();
   ws.send(
     JSON.stringify({
-      type: "SYSTEM_STATE",
-      data: {
-        ...runtime.getWorldState(),
-        isRunning: runtime.isRunning,
-      },
+      type: "WORLD_STATE",
+      data: worldState,
       timestamp: Date.now(),
     })
   );
 
+  // Handle client messages
   ws.on("message", async (data) => {
     try {
       const message = JSON.parse(data.toString()) as ClientMessage;
       switch (message.type) {
         case "CHAT":
-          // Handle chat messages
+          // TODO: Handle chat messages
           break;
         case "START":
           runtime.start();

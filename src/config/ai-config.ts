@@ -1,5 +1,4 @@
 import { google } from "@ai-sdk/google";
-import "./env";
 
 // Initialize the Google model with safety settings
 export const geminiProModel = google("gemini-1.5-pro-latest", {

@@ -6,30 +6,32 @@ import { AgentNetwork } from "./components/AgentNetwork";
 import { ChatInterface } from "./components/ChatInterface";
 import { Inspector } from "./components/Inspector";
 import { Timeline } from "./components/Timeline";
-import { SimulationEvent } from "../../types";
+import { SimulationEvent, WorldState } from "../../types";
+import { useSimulationStore } from "../../state/simulation";
+import { setupSingleAgent } from "../../examples/single-agent-setup";
 import "./styles/panels.css";
 
-interface SimulationState {
-  isRunning: boolean;
-  agents: any[];
-  rooms: any[];
-  logs: SimulationEvent[];
+interface RoomSubscription {
+  unsubscribe: () => void;
+  agentUnsubscribes: Map<number, () => void>;
 }
 
 export function ModernUI() {
-  const [state, setState] = useState<SimulationState>({
-    isRunning: false,
-    agents: [],
-    rooms: [],
-    logs: [],
-  });
-  const [ws, setWs] = useState<WebSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-  const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
+  const [ws, setWs] = useState<WebSocket | null>(null);
+  const {
+    agents,
+    rooms,
+    selectedAgent,
+    selectedRoom,
+    setAgents,
+    setRooms,
+    setIsRunning,
+  } = useSimulationStore();
 
-  // WebSocket setup
+  // Initialize runtime and WebSocket
   useEffect(() => {
+    const { runtime } = setupSingleAgent();
     const socket = new WebSocket(`ws://${window.location.hostname}:3000/ws`);
 
     socket.onopen = () => {
@@ -47,37 +49,71 @@ export function ModernUI() {
     };
 
     socket.onmessage = (event) => {
-      const message: SimulationEvent = JSON.parse(event.data);
-      setState((prev) => {
-        switch (message.type) {
-          case "SYSTEM_STATE":
-            return {
-              ...prev,
-              isRunning: message.data.isRunning,
-              agents: message.data.agents || prev.agents,
-              rooms: message.data.rooms || prev.rooms,
-            };
-          case "LOG":
-          case "AGENT_ACTION":
-          case "AGENT_STATE":
-            // Add timestamp if not present
-            const eventWithTimestamp = {
-              ...message,
-              timestamp: message.timestamp || Date.now(),
-            };
-            return {
-              ...prev,
-              logs: [...prev.logs, eventWithTimestamp].slice(-100),
-            };
-          default:
-            return prev;
-        }
-      });
+      const message = JSON.parse(event.data);
+      if (message.type === "WORLD_STATE") {
+        const worldState = message.data as WorldState;
+        setAgents(worldState.agents);
+        setRooms(worldState.rooms);
+      }
     };
 
     setWs(socket);
-    return () => socket.close();
+
+    return () => {
+      socket.close();
+    };
   }, []);
+
+  // Handle room subscriptions
+  useEffect(() => {
+    if (!selectedRoom) return;
+
+    const { runtime } = setupSingleAgent();
+    const agentUnsubscribes = new Map<number, () => void>();
+
+    // Subscribe to room
+    const unsubRoom = runtime.subscribeToRoom(selectedRoom, (event) => {
+      console.log("Room event:", event);
+
+      // Handle room state updates
+      if (event.type === "ROOM_STATE") {
+        // Subscribe to all agents in room
+        event.data.occupants.forEach((agentId: number) => {
+          if (!agentUnsubscribes.has(agentId)) {
+            const unsubAgent = runtime.subscribeToAgent(
+              agentId,
+              (agentEvent) => {
+                console.log("Agent event:", agentEvent);
+              }
+            );
+            agentUnsubscribes.set(agentId, unsubAgent);
+          }
+        });
+      }
+    });
+
+    return () => {
+      unsubRoom();
+      agentUnsubscribes.forEach((unsub) => unsub());
+    };
+  }, [selectedRoom]);
+
+  // Handle agent subscriptions
+  useEffect(() => {
+    if (!selectedAgent) return;
+
+    const { runtime } = setupSingleAgent();
+    const unsubAgent = runtime.subscribeToAgent(
+      Number(selectedAgent),
+      (event) => {
+        console.log("Agent event:", event);
+      }
+    );
+
+    return () => {
+      unsubAgent();
+    };
+  }, [selectedAgent]);
 
   const sendCommand = (type: string) => {
     if (ws && isConnected) {
@@ -85,48 +121,10 @@ export function ModernUI() {
     }
   };
 
-  const handleChatMessage = (message: string) => {
-    if (ws && isConnected) {
-      ws.send(
-        JSON.stringify({
-          type: "CHAT",
-          data: {
-            message,
-            target: selectedAgent,
-            roomId: selectedRoom,
-          },
-        })
-      );
-    }
-  };
-
-  const handleNodeSelect = (nodeType: "agent" | "room", id: string) => {
-    if (nodeType === "agent") {
-      setSelectedAgent(id);
-      setSelectedRoom(null);
-    } else {
-      setSelectedRoom(id);
-      setSelectedAgent(null);
-    }
-  };
-
-  // Filter logs based on selection
-  const filteredLogs = state.logs.filter((log) => {
-    if (selectedAgent) {
-      return (
-        log.agentName === selectedAgent || log.data.agentId === selectedAgent
-      );
-    }
-    if (selectedRoom) {
-      return log.data.roomId === selectedRoom;
-    }
-    return true;
-  });
-
   return (
     <div className="h-screen flex flex-col">
       <CommandBar
-        isRunning={state.isRunning}
+        isRunning={false}
         isConnected={isConnected}
         onCommand={sendCommand}
       />
@@ -136,11 +134,17 @@ export function ModernUI() {
           <PanelGroup direction="horizontal">
             <Panel defaultSize={25} minSize={20}>
               <AgentNetwork
-                agents={state.agents}
-                rooms={state.rooms}
+                agents={agents}
+                rooms={rooms}
                 selectedAgent={selectedAgent}
                 selectedRoom={selectedRoom}
-                onNodeSelect={handleNodeSelect}
+                onNodeSelect={(nodeType, id) => {
+                  if (nodeType === "agent") {
+                    useSimulationStore.getState().setSelectedAgent(id);
+                  } else {
+                    useSimulationStore.getState().setSelectedRoom(id);
+                  }
+                }}
               />
             </Panel>
 
@@ -150,10 +154,10 @@ export function ModernUI() {
               <ChatInterface
                 selectedAgent={selectedAgent}
                 selectedRoom={selectedRoom}
-                agents={state.agents}
-                rooms={state.rooms}
-                logs={filteredLogs}
-                onSendMessage={handleChatMessage}
+                agents={agents}
+                rooms={rooms}
+                logs={[]}
+                onSendMessage={() => {}}
               />
             </Panel>
 
@@ -163,9 +167,9 @@ export function ModernUI() {
               <Inspector
                 selectedAgent={selectedAgent}
                 selectedRoom={selectedRoom}
-                agents={state.agents}
-                rooms={state.rooms}
-                logs={filteredLogs}
+                agents={agents}
+                rooms={rooms}
+                logs={[]}
               />
             </Panel>
           </PanelGroup>
@@ -174,7 +178,7 @@ export function ModernUI() {
         <PanelResizeHandle className="h-1 bg-cyan-900/30 hover:bg-cyan-500/50 transition-colors" />
 
         <Panel defaultSize={15} minSize={10}>
-          <Timeline logs={filteredLogs} isRunning={state.isRunning} />
+          <Timeline logs={[]} isRunning={false} />
         </Panel>
       </PanelGroup>
     </div>
