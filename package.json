@@ -32,7 +32,8 @@
     "react-router-dom": "^6.28.0",
     "ws": "^8.18.0",
     "zod": "^3.23.8",
-    "zod-to-json-schema": "^3.23.5"
+    "zod-to-json-schema": "^3.23.5",
+    "zustand": "^5.0.1"
   },
   "devDependencies": {
     "@types/dotenv": "^6.1.1",

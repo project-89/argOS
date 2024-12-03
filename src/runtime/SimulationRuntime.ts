@@ -11,9 +11,16 @@ import {
   query,
 } from "bitecs";
 import { EventEmitter } from "events";
-import { Room, Agent, Memory, Stimulus } from "../components/agent/Agent";
+import {
+  Room,
+  Agent,
+  Memory,
+  Stimulus,
+  Perception,
+} from "../components/agent/Agent";
 import { WorldState, Room as RoomType } from "../types";
 import { logger } from "../utils/logger";
+import { StimulusType } from "../utils/stimulus-utils";
 
 export type ActionModule = {
   schema: any;
@@ -41,7 +48,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   updateInterval: 100,
   systems: [],
   actions: {},
-  components: [Room, Agent, Memory, Stimulus],
+  components: [Room, Agent, Memory, Stimulus, Perception],
 };
 
 export class SimulationRuntime extends EventEmitter {
@@ -134,13 +141,83 @@ export class SimulationRuntime extends EventEmitter {
       })
     );
 
+    // Observe Memory changes for thoughts and experiences
+    this.observers.push(
+      observe(this.world, onSet(Memory), (eid, params) => {
+        const agentName = Agent.name[eid];
+
+        // Emit thought changes
+        if (params.lastThought) {
+          this.emit("LOG", {
+            type: "AGENT_STATE",
+            category: "thought",
+            data: {
+              thought: params.lastThought,
+              agentId: eid,
+              agentName,
+              actionType: "THOUGHT",
+            },
+            timestamp: Date.now(),
+          });
+        }
+
+        // Emit new experiences
+        if (params.experiences) {
+          const newExperiences = params.experiences.slice(-1)[0];
+          if (newExperiences) {
+            this.emit("LOG", {
+              type: "AGENT_STATE",
+              category: "experience",
+              data: {
+                ...newExperiences,
+                agentId: eid,
+                agentName,
+                actionType: newExperiences.type.toUpperCase(),
+              },
+              timestamp: newExperiences.timestamp,
+            });
+          }
+        }
+      })
+    );
+
+    // Observe Perception changes
+    this.observers.push(
+      observe(this.world, onSet(Perception), (eid, params) => {
+        if (params.currentStimuli) {
+          const agentName = Agent.name[eid];
+          const roomId = this.getAgentRoom(eid)?.id;
+
+          if (!roomId) return;
+
+          // Emit each new stimulus as a perception event
+          params.currentStimuli.forEach((stimulus: StimulusType) => {
+            this.emit("LOG", {
+              type: "AGENT_STATE",
+              category: "perception",
+              data: {
+                stimulus,
+                agentId: eid,
+                agentName,
+                roomId,
+                actionType: "PERCEPTION",
+              },
+              timestamp: Date.now(),
+            });
+          });
+        }
+      })
+    );
+
     // Observe stimulus creation
     this.observers.push(
       observe(this.world, onAdd(Stimulus), (eid) => {
         const roomId = Stimulus.roomId[eid];
         const type = Stimulus.type[eid];
         const sourceEntity = Stimulus.sourceEntity[eid];
-        const content = JSON.parse(Stimulus.content[eid]);
+        const content = Stimulus.content[eid]
+          ? JSON.parse(Stimulus.content[eid])
+          : {};
         const timestamp = Stimulus.timestamp[eid];
 
         // Emit room-specific stimulus event

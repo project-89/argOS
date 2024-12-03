@@ -1,6 +1,7 @@
 import * as React from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import { getTailwindColor } from "../../../utils/colors";
+import { NetworkNode, NetworkLink } from "../../../types";
 
 interface Node {
   id: string;
@@ -26,14 +27,16 @@ interface AgentNetworkProps {
   agents: any[];
   rooms: any[];
   selectedAgent: string | null;
-  onSelectAgent: (agentId: string | null) => void;
+  selectedRoom: string | null;
+  onNodeSelect: (nodeType: "agent" | "room", id: string) => void;
 }
 
 export function AgentNetwork({
   agents,
   rooms,
   selectedAgent,
-  onSelectAgent,
+  selectedRoom,
+  onNodeSelect,
 }: AgentNetworkProps) {
   const graphRef = React.useRef<any>();
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -129,6 +132,14 @@ export function AgentNetwork({
               ctx.beginPath();
               ctx.arc(node.x, node.y, nodeR, 0, 2 * Math.PI);
               ctx.fillStyle = node.color;
+              if (
+                (node.type === "agent" && node.name === selectedAgent) ||
+                (node.type === "room" && node.id === `room-${selectedRoom}`)
+              ) {
+                ctx.strokeStyle = "#fff";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+              }
               ctx.fill();
 
               // Draw label with background
@@ -151,7 +162,10 @@ export function AgentNetwork({
             backgroundColor="transparent"
             onNodeClick={(node: any) => {
               if (node.type === "agent") {
-                onSelectAgent(node.name);
+                onNodeSelect("agent", node.name);
+              } else if (node.type === "room") {
+                const roomId = node.id.replace("room-", "");
+                onNodeSelect("room", roomId);
               }
             }}
             cooldownTicks={50}

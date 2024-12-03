@@ -24,7 +24,9 @@ export const StimulusCleanupSystem = createSystem(
       // Emit cleanup event before removing
       runtime.emit("log", "system", {
         message: `Cleaned up stimulus: ${
-          JSON.parse(Stimulus.content[eid]).action || "unknown"
+          (Stimulus.content[eid]
+            ? JSON.parse(Stimulus.content[eid]).action
+            : null) || "unknown"
         }`,
         actionType: "SYSTEM",
       });

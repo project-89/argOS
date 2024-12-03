@@ -26,6 +26,7 @@ export function ModernUI() {
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [selectedRoom, setSelectedRoom] = useState<string | null>(null);
 
   // WebSocket setup
   useEffect(() => {
@@ -59,9 +60,14 @@ export function ModernUI() {
           case "LOG":
           case "AGENT_ACTION":
           case "AGENT_STATE":
+            // Add timestamp if not present
+            const eventWithTimestamp = {
+              ...message,
+              timestamp: message.timestamp || Date.now(),
+            };
             return {
               ...prev,
-              logs: [...prev.logs, message].slice(-100),
+              logs: [...prev.logs, eventWithTimestamp].slice(-100),
             };
           default:
             return prev;
@@ -87,11 +93,35 @@ export function ModernUI() {
           data: {
             message,
             target: selectedAgent,
+            roomId: selectedRoom,
           },
         })
       );
     }
   };
+
+  const handleNodeSelect = (nodeType: "agent" | "room", id: string) => {
+    if (nodeType === "agent") {
+      setSelectedAgent(id);
+      setSelectedRoom(null);
+    } else {
+      setSelectedRoom(id);
+      setSelectedAgent(null);
+    }
+  };
+
+  // Filter logs based on selection
+  const filteredLogs = state.logs.filter((log) => {
+    if (selectedAgent) {
+      return (
+        log.agentName === selectedAgent || log.data.agentId === selectedAgent
+      );
+    }
+    if (selectedRoom) {
+      return log.data.roomId === selectedRoom;
+    }
+    return true;
+  });
 
   return (
     <div className="h-screen flex flex-col">
@@ -109,7 +139,8 @@ export function ModernUI() {
                 agents={state.agents}
                 rooms={state.rooms}
                 selectedAgent={selectedAgent}
-                onSelectAgent={setSelectedAgent}
+                selectedRoom={selectedRoom}
+                onNodeSelect={handleNodeSelect}
               />
             </Panel>
 
@@ -118,8 +149,10 @@ export function ModernUI() {
             <Panel defaultSize={50} minSize={30}>
               <ChatInterface
                 selectedAgent={selectedAgent}
+                selectedRoom={selectedRoom}
                 agents={state.agents}
-                logs={state.logs}
+                rooms={state.rooms}
+                logs={filteredLogs}
                 onSendMessage={handleChatMessage}
               />
             </Panel>
@@ -129,8 +162,10 @@ export function ModernUI() {
             <Panel defaultSize={25} minSize={20}>
               <Inspector
                 selectedAgent={selectedAgent}
+                selectedRoom={selectedRoom}
                 agents={state.agents}
-                logs={state.logs}
+                rooms={state.rooms}
+                logs={filteredLogs}
               />
             </Panel>
           </PanelGroup>
@@ -139,7 +174,7 @@ export function ModernUI() {
         <PanelResizeHandle className="h-1 bg-cyan-900/30 hover:bg-cyan-500/50 transition-colors" />
 
         <Panel defaultSize={15} minSize={10}>
-          <Timeline logs={state.logs} isRunning={state.isRunning} />
+          <Timeline logs={filteredLogs} isRunning={state.isRunning} />
         </Panel>
       </PanelGroup>
     </div>

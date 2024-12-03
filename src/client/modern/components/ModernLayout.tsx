@@ -1,8 +1,8 @@
 import * as React from "react";
 import { AgentNetwork } from "./AgentNetwork";
-import { AgentInspector } from "./AgentInspector";
-import { AgentTimeline } from "./AgentTimeline";
-import { AgentChat } from "./AgentChat";
+import { Inspector } from "./Inspector";
+import { Timeline } from "./Timeline";
+import { ChatInterface } from "./ChatInterface";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useSimulationStore } from "../../../state/simulation";
 
@@ -19,20 +19,38 @@ export function ModernLayout() {
               agents={agents}
               rooms={rooms}
               selectedAgent={selectedAgent}
-              onSelectAgent={setSelectedAgent}
+              selectedRoom={null}
+              onNodeSelect={(nodeType, id) => {
+                if (nodeType === "agent") {
+                  setSelectedAgent(id);
+                }
+              }}
             />
           </Panel>
 
           <PanelResizeHandle className="w-1 bg-cyan-900/30 hover:bg-cyan-500/50 transition-colors" />
 
           <Panel defaultSize={50} minSize={30}>
-            <AgentChat selectedAgent={selectedAgent} />
+            <ChatInterface
+              selectedAgent={selectedAgent}
+              selectedRoom={null}
+              agents={agents}
+              rooms={rooms}
+              logs={[]}
+              onSendMessage={() => {}}
+            />
           </Panel>
 
           <PanelResizeHandle className="w-1 bg-cyan-900/30 hover:bg-cyan-500/50 transition-colors" />
 
           <Panel defaultSize={25} minSize={20}>
-            <AgentInspector selectedAgent={selectedAgent} />
+            <Inspector
+              selectedAgent={selectedAgent}
+              selectedRoom={null}
+              agents={agents}
+              rooms={rooms}
+              logs={[]}
+            />
           </Panel>
         </PanelGroup>
       </div>
@@ -40,7 +58,7 @@ export function ModernLayout() {
       <PanelGroup direction="vertical">
         <Panel>
           <div className="h-48 border-t border-cyan-900/30">
-            <AgentTimeline />
+            <Timeline logs={[]} isRunning={false} />
           </div>
         </Panel>
       </PanelGroup>

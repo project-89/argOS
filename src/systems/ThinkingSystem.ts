@@ -121,7 +121,9 @@ export const ThinkingSystem = createSystem<SystemConfig>(
           type: Stimulus.type[sid],
           sourceEntity: Stimulus.sourceEntity[sid],
           source: Stimulus.source[sid],
-          content: JSON.parse(Stimulus.content[sid]),
+          content: Stimulus.content[sid]
+            ? JSON.parse(Stimulus.content[sid])
+            : {},
           timestamp: Stimulus.timestamp[sid],
           roomId: Stimulus.roomId[sid],
         }));

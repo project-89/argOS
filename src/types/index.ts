@@ -9,12 +9,18 @@ export interface SimulationEvent {
     | "WORLD_STATE"
     | "ROOM_UPDATE"
     | "NETWORK_UPDATE";
-  category?: string;
+  category?: "thought" | "experience" | "perception" | "system" | string;
   data: any;
   timestamp: number;
   agentId?: number;
   agentName?: string;
-  actionType?: "SPEECH" | "THOUGHT" | "WAIT" | "MOVEMENT" | "SYSTEM";
+  actionType?:
+    | "SPEECH"
+    | "THOUGHT"
+    | "WAIT"
+    | "MOVEMENT"
+    | "PERCEPTION"
+    | "SYSTEM";
 }
 
 export interface AgentColor {
