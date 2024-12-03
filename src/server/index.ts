@@ -91,7 +91,7 @@ export class SimulationServer {
 
     this.runtime.on("agentAction", (agentId, action) => {
       const agent = this.runtime.getAgentById(agentId);
-      console.log("Broadcasting agent action:", { agentId, agent, action });
+
       this.broadcast({
         type: "AGENT_ACTION",
         data: {

@@ -48,7 +48,7 @@ export async function execute(
 
   // Log the speech with agent name
   const agentName = Agent.name[eid];
-  console.log("Speak action executed:", { agentName, message, tone, target });
+
   logger.agent(eid, `Says: ${message}`);
 
   // Create visual stimulus for speaking action

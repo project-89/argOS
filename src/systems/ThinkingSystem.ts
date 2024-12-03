@@ -95,20 +95,27 @@ function emitAppearanceStimulus(
   });
 }
 
-export const ThinkingSystem = createSystem((runtime: SimulationRuntime) => {
-  return async (world: World) => {
-    const agents = query(world, [Agent]);
-    const stimuli = query(world, [Stimulus]);
+export const ThinkingSystem = createSystem<SystemConfig>(
+  (runtime) => async (world: World) => {
+    const agents = query(world, [Agent, Memory]);
+    logger.system(`ThinkingSystem processing ${agents.length} agents`);
 
     for (const eid of agents) {
       if (!Agent.active[eid]) continue;
 
-      // Get agent's perceptions
-      const agentRoom = findAgentRoom(world, eid);
-      if (!agentRoom) continue;
+      const agentName = Agent.name[eid];
+      logger.system(`Processing thoughts for ${agentName}`);
 
+      // Get perceptions from current room
+      const agentRoom = findAgentRoom(world, eid);
+      if (!agentRoom) {
+        logger.system(`No room found for ${agentName}`);
+        continue;
+      }
+
+      const stimuli = query(world, [Stimulus]);
       const roomId = Room.id[agentRoom];
-      const perceptions = stimuli
+      const currentPerceptions = stimuli
         .filter((sid) => Stimulus.roomId[sid] === roomId)
         .map((sid) => ({
           type: Stimulus.type[sid],
@@ -119,29 +126,34 @@ export const ThinkingSystem = createSystem((runtime: SimulationRuntime) => {
           roomId: Stimulus.roomId[sid],
         }));
 
-      // Process perceptions
-      const processedPerceptions = await processPerceptions(
+      logger.system(
+        `${agentName} has ${currentPerceptions.length} perceptions`
+      );
+
+      // Process perceptions into narrative
+      const perceptions = await processPerceptions(
         eid,
-        perceptions,
+        currentPerceptions,
         world
       );
 
-      // Emit perception event
+      logger.system(`${agentName} processed perceptions: ${perceptions}`);
+
       runtime.emit("agentThought", eid, {
         type: "PERCEPTION",
-        data: processedPerceptions,
+        data: perceptions,
         actionType: "THOUGHT",
       });
 
-      // Generate thought
-      const thought = await generateThought({
-        name: Agent.name[eid],
+      // Generate thought based on perceptions
+      const agentState: AgentState = {
+        name: agentName,
         role: Agent.role[eid],
         systemPrompt: Agent.systemPrompt[eid],
         thoughtHistory: Memory.thoughts[eid] || [],
         perceptions: {
-          narrative: processedPerceptions,
-          raw: perceptions.map((p) => ({
+          narrative: perceptions,
+          raw: currentPerceptions.map((p) => ({
             type: p.type,
             source: p.sourceEntity,
             data: p.content,
@@ -149,25 +161,32 @@ export const ThinkingSystem = createSystem((runtime: SimulationRuntime) => {
         },
         experiences: Memory.experiences[eid] || [],
         availableTools: runtime.getAvailableTools(),
-      });
+      };
 
-      // Emit thought event
-      runtime.emit("agentThought", eid, {
-        type: "THOUGHT",
-        data: thought,
-        actionType: "THOUGHT",
-      });
+      logger.system(`Generating thought for ${agentName}`);
+      const thought = await generateThought(agentState);
+      logger.system(`${agentName} generated thought: ${thought.thought}`);
 
-      // Execute action if one was generated
+      // Update memory with new thought
+      Memory.lastThought[eid] = thought.thought;
+      Memory.thoughts[eid] = [...(Memory.thoughts[eid] || []), thought.thought];
+      runtime.emit("agentThought", eid, thought);
+
+      // Queue action for ActionSystem instead of executing immediately
       if (thought.action) {
-        await runtime.executeAction(
-          thought.action.tool,
-          eid,
-          thought.action.parameters
-        );
+        logger.system(`${agentName} queued action: ${thought.action.tool}`);
+        Action.pendingAction[eid] = thought.action;
+      }
+
+      // Update appearance and create visual stimulus if provided
+      if (thought.appearance) {
+        const agentRoom = findAgentRoom(world, eid);
+        if (agentRoom) {
+          emitAppearanceStimulus(world, eid, agentRoom, thought.appearance);
+        }
       }
     }
 
     return world;
-  };
-});
+  }
+);

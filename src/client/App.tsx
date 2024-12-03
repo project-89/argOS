@@ -19,7 +19,6 @@ const LogMessage = ({
 }) => {
   const agentName = log.data.agentName;
   const agentColor = agentName ? getTailwindColor(agentName) : "text-gray-400";
-  console.log(`Color for ${agentName}:`, agentColor);
 
   return (
     <div className="font-mono text-sm">
@@ -289,23 +288,16 @@ export function App() {
                       })()}
                       {state.logs
                         .filter((log) => {
-                          console.log("Checking log:", log);
-                          // Show only speech actions
+                          // Show speech actions
                           if (log.type === "AGENT_ACTION") {
-                            console.log(
-                              "Action type:",
-                              log.data.actionType,
-                              "Tool:",
-                              log.data.tool
-                            );
-                            return log.data.tool === "speak";
+                            return log.data.actionType === "SPEECH";
                           }
                           // Show appearance changes
-                          if (
-                            log.type === "AGENT_STATE" &&
-                            log.data.appearance
-                          ) {
-                            return true;
+                          if (log.type === "AGENT_STATE") {
+                            return (
+                              log.data.appearance ||
+                              log.data.actionType === "APPEARANCE"
+                            );
                           }
                           return false;
                         })
