@@ -1,3 +1,4 @@
+import "dotenv/config";
 import {
   World,
   addEntity,
@@ -21,6 +22,13 @@ import {
 import { ComponentEventBus } from "./ComponentEventBus";
 import { ComponentSync } from "./ComponentSync";
 import EventEmitter from "events";
+
+// Validate required environment variables
+if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  throw new Error(
+    "GOOGLE_GENERATIVE_AI_API_KEY is required but not set in environment variables"
+  );
+}
 
 export type ActionModule = {
   schema: any;
@@ -67,18 +75,18 @@ export class SimulationRuntime extends EventEmitter {
 
   // Event handlers
   private agentUpdateHandlers: Set<
-    (agentId: string, roomId: string, data: any) => void
+    (agentId: number, roomId: number, data: any) => void
   > = new Set();
-  private roomUpdateHandlers: Set<(roomId: string, data: any) => void> =
+  private roomUpdateHandlers: Set<(roomId: number, data: any) => void> =
     new Set();
   private worldUpdateHandlers: Set<(data: any) => void> = new Set();
 
-  onAgentUpdate(handler: (agentId: string, roomId: string, data: any) => void) {
+  onAgentUpdate(handler: (agentId: number, roomId: number, data: any) => void) {
     this.agentUpdateHandlers.add(handler);
     return () => this.agentUpdateHandlers.delete(handler);
   }
 
-  onRoomUpdate(handler: (roomId: string, data: any) => void) {
+  onRoomUpdate(handler: (roomId: number, data: any) => void) {
     this.roomUpdateHandlers.add(handler);
     return () => this.roomUpdateHandlers.delete(handler);
   }
@@ -90,11 +98,11 @@ export class SimulationRuntime extends EventEmitter {
 
   private emitAgentUpdate(agentId: number, roomId: number, data: any) {
     this.agentUpdateHandlers.forEach((handler) =>
-      handler(agentId.toString(), roomId.toString(), data)
+      handler(agentId, roomId, data)
     );
   }
 
-  private emitRoomUpdate(roomId: string, data: any) {
+  private emitRoomUpdate(roomId: number, data: any) {
     this.roomUpdateHandlers.forEach((handler) => handler(roomId, data));
   }
 
@@ -169,9 +177,42 @@ export class SimulationRuntime extends EventEmitter {
     return this.world;
   }
 
-  async start() {
+  start() {
+    if (this._isRunning) return;
     this._isRunning = true;
-    this.emitWorldState();
+
+    // Emit initial state through component events
+    const agents = query(this.world, [Agent]);
+    const rooms = query(this.world, [Room]);
+
+    rooms.forEach((roomId) => {
+      this.eventBus.broadcast(`room:${roomId}`, {
+        type: "state",
+        data: {
+          id: roomId,
+          name: Room.name[roomId],
+          description: Room.description[roomId],
+          type: Room.type[roomId],
+        },
+      });
+    });
+
+    agents.forEach((eid) => {
+      this.eventBus.broadcast(`agent:${Agent.id[eid]}`, {
+        type: "state",
+        data: {
+          id: eid,
+          name: Agent.name[eid],
+          role: Agent.role[eid],
+          systemPrompt: Agent.systemPrompt[eid],
+          active: Agent.active[eid],
+          platform: Agent.platform[eid],
+          appearance: Agent.appearance[eid],
+          attention: Agent.attention[eid],
+        },
+      });
+    });
+
     this.run();
   }
 
@@ -200,8 +241,8 @@ export class SimulationRuntime extends EventEmitter {
           this.world = await system(this.world);
         }
 
-        // Emit world state updates
-        this.emitWorldState();
+        // Update component event bus - this will trigger component change events
+        this.eventBus.update();
 
         // Calculate time spent and adjust delay
         const elapsed = Date.now() - startTime;
@@ -229,7 +270,6 @@ export class SimulationRuntime extends EventEmitter {
     const roomEntity = addEntity(this.world);
 
     setComponent(this.world, roomEntity, Room, {
-      id: roomData.id || `room-${roomEntity}`,
       name: roomData.name || "New Room",
       description: roomData.description || "",
       type: roomData.type || "physical",
@@ -282,7 +322,7 @@ export class SimulationRuntime extends EventEmitter {
   // State Management
   getWorldState(): WorldState {
     const agents = query(this.world, [Agent]).map((eid) => ({
-      id: Agent.id[eid],
+      id: eid,
       eid,
       name: Agent.name[eid],
       role: Agent.role[eid],
@@ -292,13 +332,13 @@ export class SimulationRuntime extends EventEmitter {
     }));
 
     const rooms = query(this.world, [Room]).map((eid) => ({
-      id: Room.id[eid],
+      id: eid,
       eid,
       name: Room.name[eid],
       type: Room.type[eid],
       description: Room.description[eid],
       occupants: query(this.world, [OccupiesRoom(eid)]).map(
-        (agentEid) => Agent.id[agentEid]
+        (agentEid) => agentEid
       ),
     }));
 
@@ -308,7 +348,7 @@ export class SimulationRuntime extends EventEmitter {
       for (const agentId of room.occupants) {
         relationships.push({
           source: agentId,
-          target: room.id,
+          target: room.eid,
           type: "presence",
           value: 1,
         });
@@ -319,6 +359,7 @@ export class SimulationRuntime extends EventEmitter {
       agents,
       rooms,
       relationships,
+      isRunning: this._isRunning,
       timestamp: Date.now(),
     };
   }
@@ -328,7 +369,7 @@ export class SimulationRuntime extends EventEmitter {
     this.emitWorldUpdate(worldState);
   }
 
-  private getAgents() {
+  getAgents() {
     return Object.keys(Agent.name)
       .map(Number)
       .filter(
@@ -345,7 +386,7 @@ export class SimulationRuntime extends EventEmitter {
           role: Agent.role[eid],
           room: roomEid
             ? {
-                id: Room.id[roomEid],
+                eid: roomEid,
                 name: Room.name[roomEid],
                 type: Room.type[roomEid],
               }
@@ -356,9 +397,9 @@ export class SimulationRuntime extends EventEmitter {
       });
   }
 
-  private getRooms(): RoomData[] {
+  getRooms(): RoomData[] {
     return query(this.world, [Room]).map((eid) => ({
-      id: Room.id[eid],
+      id: eid,
       eid,
       name: Room.name[eid],
       description: Room.description[eid],
@@ -369,13 +410,13 @@ export class SimulationRuntime extends EventEmitter {
   private getRoomStimuli(roomId: number): number[] {
     return Object.keys(Stimulus.roomId)
       .map(Number)
-      .filter((eid) => Stimulus.roomId[eid] === Room.id[roomId]);
+      .filter((eid) => Stimulus.roomId[eid] === roomId);
   }
 
   private getRoomState(roomEntity: number) {
     return {
       room: {
-        id: Room.id[roomEntity],
+        eid: roomEntity,
         name: Room.name[roomEntity],
         description: Room.description[roomEntity],
         type: Room.type[roomEntity],
@@ -388,10 +429,12 @@ export class SimulationRuntime extends EventEmitter {
 
   // Methods for event subscription
   subscribeToRoom(roomId: number, callback: (event: any) => void) {
+    console.log("Subscribing to room:", roomId);
     return this.eventBus.subscribe(`room:${roomId}`, callback);
   }
 
   subscribeToAgent(agentId: number, callback: (event: any) => void) {
+    console.log("Subscribing to agent:", agentId);
     return this.eventBus.subscribe(`agent:${agentId}`, callback);
   }
 
