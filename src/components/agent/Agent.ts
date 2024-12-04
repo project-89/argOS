@@ -1,24 +1,25 @@
-import { createRelation } from "bitecs";
+import { createRelation, withStore } from "bitecs";
 
 // Core Agent component - essential properties every agent needs
 export const Agent = {
-  name: [] as string[], // Agent's name/identifier
-  role: [] as string[], // Role description (producer, director, actor, etc)
-  systemPrompt: [] as string[], // Base personality/behavior prompt
-  active: [] as number[], // Is agent currently active
-  platform: [] as string[], // Which platform this agent operates on
-  appearance: [] as string[], // Physical description of the agent
-  attention: [] as number[], // Current attention/presence level (0-1)
+  id: [] as string[],
+  name: [] as string[],
+  role: [] as string[],
+  systemPrompt: [] as string[],
+  active: [] as number[],
+  platform: [] as string[],
+  appearance: [] as string[],
+  attention: [] as number[],
 };
 
 // Memory component for storing thoughts and experiences
 export const Memory = {
-  thoughts: [] as string[][], // Array of thought history
-  lastThought: [] as string[], // Most recent thought
+  thoughts: [] as string[][],
+  lastThought: [] as string[],
   perceptions: [] as Array<{
     timestamp: number;
     content: string;
-  }>[], // Array of perception objects
+  }>[],
   experiences: [] as Array<{
     type: string;
     content: string;
@@ -33,28 +34,30 @@ export type RoomType =
   | "private"
   | "astral";
 
-// Room occupancy relationship
-export const OccupiesRoom = createRelation();
-
 // Room component for spatial organization
 export const Room = {
-  id: [] as string[], // Room identifier
-  name: [] as string[], // Room name
-  description: [] as string[], // Room description
-  type: [] as RoomType[], // Room type (physical, discord, twitter, private)
+  id: [] as string[],
+  name: [] as string[],
+  description: [] as string[],
+  type: [] as RoomType[],
 };
+
+// Room occupancy relationship with store for metadata
+export const OccupiesRoom = createRelation({
+  exclusive: true, // An agent can only be in one room at a time
+});
 
 // Perception component for storing what an agent perceives
 export const Perception = {
-  currentStimuli: [] as any[][], // Current perceptions/stimuli
-  lastProcessedTime: [] as number[], // When we last processed perceptions
+  currentStimuli: [] as any[][],
+  lastProcessedTime: [] as number[],
 };
 
 // Action component for handling agent actions and tool usage
 export const Action = {
   pendingAction: [] as ({
     tool: string;
-    parameters: any; // Using any since parameters vary by action type
+    parameters: any;
   } | null)[],
   lastActionTime: [] as number[],
   availableTools: [] as Array<{
@@ -67,25 +70,38 @@ export const Action = {
 
 // Dynamic appearance component for handling physical state and social cues
 export const Appearance = {
-  baseDescription: [] as string[], // Static physical description
-  facialExpression: [] as string[], // Current facial expression
-  bodyLanguage: [] as string[], // Current body posture/gestures
-  currentAction: [] as string[], // What the agent is visibly doing
-  socialCues: [] as string[], // Social signals being displayed
-  lastUpdate: [] as number[], // When appearance was last updated
+  baseDescription: [] as string[],
+  facialExpression: [] as string[],
+  bodyLanguage: [] as string[],
+  currentAction: [] as string[],
+  socialCues: [] as string[],
+  lastUpdate: [] as number[],
 };
 
 // Stimulus component for broadcasting events in the environment
 export const Stimulus = {
-  type: [] as string[], // Type of stimulus (VISUAL, AUDITORY, etc)
-  sourceEntity: [] as number[], // Entity ID of the source
-  source: [] as string[], // System that generated the stimulus (ROOM, AGENT, etc)
-  content: [] as string[], // The actual stimulus content
-  timestamp: [] as number[], // When the stimulus was created
-  decay: [] as number[], // Number of engine loops this stimulus will last
-  roomId: [] as string[], // The room where this stimulus occurred
+  type: [] as string[],
+  sourceEntity: [] as number[],
+  source: [] as string[],
+  content: [] as string[],
+  timestamp: [] as number[],
+  decay: [] as number[],
+  roomId: [] as string[],
 };
 
-// Relations
-export const StimulusInRoom = createRelation();
-export const StimulusSource = createRelation();
+// Stimulus relationships with stores for metadata
+export const StimulusInRoom = createRelation(
+  withStore(() => ({
+    roomId: [] as string[],
+    enteredAt: [] as number[],
+    intensity: [] as number[],
+  }))
+);
+
+export const StimulusSource = createRelation(
+  withStore(() => ({
+    source: [] as string[],
+    createdAt: [] as number[],
+    strength: [] as number[],
+  }))
+);

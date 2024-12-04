@@ -95,10 +95,9 @@ export function AgentNetwork({
     agents.forEach((agent) => {
       if (!agent?.name) return;
       const nodeId = `agent-${agent.name}`;
-      console.log("Adding agent node:", nodeId);
       data.nodes.push({
         id: nodeId,
-        name: agent.name || "Unknown Agent",
+        name: agent.name,
         type: "agent",
         color: "#f472b6",
         val: 2,
@@ -107,8 +106,9 @@ export function AgentNetwork({
 
     // Add relationship links
     relationships?.forEach((rel) => {
-      const sourceAgent = agents.find((a) => a.eid.toString() === rel.source);
-      const targetRoom = rooms.find((r) => r.eid.toString() === rel.target);
+      const sourceAgent = agents.find((a) => a.id === rel.source);
+      const targetRoom = rooms.find((r) => r.id === rel.target);
+
       if (sourceAgent && targetRoom) {
         const link = {
           source: `agent-${sourceAgent.name}`,
@@ -116,7 +116,6 @@ export function AgentNetwork({
           type: "presence" as const,
           value: rel.value,
         };
-        console.log("Adding link:", link);
         data.links.push(link);
       }
     });
@@ -182,8 +181,7 @@ export function AgentNetwork({
               if (node.type === "agent") {
                 onNodeSelect("agent", node.name);
               } else if (node.type === "room") {
-                const roomId = node.id.replace("room-", "");
-                onNodeSelect("room", roomId);
+                onNodeSelect("room", node.id.replace("room-", ""));
               }
             }}
             cooldownTicks={50}

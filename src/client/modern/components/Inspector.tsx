@@ -19,6 +19,8 @@ export function Inspector({
   const agent = agents.find((a) => a.name === selectedAgent);
   const room = rooms.find((r) => r.id === selectedRoom);
 
+  // console.log("AGENTS", agents);
+
   if (!agent && !room) {
     return (
       <div className="h-full flex flex-col">
@@ -59,11 +61,16 @@ export function Inspector({
           <div className="p-2 border-b border-cyan-900/30">
             <div className="text-xs text-gray-500 mb-1">Present Agents</div>
             <div className="space-y-1">
-              {room.occupants?.map((agentId: number) => {
-                const agent = agents.find((a) => a.id === agentId);
-                return (
+              {agents
+                .map((agent) => {
+                  console.log("AGENT", agent);
+                  console.log("ROOM", room);
+                  return agent;
+                })
+                .filter((agent) => agent?.room === room.eid)
+                .map((agent) => (
                   <div
-                    key={agentId}
+                    key={agent.id}
                     className="text-sm flex items-center gap-2"
                   >
                     <span
@@ -71,10 +78,9 @@ export function Inspector({
                         agent?.active ? "bg-emerald-400" : "bg-red-400"
                       }`}
                     />
-                    <span className="text-cyan-400">{agent?.name}</span>
+                    <span className="text-cyan-400">{agent.name}</span>
                   </div>
-                );
-              })}
+                ))}
             </div>
           </div>
 
