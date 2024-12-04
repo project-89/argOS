@@ -1,20 +1,14 @@
 import { World } from "../types/bitecs";
-import { query, addEntity, addComponent, removeEntity } from "bitecs";
-import {
-  Agent,
-  Memory,
-  Room,
-  Perception,
-  Appearance,
-  Stimulus,
-} from "../components/agent/Agent";
+import { addEntity, addComponent, removeEntity, query, set } from "bitecs";
+import { Agent, Room, Appearance, Stimulus } from "../components/agent/Agent";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
+import { getRooms, getRoomOccupants, getActiveAgents } from "../utils/queries";
 
 // System for managing rooms and generating stimuli about occupants
 export const RoomSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
-    const rooms = query(world, [Room]);
+    const rooms = getRooms(world);
 
     // First, clean up any previous room-generated stimuli
     const existingStimuli = query(world, [Stimulus]);
@@ -29,7 +23,7 @@ export const RoomSystem = createSystem<SystemConfig>(
 
     // Process each room
     for (const roomId of rooms) {
-      const occupants = Room.occupants[roomId] || [];
+      const occupants = getRoomOccupants(world, roomId);
 
       // Skip empty rooms
       if (occupants.length === 0) continue;
@@ -41,16 +35,6 @@ export const RoomSystem = createSystem<SystemConfig>(
 
         // Create visual stimulus for this agent
         const stimulusEntity = addEntity(world);
-        addComponent(world, stimulusEntity, Stimulus);
-
-        // Set stimulus properties
-        Stimulus.type[stimulusEntity] = "VISUAL";
-        Stimulus.sourceEntity[stimulusEntity] = agentId;
-        Stimulus.source[stimulusEntity] = "ROOM"; // Mark as room-generated
-        Stimulus.timestamp[stimulusEntity] = Date.now();
-        Stimulus.decay[stimulusEntity] = 1; // Only needs to last for immediate processing
-
-        // Combine appearance details into content
         const appearanceContent = {
           baseDescription: Appearance.baseDescription[agentId],
           facialExpression: Appearance.facialExpression[agentId],
@@ -63,7 +47,18 @@ export const RoomSystem = createSystem<SystemConfig>(
           },
         };
 
-        Stimulus.content[stimulusEntity] = JSON.stringify(appearanceContent);
+        addComponent(
+          world,
+          stimulusEntity,
+          set(Stimulus, {
+            type: "VISUAL",
+            sourceEntity: agentId,
+            source: "ROOM",
+            timestamp: Date.now(),
+            decay: 1,
+            content: JSON.stringify(appearanceContent),
+          })
+        );
 
         logger.system(
           `Created visual stimulus for ${Agent.name[agentId]} in ${Room.name[roomId]}`

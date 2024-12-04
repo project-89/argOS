@@ -1,4 +1,4 @@
-import { World, query, removeEntity } from "bitecs";
+import { World, query, removeEntity, setComponent } from "bitecs";
 import { Stimulus } from "../components/agent/Agent";
 import { logger } from "../utils/logger";
 import { createSystem } from "./System";
@@ -17,7 +17,14 @@ export const StimulusCleanupSystem = createSystem(
     for (const eid of stimuli) {
       // Skip if stimulus hasn't decayed yet
       if (Stimulus.decay[eid] > 0) {
-        Stimulus.decay[eid]--;
+        setComponent(world, eid, Stimulus, {
+          ...Object.fromEntries(
+            (Object.keys(Stimulus) as Array<keyof typeof Stimulus>).map(
+              (key) => [key, Stimulus[key][eid]]
+            )
+          ),
+          decay: Stimulus.decay[eid] - 1,
+        });
         continue;
       }
 

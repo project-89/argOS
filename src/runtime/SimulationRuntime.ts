@@ -1,6 +1,5 @@
 import {
   World,
-  createWorld,
   addEntity,
   addComponent,
   removeEntity,
@@ -9,17 +8,21 @@ import {
   onRemove,
   onSet,
   query,
+  hasComponent,
+  removeComponent,
+  setComponent,
 } from "bitecs";
-import { WorldState, Room as RoomType } from "../types";
+import { WorldState, Room as RoomData } from "../types";
 import { logger } from "../utils/logger";
-import { StimulusType } from "../utils/stimulus-utils";
 import {
   Agent,
   Memory,
   Perception,
   Room,
   Stimulus,
+  OccupiesRoom,
 } from "../components/agent/Agent";
+import { getAgentRoom } from "../utils/queries";
 
 export type ActionModule = {
   schema: any;
@@ -109,10 +112,17 @@ export class SimulationRuntime extends EventEmitter {
     // Clean up any existing observers first
     this.cleanup();
 
-    // Observe room creation
+    // Observe room creation and handle setting values
     this.observers.push(
-      observe(this.world, onAdd(Room), (eid) => {
-        logger.system(`Room created: ${Room.name[eid]}`);
+      observe(this.world, onSet(Room), (eid, params) => {
+        // Handle partial updates - only set defined values
+        if (params.id !== undefined) Room.id[eid] = params.id;
+        if (params.name !== undefined) Room.name[eid] = params.name;
+        if (params.description !== undefined)
+          Room.description[eid] = params.description;
+        if (params.type !== undefined) Room.type[eid] = params.type;
+
+        logger.system(`Room updated: ${Room.name[eid]}`);
         this.emit("roomCreated", {
           id: Room.id[eid],
           name: Room.name[eid],
@@ -130,10 +140,23 @@ export class SimulationRuntime extends EventEmitter {
       })
     );
 
-    // Observe agent creation
+    // Observe agent creation/updates
     this.observers.push(
-      observe(this.world, onAdd(Agent), (eid) => {
-        logger.system(`Agent created: ${Agent.name[eid]}`);
+      observe(this.world, onSet(Agent), (eid, params) => {
+        // Handle partial updates - only set defined values
+        if (params.name !== undefined) Agent.name[eid] = params.name;
+        if (params.role !== undefined) Agent.role[eid] = params.role;
+        if (params.systemPrompt !== undefined)
+          Agent.systemPrompt[eid] = params.systemPrompt;
+        if (params.active !== undefined) Agent.active[eid] = params.active;
+        if (params.platform !== undefined)
+          Agent.platform[eid] = params.platform;
+        if (params.appearance !== undefined)
+          Agent.appearance[eid] = params.appearance;
+        if (params.attention !== undefined)
+          Agent.attention[eid] = params.attention;
+
+        logger.system(`Agent updated: ${Agent.name[eid]}`);
         this.emit("agentCreated", {
           id: eid,
           name: Agent.name[eid],
@@ -154,12 +177,12 @@ export class SimulationRuntime extends EventEmitter {
 
     // Observe room occupancy changes
     this.observers.push(
-      observe(this.world, onSet(Room), (eid, params) => {
-        if (params.occupants) {
-          logger.system(`Room ${Room.name[eid]} occupancy changed`);
+      observe(this.world, onAdd(OccupiesRoom), (eid) => {
+        const roomId = this.getAgentRoom(eid);
+        if (roomId) {
           this.emit("roomOccupancyChanged", {
-            roomId: Room.id[eid],
-            occupants: Room.occupants[eid],
+            roomId: Room.id[roomId],
+            occupants: this.getRoomOccupants(roomId),
           });
         }
       })
@@ -169,12 +192,6 @@ export class SimulationRuntime extends EventEmitter {
     this.observers.push(
       observe(this.world, onSet(Memory), (eid, params) => {
         const agentName = Agent.name[eid];
-
-        console.log(
-          "################Memory changed for agent",
-          agentName,
-          params
-        );
 
         // Emit thought changes
         if (params.lastThought) {
@@ -266,9 +283,9 @@ export class SimulationRuntime extends EventEmitter {
       observe(this.world, onSet(Perception), (eid, params) => {
         if (params.currentStimuli) {
           const agentName = Agent.name[eid];
-          const roomId = this.getAgentRoom(eid)?.id;
+          const roomEid = this.getAgentRoom(eid);
 
-          if (!roomId) return;
+          if (!roomEid) return;
 
           // Emit each new stimulus as a perception event
           params.currentStimuli.forEach((stimulus: any) => {
@@ -279,7 +296,7 @@ export class SimulationRuntime extends EventEmitter {
                 stimulus,
                 agentId: eid,
                 agentName,
-                roomId,
+                roomId: Room.id[roomEid],
                 actionType: "PERCEPTION",
               },
               timestamp: Date.now(),
@@ -375,55 +392,42 @@ export class SimulationRuntime extends EventEmitter {
   }
 
   // Room Management
-  createRoom(roomData: Partial<RoomType>): number {
+  createRoom(roomData: Partial<RoomData>): number {
     const roomEntity = addEntity(this.world);
-    addComponent(this.world, roomEntity, Room);
 
-    Room.id[roomEntity] = roomData.id || `room-${roomEntity}`;
-    Room.name[roomEntity] = roomData.name || "New Room";
-    Room.description[roomEntity] = roomData.description || "";
-    Room.type[roomEntity] = roomData.type || "physical";
-    Room.occupants[roomEntity] = [];
+    setComponent(this.world, roomEntity, Room, {
+      id: roomData.id || `room-${roomEntity}`,
+      name: roomData.name || "New Room",
+      description: roomData.description || "",
+      type: roomData.type || "physical",
+    });
 
-    logger.system(
-      `Created room: ${Room.name[roomEntity]} (${Room.id[roomEntity]})`
-    );
-    this.emit("roomCreated", { roomId: Room.id[roomEntity] });
     return roomEntity;
   }
 
-  moveAgentToRoom(agentId: number, roomId: string): void {
-    const roomEntity = Object.keys(Room.id)
-      .map(Number)
-      .find((eid) => Room.id[eid] === roomId);
-
-    if (!roomEntity) {
-      logger.error(`Room ${roomId} not found`);
+  moveAgentToRoom(agentId: number, roomEid: number): void {
+    // Verify room exists
+    const rooms = query(this.world, [Room]);
+    if (!rooms.includes(roomEid)) {
+      logger.error(`Room ${roomEid} not found`);
       return;
     }
 
-    // Initialize occupants array if it doesn't exist
-    if (!Room.occupants[roomEntity]) {
-      Room.occupants[roomEntity] = [];
-    }
+    // Find current room relationship and remove it
+    const currentRooms = query(this.world, [Room]).filter((eid) =>
+      hasComponent(this.world, agentId, OccupiesRoom(eid))
+    );
 
-    // Update room occupants
-    const currentRoom = Object.keys(Room.occupants)
-      .map(Number)
-      .find((eid) => Room.occupants[eid]?.includes(agentId));
-
-    if (currentRoom) {
-      Room.occupants[currentRoom] = Room.occupants[currentRoom].filter(
-        (id) => id !== agentId
-      );
+    for (const currentRoom of currentRooms) {
+      removeComponent(this.world, agentId, OccupiesRoom(currentRoom));
       logger.system(
         `Removed agent ${agentId} from room ${Room.name[currentRoom]}`
       );
     }
 
-    Room.occupants[roomEntity].push(agentId);
-    logger.system(`Added agent ${agentId} to room ${Room.name[roomEntity]}`);
-    this.emit("agentMoved", { agentId, roomId });
+    // Add new room relationship
+    addComponent(this.world, agentId, OccupiesRoom(roomEid));
+    logger.system(`Added agent ${agentId} to room ${Room.name[roomEid]}`);
 
     // Emit updated world state after moving agent
     this.emitWorldState();
@@ -444,59 +448,100 @@ export class SimulationRuntime extends EventEmitter {
 
   // State Management
   getWorldState(): WorldState {
+    const agents = Object.keys(Agent.name)
+      .map(Number)
+      .filter((eid) => Agent.name[eid] && Agent.active[eid] === 1)
+      .map((eid) => ({
+        eid,
+        id: eid,
+        name: Agent.name[eid],
+        role: Agent.role[eid],
+        active: Agent.active[eid],
+        attention: Agent.attention[eid],
+      }));
+
+    const rooms = query(this.world, [Room]).map((eid) => ({
+      id: Room.id[eid],
+      eid,
+      name: Room.name[eid],
+      description: Room.description[eid],
+      type: Room.type[eid],
+    }));
+
+    // Get all room occupancy relationships
+    const relationships = agents
+      .map((agent) => {
+        const roomEid = this.getAgentRoom(agent.eid);
+        if (!roomEid) return null;
+        return {
+          source: agent.eid.toString(),
+          target: roomEid.toString(),
+          type: "occupies",
+          value: agent.attention || 1,
+        };
+      })
+      .filter((rel): rel is NonNullable<typeof rel> => rel !== null);
+
     return {
-      agents: this.getAgents(),
-      rooms: this.getRooms(),
+      agents,
+      rooms,
+      relationships,
       timestamp: Date.now(),
     };
   }
 
   emitWorldState() {
-    this.emit("worldState", {
-      agents: this.getAgents(),
-      rooms: this.getRooms(),
-      timestamp: Date.now(),
-    });
+    const state = this.getWorldState();
+    console.log(
+      "Emitting world state with relationships:",
+      state.relationships
+    );
+    this.emit("worldState", state);
   }
 
   private getAgents() {
     return Object.keys(Agent.name)
       .map(Number)
-      .filter((eid) => Agent.active[eid])
-      .map((eid) => ({
-        id: eid,
-        name: Agent.name[eid],
-        role: Agent.role[eid],
-        room: this.getAgentRoom(eid),
-        active: Agent.active[eid],
-        attention: Agent.attention[eid],
-      }));
+      .filter(
+        (eid) =>
+          // Only include agents that have both a name and are active
+          Agent.name[eid] && Agent.active[eid] === 1
+      )
+      .map((eid) => {
+        const roomEid = this.getAgentRoom(eid);
+        return {
+          eid, // Include the entity ID
+          id: eid,
+          name: Agent.name[eid],
+          role: Agent.role[eid],
+          room: roomEid
+            ? {
+                id: Room.id[roomEid],
+                name: Room.name[roomEid],
+                type: Room.type[roomEid],
+              }
+            : undefined,
+          active: Agent.active[eid],
+          attention: Agent.attention[eid],
+        };
+      });
   }
 
-  private getRooms(): RoomType[] {
-    return Object.keys(Room.id)
-      .map(Number)
-      .map((eid) => ({
-        id: Room.id[eid],
-        name: Room.name[eid],
-        description: Room.description[eid],
-        type: Room.type[eid],
-        occupants: Room.occupants[eid],
-        stimuli: this.getRoomStimuli(eid),
-      }));
+  private getRooms(): RoomData[] {
+    return query(this.world, [Room]).map((eid) => ({
+      id: Room.id[eid],
+      eid,
+      name: Room.name[eid],
+      description: Room.description[eid],
+      type: Room.type[eid],
+    }));
   }
 
-  private getAgentRoom(agentId: number) {
-    const roomEntity = Object.keys(Room.occupants)
-      .map(Number)
-      .find((eid) => Room.occupants[eid].includes(agentId));
-
-    if (!roomEntity) return null;
-
-    return {
-      id: Room.id[roomEntity],
-      name: Room.name[roomEntity],
-    };
+  private getAgentRoom(agentId: number): number | null {
+    const rooms = query(this.world, [Room]).filter((roomEid) =>
+      hasComponent(this.world, agentId, OccupiesRoom(roomEid))
+    );
+    return rooms[0] || null;
   }
 
   private getRoomStimuli(roomId: number): number[] {
@@ -506,31 +551,25 @@ export class SimulationRuntime extends EventEmitter {
   }
 
   // Room subscriptions
-  subscribeToRoom(roomId: string, callback: (data: any) => void) {
-    if (!this.roomSubscriptions.has(roomId)) {
-      this.roomSubscriptions.set(roomId, new Set());
-    }
-    this.roomSubscriptions.get(roomId)?.add(callback);
+  subscribeToRoom(roomEntity: number, callback: (data: any) => void) {
+    // Initial state
+    callback({
+      room: {
+        id: Room.id[roomEntity],
+        name: Room.name[roomEntity],
+        description: Room.description[roomEntity],
+        type: Room.type[roomEntity],
+        occupants: this.getRoomOccupants(roomEntity),
+        stimuli: this.getRoomStimuli(roomEntity),
+      },
+      timestamp: Date.now(),
+    });
 
-    // Immediately send current room state
-    const roomEntity = this.findRoomByStringId(roomId);
-    if (roomEntity) {
-      callback({
-        type: "ROOM_STATE",
-        data: {
-          id: Room.id[roomEntity],
-          name: Room.name[roomEntity],
-          description: Room.description[roomEntity],
-          occupants: Room.occupants[roomEntity],
-          stimuli: this.getRoomStimuli(roomEntity),
-        },
-        timestamp: Date.now(),
-      });
+    // Add to room subscriptions
+    if (!this.roomSubscriptions.has(Room.id[roomEntity])) {
+      this.roomSubscriptions.set(Room.id[roomEntity], new Set());
     }
-
-    return () => {
-      this.roomSubscriptions.get(roomId)?.delete(callback);
-    };
+    this.roomSubscriptions.get(Room.id[roomEntity])!.add(callback);
   }
 
   // Agent subscriptions
@@ -559,12 +598,24 @@ export class SimulationRuntime extends EventEmitter {
     };
   }
 
-  // Helper to find room by string ID
-  private findRoomByStringId(roomId: string): number | null {
-    return (
-      Object.keys(Room.id)
-        .map(Number)
-        .find((eid) => Room.id[eid] === roomId) ?? null
+  // Helper method to get room occupants
+  getRoomOccupants(roomEid: number): number[] {
+    return query(this.world, [Agent]).filter((agentEid) =>
+      hasComponent(this.world, agentEid, OccupiesRoom(roomEid))
     );
+  }
+
+  private getRoomState(roomEntity: number) {
+    return {
+      room: {
+        id: Room.id[roomEntity],
+        name: Room.name[roomEntity],
+        description: Room.description[roomEntity],
+        type: Room.type[roomEntity],
+        occupants: this.getRoomOccupants(roomEntity),
+        stimuli: this.getRoomStimuli(roomEntity),
+      },
+      timestamp: Date.now(),
+    };
   }
 }

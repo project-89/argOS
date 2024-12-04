@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { World } from "../types/bitecs";
 import { Memory, Room, Agent } from "../components/agent/Agent";
-import { findAgentRoom } from "../utils/world-utils";
+import { getAgentRoom } from "../utils/queries";
 import { logger } from "../utils/logger";
 import {
   createCognitiveStimulus,
@@ -25,8 +25,8 @@ export async function execute(
   eid: number,
   parameters: z.infer<typeof schema>
 ) {
-  const roomId = findAgentRoom(world, eid);
-  if (roomId === null) return;
+  const roomId = getAgentRoom(world, eid);
+  if (roomId === undefined) return;
 
   const { reason, isThinking = false } = parameters;
   const agentName = Agent.name[eid];

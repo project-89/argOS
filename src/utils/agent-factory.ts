@@ -1,8 +1,7 @@
-import { addEntity, addComponent } from "bitecs";
+import { World, addEntity, addComponent, set, setComponent } from "bitecs";
 import { Action, Agent, Memory, Appearance } from "../components/agent/Agent";
 import { AgentConfig } from "../types/agent";
 import { logger } from "../utils/logger";
-import { World } from "../types/bitecs";
 import { availableTools } from "../types/tools";
 
 export function createAgent(world: World, config: AgentConfig) {
@@ -17,36 +16,68 @@ export function createAgent(world: World, config: AgentConfig) {
 
   const eid = addEntity(world);
 
-  // Add core agent components
-  addComponent(world, eid, Agent);
-  addComponent(world, eid, Memory);
-  addComponent(world, eid, Action);
-  addComponent(world, eid, Appearance);
+  setComponent(world, eid, Agent, {
+    name,
+    role,
+    systemPrompt,
+    active,
+    platform,
+    appearance,
+    attention: 1,
+  });
+  // Add core agent component
+  // addComponent(
+  //   world,
+  //   eid,
+  //   set(Agent, {
+  //     name,
+  //     role,
+  //     systemPrompt,
+  //     active,
+  //     platform,
+  //     appearance,
+  //     attention: 1,
+  //   })
+  // );
 
-  // Initialize core properties
-  Agent.name[eid] = name;
-  Agent.role[eid] = role;
-  Agent.systemPrompt[eid] = systemPrompt;
-  Agent.active[eid] = active;
-  Agent.platform[eid] = platform;
-  Agent.appearance[eid] = appearance;
-  Agent.attention[eid] = 1;
+  // Add appearance component
+  addComponent(
+    world,
+    eid,
+    set(Appearance, {
+      baseDescription: appearance,
+      facialExpression: "neutral",
+      bodyLanguage: "relaxed",
+      currentAction: "standing",
+      socialCues: "open to interaction",
+      lastUpdate: Date.now(),
+    })
+  );
 
-  // Initialize appearance
-  Appearance.baseDescription[eid] = appearance;
-  Appearance.facialExpression[eid] = "neutral";
-  Appearance.bodyLanguage[eid] = "relaxed";
-  Appearance.currentAction[eid] = "standing";
-  Appearance.socialCues[eid] = "open to interaction";
-  Appearance.lastUpdate[eid] = Date.now();
+  // Add memory component
+  addComponent(
+    world,
+    eid,
+    set(Memory, {
+      thoughts: [],
+      lastThought: "",
+      perceptions: [],
+      experiences: [],
+    })
+  );
 
-  // Initialize memory
-  Memory.thoughts[eid] = [];
-  Memory.lastThought[eid] = "";
+  // Add action component
+  addComponent(
+    world,
+    eid,
+    set(Action, {
+      pendingAction: null,
+      lastActionTime: Date.now(),
+      availableTools,
+    })
+  );
 
-  Action.availableTools[eid] = availableTools;
-
-  logger.system(`Created agent: ${name} (${role})`);
+  logger.system(`Created agent: ${name} (${role}) with active=${active}`);
 
   return eid;
 }

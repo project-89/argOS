@@ -6,19 +6,14 @@ import { AgentNetwork } from "./components/AgentNetwork";
 import { ChatInterface } from "./components/ChatInterface";
 import { Inspector } from "./components/Inspector";
 import { Timeline } from "./components/Timeline";
-import { SimulationEvent, WorldState } from "../../types";
+import { WorldState } from "../../types";
 import { useSimulationStore } from "../../state/simulation";
-import { setupSingleAgent } from "../../examples/single-agent-setup";
+import { WebSocketService } from "../services/websocket";
 import "./styles/panels.css";
-
-interface RoomSubscription {
-  unsubscribe: () => void;
-  agentUnsubscribes: Map<number, () => void>;
-}
 
 export function ModernUI() {
   const [isConnected, setIsConnected] = useState(false);
-  const [ws, setWs] = useState<WebSocket | null>(null);
+  const wsRef = React.useRef<WebSocketService>();
   const {
     agents,
     rooms,
@@ -29,95 +24,62 @@ export function ModernUI() {
     setIsRunning,
   } = useSimulationStore();
 
-  // Initialize runtime and WebSocket
+  // Initialize WebSocket service
   useEffect(() => {
-    const { runtime } = setupSingleAgent();
-    const socket = new WebSocket(`ws://${window.location.hostname}:3000/ws`);
+    const ws = new WebSocketService(`ws://${window.location.hostname}:3000/ws`);
+    wsRef.current = ws;
 
-    socket.onopen = () => {
-      setIsConnected(true);
-      console.log("WebSocket connected");
-    };
-
-    socket.onclose = () => {
-      setIsConnected(false);
-      console.log("WebSocket disconnected");
-    };
-
-    socket.onerror = (error) => {
-      console.error("WebSocket error:", error);
-    };
-
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === "WORLD_STATE") {
+    const unsubscribe = ws.subscribe((message) => {
+      if (message.type === "CONNECTION_STATE") {
+        setIsConnected(message.connected);
+      } else if (message.type === "WORLD_STATE") {
         const worldState = message.data as WorldState;
         setAgents(worldState.agents);
         setRooms(worldState.rooms);
       }
-    };
+    });
 
-    setWs(socket);
+    ws.connect();
 
     return () => {
-      socket.close();
+      unsubscribe();
+      ws.disconnect();
     };
   }, []);
 
   // Handle room subscriptions
   useEffect(() => {
-    if (!selectedRoom) return;
+    if (!selectedRoom || !wsRef.current) return;
 
-    const { runtime } = setupSingleAgent();
-    const agentUnsubscribes = new Map<number, () => void>();
-
-    // Subscribe to room
-    const unsubRoom = runtime.subscribeToRoom(selectedRoom, (event) => {
-      console.log("Room event:", event);
-
-      // Handle room state updates
-      if (event.type === "ROOM_STATE") {
-        // Subscribe to all agents in room
-        event.data.occupants.forEach((agentId: number) => {
-          if (!agentUnsubscribes.has(agentId)) {
-            const unsubAgent = runtime.subscribeToAgent(
-              agentId,
-              (agentEvent) => {
-                console.log("Agent event:", agentEvent);
-              }
-            );
-            agentUnsubscribes.set(agentId, unsubAgent);
-          }
-        });
-      }
-    });
-
+    wsRef.current.subscribeToRoom(selectedRoom);
     return () => {
-      unsubRoom();
-      agentUnsubscribes.forEach((unsub) => unsub());
+      wsRef.current?.unsubscribeFromRoom(selectedRoom);
     };
   }, [selectedRoom]);
 
   // Handle agent subscriptions
   useEffect(() => {
-    if (!selectedAgent) return;
+    if (!selectedAgent || !wsRef.current) return;
 
-    const { runtime } = setupSingleAgent();
-    const unsubAgent = runtime.subscribeToAgent(
-      Number(selectedAgent),
-      (event) => {
-        console.log("Agent event:", event);
-      }
-    );
-
+    wsRef.current.subscribeToAgent(selectedAgent);
     return () => {
-      unsubAgent();
+      wsRef.current?.unsubscribeFromAgent(selectedAgent);
     };
   }, [selectedAgent]);
 
   const sendCommand = (type: string) => {
-    if (ws && isConnected) {
-      ws.send(JSON.stringify({ type }));
+    if (wsRef.current && isConnected) {
+      switch (type) {
+        case "START":
+          wsRef.current.startSimulation();
+          break;
+        case "STOP":
+          wsRef.current.stopSimulation();
+          break;
+        case "RESET":
+          wsRef.current.resetSimulation();
+          break;
+      }
     }
   };
 
@@ -127,6 +89,7 @@ export function ModernUI() {
         isRunning={false}
         isConnected={isConnected}
         onCommand={sendCommand}
+        agents={agents}
       />
 
       <PanelGroup direction="vertical" className="flex-1">
@@ -136,6 +99,7 @@ export function ModernUI() {
               <AgentNetwork
                 agents={agents}
                 rooms={rooms}
+                relationships={useSimulationStore.getState().relationships}
                 selectedAgent={selectedAgent}
                 selectedRoom={selectedRoom}
                 onNodeSelect={(nodeType, id) => {
@@ -157,7 +121,7 @@ export function ModernUI() {
                 agents={agents}
                 rooms={rooms}
                 logs={[]}
-                onSendMessage={() => {}}
+                onSendMessage={(message) => wsRef.current?.sendChat(message)}
               />
             </Panel>
 
@@ -173,12 +137,6 @@ export function ModernUI() {
               />
             </Panel>
           </PanelGroup>
-        </Panel>
-
-        <PanelResizeHandle className="h-1 bg-cyan-900/30 hover:bg-cyan-500/50 transition-colors" />
-
-        <Panel defaultSize={15} minSize={10}>
-          <Timeline logs={[]} isRunning={false} />
         </Panel>
       </PanelGroup>
     </div>

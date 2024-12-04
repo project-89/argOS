@@ -1,7 +1,5 @@
 import * as React from "react";
 import ForceGraph2D from "react-force-graph-2d";
-import { getTailwindColor } from "../../../utils/colors";
-import { NetworkNode, NetworkLink } from "../../../types";
 
 interface Node {
   id: string;
@@ -14,7 +12,7 @@ interface Node {
 interface Link {
   source: string;
   target: string;
-  type: "presence";
+  type: "presence" | "occupies";
   value: number;
 }
 
@@ -26,6 +24,12 @@ interface GraphData {
 interface AgentNetworkProps {
   agents: any[];
   rooms: any[];
+  relationships: Array<{
+    source: string;
+    target: string;
+    type: string;
+    value: number;
+  }>;
   selectedAgent: string | null;
   selectedRoom: string | null;
   onNodeSelect: (nodeType: "agent" | "room", id: string) => void;
@@ -34,6 +38,7 @@ interface AgentNetworkProps {
 export function AgentNetwork({
   agents,
   rooms,
+  relationships,
   selectedAgent,
   selectedRoom,
   onNodeSelect,
@@ -74,38 +79,51 @@ export function AgentNetwork({
 
     // Add room nodes first
     rooms.forEach((room) => {
+      if (!room?.id) return;
+      const nodeId = `room-${room.id}`;
+      console.log("Adding room node:", nodeId);
       data.nodes.push({
-        id: `room-${room.id}`,
-        name: room.name,
+        id: nodeId,
+        name: room.name || "Unknown Room",
         type: "room",
-        color: "#22d3ee", // cyan-400 - brighter for rooms
-        val: 3, // Larger size for rooms
+        color: "#22d3ee",
+        val: 3,
       });
     });
 
-    // Add agent nodes and their connections
+    // Add agent nodes
     agents.forEach((agent) => {
+      if (!agent?.name) return;
+      const nodeId = `agent-${agent.name}`;
+      console.log("Adding agent node:", nodeId);
       data.nodes.push({
-        id: `agent-${agent.name}`,
-        name: agent.name,
+        id: nodeId,
+        name: agent.name || "Unknown Agent",
         type: "agent",
-        color: "#f472b6", // pink-400 - agents stand out
+        color: "#f472b6",
         val: 2,
       });
+    });
 
-      // Connect to room if present
-      if (agent.room?.id) {
-        data.links.push({
-          source: `agent-${agent.name}`,
-          target: `room-${agent.room.id}`,
-          type: "presence",
-          value: agent.attention || 1,
-        });
+    // Add relationship links
+    relationships?.forEach((rel) => {
+      const sourceAgent = agents.find((a) => a.eid.toString() === rel.source);
+      const targetRoom = rooms.find((r) => r.eid.toString() === rel.target);
+      if (sourceAgent && targetRoom) {
+        const link = {
+          source: `agent-${sourceAgent.name}`,
+          target: `room-${targetRoom.id}`,
+          type: "presence" as const,
+          value: rel.value,
+        };
+        console.log("Adding link:", link);
+        data.links.push(link);
       }
     });
 
+    console.log("Final graph data:", data);
     return data;
-  }, [agents, rooms]);
+  }, [agents, rooms, relationships]);
 
   return (
     <div className="h-full flex flex-col">
@@ -172,6 +190,7 @@ export function AgentNetwork({
             linkDirectionalParticles={2}
             linkDirectionalParticleWidth={2}
             linkDirectionalParticleSpeed={0.005}
+            nodeRelSize={6}
           />
         )}
       </div>

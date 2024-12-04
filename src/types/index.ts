@@ -1,3 +1,5 @@
+import { RoomType } from "../components/agent/Agent";
+
 export interface SimulationEvent {
   type:
     | "LOG"
@@ -32,11 +34,10 @@ export interface AgentColor {
 
 export interface Room {
   id: string;
+  eid: number;
   name: string;
+  type: RoomType;
   description: string;
-  type: "physical" | "discord" | "twitter" | "private";
-  occupants: number[]; // entity IDs
-  stimuli: number[]; // entity IDs of active stimuli
 }
 
 export interface NetworkPosition {
@@ -65,9 +66,25 @@ export interface NetworkState {
   links: NetworkLink[];
 }
 
+export type ClientMessage =
+  | { type: "START" }
+  | { type: "STOP" }
+  | { type: "RESET" }
+  | { type: "CHAT"; message: string }
+  | { type: "SUBSCRIBE_ROOM"; roomId: string }
+  | { type: "UNSUBSCRIBE_ROOM"; roomId: string }
+  | { type: "SUBSCRIBE_AGENT"; agentId: string }
+  | { type: "UNSUBSCRIBE_AGENT"; agentId: string };
+
 export interface WorldState {
   agents: any[];
   rooms: Room[];
+  relationships: Array<{
+    source: string;
+    target: string;
+    type: string;
+    value: number;
+  }>;
   timestamp: number;
 }
 
@@ -84,5 +101,4 @@ export interface ControlMessage {
   type: "START" | "STOP" | "RESET";
 }
 
-export type ClientMessage = ChatMessage | ControlMessage;
 export type ServerMessage = SimulationEvent | WorldState;

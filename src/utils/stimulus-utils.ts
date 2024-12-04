@@ -1,6 +1,12 @@
-import { World } from "../types/bitecs";
-import { addComponent, addEntity } from "bitecs";
-import { Agent, Room, Stimulus } from "../components/agent/Agent";
+import { World, addEntity, addComponent, set } from "bitecs";
+import {
+  Agent,
+  Room,
+  Stimulus,
+  StimulusInRoom,
+  StimulusSource,
+} from "../components/agent/Agent";
+import { findRoomByStringId } from "./queries";
 import { STIMULUS_DECAY, DEFAULT_DECAY_BY_TYPE } from "./stimulus-constants";
 
 // Base types for all stimuli
@@ -11,41 +17,27 @@ export type StimulusType =
   | "TECHNICAL"
   | "ENVIRONMENTAL";
 
-interface BaseStimulusOptions {
+interface BaseStimulus {
   sourceEntity: number;
   roomId: string;
   decay?: number;
 }
 
-// Helper to find room entity by ID
-function findRoomEntity(roomId: string): number {
-  return (
-    Number(
-      Object.keys(Room.id).find((eid) => Room.id[Number(eid)] === roomId)
-    ) || 0
-  );
-}
-
-/**
- * Core utility to create a basic stimulus entity
- */
-export function createStimulus(
+function createStimulus(
   world: World,
   type: StimulusType,
-  options: BaseStimulusOptions,
+  options: BaseStimulus,
   content: Record<string, any>
 ) {
   const { sourceEntity, roomId } = options;
-  const roomEntity = findRoomEntity(roomId);
+  const roomEntity = findRoomByStringId(world, roomId);
+  if (!roomEntity) return;
+
   const decay = options.decay ?? DEFAULT_DECAY_BY_TYPE[type];
+  const stimulusEntity = addEntity(world);
 
-  const stimulus = addEntity(world);
-  addComponent(world, stimulus, Stimulus);
-
-  Stimulus.type[stimulus] = type;
-  Stimulus.sourceEntity[stimulus] = sourceEntity;
-  Stimulus.source[stimulus] = "AGENT";
-  Stimulus.content[stimulus] = JSON.stringify({
+  // Create stimulus content
+  const stimulusContent = {
     name: Agent.name[sourceEntity],
     role: Agent.role[sourceEntity],
     timestamp: Date.now(),
@@ -54,16 +46,32 @@ export function createStimulus(
     metadata: {
       sourceName: Agent.name[sourceEntity],
       sourceRole: Agent.role[sourceEntity],
-      roomName: Room.name[roomEntity] || "Unknown Room",
+      roomName: Room.name[roomEntity],
       decay,
       ...content.metadata,
     },
-  });
-  Stimulus.timestamp[stimulus] = Date.now();
-  Stimulus.roomId[stimulus] = roomId;
-  Stimulus.decay[stimulus] = decay;
+  };
 
-  return stimulus;
+  // Add stimulus component with all properties
+  addComponent(
+    world,
+    stimulusEntity,
+    set(Stimulus, {
+      type,
+      sourceEntity,
+      source: "AGENT",
+      timestamp: Date.now(),
+      decay,
+      content: JSON.stringify(stimulusContent),
+      roomId,
+    })
+  );
+
+  // Add relations
+  addComponent(world, stimulusEntity, StimulusInRoom(roomEntity));
+  addComponent(world, stimulusEntity, StimulusSource(sourceEntity));
+
+  return stimulusEntity;
 }
 
 // Helper function to get UI-friendly category
@@ -89,13 +97,15 @@ function getStimulusCategory(type: StimulusType): string {
  */
 export function createVisualStimulus(
   world: World,
-  options: BaseStimulusOptions & {
+  options: BaseStimulus & {
     appearance?: boolean;
     data: Record<string, any>;
     context?: Record<string, any>;
   }
 ) {
-  const roomEntity = findRoomEntity(options.roomId);
+  const roomEntity = findRoomByStringId(world, options.roomId);
+  if (!roomEntity) return;
+
   const content = {
     ...(options.appearance
       ? { appearance: Agent.appearance[options.sourceEntity] }
@@ -104,7 +114,7 @@ export function createVisualStimulus(
     context: options.context,
     location: {
       roomId: options.roomId,
-      roomName: Room.name[roomEntity] || "Unknown Room",
+      roomName: Room.name[roomEntity],
     },
     metadata: {
       hasAppearance: !!options.appearance,
@@ -120,7 +130,7 @@ export function createVisualStimulus(
  */
 export function createCognitiveStimulus(
   world: World,
-  options: BaseStimulusOptions & {
+  options: BaseStimulus & {
     activity: string;
     focus: string;
     intensity?: "light" | "moderate" | "deep";
@@ -154,7 +164,7 @@ export function createCognitiveStimulus(
  */
 export function createAuditoryStimulus(
   world: World,
-  options: BaseStimulusOptions & {
+  options: BaseStimulus & {
     message: string;
     tone?: string;
     target?: number; // Target agent if directed speech

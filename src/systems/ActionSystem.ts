@@ -1,5 +1,5 @@
 import { World } from "../types/bitecs";
-import { query } from "bitecs";
+import { query, setComponent } from "bitecs";
 import { Agent, Action } from "../components/agent/Agent";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
@@ -15,7 +15,11 @@ export const ActionSystem = createSystem<SystemConfig>(
 
       // Initialize available tools if not set
       if (!Action.availableTools[eid]) {
-        Action.availableTools[eid] = runtime.getAvailableTools();
+        setComponent(world, eid, Action, {
+          availableTools: runtime.getAvailableTools(),
+          pendingAction: Action.pendingAction[eid],
+          lastActionTime: Action.lastActionTime[eid],
+        });
       }
 
       // Process pending actions
@@ -31,9 +35,12 @@ export const ActionSystem = createSystem<SystemConfig>(
         pendingAction.parameters
       );
 
-      // Clear pending action
-      Action.pendingAction[eid] = null;
-      Action.lastActionTime[eid] = Date.now();
+      // Clear pending action and update last action time
+      setComponent(world, eid, Action, {
+        pendingAction: null,
+        lastActionTime: Date.now(),
+        availableTools: Action.availableTools[eid],
+      });
     }
 
     return world;

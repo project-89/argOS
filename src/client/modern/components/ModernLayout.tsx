@@ -14,6 +14,7 @@ export function ModernLayout() {
     selectedRoom,
     setSelectedAgent,
     setSelectedRoom,
+    relationships,
   } = useSimulationStore();
 
   return (
@@ -24,6 +25,7 @@ export function ModernLayout() {
             <AgentNetwork
               agents={agents}
               rooms={rooms}
+              relationships={relationships}
               selectedAgent={selectedAgent}
               selectedRoom={selectedRoom}
               onNodeSelect={(nodeType, id) => {

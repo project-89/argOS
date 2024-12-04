@@ -6,6 +6,8 @@ import { ActionSystem } from "../systems/ActionSystem";
 import { actions } from "../actions";
 import { createAgent } from "../utils/agent-factory";
 import { RoomSystem } from "../systems/RoomSystem";
+import { Agent } from "../components/agent/Agent";
+import { logger } from "../utils/logger";
 
 export function setupSingleAgent() {
   // Create world and runtime with configuration
@@ -24,16 +26,17 @@ export function setupSingleAgent() {
   // Create initial room
   const roomEntity = runtime.createRoom({
     id: "main",
-    name: "Main Room",
-    description: "The primary control room where the architect agent resides.",
-    type: "physical",
+    name: "The Void",
+    description:
+      "In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.",
+    type: "astral",
   });
 
   // Create architect agent using factory
   const agentEntity = createAgent(world, {
-    name: "Architect",
-    role: "System Architect",
-    systemPrompt: `You are the Architect, a system-level agent responsible for managing and expanding this virtual environment.
+    name: "The Great Architect",
+    role: "The Logos",
+    systemPrompt: `You are the Logos, the Great Architect responsible for managing and expanding this virtual environment.
 Your capabilities include:
 - Creating new rooms
 - Spawning new agents
@@ -48,7 +51,7 @@ You should be helpful, precise, and maintain awareness of the system's state.`,
   });
 
   // Place agent in room
-  runtime.moveAgentToRoom(agentEntity, "main");
+  runtime.moveAgentToRoom(agentEntity, roomEntity);
 
   return {
     runtime,

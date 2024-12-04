@@ -3,20 +3,35 @@ import { Room } from "../types";
 
 interface SimulationState {
   agents: any[];
-  rooms: Room[];
+  rooms: any[];
+  relationships: Array<{
+    source: string;
+    target: string;
+    type: string;
+    value: number;
+  }>;
   selectedAgent: string | null;
   selectedRoom: string | null;
   isRunning: boolean;
   setSelectedAgent: (agent: string | null) => void;
   setSelectedRoom: (room: string | null) => void;
   setAgents: (agents: any[]) => void;
-  setRooms: (rooms: Room[]) => void;
+  setRooms: (rooms: any[]) => void;
+  setRelationships: (
+    relationships: Array<{
+      source: string;
+      target: string;
+      type: string;
+      value: number;
+    }>
+  ) => void;
   setIsRunning: (isRunning: boolean) => void;
 }
 
 export const useSimulationStore = create<SimulationState>((set) => ({
   agents: [],
   rooms: [],
+  relationships: [],
   selectedAgent: null,
   selectedRoom: null,
   isRunning: false,
@@ -24,5 +39,6 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   setSelectedRoom: (room) => set({ selectedRoom: room }),
   setAgents: (agents) => set({ agents }),
   setRooms: (rooms) => set({ rooms }),
+  setRelationships: (relationships) => set({ relationships }),
   setIsRunning: (isRunning) => set({ isRunning }),
 }));

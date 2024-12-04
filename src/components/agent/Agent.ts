@@ -1,3 +1,5 @@
+import { createRelation } from "bitecs";
+
 // Core Agent component - essential properties every agent needs
 export const Agent = {
   name: [] as string[], // Agent's name/identifier
@@ -13,7 +15,10 @@ export const Agent = {
 export const Memory = {
   thoughts: [] as string[][], // Array of thought history
   lastThought: [] as string[], // Most recent thought
-  perceptions: [] as string[][],
+  perceptions: [] as Array<{
+    timestamp: number;
+    content: string;
+  }>[], // Array of perception objects
   experiences: [] as Array<{
     type: string;
     content: string;
@@ -21,14 +26,21 @@ export const Memory = {
   }>[],
 };
 
-export type RoomType = "physical" | "discord" | "twitter" | "private";
+export type RoomType =
+  | "physical"
+  | "discord"
+  | "twitter"
+  | "private"
+  | "astral";
+
+// Room occupancy relationship
+export const OccupiesRoom = createRelation();
 
 // Room component for spatial organization
 export const Room = {
   id: [] as string[], // Room identifier
   name: [] as string[], // Room name
   description: [] as string[], // Room description
-  occupants: [] as number[][], // Array of entity IDs in the room
   type: [] as RoomType[], // Room type (physical, discord, twitter, private)
 };
 
@@ -73,3 +85,7 @@ export const Stimulus = {
   decay: [] as number[], // Number of engine loops this stimulus will last
   roomId: [] as string[], // The room where this stimulus occurred
 };
+
+// Relations
+export const StimulusInRoom = createRelation();
+export const StimulusSource = createRelation();

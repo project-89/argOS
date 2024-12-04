@@ -1,9 +1,8 @@
-import { createWorld, addEntity, addComponent } from "bitecs";
+import { createWorld, addEntity, addComponent, set } from "bitecs";
 import { createAgent } from "../utils/agent-factory";
 import { logger } from "../utils/logger";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
-import { Room } from "../components/agent/Agent";
-import { fileURLToPath } from "url";
+import { Room, OccupiesRoom } from "../components/agent/Agent";
 
 export async function setupBasicConversation(runtime: SimulationRuntime) {
   logger.system("Setting up basic conversation scenario...");
@@ -12,12 +11,17 @@ export async function setupBasicConversation(runtime: SimulationRuntime) {
 
   // Create a room
   const gardenRoom = addEntity(world);
-  addComponent(world, gardenRoom, Room);
-  Room.id[gardenRoom] = "street";
-  Room.name[gardenRoom] = "Busy street";
-  Room.description[gardenRoom] =
-    "A busy city street with people walking by and a busy coffee shop in the year 2024.";
-  Room.occupants[gardenRoom] = [];
+  addComponent(
+    world,
+    gardenRoom,
+    set(Room, {
+      id: "street",
+      name: "Busy street",
+      description:
+        "A busy city street with people walking by and a busy coffee shop in the year 2024.",
+      type: "physical",
+    })
+  );
 
   // Create agents...
   const agent1 = createAgent(world, {
@@ -40,20 +44,9 @@ export async function setupBasicConversation(runtime: SimulationRuntime) {
       "A 23-year-old with an undercut hairstyle dyed in muted pastel colors, wearing oversized vintage tech company hoodie and cargo pants covered in unnecessary straps and pockets. Their fingers are adorned with various smart rings and their augmented reality glasses occasionally glitch, displaying fragments of code in their peripheral vision. They carry a beat-up laptop covered in cyberpunk stickers and fidget constantly with a rubik's cube that seems to solve itself when they're not paying attention. Their movements are quick and nervous, like someone who's had too much coffee and just discovered their reality might be breaking down.",
   });
 
-  // Add agents to room
-  Room.occupants[gardenRoom] = [agent1, agent2];
+  // Add agents to room using relationships
+  addComponent(world, agent1, OccupiesRoom(gardenRoom));
+  addComponent(world, agent2, OccupiesRoom(gardenRoom));
 
   logger.system("Basic conversation scenario setup complete");
-}
-
-// Allow running directly
-if (import.meta.url === fileURLToPath(import.meta.url)) {
-  const world = createWorld();
-  const runtime = new SimulationRuntime(world);
-  setupBasicConversation(runtime)
-    .then(() => runtime.start())
-    .catch((error) => {
-      logger.error(`Simulation failed: ${error.message}`);
-      console.error(error);
-    });
 }

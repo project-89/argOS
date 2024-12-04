@@ -2,7 +2,7 @@ import { z } from "zod";
 import { World } from "../types/bitecs";
 import { Memory, Room, Agent } from "../components/agent/Agent";
 import { logger } from "../utils/logger";
-import { findAgentRoom } from "../utils/world-utils";
+import { getAgentRoom } from "../utils/queries";
 import {
   createVisualStimulus,
   createAuditoryStimulus,
@@ -41,8 +41,8 @@ export async function execute(
   eid: number,
   parameters: z.infer<typeof schema>
 ) {
-  const roomId = findAgentRoom(world, eid);
-  if (roomId === null) return;
+  const roomId = getAgentRoom(world, eid);
+  if (!roomId) return;
 
   const { message, tone = "neutral", target } = parameters;
 
