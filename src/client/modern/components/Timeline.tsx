@@ -1,8 +1,8 @@
 import * as React from "react";
-import { SimulationEvent } from "../../../types";
+import { ServerMessage, AgentStateMessage } from "../../../types";
 
 interface TimelineProps {
-  logs: SimulationEvent[];
+  logs: ServerMessage[];
   isRunning: boolean;
 }
 
@@ -33,38 +33,40 @@ export function Timeline({ logs, isRunning }: TimelineProps) {
   );
 }
 
-function getEventColor(type: string): string {
+function getEventColor(type: ServerMessage["type"]): string {
   switch (type) {
-    case "AGENT_ACTION":
-      return "emerald";
     case "AGENT_STATE":
       return "cyan";
-    case "SYSTEM_STATE":
+    case "ROOM_STATE":
+      return "emerald";
+    case "WORLD_STATE":
       return "orange";
-    case "LOG":
+    case "CONNECTION_STATE":
       return "gray";
     default:
       return "gray";
   }
 }
 
-function formatEventContent(log: SimulationEvent): string {
-  switch (log.type) {
-    case "AGENT_ACTION":
-      return `${log.data.agentName || ""} ${log.data.tool || ""} ${
-        log.data.message || ""
-      }`;
-    case "AGENT_STATE":
-      if (log.data.thought)
-        return `${log.data.agentName || ""} thought: ${log.data.thought}`;
-      if (log.data.appearance)
-        return `${log.data.agentName || ""} appearance changed`;
-      return JSON.stringify(log.data);
-    case "SYSTEM_STATE":
-      return `System state updated`;
-    case "LOG":
-      return log.data.message || "";
-    default:
-      return JSON.stringify(log.data);
+function formatEventContent(log: ServerMessage): string {
+  if (log.type === "AGENT_STATE") {
+    const data = log.data;
+    if (data.category === "thought")
+      return `${data.agentName} thought: ${data.thought}`;
+    if (data.category === "appearance")
+      return `${data.agentName} appearance changed`;
+    if (data.category === "action")
+      return `${data.agentName} ${data.action?.type || ""}`;
+    return JSON.stringify(data);
   }
+  if (log.type === "ROOM_STATE") {
+    return log.data.event?.message || "Room updated";
+  }
+  if (log.type === "WORLD_STATE") {
+    return "World state updated";
+  }
+  if (log.type === "CONNECTION_STATE") {
+    return log.connected ? "Connected" : "Disconnected";
+  }
+  return "";
 }

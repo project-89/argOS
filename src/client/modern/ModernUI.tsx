@@ -36,6 +36,32 @@ export function ModernUI() {
         const worldState = message.data as WorldState;
         setAgents(worldState.agents);
         setRooms(worldState.rooms);
+      } else if (
+        message.type === "AGENT_STATE" &&
+        message.data.category === "appearance" &&
+        message.data.appearance
+      ) {
+        // Update agent appearance in real-time
+        setAgents((prev: any[]) =>
+          prev.map((agent) => {
+            if (agent.name === message.data.agentName) {
+              return {
+                ...agent,
+                facialExpression:
+                  message.data.appearance?.facialExpression ??
+                  agent.facialExpression,
+                bodyLanguage:
+                  message.data.appearance?.bodyLanguage ?? agent.bodyLanguage,
+                currentAction:
+                  message.data.appearance?.currentAction ?? agent.currentAction,
+                socialCues:
+                  message.data.appearance?.socialCues ?? agent.socialCues,
+                lastUpdate: Date.now(),
+              };
+            }
+            return agent;
+          })
+        );
       }
     });
 
@@ -105,8 +131,10 @@ export function ModernUI() {
                 onNodeSelect={(nodeType, id) => {
                   if (nodeType === "agent") {
                     useSimulationStore.getState().setSelectedAgent(id);
+                    useSimulationStore.getState().setSelectedRoom(null);
                   } else {
                     useSimulationStore.getState().setSelectedRoom(id);
+                    useSimulationStore.getState().setSelectedAgent(null);
                   }
                 }}
               />

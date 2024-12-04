@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useState } from "react";
-import { SimulationEvent } from "../../../types";
+import { ServerMessage } from "../../../types";
 import { getTailwindColor } from "../../../utils/colors";
 
 interface ChatInterfaceProps {
@@ -8,7 +8,7 @@ interface ChatInterfaceProps {
   selectedRoom: string | null;
   agents: any[];
   rooms: any[];
-  logs: SimulationEvent[];
+  logs: ServerMessage[];
   onSendMessage: (message: string) => void;
 }
 
@@ -72,35 +72,35 @@ export function ChatInterface({
   };
 
   const filteredLogs = logs.filter((log) => {
-    if (selectedAgent) {
+    if (selectedAgent && log.type === "AGENT_STATE") {
       return (
-        log.agentName === selectedAgent &&
-        log.actionType &&
-        selectedTypes.has(log.actionType)
+        log.data.agentName === selectedAgent &&
+        log.data.category &&
+        selectedTypes.has(log.data.category)
       );
     }
-    return log.actionType && selectedTypes.has(log.actionType);
+    return false;
   });
 
-  const getMessageContent = (log: SimulationEvent) => {
+  const getMessageContent = (log: ServerMessage) => {
     if (log.type === "AGENT_STATE") {
-      switch (log.category) {
+      switch (log.data.category) {
         case "thought":
           return log.data.thought;
-        case "experience":
-          return log.data.content;
-        case "perception":
-          return `Perceiving: ${log.data.stimulus?.type || "unknown"}`;
+        case "action":
+          return log.data.action?.type;
+        case "appearance":
+          return `${log.data.appearance?.currentAction || "Unknown action"}`;
       }
     }
-    return log.data.message || log.data.action;
+    return null;
   };
 
-  const getMessageType = (log: SimulationEvent) => {
+  const getMessageType = (log: ServerMessage) => {
     if (log.type === "AGENT_STATE") {
-      return log.category?.toUpperCase() || "STATE";
+      return log.data.category.toUpperCase();
     }
-    return log.actionType || log.type;
+    return log.type;
   };
 
   const getMessageColor = (type: string) => {
@@ -168,10 +168,9 @@ export function ChatInterface({
           const type = getMessageType(log);
           const content = getMessageContent(log);
           const agentName =
-            log.agentName ||
-            log.data.agentName ||
-            log.data.sourceName ||
-            "System";
+            (log.type === "AGENT_STATE" && log.data.agentName) ||
+            agents.find((a) => a.id === selectedAgent)?.name ||
+            "Unknown Agent";
 
           return (
             <div key={i} className="log-entry">

@@ -1,29 +1,100 @@
 import { RoomType } from "../components/agent/Agent";
 
-export interface SimulationEvent {
-  type:
-    | "LOG"
-    | "AGENT_STATE"
-    | "SYSTEM_STATE"
-    | "AGENT_ACTION"
-    | "ERROR"
-    | "PERCEPTION"
-    | "WORLD_STATE"
-    | "ROOM_UPDATE"
-    | "NETWORK_UPDATE"
-    | "ROOM_STIMULUS";
-  category?: "thought" | "experience" | "perception" | "system" | string;
-  data: any;
+export type MessageType =
+  | "WORLD_STATE"
+  | "AGENT_STATE"
+  | "ROOM_STATE"
+  | "CONNECTION_STATE"
+  | "SUBSCRIBE_ROOM"
+  | "UNSUBSCRIBE_ROOM"
+  | "SUBSCRIBE_AGENT"
+  | "UNSUBSCRIBE_AGENT"
+  | "CHAT"
+  | "START"
+  | "STOP"
+  | "RESET";
+
+export interface BaseMessage {
+  type: MessageType;
   timestamp: number;
-  agentId?: number;
-  agentName?: string;
-  actionType?:
-    | "SPEECH"
-    | "THOUGHT"
-    | "WAIT"
-    | "MOVEMENT"
-    | "PERCEPTION"
-    | "SYSTEM";
+}
+
+export interface WorldStateMessage extends BaseMessage {
+  type: "WORLD_STATE";
+  data: WorldState;
+}
+
+export interface AgentStateMessage extends BaseMessage {
+  type: "AGENT_STATE";
+  data: {
+    agentId: string;
+    agentName: string;
+    category: "appearance" | "thought" | "action";
+    appearance?: {
+      facialExpression?: string;
+      bodyLanguage?: string;
+      currentAction?: string;
+      socialCues?: string;
+    };
+    thought?: string;
+    action?: {
+      type: string;
+      data: any;
+    };
+  };
+}
+
+export interface RoomStateMessage extends BaseMessage {
+  type: "ROOM_STATE";
+  data: {
+    roomId: string;
+    event: any; // TODO: Type this properly based on room events
+  };
+}
+
+export interface ConnectionStateMessage extends BaseMessage {
+  type: "CONNECTION_STATE";
+  connected: boolean;
+}
+
+export interface SubscriptionMessage extends BaseMessage {
+  type:
+    | "SUBSCRIBE_ROOM"
+    | "UNSUBSCRIBE_ROOM"
+    | "SUBSCRIBE_AGENT"
+    | "UNSUBSCRIBE_AGENT";
+  roomId?: string;
+  agentId?: string;
+}
+
+export interface ChatMessage extends BaseMessage {
+  type: "CHAT";
+  message: string;
+  target?: string;
+}
+
+export interface ControlMessage extends BaseMessage {
+  type: "START" | "STOP" | "RESET";
+}
+
+export type ServerMessage =
+  | WorldStateMessage
+  | AgentStateMessage
+  | RoomStateMessage
+  | ConnectionStateMessage;
+
+export type ClientMessage = SubscriptionMessage | ChatMessage | ControlMessage;
+
+export interface WorldState {
+  agents: any[]; // TODO: Create proper Agent interface
+  rooms: Room[];
+  relationships: Array<{
+    source: string;
+    target: string;
+    type: string;
+    value: number;
+  }>;
+  timestamp: number;
 }
 
 export interface AgentColor {
@@ -65,40 +136,3 @@ export interface NetworkState {
   nodes: NetworkNode[];
   links: NetworkLink[];
 }
-
-export type ClientMessage =
-  | { type: "START" }
-  | { type: "STOP" }
-  | { type: "RESET" }
-  | { type: "CHAT"; message: string }
-  | { type: "SUBSCRIBE_ROOM"; roomId: string }
-  | { type: "UNSUBSCRIBE_ROOM"; roomId: string }
-  | { type: "SUBSCRIBE_AGENT"; agentId: string }
-  | { type: "UNSUBSCRIBE_AGENT"; agentId: string };
-
-export interface WorldState {
-  agents: any[];
-  rooms: Room[];
-  relationships: Array<{
-    source: string;
-    target: string;
-    type: string;
-    value: number;
-  }>;
-  timestamp: number;
-}
-
-export interface ChatMessage {
-  type: "CHAT";
-  data: {
-    message: string;
-    target?: string | null;
-    roomId?: string | null;
-  };
-}
-
-export interface ControlMessage {
-  type: "START" | "STOP" | "RESET";
-}
-
-export type ServerMessage = SimulationEvent | WorldState;

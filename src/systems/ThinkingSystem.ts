@@ -201,8 +201,6 @@ export const ThinkingSystem = createSystem<SystemConfig>(
         Experiences: ${currentExperiences.length}
       `);
 
-      runtime.emit("agentThought", eid, thought);
-
       // Queue action for ActionSystem
       if (thought.action) {
         logger.system(`${agentName} queued action: ${thought.action.tool}`);

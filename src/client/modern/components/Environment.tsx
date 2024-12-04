@@ -1,10 +1,14 @@
 import * as React from "react";
-import { SimulationEvent } from "../../../types";
+import {
+  ServerMessage,
+  AgentStateMessage,
+  RoomStateMessage,
+} from "../../../types";
 import { getTailwindColor } from "../../../utils/colors";
 
 interface EnvironmentProps {
   agents: any[];
-  logs: SimulationEvent[];
+  logs: ServerMessage[];
   selectedRoom?: string | null;
 }
 
@@ -13,24 +17,16 @@ export function Environment({ agents, logs, selectedRoom }: EnvironmentProps) {
   const roomLogs = React.useMemo(() => {
     if (!selectedRoom) return [];
     return logs.filter((log) => {
-      // Include room-specific events
-      if (log.data.roomId === selectedRoom) return true;
-
-      // Include agent actions in this room
-      if (log.type === "AGENT_ACTION" && log.data.roomId === selectedRoom)
-        return true;
-
-      // Include agent state changes in this room
-      if (log.type === "AGENT_STATE" && log.data.roomId === selectedRoom)
-        return true;
-
-      // Include room stimuli
-      if (log.type === "ROOM_STIMULUS" && log.data.roomId === selectedRoom)
-        return true;
-
+      if (log.type === "ROOM_STATE") {
+        return log.data.roomId === selectedRoom;
+      }
+      if (log.type === "AGENT_STATE") {
+        const agent = agents.find((a) => a.id === log.data.agentId);
+        return agent?.room?.id === selectedRoom;
+      }
       return false;
     });
-  }, [logs, selectedRoom]);
+  }, [logs, selectedRoom, agents]);
 
   // Get current room info
   const currentRoom = React.useMemo(() => {
@@ -64,7 +60,7 @@ export function Environment({ agents, logs, selectedRoom }: EnvironmentProps) {
               <span className="text-gray-500">
                 {new Date(log.timestamp).toLocaleTimeString()} »
               </span>{" "}
-              {log.data.agentName && (
+              {log.type === "AGENT_STATE" && (
                 <span className={getTailwindColor(log.data.agentName)}>
                   [{log.data.agentName}]
                 </span>
@@ -78,35 +74,22 @@ export function Environment({ agents, logs, selectedRoom }: EnvironmentProps) {
   );
 }
 
-function formatLogContent(log: SimulationEvent): string {
-  switch (log.type) {
-    case "AGENT_ACTION":
-      if (log.data.actionType === "SPEECH") {
-        return `says: "${log.data.message}"`;
-      }
-      if (log.data.actionType === "WAIT") {
-        return log.data.isThinking
-          ? `is thinking: ${log.data.reason}`
-          : `is waiting: ${log.data.reason}`;
-      }
-      return log.data.message || JSON.stringify(log.data);
-
-    case "AGENT_STATE":
-      if (log.data.appearance) {
-        return Object.values(log.data.appearance).filter(Boolean).join("; ");
-      }
-      if (log.data.thought) {
-        return `thinks: "${log.data.thought}"`;
-      }
-      return "";
-
-    case "ROOM_STIMULUS":
-      if (log.data.content?.action) {
-        return `${log.data.content.action}: ${log.data.content.reason || ""}`;
-      }
-      return log.data.content?.message || "";
-
-    default:
-      return "";
+function formatLogContent(log: ServerMessage): string {
+  if (log.type === "AGENT_STATE") {
+    const data = (log as AgentStateMessage).data;
+    if (data.category === "appearance" && data.appearance) {
+      return Object.values(data.appearance).filter(Boolean).join("; ");
+    }
+    if (data.category === "thought" && data.thought) {
+      return `thinks: "${data.thought}"`;
+    }
+    if (data.category === "action" && data.action) {
+      return `${data.action.type}: ${data.action.data || ""}`;
+    }
   }
+  if (log.type === "ROOM_STATE") {
+    const data = (log as RoomStateMessage).data;
+    return data.event?.message || "";
+  }
+  return "";
 }

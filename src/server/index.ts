@@ -4,7 +4,12 @@ import { createServer } from "http";
 import { WebSocket, WebSocketServer } from "ws";
 import cors from "cors";
 import { setupSingleAgent } from "../examples/single-agent-setup";
-import type { ClientMessage } from "../types";
+import type {
+  ClientMessage,
+  ServerMessage,
+  AgentStateMessage,
+  RoomStateMessage,
+} from "../types";
 import { logger } from "../utils/logger";
 
 // Validate required environment variables
@@ -44,13 +49,12 @@ wss.on("connection", (ws) => {
 
   // Send initial world state
   const worldState = runtime.getWorldState();
-  ws.send(
-    JSON.stringify({
-      type: "WORLD_STATE",
-      data: worldState,
-      timestamp: Date.now(),
-    })
-  );
+  const worldStateMessage: ServerMessage = {
+    type: "WORLD_STATE",
+    data: worldState,
+    timestamp: Date.now(),
+  };
+  ws.send(JSON.stringify(worldStateMessage));
 
   // Handle client messages
   ws.on("message", async (data) => {
@@ -59,14 +63,23 @@ wss.on("connection", (ws) => {
       switch (message.type) {
         case "SUBSCRIBE_ROOM": {
           const { roomId } = message;
+          if (!roomId) break;
           const roomEntity = findRoomEntity(runtime, roomId);
           if (!roomEntity) break;
 
           if (!roomSubscriptions.has(roomId)) {
             roomSubscriptions.set(roomId, new Set());
             runtime.subscribeToRoom(roomEntity, (roomEvent) => {
+              const roomStateMessage: RoomStateMessage = {
+                type: "ROOM_STATE",
+                data: {
+                  roomId,
+                  event: roomEvent,
+                },
+                timestamp: Date.now(),
+              };
               roomSubscriptions.get(roomId)?.forEach((client) => {
-                client.send(JSON.stringify(roomEvent));
+                client.send(JSON.stringify(roomStateMessage));
               });
             });
           }
@@ -76,19 +89,31 @@ wss.on("connection", (ws) => {
 
         case "UNSUBSCRIBE_ROOM": {
           const { roomId } = message;
+          if (!roomId) break;
           roomSubscriptions.get(roomId)?.delete(ws);
           break;
         }
 
         case "SUBSCRIBE_AGENT": {
           const { agentId } = message;
+          if (!agentId) break;
           if (!agentSubscriptions.has(agentId)) {
             agentSubscriptions.set(agentId, new Set());
-            // Set up runtime subscription
             runtime.subscribeToAgent(Number(agentId), (agentEvent) => {
-              // Broadcast to all subscribers
+              const agentStateMessage: AgentStateMessage = {
+                type: "AGENT_STATE",
+                data: {
+                  agentId,
+                  agentName: agentEvent.agentName,
+                  category: agentEvent.category,
+                  appearance: agentEvent.appearance,
+                  thought: agentEvent.thought,
+                  action: agentEvent.action,
+                },
+                timestamp: Date.now(),
+              };
               agentSubscriptions.get(agentId)?.forEach((client) => {
-                client.send(JSON.stringify(agentEvent));
+                client.send(JSON.stringify(agentStateMessage));
               });
             });
           }
@@ -98,12 +123,13 @@ wss.on("connection", (ws) => {
 
         case "UNSUBSCRIBE_AGENT": {
           const { agentId } = message;
+          if (!agentId) break;
           agentSubscriptions.get(agentId)?.delete(ws);
           break;
         }
 
         case "CHAT":
-          // TODO: Handle chat messages
+          // TODO: Handle chat messages with proper typing
           break;
 
         case "START":

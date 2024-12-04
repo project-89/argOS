@@ -492,10 +492,6 @@ export class SimulationRuntime extends EventEmitter {
 
   emitWorldState() {
     const state = this.getWorldState();
-    console.log(
-      "Emitting world state with relationships:",
-      state.relationships
-    );
     this.emit("worldState", state);
   }
 
