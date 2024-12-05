@@ -34,7 +34,23 @@ function findAgentRoom(world: World, agentId: number): number | null {
   return rooms[0] || null;
 }
 
-// Helper to process perceptions
+// Stage 1: Gather current perceptions from room
+function gatherRoomPerceptions(world: World, eid: number, roomId: string) {
+  const stimuli = query(world, [Stimulus]);
+  return stimuli
+    .filter((sid) => Stimulus.roomId[sid] === roomId)
+    .filter((sid) => Stimulus.sourceEntity[sid] !== eid)
+    .map((sid) => ({
+      type: Stimulus.type[sid],
+      sourceEntity: Stimulus.sourceEntity[sid],
+      source: Stimulus.source[sid],
+      content: Stimulus.content[sid] ? JSON.parse(Stimulus.content[sid]) : {},
+      timestamp: Stimulus.timestamp[sid],
+      roomId: Stimulus.roomId[sid],
+    }));
+}
+
+// Stage 2: Process perceptions into narrative
 async function processPerceptions(
   eid: number,
   perceptions: any[],
@@ -54,15 +70,94 @@ async function processPerceptions(
   return await processStimulus(agentState);
 }
 
-// Helper to emit appearance changes as visual stimuli
-function emitAppearanceStimulus(
+// Stage 3: Generate thought based on state
+async function generateAgentThought(
+  world: World,
+  eid: number,
+  perceptions: string,
+  currentPerceptions: any[],
+  runtime: any
+) {
+  const agentState: AgentState = {
+    name: Agent.name[eid],
+    role: Agent.role[eid],
+    systemPrompt: Agent.systemPrompt[eid],
+    thoughtHistory: Memory.thoughts[eid] || [],
+    perceptions: {
+      narrative: perceptions,
+      raw: currentPerceptions.map((p) => ({
+        type: p.type,
+        source: p.sourceEntity,
+        data: p.content,
+      })),
+    },
+    experiences: Memory.experiences[eid] || [],
+    availableTools: runtime.getAvailableTools(),
+  };
+
+  return await generateThought(agentState);
+}
+
+// Stage 4: Update agent memory
+function updateAgentMemory(
+  world: World,
+  eid: number,
+  thought: any,
+  perceptions: string
+) {
+  const currentThoughts = Memory.thoughts[eid] || [];
+  const currentPerceptionsList = Memory.perceptions[eid] || [];
+  const currentExperiences = Memory.experiences[eid] || [];
+
+  const lastThought = Memory.lastThought[eid];
+  const lastPerception =
+    currentPerceptionsList[currentPerceptionsList.length - 1]?.content;
+
+  const shouldAddThought = thought.thought !== lastThought;
+  const shouldAddPerception = perceptions !== lastPerception;
+
+  setComponent(world, eid, Memory, {
+    lastThought: thought.thought,
+    thoughts: shouldAddThought
+      ? [...currentThoughts, thought.thought]
+      : currentThoughts,
+    perceptions: shouldAddPerception
+      ? [
+          ...currentPerceptionsList,
+          { timestamp: Date.now(), content: perceptions },
+        ]
+      : currentPerceptionsList,
+    experiences: currentExperiences,
+  });
+
+  return { shouldAddThought, shouldAddPerception };
+}
+
+// Stage 5: Handle agent actions
+function handleAgentAction(world: World, eid: number, thought: any) {
+  if (thought.action) {
+    logger.agent(
+      eid,
+      `I decided to take the action: ${thought.action.tool}`,
+      Agent.name[eid]
+    );
+    setComponent(world, eid, Action, {
+      pendingAction: thought.action,
+      lastActionTime: Action.lastActionTime[eid],
+      availableTools: Action.availableTools[eid],
+    });
+  }
+}
+
+// Stage 6: Update agent appearance
+function updateAgentAppearance(
   world: World,
   eid: number,
   roomId: number,
   appearance: Record<string, string>
 ) {
-  // Update appearance component using setComponent
   setComponent(world, eid, Appearance, {
+    description: appearance.description || "",
     baseDescription: Appearance.baseDescription[eid],
     facialExpression:
       appearance.facialExpression || Appearance.facialExpression[eid],
@@ -72,7 +167,6 @@ function emitAppearanceStimulus(
     lastUpdate: Date.now(),
   });
 
-  // Create visual stimulus for appearance change
   createVisualStimulus(world, {
     sourceEntity: eid,
     roomId: Room.id[roomId],
@@ -93,148 +187,63 @@ export const ThinkingSystem = createSystem<SystemConfig>(
     logger.debug(`ThinkingSystem processing ${agents.length} agents`);
 
     for (const eid of agents) {
+      // Skip inactive agents
       if (!Agent.active[eid]) {
         logger.debug(`Agent ${Agent.name[eid]} is not active, skipping`);
         continue;
       }
 
-      const agentName = Agent.name[eid];
-
-      // Get perceptions from current room
+      // Stage 1: Find agent's room and gather perceptions
       const agentRoom = findAgentRoom(world, eid);
       if (!agentRoom) {
-        logger.debug(`No room found for ${agentName}`);
+        logger.debug(`No room found for ${Agent.name[eid]}`);
         continue;
       }
-
-      const stimuli = query(world, [Stimulus]);
       const roomId = Room.id[agentRoom] || String(agentRoom);
-      const currentPerceptions = stimuli
-        .filter((sid) => Stimulus.roomId[sid] === roomId)
-        // Ignore stimuli from the agent itself
-        .filter((sid) => Stimulus.sourceEntity[sid] !== eid)
-        .map((sid) => ({
-          type: Stimulus.type[sid],
-          sourceEntity: Stimulus.sourceEntity[sid],
-          source: Stimulus.source[sid],
-          content: Stimulus.content[sid]
-            ? JSON.parse(Stimulus.content[sid])
-            : {},
-          timestamp: Stimulus.timestamp[sid],
-          roomId: Stimulus.roomId[sid],
-        }));
+      const currentPerceptions = gatherRoomPerceptions(world, eid, roomId);
 
-      // Process perceptions into narrative
+      // Stage 2: Process perceptions into narrative
       const perceptions = await processPerceptions(
         eid,
         currentPerceptions,
         world
       );
+      logger.agent(eid, `Perceiving: ${perceptions}`, Agent.name[eid]);
 
-      logger.agent(eid, `Perceiving: ${perceptions}`, agentName);
+      // Stage 3: Generate thought based on state
+      logger.debug(`Generating thought for ${Agent.name[eid]}`);
+      const thought = await generateAgentThought(
+        world,
+        eid,
+        perceptions,
+        currentPerceptions,
+        runtime
+      );
+      logger.agent(eid, `Thought: ${thought.thought}`, Agent.name[eid]);
 
-      // Generate thought based on perceptions
-      const agentState: AgentState = {
-        name: agentName,
-        role: Agent.role[eid],
-        systemPrompt: Agent.systemPrompt[eid],
-        thoughtHistory: Memory.thoughts[eid] || [],
-        perceptions: {
-          narrative: perceptions,
-          raw: currentPerceptions.map((p) => ({
-            type: p.type,
-            source: p.sourceEntity,
-            data: p.content,
-          })),
-        },
-        experiences: Memory.experiences[eid] || [],
-        availableTools: runtime.getAvailableTools(),
-      };
-
-      logger.debug(`Generating thought for ${agentName}`);
-
-      const thought = await generateThought(agentState);
-
-      logger.agent(eid, `Thought: ${thought.thought}`, agentName);
-
-      // Get current memory state
-      const currentThoughts = Memory.thoughts[eid] || [];
-      const currentPerceptionsList = Memory.perceptions[eid] || [];
-      const currentExperiences = Memory.experiences[eid] || [];
-
-      // Only add new thought if it's different from the last one
-      const lastThought = Memory.lastThought[eid];
-      const shouldAddThought = thought.thought !== lastThought;
-
-      // Only add new perception if it's different from the last one
-      const lastPerception =
-        currentPerceptionsList[currentPerceptionsList.length - 1]?.content;
-      const shouldAddPerception = perceptions !== lastPerception;
-
-      // Update memory with new thought using setComponent
-      setComponent(world, eid, Memory, {
-        lastThought: thought.thought,
-        thoughts: shouldAddThought
-          ? [...currentThoughts, thought.thought]
-          : currentThoughts,
-        perceptions: shouldAddPerception
-          ? [
-              ...currentPerceptionsList,
-              {
-                timestamp: Date.now(),
-                content: perceptions,
-              },
-            ]
-          : currentPerceptionsList,
-        experiences: currentExperiences,
-      });
-
-      // Log memory state for debugging
+      // Stage 4: Update agent memory
+      const { shouldAddThought, shouldAddPerception } = updateAgentMemory(
+        world,
+        eid,
+        thought,
+        perceptions
+      );
       logger.debug(
-        `Memory state for ${agentName}:
-        Thoughts: ${currentThoughts.length + (shouldAddThought ? 1 : 0)}
+        `Memory state for ${Agent.name[eid]}:
+        Thoughts: ${Memory.thoughts[eid].length + (shouldAddThought ? 1 : 0)}
         Perceptions: ${
-          currentPerceptionsList.length + (shouldAddPerception ? 1 : 0)
+          Memory.perceptions[eid].length + (shouldAddPerception ? 1 : 0)
         }
-        Experiences: ${currentExperiences.length}
+        Experiences: ${Memory.experiences[eid].length}
       `
       );
 
-      // Queue action for ActionSystem
-      if (thought.action) {
-        logger.agent(
-          eid,
-          `I decided to take the action: ${thought.action.tool}`,
-          agentName
-        );
+      // Stage 5: Handle agent actions
+      handleAgentAction(world, eid, thought);
 
-        setComponent(world, eid, Action, {
-          pendingAction: thought.action,
-          lastActionTime: Action.lastActionTime[eid],
-          availableTools: Action.availableTools[eid],
-        });
-      }
-
-      // Update appearance if provided
+      // Stage 6: Update agent appearance
       if (thought.appearance) {
-        const agentRoom = findAgentRoom(world, eid);
-        if (agentRoom) {
-          setComponent(world, eid, Appearance, {
-            baseDescription: Appearance.baseDescription[eid],
-            description: thought.appearance.description || "",
-            facialExpression:
-              thought.appearance.facialExpression ||
-              Appearance.facialExpression[eid],
-            bodyLanguage:
-              thought.appearance.bodyLanguage || Appearance.bodyLanguage[eid],
-            currentAction:
-              thought.appearance.currentAction || Appearance.currentAction[eid],
-            socialCues:
-              thought.appearance.socialCues || Appearance.socialCues[eid],
-            lastUpdate: Date.now(),
-          });
-          emitAppearanceStimulus(world, eid, agentRoom, thought.appearance);
-        }
+        updateAgentAppearance(world, eid, agentRoom, thought.appearance);
       }
     }
 

@@ -37,9 +37,7 @@ export class WebSocketService {
           this.handleWorldState(data.data);
         } else if (data.type === "AGENT_UPDATE") {
           console.log("Received agent update:", data);
-          if (data.data.type === "thought") {
-            useSimulationStore.getState().addLog(data);
-          }
+          useSimulationStore.getState().addLog(data);
         }
         this.broadcast(data);
       } catch (error) {

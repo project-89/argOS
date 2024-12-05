@@ -39,6 +39,8 @@ Tool Schemas:
 Based on your personality, role, and the current social situation, what are you thinking? What would you like to do?
 Remember to take time to process information and think between exchanges.
 
+Remember that what you think doees not become reality.  This is an internal monologue which is personal to you and your own internal world.  Only your actions can change reality.
+
 Respond with a JSON object containing:
 1. A "thought" field expressing your internal monologue - keep it focused on the immediate situation
 2. An "action" object (required) containing:

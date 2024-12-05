@@ -57,15 +57,15 @@ export async function execute(
   });
 
   // If thinking, create cognitive stimulus
-  if (isThinking) {
-    createCognitiveStimulus(world, {
-      sourceEntity: eid,
-      roomId: Room.id[roomId],
-      activity: "processing",
-      focus: reason,
-      intensity: "deep",
-    });
-  }
+  // if (isThinking) {
+  //   createCognitiveStimulus(world, {
+  //     sourceEntity: eid,
+  //     roomId: Room.id[roomId],
+  //     activity: "processing",
+  //     focus: reason,
+  //     intensity: "deep",
+  //   });
+  // }
 
   // Record the experience
   Memory.experiences[eid] = Memory.experiences[eid] || [];

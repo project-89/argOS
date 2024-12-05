@@ -18,6 +18,19 @@ import {
   Perception,
   Stimulus,
 } from "../components/agent/Agent";
+import {
+  AgentEventType,
+  AgentEventData,
+  AgentThoughtData,
+  AgentPerceptionData,
+  AgentExperienceData,
+  AgentAppearanceData,
+  AgentActionData,
+  AgentStateData,
+  AgentEventMessage,
+  AgentEventDataType,
+  AuditoryStimulusContent,
+} from "../types";
 
 export class ComponentEventBus {
   private world: World;
@@ -62,14 +75,18 @@ export class ComponentEventBus {
     this.observers.push(
       observe(this.world, onSet(Agent), (eid: number, params) => {
         this.emitAgentUpdate(eid, "state", {
-          id: params.id,
-          name: params.name,
-          role: params.role,
-          systemPrompt: params.systemPrompt,
-          active: params.active,
-          platform: params.platform,
-          appearance: params.appearance,
-          attention: params.attention,
+          category: "state",
+          content: {
+            id: params.id,
+            name: params.name,
+            role: params.role,
+            systemPrompt: params.systemPrompt,
+            active: params.active,
+            platform: params.platform,
+            appearance: params.appearance,
+            attention: params.attention,
+          },
+          timestamp: Date.now(),
         });
       })
     );
@@ -82,38 +99,40 @@ export class ComponentEventBus {
           const perceptions = params.perceptions;
           const experiences = params.experiences;
 
-          // Emit thought
           if (params.lastThought) {
-            this.emitAgentUpdate(eid, "thought", {
+            const thoughtData: AgentThoughtData = {
               category: "thought",
-              thought: params.lastThought,
+              content: params.lastThought,
               timestamp: Date.now(),
-            });
+            };
+            this.emitAgentUpdate(eid, "thought", thoughtData);
           }
 
-          // Emit perception
           if (perceptions?.length) {
-            this.emitAgentUpdate(eid, "perception", {
+            const perception = perceptions[perceptions.length - 1];
+            const perceptionData: AgentPerceptionData = {
               category: "perception",
-              perception: {
-                content: perceptions[perceptions.length - 1],
+              content: {
                 timestamp: Date.now(),
+                content: perception,
               },
               timestamp: Date.now(),
-            });
+            };
+            this.emitAgentUpdate(eid, "perception", perceptionData);
           }
 
-          // Emit experience
           if (experiences?.length) {
-            this.emitAgentUpdate(eid, "experience", {
+            const experience = experiences[experiences.length - 1];
+            const experienceData: AgentExperienceData = {
               category: "experience",
-              experience: {
-                content: experiences[experiences.length - 1],
+              content: {
                 type: "memory",
-                timestamp: Date.now(),
+                content: experience.content,
+                timestamp: experience.timestamp,
               },
               timestamp: Date.now(),
-            });
+            };
+            this.emitAgentUpdate(eid, "experience", experienceData);
           }
         }
       })
@@ -122,33 +141,35 @@ export class ComponentEventBus {
     // Stimuli changes
     this.observers.push(
       observe(this.world, onSet(Stimulus), (eid: number, params) => {
-        if (params.type === "AUDITORY" && params.source === "SPEECH") {
-          // Special handling for speech stimuli
-          this.emitRoomUpdate(params.roomId, "speech", {
-            type: "speech",
-            agentId: params.sourceEntity,
-            agentName: Agent.name[params.sourceEntity],
-            message: params.content,
-            timestamp: params.timestamp,
-          });
-        } else {
-          // Default stimulus handling
-          this.emitRoomUpdate(params.roomId, "stimulus", {
-            type: "stimulus",
-            content: params.content,
-            source: params.source,
-            timestamp: params.timestamp,
-          });
+        if (params.type === "AUDITORY") {
+          const content = params.content
+            ? (JSON.parse(params.content) as AuditoryStimulusContent)
+            : null;
+
+          if (content?.speech) {
+            this.emitRoomUpdate(params.roomId, "speech", {
+              type: "speech",
+              agentId: params.sourceEntity,
+              agentName: content.name,
+              message: content.speech,
+              tone: content.tone,
+              timestamp: content.timestamp,
+              metadata: content.metadata,
+            });
+          }
         }
       })
     );
 
     this.observers.push(
       observe(this.world, onSet(Action), (eid: number, params) => {
+        if (!params.pendingAction) return;
         this.emitAgentUpdate(eid, "action", {
-          pendingAction: params.pendingAction,
-          availableTools: params.availableTools,
-          lastActionTime: params.lastActionTime,
+          category: "action",
+          content: {
+            tool: params.pendingAction.tool,
+          },
+          timestamp: Date.now(),
         });
       })
     );
@@ -157,12 +178,16 @@ export class ComponentEventBus {
     this.observers.push(
       observe(this.world, onSet(Appearance), (eid: number, params) => {
         this.emitAgentUpdate(eid, "appearance", {
-          baseDescription: params.baseDescription,
-          facialExpression: params.facialExpression,
-          bodyLanguage: params.bodyLanguage,
-          currentAction: params.currentAction,
-          socialCues: params.socialCues,
-          lastUpdate: params.lastUpdate,
+          category: "appearance",
+          content: {
+            baseDescription: params.baseDescription,
+            facialExpression: params.facialExpression,
+            bodyLanguage: params.bodyLanguage,
+            currentAction: params.currentAction,
+            socialCues: params.socialCues,
+            lastUpdate: Date.now(),
+          },
+          timestamp: Date.now(),
         });
       })
     );
@@ -218,7 +243,11 @@ export class ComponentEventBus {
     });
   }
 
-  private emitAgentUpdate(eid: number, type: string, data: any) {
+  private emitAgentUpdate(
+    eid: number,
+    type: AgentEventType,
+    data: AgentEventDataType
+  ) {
     const agentId = Agent.id[eid] || String(eid);
     let roomId = null;
 
@@ -231,12 +260,14 @@ export class ComponentEventBus {
       }
     }
 
-    // Emit on agent-specific channel
-    this.broadcast(`agent:${agentId}`, {
+    const eventMessage: AgentEventMessage = {
       type,
       data,
       timestamp: Date.now(),
-    });
+    };
+
+    // Emit on agent-specific channel
+    this.broadcast(`agent:${agentId}`, eventMessage);
 
     // Also emit on room channel if agent is in a room
     if (roomId) {
@@ -244,8 +275,7 @@ export class ComponentEventBus {
         type: "agent",
         data: {
           agentId,
-          type,
-          ...data,
+          ...eventMessage,
         },
         timestamp: Date.now(),
       });

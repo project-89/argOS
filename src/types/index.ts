@@ -93,11 +93,7 @@ export interface AgentUpdateMessage extends BaseMessage {
     room: string;
     agent: string;
   };
-  data: {
-    type: string;
-    data: any;
-    timestamp: number;
-  };
+  data: AgentEventMessage;
 }
 
 export type ServerMessage =
@@ -160,4 +156,133 @@ export interface NetworkLink {
 export interface NetworkState {
   nodes: NetworkNode[];
   links: NetworkLink[];
+}
+
+// Event Types
+export type AgentEventType =
+  | "thought"
+  | "perception"
+  | "experience"
+  | "action"
+  | "appearance"
+  | "state"
+  | "stimulus";
+
+export interface AgentEventData {
+  category: string;
+  content: any;
+  timestamp: number;
+}
+
+export interface AgentThoughtData extends AgentEventData {
+  category: "thought";
+  content: string;
+}
+
+export interface AgentPerceptionData extends AgentEventData {
+  category: "perception";
+  content: {
+    timestamp: number;
+    content: string;
+  };
+}
+
+export interface AgentExperienceData extends AgentEventData {
+  category: "experience";
+  content: {
+    type: string;
+    content: string;
+    timestamp: number;
+  };
+}
+
+export interface AgentAppearanceData extends AgentEventData {
+  category: "appearance";
+  content: {
+    baseDescription?: string;
+    facialExpression?: string;
+    bodyLanguage?: string;
+    currentAction?: string;
+    socialCues?: string;
+    lastUpdate?: number;
+  };
+}
+
+export interface AgentActionData extends AgentEventData {
+  category: "action";
+  content: {
+    tool: string;
+  };
+}
+
+export interface AgentStateData extends AgentEventData {
+  category: "state";
+  content: {
+    id: string;
+    name: string;
+    role: string;
+    systemPrompt: string;
+    active: boolean;
+    platform: string;
+    appearance: string;
+    attention: any;
+  };
+}
+
+export type AgentEventDataType =
+  | AgentThoughtData
+  | AgentPerceptionData
+  | AgentExperienceData
+  | AgentAppearanceData
+  | AgentActionData
+  | AgentStateData;
+
+// Message Types
+export interface AgentEventMessage {
+  type: AgentEventType;
+  data: AgentEventDataType;
+  timestamp: number;
+}
+
+// Stimulus Types
+export type StimulusType =
+  | "VISUAL"
+  | "AUDITORY"
+  | "COGNITIVE"
+  | "TECHNICAL"
+  | "ENVIRONMENTAL";
+
+export interface StimulusMetadata {
+  sourceName: string;
+  sourceRole: string;
+  roomName: string;
+  decay: number;
+  [key: string]: any;
+}
+
+export interface BaseStimulus {
+  name: string;
+  role: string;
+  timestamp: number;
+  category: string;
+  metadata: StimulusMetadata;
+}
+
+export interface AuditoryStimulusContent extends BaseStimulus {
+  speech: string;
+  tone?: string;
+  metadata: StimulusMetadata & {
+    isDirected: boolean;
+    targetName?: string;
+    targetRole?: string;
+  };
+}
+
+export interface VisualStimulusContent extends BaseStimulus {
+  appearance?: string;
+  action?: string;
+  metadata: StimulusMetadata & {
+    hasAppearance: boolean;
+    roomContext: string;
+  };
 }

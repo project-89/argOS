@@ -191,23 +191,6 @@ export class SimulationRuntime extends EventEmitter {
     return null;
   }
 
-  private getStimulusCategory(type: string): string {
-    switch (type) {
-      case "VISUAL":
-        return "Observation";
-      case "AUDITORY":
-        return "Speech";
-      case "COGNITIVE":
-        return "Thought";
-      case "TECHNICAL":
-        return "Technical";
-      case "ENVIRONMENTAL":
-        return "Environment";
-      default:
-        return "Other";
-    }
-  }
-
   cleanup() {
     this.eventBus.cleanup();
     this.componentSync.cleanup();

@@ -222,8 +222,6 @@ export function Inspector({
             <div className="space-y-1">
               {agents
                 .map((agent) => {
-                  console.log("AGENT", agent);
-                  console.log("ROOM", room);
                   return agent;
                 })
                 .filter((agent) => agent?.room === room.eid)
