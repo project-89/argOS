@@ -90,30 +90,29 @@ function emitAppearanceStimulus(
 export const ThinkingSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
     const agents = query(world, [Agent, Memory]);
-    logger.system(`ThinkingSystem processing ${agents.length} agents`);
+    logger.debug(`ThinkingSystem processing ${agents.length} agents`);
 
     for (const eid of agents) {
       if (!Agent.active[eid]) {
-        logger.system(`Agent ${Agent.name[eid]} is not active, skipping`);
+        logger.debug(`Agent ${Agent.name[eid]} is not active, skipping`);
         continue;
       }
 
       const agentName = Agent.name[eid];
-      logger.system(
-        `Processing thoughts for ${agentName} (active: ${Agent.active[eid]})`
-      );
 
       // Get perceptions from current room
       const agentRoom = findAgentRoom(world, eid);
       if (!agentRoom) {
-        logger.system(`No room found for ${agentName}`);
+        logger.debug(`No room found for ${agentName}`);
         continue;
       }
 
       const stimuli = query(world, [Stimulus]);
-      const roomId = Room.id[agentRoom];
+      const roomId = Room.id[agentRoom] || String(agentRoom);
       const currentPerceptions = stimuli
         .filter((sid) => Stimulus.roomId[sid] === roomId)
+        // Ignore stimuli from the agent itself
+        .filter((sid) => Stimulus.sourceEntity[sid] !== eid)
         .map((sid) => ({
           type: Stimulus.type[sid],
           sourceEntity: Stimulus.sourceEntity[sid],
@@ -125,10 +124,6 @@ export const ThinkingSystem = createSystem<SystemConfig>(
           roomId: Stimulus.roomId[sid],
         }));
 
-      logger.system(
-        `${agentName} has ${currentPerceptions.length} perceptions in room ${Room.name[agentRoom]}`
-      );
-
       // Process perceptions into narrative
       const perceptions = await processPerceptions(
         eid,
@@ -136,7 +131,7 @@ export const ThinkingSystem = createSystem<SystemConfig>(
         world
       );
 
-      logger.system(`${agentName} processed perceptions: ${perceptions}`);
+      logger.agent(eid, `Perceiving: ${perceptions}`, agentName);
 
       // Generate thought based on perceptions
       const agentState: AgentState = {
@@ -156,9 +151,11 @@ export const ThinkingSystem = createSystem<SystemConfig>(
         availableTools: runtime.getAvailableTools(),
       };
 
-      logger.system(`Generating thought for ${agentName}`);
+      logger.debug(`Generating thought for ${agentName}`);
+
       const thought = await generateThought(agentState);
-      logger.system(`${agentName} generated thought: ${thought.thought}`);
+
+      logger.agent(eid, `Thought: ${thought.thought}`, agentName);
 
       // Get current memory state
       const currentThoughts = Memory.thoughts[eid] || [];
@@ -193,17 +190,24 @@ export const ThinkingSystem = createSystem<SystemConfig>(
       });
 
       // Log memory state for debugging
-      logger.system(`Memory state for ${agentName}:
+      logger.debug(
+        `Memory state for ${agentName}:
         Thoughts: ${currentThoughts.length + (shouldAddThought ? 1 : 0)}
         Perceptions: ${
           currentPerceptionsList.length + (shouldAddPerception ? 1 : 0)
         }
         Experiences: ${currentExperiences.length}
-      `);
+      `
+      );
 
       // Queue action for ActionSystem
       if (thought.action) {
-        logger.system(`${agentName} queued action: ${thought.action.tool}`);
+        logger.agent(
+          eid,
+          `I decided to take the action: ${thought.action.tool}`,
+          agentName
+        );
+
         setComponent(world, eid, Action, {
           pendingAction: thought.action,
           lastActionTime: Action.lastActionTime[eid],
@@ -217,6 +221,7 @@ export const ThinkingSystem = createSystem<SystemConfig>(
         if (agentRoom) {
           setComponent(world, eid, Appearance, {
             baseDescription: Appearance.baseDescription[eid],
+            description: thought.appearance.description || "",
             facialExpression:
               thought.appearance.facialExpression ||
               Appearance.facialExpression[eid],

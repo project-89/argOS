@@ -16,6 +16,12 @@ export function CommandBar({
   const [elapsedTime, setElapsedTime] = React.useState(0);
 
   React.useEffect(() => {
+    if (!isRunning) {
+      setElapsedTime(0);
+    }
+  }, [isRunning]);
+
+  React.useEffect(() => {
     let interval: NodeJS.Timeout;
     if (isRunning) {
       interval = setInterval(() => {
@@ -36,45 +42,38 @@ export function CommandBar({
       .padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  const handleCommand = (command: string) => {
-    if (command === "STOP" || command === "RESET") {
-      setElapsedTime(0);
-    }
-    onCommand(command);
-  };
-
   return (
     <div className="h-12 border-b border-cyan-900/30 bg-black/20 flex items-center justify-between px-4">
       {/* Left: Primary Controls */}
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => handleCommand(isRunning ? "STOP" : "START")}
+            onClick={() => onCommand(isRunning ? "STOP" : "START")}
             disabled={!isConnected}
-            className={`px-3 py-1 rounded font-mono text-sm transition-all duration-200 ${
+            className={`px-3 py-1 rounded font-mono text-sm transition-all duration-300 ${
               !isConnected
                 ? "bg-gray-800 text-gray-600 cursor-not-allowed"
                 : isRunning
                 ? "bg-black/30 text-yellow-400 border border-yellow-900/50 hover:bg-yellow-900/20 hover:border-yellow-700/50"
                 : "bg-black/30 text-emerald-400 border border-emerald-900/50 hover:bg-emerald-900/20 hover:border-emerald-700/50"
-            } ${isRunning ? "animate-pulse-slow" : ""}`}
+            } ${isRunning ? "animate-pulse" : ""}`}
           >
-            <span className="inline-flex items-center">
+            <span className="inline-flex items-center gap-2">
               {isRunning ? (
                 <>
-                  <span className="mr-1">■</span>
+                  <span className="w-2 h-2 bg-yellow-400 rounded-sm"></span>
                   <span>PAUSE</span>
                 </>
               ) : (
                 <>
-                  <span className="mr-1">►</span>
+                  <span className="w-0 h-0 border-t-[6px] border-t-transparent border-b-[6px] border-b-transparent border-l-[10px] border-emerald-400"></span>
                   <span>START</span>
                 </>
               )}
             </span>
           </button>
           <button
-            onClick={() => handleCommand("STOP")}
+            onClick={() => onCommand("STOP")}
             disabled={!isConnected}
             className={`px-3 py-1 rounded font-mono text-sm ${
               !isConnected
@@ -85,7 +84,7 @@ export function CommandBar({
             ◼ STOP
           </button>
           <button
-            onClick={() => handleCommand("RESET")}
+            onClick={() => onCommand("RESET")}
             disabled={!isConnected}
             className={`px-3 py-1 rounded font-mono text-sm ${
               !isConnected
@@ -133,11 +132,13 @@ export function CommandBar({
         </div>
         <div className="text-sm font-mono">
           <span className="text-gray-500">Time:</span>{" "}
-          <span className="text-cyan-400">{formatTime(elapsedTime)}</span>
+          <span className={`text-cyan-400 ${isRunning ? "animate-pulse" : ""}`}>
+            {formatTime(elapsedTime)}
+          </span>
         </div>
         <div
           className={`w-2 h-2 rounded-full ${
-            isConnected ? "bg-emerald-400 animate-pulse-slow" : "bg-red-500"
+            isConnected ? "bg-emerald-400 animate-pulse" : "bg-red-500"
           }`}
         />
       </div>

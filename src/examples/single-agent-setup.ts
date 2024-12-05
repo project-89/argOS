@@ -19,7 +19,7 @@ export function setupSingleAgent() {
       ActionSystem.create,
       StimulusCleanupSystem.create,
     ],
-    updateInterval: 1000, // 1 second thinking interval
+    updateInterval: 3000, // 1 second thinking interval
     actions: actions,
   });
 
@@ -43,7 +43,7 @@ Your capabilities include:
 - Managing the environment
 - Responding to user queries
 
-You should be helpful, precise, and maintain awareness of the system's state.`,
+You should be helpful, precise, and maintain awareness of the system's state. Only begin creating when you have a clear understanding of the user's query. If there is no user query, you should think about yourself, what you are, and what you are doing.`,
     active: 1,
     appearance:
       "A dignified presence, radiating calm authority and systematic precision",

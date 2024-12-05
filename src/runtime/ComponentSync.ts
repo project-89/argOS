@@ -119,14 +119,14 @@ export class ComponentSync {
     // Room sync
     this.observers.push(
       observe(this.world, onSet(Room), (eid, params) => {
-        if (params.id) Room.id[eid] = params.id;
+        if (params.id) Room.id[eid] = String(params.id);
         if (params.name) Room.name[eid] = params.name;
         if (params.description) Room.description[eid] = params.description;
         if (params.type) Room.type[eid] = params.type;
         return params;
       }),
       observe(this.world, onGet(Room), (eid) => ({
-        id: Room.id[eid],
+        id: Room.id[eid] || String(eid),
         name: Room.name[eid],
         description: Room.description[eid],
         type: Room.type[eid],
@@ -146,7 +146,6 @@ export class ComponentSync {
 
         // Always set timestamp on updates
         Stimulus.timestamp[eid] = Date.now();
-        return { ...params, timestamp: Stimulus.timestamp[eid] };
       })
     );
 
@@ -179,32 +178,6 @@ export class ComponentSync {
     // Remove all observers
     this.observers.forEach((unobserve) => unobserve());
     this.observers = [];
-  }
-
-  // Helper methods for common sync patterns
-  updateAgent(eid: number, params: Partial<typeof Agent>) {
-    return setComponent(this.world, eid, Agent, params);
-  }
-
-  updateMemory(eid: number, params: Partial<typeof Memory>) {
-    return setComponent(this.world, eid, Memory, params);
-  }
-
-  updateAppearance(eid: number, params: Partial<typeof Appearance>) {
-    return setComponent(this.world, eid, Appearance, params);
-  }
-
-  updateAction(eid: number, params: Partial<typeof Action>) {
-    return setComponent(this.world, eid, Action, params);
-  }
-
-  updatePerception(eid: number, params: Partial<typeof Perception>) {
-    return setComponent(this.world, eid, Perception, params);
-  }
-
-  // Additional helper methods
-  updateRoom(eid: number, params: Partial<typeof Room>) {
-    return setComponent(this.world, eid, Room, params);
   }
 
   updateStimulus(eid: number, params: Partial<typeof Stimulus>) {

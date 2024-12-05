@@ -71,6 +71,7 @@ export const Action = {
 // Dynamic appearance component for handling physical state and social cues
 export const Appearance = {
   baseDescription: [] as string[],
+  description: [] as string[],
   facialExpression: [] as string[],
   bodyLanguage: [] as string[],
   currentAction: [] as string[],

@@ -60,7 +60,6 @@ export async function execute(
       action: "speaking",
       target,
       tone,
-      message,
       agentId: eid,
       agentName,
       actionType: "SPEECH",

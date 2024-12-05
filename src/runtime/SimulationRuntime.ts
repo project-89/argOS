@@ -133,22 +133,62 @@ export class SimulationRuntime extends EventEmitter {
 
     // Set up observers
     this.componentSync = new ComponentSync(this.world);
-
     this.eventBus = new ComponentEventBus(this.world);
 
-    // Set up component event handlers
-    this.eventBus.subscribe("agent", (data: any) => {
-      const { agentId, ...eventData } = data;
-      const roomId = this.getAgentRoom(agentId);
-      if (roomId) {
-        this.emitAgentUpdate(agentId, roomId, eventData);
-      }
+    // Set up component event handlers for specific room and agent channels
+    this.setupEventHandlers();
+  }
+
+  private setupEventHandlers() {
+    // Handle room-specific events
+    this.eventBus.subscribe("room:*", (data: any, channel?: string) => {
+      if (!channel) return;
+      const roomId = channel.split(":")[1];
+      this.emitRoomUpdate(Number(roomId), data);
     });
 
-    this.eventBus.subscribe("room", (data: any) => {
-      const { roomId, ...eventData } = data;
-      this.emitRoomUpdate(roomId, eventData);
+    // Handle agent-specific events
+    this.eventBus.subscribe("agent:*", (data: any, channel?: string) => {
+      if (!channel) return;
+      const agentId = Number(channel.split(":")[1]);
+      const roomId = this.getAgentRoom(agentId);
+      if (roomId) {
+        this.emitAgentUpdate(agentId, roomId, data);
+      }
     });
+  }
+
+  // Methods for event subscription
+  subscribeToRoom(roomId: number, handler: (event: any) => void) {
+    console.log("Subscribing to room:", roomId);
+    const stringRoomId = Room.id[roomId] || String(roomId);
+    if (!this.roomSubscriptions.has(stringRoomId)) {
+      this.roomSubscriptions.set(stringRoomId, new Set());
+    }
+    this.roomSubscriptions.get(stringRoomId)?.add(handler);
+    return this.eventBus.subscribe(`room:${stringRoomId}`, handler);
+  }
+
+  subscribeToAgent(agentId: number, handler: (event: any) => void) {
+    console.log("Subscribing to agent:", agentId);
+    if (!this.agentSubscriptions.has(agentId)) {
+      this.agentSubscriptions.set(agentId, new Set());
+    }
+    this.agentSubscriptions.get(agentId)?.add(handler);
+    return this.eventBus.subscribe(
+      `agent:${Agent.id[agentId] || String(agentId)}`,
+      handler
+    );
+  }
+
+  private getAgentRoom(agentId: number): number | null {
+    const rooms = query(this.world, [Room]);
+    for (const roomId of rooms) {
+      if (hasComponent(this.world, agentId, OccupiesRoom(roomId))) {
+        return roomId;
+      }
+    }
+    return null;
   }
 
   private getStimulusCategory(type: string): string {
@@ -270,6 +310,7 @@ export class SimulationRuntime extends EventEmitter {
     const roomEntity = addEntity(this.world);
 
     setComponent(this.world, roomEntity, Room, {
+      id: roomData.id || String(roomEntity),
       name: roomData.name || "New Room",
       description: roomData.description || "",
       type: roomData.type || "physical",
@@ -322,7 +363,7 @@ export class SimulationRuntime extends EventEmitter {
   // State Management
   getWorldState(): WorldState {
     const agents = query(this.world, [Agent]).map((eid) => ({
-      id: eid,
+      id: `${eid}`,
       eid,
       name: Agent.name[eid],
       role: Agent.role[eid],
@@ -332,7 +373,7 @@ export class SimulationRuntime extends EventEmitter {
     }));
 
     const rooms = query(this.world, [Room]).map((eid) => ({
-      id: eid,
+      id: Room.id[eid] || String(eid),
       eid,
       name: Room.name[eid],
       type: Room.type[eid],
@@ -347,8 +388,8 @@ export class SimulationRuntime extends EventEmitter {
     for (const room of rooms) {
       for (const agentId of room.occupants) {
         relationships.push({
-          source: agentId,
-          target: room.eid,
+          source: String(agentId),
+          target: room.id,
           type: "presence",
           value: 1,
         });
@@ -399,7 +440,7 @@ export class SimulationRuntime extends EventEmitter {
 
   getRooms(): RoomData[] {
     return query(this.world, [Room]).map((eid) => ({
-      id: eid,
+      id: Room.id[eid] || String(eid),
       eid,
       name: Room.name[eid],
       description: Room.description[eid],
@@ -408,9 +449,10 @@ export class SimulationRuntime extends EventEmitter {
   }
 
   private getRoomStimuli(roomId: number): number[] {
+    const roomStringId = Room.id[roomId] || String(roomId);
     return Object.keys(Stimulus.roomId)
       .map(Number)
-      .filter((eid) => Stimulus.roomId[eid] === roomId);
+      .filter((eid) => Stimulus.roomId[eid] === roomStringId);
   }
 
   private getRoomState(roomEntity: number) {
@@ -427,27 +469,8 @@ export class SimulationRuntime extends EventEmitter {
     };
   }
 
-  // Methods for event subscription
-  subscribeToRoom(roomId: number, callback: (event: any) => void) {
-    console.log("Subscribing to room:", roomId);
-    return this.eventBus.subscribe(`room:${roomId}`, callback);
-  }
-
-  subscribeToAgent(agentId: number, callback: (event: any) => void) {
-    console.log("Subscribing to agent:", agentId);
-    return this.eventBus.subscribe(`agent:${agentId}`, callback);
-  }
-
   // Helper methods
   getRoomOccupants(roomId: number): number[] {
     return this.eventBus.getRoomOccupants(roomId);
-  }
-
-  getAgentRoom(eid: number) {
-    const rooms = query(this.world, [Room]);
-    const roomId = rooms.find((roomEid) =>
-      hasComponent(this.world, eid, OccupiesRoom(roomEid))
-    );
-    return roomId ? roomId : null;
   }
 }

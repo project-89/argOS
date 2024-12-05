@@ -1,12 +1,19 @@
 import chalk from "chalk";
 import { getChalkColor } from "./colors";
 
-export const logger = {
-  system: (message: string) => {
-    if (!chalk) return console.log(message + "\n");
-    return console.log(chalk.gray(`[System] ${message}`) + "\n");
-  },
+const DEBUG = process.env.DEBUG === "true";
 
+export const logger = {
+  system: (message: string, systemName?: string) => {
+    if (!chalk) return console.log(message + "\n");
+    return console.log(
+      chalk.gray(`[${systemName || "System"}] ${message}`) + "\n"
+    );
+  },
+  debug: (message: string) => {
+    if (!DEBUG) return;
+    return console.log(chalk.gray(`[Debug] ${message}`) + "\n");
+  },
   emphasize: (message: string) => {
     if (!chalk) return console.log(message + "\n");
     return console.log(chalk.bold(chalk.bgMagentaBright(message)) + "\n");

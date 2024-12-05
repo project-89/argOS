@@ -71,34 +71,37 @@ export function ChatInterface({
     return "CHAT: GOD MODE";
   };
 
-  const filteredLogs = logs.filter((log) => {
-    if (selectedAgent && log.type === "AGENT_STATE") {
-      return (
-        log.data.agentName === selectedAgent &&
-        log.data.category &&
-        selectedTypes.has(log.data.category)
-      );
-    }
-    return false;
-  });
-
   const getMessageContent = (log: ServerMessage) => {
-    if (log.type === "AGENT_STATE") {
-      switch (log.data.category) {
+    if (log.type === "AGENT_UPDATE") {
+      const eventType = log.data.type;
+      const eventData = log.data.data;
+
+      switch (eventType) {
         case "thought":
-          return log.data.thought;
+          return eventData.thought;
+        case "perception":
+          return eventData.perception?.content;
+        case "experience":
+          return eventData.experience?.content;
         case "action":
-          return log.data.action?.type;
+          return eventData.action?.type;
         case "appearance":
-          return `${log.data.appearance?.currentAction || "Unknown action"}`;
+          return eventData.appearance?.currentAction;
       }
+    } else if (log.type === "ROOM_STATE") {
+      if (log.data.event?.type === "speech") {
+        return log.data.event.message;
+      }
+      return JSON.stringify(log.data.event);
     }
     return null;
   };
 
   const getMessageType = (log: ServerMessage) => {
-    if (log.type === "AGENT_STATE") {
-      return log.data.category.toUpperCase();
+    if (log.type === "AGENT_UPDATE") {
+      return log.data.type.toUpperCase();
+    } else if (log.type === "ROOM_STATE" && log.data.event?.type === "speech") {
+      return "SPEECH";
     }
     return log.type;
   };
@@ -117,6 +120,28 @@ export function ChatInterface({
         return "text-gray-400";
     }
   };
+
+  const filteredLogs = logs.filter((log) => {
+    if (selectedAgent) {
+      if (log.type === "AGENT_UPDATE") {
+        return log.channel.agent === selectedAgent;
+      }
+      return false;
+    }
+
+    if (selectedRoom) {
+      if (log.type === "ROOM_STATE") {
+        return log.data.roomId === selectedRoom;
+      } else if (log.type === "AGENT_UPDATE") {
+        return log.channel.room === selectedRoom;
+      }
+      return false;
+    }
+
+    return true; // Show all in god mode
+  });
+
+  console.log(filteredLogs);
 
   return (
     <div className="h-full flex flex-col">
@@ -168,7 +193,8 @@ export function ChatInterface({
           const type = getMessageType(log);
           const content = getMessageContent(log);
           const agentName =
-            (log.type === "AGENT_STATE" && log.data.agentName) ||
+            (log.type === "AGENT_UPDATE" &&
+              agents.find((a) => a.id === log.channel.agent)?.name) ||
             agents.find((a) => a.id === selectedAgent)?.name ||
             "Unknown Agent";
 

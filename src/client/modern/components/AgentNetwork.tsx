@@ -108,15 +108,27 @@ export function AgentNetwork({
     relationships?.forEach((rel) => {
       const sourceAgent = agents.find((a) => a.id === rel.source);
       const targetRoom = rooms.find((r) => r.id === rel.target);
+      const targetAgent = agents.find((a) => a.id === rel.target);
 
-      if (sourceAgent && targetRoom) {
-        const link = {
-          source: `agent-${sourceAgent.name}`,
-          target: `room-${targetRoom.id}`,
-          type: "presence" as const,
-          value: rel.value,
-        };
-        data.links.push(link);
+      console.log("Relationship:", rel);
+
+      if (sourceAgent) {
+        let targetId;
+        if (targetRoom) {
+          targetId = `room-${targetRoom.id}`;
+        } else if (targetAgent) {
+          targetId = `agent-${targetAgent.name}`;
+        }
+
+        if (targetId) {
+          const link = {
+            source: `agent-${sourceAgent.name}`,
+            target: targetId,
+            type: rel.type as "presence" | "occupies",
+            value: rel.value,
+          };
+          data.links.push(link);
+        }
       }
     });
 

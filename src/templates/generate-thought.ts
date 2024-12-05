@@ -45,6 +45,7 @@ Respond with a JSON object containing:
    - "tool": MUST be one of the exact action names listed above
    - "parameters": an object matching the JSON schema for the chosen tool
 3. An "appearance" object describing your physical state:
+   - "description": a short description of your current appearance
    - "facialExpression": your current facial expression
    - "bodyLanguage": your current posture/gestures
    - "currentAction": what you're visibly doing
@@ -67,8 +68,9 @@ Example response when processing what was said:
     }
   },
   "appearance": {
+    "description": "Standing thoughtfully with a furrowed brow and hand on chin, clearly deep in contemplation",
     "facialExpression": "thoughtful, slightly furrowed brow",
-    "bodyLanguage": "slightly withdrawn, hand on chin",
+    "bodyLanguage": "slightly withdrawn, hand on chin", 
     "currentAction": "processing information",
     "socialCues": "showing deep consideration of what was just said"
   }
@@ -85,6 +87,7 @@ Example response when listening:
     }
   },
   "appearance": {
+    "description": "Standing attentively with a focused expression and turned towards Sarah, maintaining comfortable eye contact",
     "facialExpression": "attentive and engaged",
     "bodyLanguage": "turned towards Sarah, maintaining comfortable eye contact",
     "currentAction": "listening carefully",

@@ -1,9 +1,10 @@
 import { create } from "zustand";
-import { Room } from "../types";
+import { Room, ServerMessage } from "../types";
 
 interface SimulationState {
   agents: any[];
   rooms: any[];
+  logs: ServerMessage[];
   relationships: Array<{
     source: string;
     target: string;
@@ -26,11 +27,14 @@ interface SimulationState {
     }>
   ) => void;
   setIsRunning: (isRunning: boolean) => void;
+  addLog: (log: ServerMessage) => void;
+  clearLogs: () => void;
 }
 
 export const useSimulationStore = create<SimulationState>((set, get) => ({
   agents: [],
   rooms: [],
+  logs: [],
   relationships: [],
   selectedAgent: null,
   selectedRoom: null,
@@ -44,4 +48,6 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   setRooms: (rooms) => set({ rooms }),
   setRelationships: (relationships) => set({ relationships }),
   setIsRunning: (isRunning) => set({ isRunning }),
+  addLog: (log) => set((state) => ({ logs: [...state.logs, log] })),
+  clearLogs: () => set({ logs: [] }),
 }));

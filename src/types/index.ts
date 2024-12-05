@@ -5,6 +5,7 @@ export type MessageType =
   | "AGENT_STATE"
   | "ROOM_STATE"
   | "CONNECTION_STATE"
+  | "AGENT_UPDATE"
   | "SUBSCRIBE_ROOM"
   | "UNSUBSCRIBE_ROOM"
   | "SUBSCRIBE_AGENT"
@@ -29,7 +30,7 @@ export interface AgentStateMessage extends BaseMessage {
   data: {
     agentId: string;
     agentName: string;
-    category: "appearance" | "thought" | "action";
+    category: "appearance" | "thought" | "action" | "perception" | "experience";
     appearance?: {
       facialExpression?: string;
       bodyLanguage?: string;
@@ -37,6 +38,15 @@ export interface AgentStateMessage extends BaseMessage {
       socialCues?: string;
     };
     thought?: string;
+    perception?: {
+      timestamp: number;
+      content: string;
+    };
+    experience?: {
+      type: string;
+      content: string;
+      timestamp: number;
+    };
     action?: {
       type: string;
       data: any;
@@ -77,17 +87,32 @@ export interface ControlMessage extends BaseMessage {
   type: "START" | "STOP" | "RESET";
 }
 
+export interface AgentUpdateMessage extends BaseMessage {
+  type: "AGENT_UPDATE";
+  channel: {
+    room: string;
+    agent: string;
+  };
+  data: {
+    type: string;
+    data: any;
+    timestamp: number;
+  };
+}
+
 export type ServerMessage =
   | WorldStateMessage
   | AgentStateMessage
   | RoomStateMessage
-  | ConnectionStateMessage;
+  | ConnectionStateMessage
+  | AgentUpdateMessage;
 
 export type ClientMessage = SubscriptionMessage | ChatMessage | ControlMessage;
 
 export interface WorldState {
   agents: any[]; // TODO: Create proper Agent interface
   rooms: Room[];
+  isRunning: boolean;
   relationships: Array<{
     source: string;
     target: string;

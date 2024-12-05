@@ -22,6 +22,9 @@ export function ModernUI() {
     setAgents,
     setRooms,
     setIsRunning,
+    isRunning,
+    setRelationships,
+    logs,
   } = useSimulationStore();
 
   // Initialize WebSocket service
@@ -36,6 +39,8 @@ export function ModernUI() {
         const worldState = message.data as WorldState;
         setAgents(worldState.agents);
         setRooms(worldState.rooms);
+        setRelationships(worldState.relationships);
+        setIsRunning(worldState.isRunning);
       } else if (
         message.type === "AGENT_STATE" &&
         message.data.category === "appearance" &&
@@ -98,12 +103,15 @@ export function ModernUI() {
       switch (type) {
         case "START":
           wsRef.current.startSimulation();
+          setIsRunning(true);
           break;
         case "STOP":
           wsRef.current.stopSimulation();
+          setIsRunning(false);
           break;
         case "RESET":
           wsRef.current.resetSimulation();
+          setIsRunning(false);
           break;
       }
     }
@@ -112,7 +120,7 @@ export function ModernUI() {
   return (
     <div className="h-screen flex flex-col">
       <CommandBar
-        isRunning={false}
+        isRunning={isRunning}
         isConnected={isConnected}
         onCommand={sendCommand}
         agents={agents}
@@ -125,7 +133,9 @@ export function ModernUI() {
               <AgentNetwork
                 agents={agents}
                 rooms={rooms}
-                relationships={useSimulationStore.getState().relationships}
+                relationships={
+                  useSimulationStore.getState().relationships || []
+                }
                 selectedAgent={selectedAgent}
                 selectedRoom={selectedRoom}
                 onNodeSelect={(nodeType, id) => {
@@ -148,7 +158,7 @@ export function ModernUI() {
                 selectedRoom={selectedRoom}
                 agents={agents}
                 rooms={rooms}
-                logs={[]}
+                logs={logs}
                 onSendMessage={(message) => wsRef.current?.sendChat(message)}
               />
             </Panel>
@@ -161,7 +171,7 @@ export function ModernUI() {
                 selectedRoom={selectedRoom}
                 agents={agents}
                 rooms={rooms}
-                logs={[]}
+                logs={logs}
               />
             </Panel>
           </PanelGroup>

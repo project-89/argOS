@@ -10,6 +10,7 @@ export interface ThoughtResponse {
     parameters: Record<string, any>;
   };
   appearance?: {
+    description?: string;
     facialExpression?: string;
     bodyLanguage?: string;
     currentAction?: string;

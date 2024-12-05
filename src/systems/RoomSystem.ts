@@ -42,7 +42,7 @@ export const RoomSystem = createSystem<SystemConfig>(
           currentAction: Appearance.currentAction[agentId],
           socialCues: Appearance.socialCues[agentId],
           location: {
-            roomId: Room.id[roomId],
+            roomId: Room.id[roomId] || String(roomId),
             roomName: Room.name[roomId],
           },
         };
