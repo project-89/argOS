@@ -1,23 +1,33 @@
 import * as React from "react";
 import { useState } from "react";
 import {
-  AgentActionData,
-  AgentAppearanceData,
-  AgentExperienceData,
-  AgentPerceptionData,
-  AgentThoughtData,
   ServerMessage,
+  EventCategory,
+  AgentState,
+  RoomState,
+  AgentUpdateMessage,
+  RoomUpdateMessage,
 } from "../../../types";
 import { getTailwindColor } from "../../../utils/colors";
 
 interface ChatInterfaceProps {
   selectedAgent: string | null;
   selectedRoom: string | null;
-  agents: any[];
-  rooms: any[];
+  agents: AgentState[];
+  rooms: RoomState[];
   logs: ServerMessage[];
-  onSendMessage: (message: string) => void;
+  onSendMessage: (message: string, room: string) => void;
 }
+
+export type EventType =
+  | "speech"
+  | "thought"
+  | "perception"
+  | "action"
+  | "appearance"
+  | "state"
+  | "experience"
+  | "agent";
 
 export function ChatInterface({
   selectedAgent,
@@ -44,7 +54,7 @@ export function ChatInterface({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (message.trim()) {
-      onSendMessage(message);
+      onSendMessage(message, selectedRoom || "");
       setMessage("");
     }
   };
@@ -70,46 +80,40 @@ export function ChatInterface({
     return "CHAT: GOD MODE";
   };
 
-  const getMessageContent = (log: ServerMessage) => {
+  const getMessageContent = (log: ServerMessage): string => {
     if (log.type === "AGENT_UPDATE") {
-      const eventType = log.data.type;
-      const eventData = log.data.data;
-
-      switch (eventType) {
-        case "thought":
-          return (eventData as AgentThoughtData).content;
-        case "perception":
-          const perceptionData = (eventData as AgentPerceptionData).content;
-          return perceptionData.content;
-        case "experience":
-          return typeof (eventData as AgentExperienceData).content.content ===
-            "string"
-            ? (eventData as AgentExperienceData).content.content
-            : JSON.stringify(
-                (eventData as AgentExperienceData).content.content
-              );
-        case "action":
-          return (eventData as AgentActionData).content.tool;
-        case "appearance":
-          return (
-            (eventData as AgentAppearanceData).content.currentAction ||
-            "No action"
-          );
+      const { content } = log.data;
+      if (typeof content === "object" && content !== null) {
+        if ("action" in content) {
+          return `${content.action}${
+            "reason" in content && content.reason ? ` - ${content.reason}` : ""
+          }`;
+        }
+        return JSON.stringify(content);
       }
-    } else if (log.type === "ROOM_STATE" && log.data.event?.type === "speech") {
-      const { message, tone, agentName } = log.data.event;
-      return tone
-        ? `${agentName} says (${tone}): ${message}`
-        : `${agentName} says: ${message}`;
+      return String(content);
     }
-    return null;
+    if (log.type === "ROOM_UPDATE") {
+      const { content } = log.data;
+      if (typeof content === "object" && content !== null) {
+        if ("action" in content) {
+          return `${content.action}${
+            "reason" in content && content.reason ? ` - ${content.reason}` : ""
+          }`;
+        }
+        return JSON.stringify(content);
+      }
+      return String(content);
+    }
+    return "";
   };
 
-  const getMessageType = (log: ServerMessage) => {
+  const getMessageType = (log: ServerMessage): EventCategory | string => {
     if (log.type === "AGENT_UPDATE") {
-      return log.data.type.toLowerCase();
-    } else if (log.type === "ROOM_STATE" && log.data.event?.type === "speech") {
-      return "speech";
+      return log.data.category;
+    }
+    if (log.type === "ROOM_UPDATE") {
+      return log.data.type;
     }
     return log.type.toLowerCase();
   };
@@ -139,39 +143,26 @@ export function ChatInterface({
     { id: "appearance", label: "Appearance" },
   ];
 
-  const filteredLogs = logs.filter((log) => {
-    // First filter by agent/room selection
-    if (selectedAgent) {
-      if (log.type === "AGENT_UPDATE") {
+  const filteredLogs = logs.filter(
+    (log): log is AgentUpdateMessage | RoomUpdateMessage => {
+      if (!(log.type === "AGENT_UPDATE" || log.type === "ROOM_UPDATE")) {
+        return false;
+      }
+
+      if (selectedAgent && log.type === "AGENT_UPDATE") {
         return (
           log.channel.agent === selectedAgent &&
-          selectedTypes.has(log.data.type.toLowerCase())
+          selectedTypes.has(log.data.category.toLowerCase())
         );
       }
-      return false;
-    }
 
-    if (selectedRoom) {
-      if (log.type === "ROOM_STATE") {
-        return log.data.event?.type === "speech" && selectedTypes.has("speech");
-      } else if (log.type === "AGENT_UPDATE") {
-        return (
-          log.channel.room === selectedRoom &&
-          selectedTypes.has(log.data.type.toLowerCase())
-        );
+      if (selectedRoom && log.type === "ROOM_UPDATE") {
+        return selectedTypes.has(log.data.type.toLowerCase());
       }
+
       return false;
     }
-
-    // Filter by type for all messages
-    if (log.type === "ROOM_STATE") {
-      return log.data.event?.type === "speech" && selectedTypes.has("speech");
-    } else if (log.type === "AGENT_UPDATE") {
-      return selectedTypes.has(log.data.type.toLowerCase());
-    }
-
-    return false;
-  });
+  );
 
   return (
     <div className="h-full flex flex-col">
@@ -215,10 +206,10 @@ export function ChatInterface({
           const type = getMessageType(log);
           const content = getMessageContent(log);
           const agentName =
+            (log.type === "ROOM_UPDATE" && log.data.agentName) ||
             (log.type === "AGENT_UPDATE" &&
               agents.find((a) => a.id === log.channel.agent)?.name) ||
-            agents.find((a) => a.id === selectedAgent)?.name ||
-            "Unknown Agent";
+            "System";
 
           return (
             <div key={i} className="log-entry">

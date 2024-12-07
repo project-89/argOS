@@ -28,6 +28,14 @@ export const ActionSystem = createSystem<SystemConfig>(
 
       logger.agent(eid, `Processing action: ${pendingAction.tool}`);
 
+      // Emit action event
+      runtime.eventBus.emitAgentEvent(
+        eid,
+        "action",
+        "action",
+        pendingAction.tool
+      );
+
       // Execute the action
       await runtime.executeAction(
         pendingAction.tool,

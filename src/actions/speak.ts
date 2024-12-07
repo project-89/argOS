@@ -3,10 +3,7 @@ import { World } from "../types/bitecs";
 import { Memory, Room, Agent } from "../components/agent/Agent";
 import { logger } from "../utils/logger";
 import { getAgentRoom } from "../utils/queries";
-import {
-  createVisualStimulus,
-  createAuditoryStimulus,
-} from "../utils/stimulus-utils";
+import { EventBus } from "../runtime/EventBus";
 
 export const schema = z.object({
   message: z.string(),
@@ -39,47 +36,32 @@ export const action = {
 export async function execute(
   world: World,
   eid: number,
-  parameters: z.infer<typeof schema>
+  parameters: z.infer<typeof schema>,
+  eventBus: EventBus
 ) {
   const roomId = getAgentRoom(world, eid);
   if (!roomId) return;
 
   const { message, tone = "neutral", target } = parameters;
-
-  // Log the speech with agent name
   const agentName = Agent.name[eid];
 
   logger.agent(eid, `Says: ${message}`);
 
-  // Create visual stimulus for speaking action
-  createVisualStimulus(world, {
-    sourceEntity: eid,
-    roomId: Room.id[roomId],
-    appearance: true,
-    data: {
-      action: "speaking",
-      target,
-      tone,
-      agentId: eid,
-      agentName,
-      actionType: "SPEECH",
-    },
-    decay: 1,
-  });
+  // Emit speech event to room
+  eventBus.emitRoomEvent(roomId, "speech", message, String(eid));
 
-  // Create auditory stimulus for the speech content
-  createAuditoryStimulus(world, {
-    sourceEntity: eid,
-    roomId: Room.id[roomId],
-    message,
-    tone,
-  });
+  const experience = `I said: "${message}"`;
 
   // Record the experience
   Memory.experiences[eid] = Memory.experiences[eid] || [];
   Memory.experiences[eid].push({
     type: "speech",
-    content: `I said: "${message}"`,
+    content: experience,
+    timestamp: Date.now(),
+  });
+
+  eventBus.emitAgentEvent(eid, "experience", "experience", {
+    content: experience,
     timestamp: Date.now(),
   });
 }

@@ -1,4 +1,4 @@
-import { AgentStateMessage, RoomStateMessage, WorldState } from "../types";
+import { AgentUpdateMessage, RoomUpdateMessage, WorldState } from "../types";
 
 export type EventChannel = {
   room: string;
@@ -8,11 +8,11 @@ export type EventChannel = {
 export type EventTypes = {
   AGENT_UPDATE: {
     channel: { room: string; agent: string };
-    data: AgentStateMessage["data"];
+    data: AgentUpdateMessage["data"];
   };
   ROOM_UPDATE: {
     channel: { room: string };
-    data: RoomStateMessage["data"];
+    data: RoomUpdateMessage["data"];
   };
   WORLD_UPDATE: {
     channel: { room: string };

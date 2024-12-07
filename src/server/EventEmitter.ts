@@ -39,6 +39,10 @@ export class EventEmitter {
     this.subscriptions.delete(ws);
   }
 
+  getSubscriptions(ws: WebSocket.WebSocket): Set<string> | undefined {
+    return this.subscriptions.get(ws);
+  }
+
   emit<T extends keyof EventTypes>(event: EventPayload<T>) {
     const payload = {
       ...event,

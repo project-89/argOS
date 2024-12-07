@@ -1,72 +1,124 @@
 import { RoomType } from "../components/agent/Agent";
+import { World } from "bitecs";
+import { EventBus } from "../runtime/EventBus";
 
+// Core Event Types - Used for event content classification
+export type EventType =
+  | "speech" // Agent speaking in room
+  | "thought" // Agent internal thoughts
+  | "perception" // What agent perceives
+  | "action" // Physical actions
+  | "appearance" // Appearance changes
+  | "state" // State changes
+  | "experience" // Memories/experiences
+  | "agent"; // Agent-specific events
+
+// Event Categories - Used for agent event processing
+export type EventCategory =
+  | "thought"
+  | "perception"
+  | "action"
+  | "appearance"
+  | "experience"
+  | "state";
+
+// Base Event Structure
+export interface BaseEvent<T = string> {
+  type: EventType;
+  content: T;
+  timestamp: number;
+}
+
+// Room Event
+export interface RoomEvent<T extends EventType = EventType>
+  extends BaseEvent<
+    T extends "state" ? { room?: RoomState; agent?: AgentState } : string
+  > {
+  roomId: string;
+  agentId?: string;
+  agentName?: string;
+  message?: string;
+  tone?: string;
+  speakerName?: string;
+}
+
+// Agent Event
+export interface AgentEvent<T extends EventType = EventType>
+  extends BaseEvent<T extends "state" ? { agent?: AgentState } : string> {
+  agentId: string;
+  category: EventCategory;
+}
+
+// WebSocket Message Types - Standardized to use UPDATE suffix
 export type MessageType =
-  | "WORLD_STATE"
-  | "AGENT_STATE"
-  | "ROOM_STATE"
-  | "CONNECTION_STATE"
+  | "WORLD_UPDATE"
+  | "ROOM_UPDATE"
   | "AGENT_UPDATE"
+  | "CHAT"
+  | "START"
+  | "STOP"
+  | "RESET"
   | "SUBSCRIBE_ROOM"
   | "UNSUBSCRIBE_ROOM"
   | "SUBSCRIBE_AGENT"
   | "UNSUBSCRIBE_AGENT"
-  | "CHAT"
-  | "START"
-  | "STOP"
-  | "RESET";
+  | "CONNECTION_UPDATE";
 
+// Base Message Structure
 export interface BaseMessage {
   type: MessageType;
   timestamp: number;
 }
 
-export interface WorldStateMessage extends BaseMessage {
-  type: "WORLD_STATE";
+// World State
+export interface WorldState {
+  agents: AgentState[];
+  rooms: RoomState[];
+  relationships: NetworkLink[];
+  isRunning: boolean;
+  timestamp: number;
+}
+
+export interface WorldUpdateMessage extends BaseMessage {
+  type: "WORLD_UPDATE";
   data: WorldState;
 }
 
-export interface AgentStateMessage extends BaseMessage {
-  type: "AGENT_STATE";
-  data: {
-    agentId: string;
-    agentName: string;
-    category: "appearance" | "thought" | "action" | "perception" | "experience";
-    appearance?: {
-      facialExpression?: string;
-      bodyLanguage?: string;
-      currentAction?: string;
-      socialCues?: string;
-    };
-    thought?: string;
-    perception?: {
-      timestamp: number;
-      content: string;
-    };
-    experience?: {
-      type: string;
-      content: string;
-      timestamp: number;
-    };
-    action?: {
-      type: string;
-      data: any;
-    };
-  };
+// Room Update
+export interface RoomUpdateMessage extends BaseMessage {
+  type: "ROOM_UPDATE";
+  data: RoomEvent;
 }
 
-export interface RoomStateMessage extends BaseMessage {
-  type: "ROOM_STATE";
-  data: {
-    roomId: string;
-    event: any; // TODO: Type this properly based on room events
+// Agent Update
+export interface AgentUpdateMessage extends BaseMessage {
+  type: "AGENT_UPDATE";
+  channel: {
+    room: string;
+    agent: string;
   };
+  data: AgentEvent;
 }
 
-export interface ConnectionStateMessage extends BaseMessage {
-  type: "CONNECTION_STATE";
+// Connection Update
+export interface ConnectionUpdateMessage extends BaseMessage {
+  type: "CONNECTION_UPDATE";
   connected: boolean;
 }
 
+// Chat Message
+export interface ChatMessage extends BaseMessage {
+  type: "CHAT";
+  message: string;
+  target?: string;
+}
+
+// Control Messages
+export type ControlMessage = BaseMessage & {
+  type: "START" | "STOP" | "RESET";
+};
+
+// Subscription Messages
 export interface SubscriptionMessage extends BaseMessage {
   type:
     | "SUBSCRIBE_ROOM"
@@ -77,51 +129,28 @@ export interface SubscriptionMessage extends BaseMessage {
   agentId?: string;
 }
 
-export interface ChatMessage extends BaseMessage {
-  type: "CHAT";
-  message: string;
-  target?: string;
-}
-
-export interface ControlMessage extends BaseMessage {
-  type: "START" | "STOP" | "RESET";
-}
-
-export interface AgentUpdateMessage extends BaseMessage {
-  type: "AGENT_UPDATE";
-  channel: {
-    room: string;
-    agent: string;
-  };
-  data: AgentEventMessage;
-}
-
+// All Message Types
 export type ServerMessage =
-  | WorldStateMessage
-  | AgentStateMessage
-  | RoomStateMessage
-  | ConnectionStateMessage
-  | AgentUpdateMessage;
+  | WorldUpdateMessage
+  | RoomUpdateMessage
+  | ChatMessage
+  | ControlMessage
+  | AgentUpdateMessage
+  | ConnectionUpdateMessage;
 
 export type ClientMessage = SubscriptionMessage | ChatMessage | ControlMessage;
 
-export interface WorldState {
-  agents: any[]; // TODO: Create proper Agent interface
-  rooms: Room[];
-  isRunning: boolean;
-  relationships: Array<{
-    source: string;
-    target: string;
-    type: string;
-    value: number;
-  }>;
-  timestamp: number;
-}
-
-export interface AgentColor {
-  id: number;
+// Entity Types
+export interface Agent {
+  id: string;
+  eid: number;
   name: string;
-  color: string;
+  role: string;
+  systemPrompt: string;
+  active: boolean;
+  platform: string;
+  appearance: string;
+  roomId: number | null;
 }
 
 export interface Room {
@@ -132,6 +161,14 @@ export interface Room {
   description: string;
 }
 
+export interface Relationship {
+  source: string;
+  target: string;
+  type: string;
+  value: number;
+}
+
+// Network Graph Types
 export interface NetworkPosition {
   x: number;
   y: number;
@@ -158,131 +195,72 @@ export interface NetworkState {
   links: NetworkLink[];
 }
 
-// Event Types
-export type AgentEventType =
-  | "thought"
-  | "perception"
-  | "experience"
-  | "action"
-  | "appearance"
-  | "state"
-  | "stimulus";
-
-export interface AgentEventData {
-  category: string;
-  content: any;
-  timestamp: number;
+// Agent Event Data Types
+export interface AgentEventMessage extends AgentUpdateMessage {
+  data: AgentEvent;
 }
 
-export interface AgentThoughtData extends AgentEventData {
-  category: "thought";
-  content: string;
-}
-
-export interface AgentPerceptionData extends AgentEventData {
-  category: "perception";
-  content: {
-    timestamp: number;
-    content: string;
+export interface ActionModule {
+  schema: any;
+  action: {
+    name: string;
+    description: string;
+    parameters: string[];
+    schema: any;
   };
+  execute: (
+    world: World,
+    eid: number,
+    parameters: any,
+    eventBus: EventBus
+  ) => Promise<void>;
 }
 
-export interface AgentExperienceData extends AgentEventData {
-  category: "experience";
-  content: {
-    type: string;
-    content: string;
-    timestamp: number;
-  };
-}
+export type ActionModules = Record<string, ActionModule>;
 
-export interface AgentAppearanceData extends AgentEventData {
-  category: "appearance";
-  content: {
-    baseDescription?: string;
-    facialExpression?: string;
-    bodyLanguage?: string;
-    currentAction?: string;
-    socialCues?: string;
-    lastUpdate?: number;
-  };
-}
-
-export interface AgentActionData extends AgentEventData {
-  category: "action";
-  content: {
-    tool: string;
-  };
-}
-
-export interface AgentStateData extends AgentEventData {
-  category: "state";
-  content: {
+// Room State
+export interface RoomState {
+  id: string;
+  name: string;
+  type: RoomType;
+  description: string;
+  occupants: Array<{
     id: string;
     name: string;
-    role: string;
-    systemPrompt: string;
-    active: boolean;
-    platform: string;
-    appearance: string;
-    attention: any;
-  };
+    attention: number;
+  }>;
+  stimuli: Array<{
+    type: string;
+    content: string;
+    source?: string;
+    timestamp: number;
+  }>;
+  lastUpdate: number;
 }
 
-export type AgentEventDataType =
-  | AgentThoughtData
-  | AgentPerceptionData
-  | AgentExperienceData
-  | AgentAppearanceData
-  | AgentActionData
-  | AgentStateData;
-
-// Message Types
-export interface AgentEventMessage {
-  type: AgentEventType;
-  data: AgentEventDataType;
-  timestamp: number;
+export interface InternalRoomState extends RoomState {
+  eid: number;
 }
 
-// Stimulus Types
-export type StimulusType =
-  | "VISUAL"
-  | "AUDITORY"
-  | "COGNITIVE"
-  | "TECHNICAL"
-  | "ENVIRONMENTAL";
-
-export interface StimulusMetadata {
-  sourceName: string;
-  sourceRole: string;
-  roomName: string;
-  decay: number;
-  [key: string]: any;
-}
-
-export interface BaseStimulus {
+// Agent State
+export interface AgentState {
+  id: string;
   name: string;
   role: string;
-  timestamp: number;
-  category: string;
-  metadata: StimulusMetadata;
-}
-
-export interface AuditoryStimulusContent extends BaseStimulus {
-  speech: string;
-  tone?: string;
-  metadata: StimulusMetadata & {
-    isDirected: boolean;
-    targetName?: string;
-    targetRole?: string;
-  };
-}
-
-export interface VisualStimulusContent extends BaseStimulus {
-  appearance?: string;
-  action?: string;
-  metadata: StimulusMetadata & {
-    hasAppearance: boolean;
-    roomContext: string;
-  };
+  systemPrompt: string;
+  active: boolean;
+  platform: string;
+  appearance: string;
+  attention: number;
+  roomId: string | null;
+  facialExpression?: string;
+  bodyLanguage?: string;
+  currentAction?: string;
+  socialCues?: string;
+  lastUpdate: number;
+  emotionalState?: string;
+  goals?: string[];
+  memories?: string[];
+  context?: string;
+  recentThoughts?: string[];
 }

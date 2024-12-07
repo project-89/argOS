@@ -1,31 +1,27 @@
 import { create } from "zustand";
-import { Room, ServerMessage } from "../types";
+import {
+  Room,
+  ServerMessage,
+  AgentState,
+  RoomState,
+  NetworkLink,
+} from "../types";
 
 interface SimulationState {
-  agents: any[];
-  rooms: any[];
+  agents: AgentState[];
+  rooms: RoomState[];
   logs: ServerMessage[];
-  relationships: Array<{
-    source: string;
-    target: string;
-    type: string;
-    value: number;
-  }>;
+  relationships: NetworkLink[];
   selectedAgent: string | null;
   selectedRoom: string | null;
   isRunning: boolean;
   setSelectedAgent: (agent: string | null) => void;
   setSelectedRoom: (room: string | null) => void;
-  setAgents: (agents: any[] | ((prev: any[]) => any[])) => void;
-  setRooms: (rooms: any[]) => void;
-  setRelationships: (
-    relationships: Array<{
-      source: string;
-      target: string;
-      type: string;
-      value: number;
-    }>
+  setAgents: (
+    agents: AgentState[] | ((prev: AgentState[]) => AgentState[])
   ) => void;
+  setRooms: (rooms: RoomState[]) => void;
+  setRelationships: (relationships: NetworkLink[]) => void;
   setIsRunning: (isRunning: boolean) => void;
   addLog: (log: ServerMessage) => void;
   clearLogs: () => void;

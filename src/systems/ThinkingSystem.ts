@@ -210,6 +210,14 @@ export const ThinkingSystem = createSystem<SystemConfig>(
       );
       logger.agent(eid, `Perceiving: ${perceptions}`, Agent.name[eid]);
 
+      // Emit perception event
+      runtime.eventBus.emitAgentEvent(
+        eid,
+        "perception",
+        "perception",
+        perceptions
+      );
+
       // Stage 3: Generate thought based on state
       logger.debug(`Generating thought for ${Agent.name[eid]}`);
       const thought = await generateAgentThought(
@@ -221,21 +229,20 @@ export const ThinkingSystem = createSystem<SystemConfig>(
       );
       logger.agent(eid, `Thought: ${thought.thought}`, Agent.name[eid]);
 
+      // Emit thought event
+      runtime.eventBus.emitAgentEvent(
+        eid,
+        "thought",
+        "thought",
+        thought.thought
+      );
+
       // Stage 4: Update agent memory
       const { shouldAddThought, shouldAddPerception } = updateAgentMemory(
         world,
         eid,
         thought,
         perceptions
-      );
-      logger.debug(
-        `Memory state for ${Agent.name[eid]}:
-        Thoughts: ${Memory.thoughts[eid].length + (shouldAddThought ? 1 : 0)}
-        Perceptions: ${
-          Memory.perceptions[eid].length + (shouldAddPerception ? 1 : 0)
-        }
-        Experiences: ${Memory.experiences[eid].length}
-      `
       );
 
       // Stage 5: Handle agent actions
@@ -244,6 +251,13 @@ export const ThinkingSystem = createSystem<SystemConfig>(
       // Stage 6: Update agent appearance
       if (thought.appearance) {
         updateAgentAppearance(world, eid, agentRoom, thought.appearance);
+        // Emit appearance event
+        runtime.eventBus.emitAgentEvent(
+          eid,
+          "appearance",
+          "appearance",
+          thought.appearance.currentAction || "No action"
+        );
       }
     }
 

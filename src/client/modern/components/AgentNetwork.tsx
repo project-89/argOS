@@ -1,5 +1,6 @@
 import * as React from "react";
 import ForceGraph2D from "react-force-graph-2d";
+import { AgentState, RoomState, NetworkLink } from "../../../types";
 
 interface Node {
   id: string;
@@ -22,14 +23,9 @@ interface GraphData {
 }
 
 interface AgentNetworkProps {
-  agents: any[];
-  rooms: any[];
-  relationships: Array<{
-    source: string;
-    target: string;
-    type: string;
-    value: number;
-  }>;
+  agents: AgentState[];
+  rooms: RoomState[];
+  relationships: NetworkLink[];
   selectedAgent: string | null;
   selectedRoom: string | null;
   onNodeSelect: (nodeType: "agent" | "room", id: string) => void;

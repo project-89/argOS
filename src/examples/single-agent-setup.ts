@@ -6,8 +6,6 @@ import { ActionSystem } from "../systems/ActionSystem";
 import { actions } from "../actions";
 import { createAgent } from "../utils/agent-factory";
 import { RoomSystem } from "../systems/RoomSystem";
-import { Agent } from "../components/agent/Agent";
-import { logger } from "../utils/logger";
 
 export function setupSingleAgent() {
   // Create world and runtime with configuration

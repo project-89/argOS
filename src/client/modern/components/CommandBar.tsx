@@ -1,10 +1,11 @@
 import * as React from "react";
+import { AgentState } from "../../../types";
 
 interface CommandBarProps {
   isRunning: boolean;
   isConnected: boolean;
-  onCommand: (command: string) => void;
-  agents: any[];
+  onCommand: (type: string) => void;
+  agents: AgentState[];
 }
 
 export function CommandBar({

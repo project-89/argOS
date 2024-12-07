@@ -7,6 +7,7 @@ import {
   createCognitiveStimulus,
   createVisualStimulus,
 } from "../utils/stimulus-utils";
+import { EventBus } from "../runtime/EventBus";
 
 export const schema = z.object({
   reason: z.string(),
@@ -23,7 +24,8 @@ export const action = {
 export async function execute(
   world: World,
   eid: number,
-  parameters: z.infer<typeof schema>
+  parameters: z.infer<typeof schema>,
+  eventBus: EventBus
 ) {
   const roomId = getAgentRoom(world, eid);
   if (roomId === undefined) return;
@@ -31,10 +33,21 @@ export async function execute(
   const { reason, isThinking = false } = parameters;
   const agentName = Agent.name[eid];
 
-  // Log the action
   logger.agent(
     eid,
     isThinking ? `Processing: ${reason}` : `Waiting: ${reason}`
+  );
+
+  // Emit wait event to room
+  eventBus.emitRoomEvent(
+    roomId,
+    "action",
+    {
+      action: isThinking ? "thinking" : "waiting",
+      reason,
+      agentName,
+    },
+    String(eid)
   );
 
   // Create visual stimulus for the action
@@ -55,17 +68,6 @@ export async function execute(
     },
     decay: isThinking ? 2 : 1,
   });
-
-  // If thinking, create cognitive stimulus
-  // if (isThinking) {
-  //   createCognitiveStimulus(world, {
-  //     sourceEntity: eid,
-  //     roomId: Room.id[roomId],
-  //     activity: "processing",
-  //     focus: reason,
-  //     intensity: "deep",
-  //   });
-  // }
 
   // Record the experience
   Memory.experiences[eid] = Memory.experiences[eid] || [];

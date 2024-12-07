@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ServerMessage, AgentStateMessage } from "../../../types";
+import { ServerMessage } from "../../../types";
 
 interface TimelineProps {
   logs: ServerMessage[];
@@ -35,13 +35,13 @@ export function Timeline({ logs, isRunning }: TimelineProps) {
 
 function getEventColor(type: ServerMessage["type"]): string {
   switch (type) {
-    case "AGENT_STATE":
+    case "AGENT_UPDATE":
       return "cyan";
-    case "ROOM_STATE":
+    case "ROOM_UPDATE":
       return "emerald";
-    case "WORLD_STATE":
+    case "WORLD_UPDATE":
       return "orange";
-    case "CONNECTION_STATE":
+    case "CONNECTION_UPDATE":
       return "gray";
     default:
       return "gray";
@@ -49,23 +49,23 @@ function getEventColor(type: ServerMessage["type"]): string {
 }
 
 function formatEventContent(log: ServerMessage): string {
-  if (log.type === "AGENT_STATE") {
+  if (log.type === "AGENT_UPDATE") {
     const data = log.data;
     if (data.category === "thought")
-      return `${data.agentName} thought: ${data.thought}`;
+      return `${data.agentId} thought: ${data.content}`;
     if (data.category === "appearance")
-      return `${data.agentName} appearance changed`;
+      return `${data.agentId} appearance changed`;
     if (data.category === "action")
-      return `${data.agentName} ${data.action?.type || ""}`;
+      return `${data.agentId} ${data.content || ""}`;
     return JSON.stringify(data);
   }
-  if (log.type === "ROOM_STATE") {
-    return log.data.event?.message || "Room updated";
+  if (log.type === "ROOM_UPDATE") {
+    return log.data.message || "Room updated";
   }
-  if (log.type === "WORLD_STATE") {
+  if (log.type === "WORLD_UPDATE") {
     return "World state updated";
   }
-  if (log.type === "CONNECTION_STATE") {
+  if (log.type === "CONNECTION_UPDATE") {
     return log.connected ? "Connected" : "Disconnected";
   }
   return "";

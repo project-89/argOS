@@ -6,7 +6,12 @@ import { AgentNetwork } from "./components/AgentNetwork";
 import { ChatInterface } from "./components/ChatInterface";
 import { Inspector } from "./components/Inspector";
 import { Timeline } from "./components/Timeline";
-import { WorldState } from "../../types";
+import {
+  AgentState,
+  AgentUpdateMessage,
+  WorldState,
+  RoomState,
+} from "../../types";
 import { useSimulationStore } from "../../state/simulation";
 import { WebSocketService } from "../services/websocket";
 import "./styles/panels.css";
@@ -33,40 +38,51 @@ export function ModernUI() {
     wsRef.current = ws;
 
     const unsubscribe = ws.subscribe((message) => {
-      if (message.type === "CONNECTION_STATE") {
+      if (message.type === "CONNECTION_UPDATE") {
         setIsConnected(message.connected);
-      } else if (message.type === "WORLD_STATE") {
-        const worldState = message.data as WorldState;
+      } else if (message.type === "WORLD_UPDATE") {
+        const worldState = message.data;
         setAgents(worldState.agents);
         setRooms(worldState.rooms);
         setRelationships(worldState.relationships);
         setIsRunning(worldState.isRunning);
-      } else if (
-        message.type === "AGENT_STATE" &&
-        message.data.category === "appearance" &&
-        message.data.appearance
-      ) {
-        // Update agent appearance in real-time
-        setAgents((prev: any[]) =>
-          prev.map((agent) => {
-            if (agent.name === message.data.agentName) {
-              return {
-                ...agent,
-                facialExpression:
-                  message.data.appearance?.facialExpression ??
-                  agent.facialExpression,
-                bodyLanguage:
-                  message.data.appearance?.bodyLanguage ?? agent.bodyLanguage,
-                currentAction:
-                  message.data.appearance?.currentAction ?? agent.currentAction,
-                socialCues:
-                  message.data.appearance?.socialCues ?? agent.socialCues,
-                lastUpdate: Date.now(),
-              };
-            }
-            return agent;
-          })
-        );
+      } else if (message.type === "AGENT_UPDATE") {
+        // Add to logs for all agent updates
+        useSimulationStore.getState().addLog(message);
+
+        // Special handling for appearance updates
+        if (message.data.category === "appearance") {
+          setAgents((prev: AgentState[]) =>
+            prev.map((agent) => {
+              if (agent.id === message.data.agentId) {
+                const newState = {
+                  ...agent,
+                  lastUpdate: Date.now(),
+                };
+
+                if (
+                  message.data.type === "state" &&
+                  typeof message.data.content === "object" &&
+                  message.data.content?.agent
+                ) {
+                  const agentUpdate = message.data.content.agent;
+                  Object.assign(newState, {
+                    facialExpression: agentUpdate.facialExpression,
+                    bodyLanguage: agentUpdate.bodyLanguage,
+                    currentAction: agentUpdate.currentAction,
+                    socialCues: agentUpdate.socialCues,
+                  });
+                }
+
+                return newState;
+              }
+              return agent;
+            })
+          );
+        }
+      } else if (message.type === "ROOM_UPDATE") {
+        // Add to logs for all room updates
+        useSimulationStore.getState().addLog(message);
       }
     });
 
@@ -83,6 +99,13 @@ export function ModernUI() {
     if (!selectedRoom || !wsRef.current) return;
 
     wsRef.current.subscribeToRoom(selectedRoom);
+
+    // Subscribe to agents in the room
+    const roomAgents = agents.filter((a) => a.roomId === selectedRoom);
+    roomAgents.forEach((agent) => {
+      wsRef.current?.subscribeToRoomAgent(agent.id, selectedRoom);
+    });
+
     return () => {
       wsRef.current?.unsubscribeFromRoom(selectedRoom);
     };
@@ -91,8 +114,8 @@ export function ModernUI() {
   // Handle agent subscriptions
   useEffect(() => {
     if (!selectedAgent || !wsRef.current) return;
-
-    wsRef.current.subscribeToAgent(selectedAgent);
+    const selectedRoom = useSimulationStore.getState().selectedRoom;
+    wsRef.current.subscribeToAgent(selectedAgent, selectedRoom || "main");
     return () => {
       wsRef.current?.unsubscribeFromAgent(selectedAgent);
     };
@@ -159,7 +182,9 @@ export function ModernUI() {
                 agents={agents}
                 rooms={rooms}
                 logs={logs}
-                onSendMessage={(message) => wsRef.current?.sendChat(message)}
+                onSendMessage={(message, room) =>
+                  wsRef.current?.sendChat(message, room)
+                }
               />
             </Panel>
 
