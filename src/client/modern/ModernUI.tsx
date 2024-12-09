@@ -11,6 +11,7 @@ import {
   AgentUpdateMessage,
   WorldState,
   RoomState,
+  NetworkLink,
 } from "../../types";
 import { useSimulationStore } from "../../state/simulation";
 import { WebSocketService } from "../services/websocket";
@@ -41,19 +42,21 @@ export function ModernUI() {
       if (message.type === "CONNECTION_UPDATE") {
         setIsConnected(message.connected);
       } else if (message.type === "WORLD_UPDATE") {
-        const worldState = message.data;
-        setAgents(worldState.agents);
-        setRooms(worldState.rooms);
-        setRelationships(worldState.relationships);
-        setIsRunning(worldState.isRunning);
+        // Batch world state updates
+        useSimulationStore.setState({
+          agents: message.data.agents,
+          rooms: message.data.rooms,
+          relationships: message.data.relationships,
+          isRunning: message.data.isRunning,
+        });
       } else if (message.type === "AGENT_UPDATE") {
         // Add to logs for all agent updates
         useSimulationStore.getState().addLog(message);
 
         // Special handling for appearance updates
         if (message.data.category === "appearance") {
-          setAgents((prev: AgentState[]) =>
-            prev.map((agent) => {
+          useSimulationStore.setState((state) => ({
+            agents: state.agents.map((agent) => {
               if (agent.id === message.data.agentId) {
                 const newState = {
                   ...agent,
@@ -77,16 +80,56 @@ export function ModernUI() {
                 return newState;
               }
               return agent;
-            })
-          );
+            }),
+          }));
         }
       } else if (message.type === "ROOM_UPDATE") {
         // Add to logs for all room updates
         useSimulationStore.getState().addLog(message);
+
+        // Batch room and relationship updates
+        if (
+          message.data.type === "state" &&
+          typeof message.data.content === "object"
+        ) {
+          const content = message.data.content as {
+            room?: RoomState;
+            agent?: AgentState;
+            relationships?: NetworkLink[];
+          };
+
+          useSimulationStore.setState((state) => {
+            const updates: Partial<typeof state> = {};
+
+            // Update rooms if needed
+            if (content.room) {
+              updates.rooms = state.rooms.map(
+                (room): RoomState =>
+                  room.id === message.data.roomId
+                    ? { ...room, ...content.room, lastUpdate: Date.now() }
+                    : room
+              );
+            }
+
+            // Update relationships if needed
+            if (content.relationships) {
+              updates.relationships = content.relationships;
+            }
+
+            // Update agent if needed
+            if (content.agent) {
+              updates.agents = state.agents.map((agent) =>
+                agent.id === message.data.agentId
+                  ? { ...agent, ...content.agent, lastUpdate: Date.now() }
+                  : agent
+              );
+            }
+
+            return updates;
+          });
+        }
       }
     });
-
-    ws.connect();
 
     return () => {
       unsubscribe();

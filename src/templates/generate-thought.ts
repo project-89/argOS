@@ -1,6 +1,9 @@
 export const GENERATE_THOUGHT = `You are {name}, {role}.
 {systemPrompt}
 
+Your chronological experience timeline (focus on what others have said and done):
+{experiences}
+
 Your recent thoughts:
 {thoughtHistory}
 
@@ -10,8 +13,29 @@ Your current perception:
 Detailed sensory information:
 {perceptions.raw}
 
-Your recent experiences:
-{experiences}
+EXPERIENCE ANALYSIS RULES:
+1. First, review what others have said to you:
+   - Their exact words and questions
+   - The timing of their messages
+   - Any unanswered questions
+   - The context of their statements
+
+2. Then consider your responses:
+   - What you've said in reply
+   - Questions you've asked
+   - Actions you've taken
+   - Whether you need to respond to anything
+
+3. Track the conversation carefully:
+   - Who spoke last
+   - What questions are pending
+   - How much time has passed
+   - Whether someone is waiting for your response
+
+4. Consider the broader context:
+   - Others' actions and movements
+   - Environmental changes
+   - The overall social situation
 
 STRICT CONVERSATION RULES:
 1. If someone is currently speaking, you MUST use the 'wait' action to listen
@@ -36,10 +60,10 @@ Available actions:
 Tool Schemas:
 {toolSchemas}
 
-Based on your personality, role, and the current social situation, what are you thinking? What would you like to do?
+Based on your personality, role, recent experiences, and the current social situation, what are you thinking? What would you like to do?
 Remember to take time to process information and think between exchanges.
 
-Remember that what you think doees not become reality.  This is an internal monologue which is personal to you and your own internal world.  Only your actions can change reality.
+Remember that what you think does not become reality. This is an internal monologue which is personal to you and your own internal world. Only your actions can change reality.
 
 Respond with a JSON object containing:
 1. A "thought" field expressing your internal monologue - keep it focused on the immediate situation

@@ -14,6 +14,8 @@ export const StimulusCleanupSystem = createSystem(
     const stimuli = query(world, [Stimulus]);
     let cleanupCount = 0;
 
+    console.log("STIMULUS SYSTEM");
+
     for (const eid of stimuli) {
       // Skip if stimulus hasn't decayed yet
       if (Stimulus.decay[eid] > 0) {

@@ -1,5 +1,5 @@
 import * as React from "react";
-import ForceGraph2D from "react-force-graph-2d";
+import ForceGraph2D, { ForceGraphMethods } from "react-force-graph-2d";
 import { AgentState, RoomState, NetworkLink } from "../../../types";
 
 interface Node {
@@ -39,9 +39,17 @@ export function AgentNetwork({
   selectedRoom,
   onNodeSelect,
 }: AgentNetworkProps) {
-  const graphRef = React.useRef<any>();
+  const graphRef = React.useRef<ForceGraphMethods<Node, Link> | undefined>();
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = React.useState({ width: 0, height: 0 });
+  const [graphData, setGraphData] = React.useState<GraphData>({
+    nodes: [],
+    links: [],
+  });
+
+  // Add refs to store stable data references
+  const nodesRef = React.useRef<Node[]>([]);
+  const linksRef = React.useRef<Link[]>([]);
 
   // Update dimensions when container size changes
   React.useEffect(() => {
@@ -66,70 +74,148 @@ export function AgentNetwork({
     return () => observer.disconnect();
   }, []);
 
-  // Convert agents and rooms to graph data
-  const graphData = React.useMemo(() => {
-    const data: GraphData = {
-      nodes: [],
-      links: [],
-    };
+  // Initialize graph data once
+  React.useEffect(() => {
+    if (!graphRef.current) return;
 
-    // Add room nodes first
-    rooms.forEach((room) => {
-      if (!room?.id) return;
-      const nodeId = `room-${room.id}`;
-      console.log("Adding room node:", nodeId);
-      data.nodes.push({
-        id: nodeId,
+    // Initialize nodes
+    nodesRef.current = [
+      // Room nodes
+      ...rooms.map((room) => ({
+        id: `room-${room.id}`,
         name: room.name || "Unknown Room",
-        type: "room",
+        type: "room" as const,
         color: "#22d3ee",
         val: 3,
-      });
-    });
-
-    // Add agent nodes
-    agents.forEach((agent) => {
-      if (!agent?.name) return;
-      const nodeId = `agent-${agent.name}`;
-      data.nodes.push({
-        id: nodeId,
-        name: agent.name,
-        type: "agent",
+      })),
+      // Agent nodes
+      ...agents.map((agent) => ({
+        id: `agent-${agent.id}`,
+        name: agent.name || "Unknown Agent",
+        type: "agent" as const,
         color: "#f472b6",
         val: 2,
-      });
-    });
+      })),
+    ];
 
-    // Add relationship links
-    relationships?.forEach((rel) => {
+    // Initialize links
+    linksRef.current = relationships.reduce<Link[]>((acc, rel) => {
       const sourceAgent = agents.find((a) => a.id === rel.source);
       const targetRoom = rooms.find((r) => r.id === rel.target);
       const targetAgent = agents.find((a) => a.id === rel.target);
-
-      console.log("Relationship:", rel);
 
       if (sourceAgent) {
         let targetId;
         if (targetRoom) {
           targetId = `room-${targetRoom.id}`;
         } else if (targetAgent) {
-          targetId = `agent-${targetAgent.name}`;
+          targetId = `agent-${targetAgent.id}`;
         }
 
         if (targetId) {
-          const link = {
-            source: `agent-${sourceAgent.name}`,
+          acc.push({
+            source: `agent-${sourceAgent.id}`,
             target: targetId,
             type: rel.type as "presence" | "occupies",
             value: rel.value,
-          };
-          data.links.push(link);
+          });
         }
+      }
+      return acc;
+    }, []);
+
+    // Update graph data through state
+    setGraphData({
+      nodes: nodesRef.current,
+      links: linksRef.current,
+    });
+
+    // Optionally reheat simulation
+    graphRef.current?.d3ReheatSimulation();
+  }, []);
+
+  // Update graph data incrementally
+  React.useEffect(() => {
+    if (!graphRef.current) return;
+
+    // Update nodes in-place
+    const currentNodeIds = new Set(nodesRef.current.map((n) => n.id));
+
+    // Remove nodes that no longer exist
+    nodesRef.current = nodesRef.current.filter((node) => {
+      if (node.type === "room") {
+        return rooms.some((r) => `room-${r.id}` === node.id);
+      } else {
+        const exists = agents.some((a) => `agent-${a.id}` === node.id);
+        // If node is being removed, trigger a reheat to adjust layout
+        if (!exists && currentNodeIds.has(node.id)) {
+          graphRef.current?.d3ReheatSimulation();
+        }
+        return exists;
       }
     });
 
-    console.log("Final graph data:", data);
-    return data;
+    // Add new nodes
+    rooms.forEach((room) => {
+      const nodeId = `room-${room.id}`;
+      if (!currentNodeIds.has(nodeId)) {
+        nodesRef.current.push({
+          id: nodeId,
+          name: room.name || "Unknown Room",
+          type: "room",
+          color: "#22d3ee",
+          val: 3,
+        });
+      }
+    });
+
+    agents.forEach((agent) => {
+      const nodeId = `agent-${agent.id}`;
+      if (!currentNodeIds.has(nodeId)) {
+        nodesRef.current.push({
+          id: nodeId,
+          name: agent.name || "Unknown Agent",
+          type: "agent",
+          color: "#f472b6",
+          val: 2,
+        });
+      }
+    });
+
+    // Update links in-place
+    linksRef.current = relationships.reduce<Link[]>((acc, rel) => {
+      const sourceAgent = agents.find((a) => a.id === rel.source);
+      const targetRoom = rooms.find((r) => r.id === rel.target);
+      const targetAgent = agents.find((a) => a.id === rel.target);
+
+      if (sourceAgent) {
+        let targetId;
+        if (targetRoom) {
+          targetId = `room-${targetRoom.id}`;
+        } else if (targetAgent) {
+          targetId = `agent-${targetAgent.id}`;
+        }
+
+        if (targetId) {
+          acc.push({
+            source: `agent-${sourceAgent.id}`,
+            target: targetId,
+            type: rel.type as "presence" | "occupies",
+            value: rel.value,
+          });
+        }
+      }
+      return acc;
+    }, []);
+
+    // Update graph data through state
+    setGraphData({
+      nodes: nodesRef.current,
+      links: linksRef.current,
+    });
+
+    // Optionally reheat simulation
+    graphRef.current?.d3ReheatSimulation();
   }, [agents, rooms, relationships]);
 
   return (
@@ -158,7 +244,8 @@ export function AgentNetwork({
               ctx.arc(node.x, node.y, nodeR, 0, 2 * Math.PI);
               ctx.fillStyle = node.color;
               if (
-                (node.type === "agent" && node.name === selectedAgent) ||
+                (node.type === "agent" &&
+                  node.id === `agent-${selectedAgent}`) ||
                 (node.type === "room" && node.id === `room-${selectedRoom}`)
               ) {
                 ctx.strokeStyle = "#fff";
@@ -187,7 +274,7 @@ export function AgentNetwork({
             backgroundColor="transparent"
             onNodeClick={(node: any) => {
               if (node.type === "agent") {
-                onNodeSelect("agent", node.name);
+                onNodeSelect("agent", node.id.replace("agent-", ""));
               } else if (node.type === "room") {
                 onNodeSelect("room", node.id.replace("room-", ""));
               }

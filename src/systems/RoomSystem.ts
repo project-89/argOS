@@ -45,6 +45,7 @@ export const RoomSystem = createSystem<SystemConfig>(
             roomId: Room.id[roomId] || String(roomId),
             roomName: Room.name[roomId],
           },
+          isUser: Agent.name[agentId] === "User",
         };
 
         addComponent(

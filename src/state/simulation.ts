@@ -20,7 +20,7 @@ interface SimulationState {
   setAgents: (
     agents: AgentState[] | ((prev: AgentState[]) => AgentState[])
   ) => void;
-  setRooms: (rooms: RoomState[]) => void;
+  setRooms: (rooms: RoomState[] | ((prev: RoomState[]) => RoomState[])) => void;
   setRelationships: (relationships: NetworkLink[]) => void;
   setIsRunning: (isRunning: boolean) => void;
   addLog: (log: ServerMessage) => void;
@@ -41,7 +41,10 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     set({
       agents: typeof agents === "function" ? agents(get().agents) : agents,
     }),
-  setRooms: (rooms) => set({ rooms }),
+  setRooms: (rooms) =>
+    set({
+      rooms: typeof rooms === "function" ? rooms(get().rooms || []) : rooms,
+    }),
   setRelationships: (relationships) => set({ relationships }),
   setIsRunning: (isRunning) => set({ isRunning }),
   addLog: (log) => set((state) => ({ logs: [...state.logs, log] })),

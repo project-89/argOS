@@ -31,9 +31,7 @@ export interface BaseEvent<T = string> {
 
 // Room Event
 export interface RoomEvent<T extends EventType = EventType>
-  extends BaseEvent<
-    T extends "state" ? { room?: RoomState; agent?: AgentState } : string
-  > {
+  extends BaseEvent<T extends "state" ? RoomEventContent : string> {
   roomId: string;
   agentId?: string;
   agentName?: string;
@@ -263,4 +261,10 @@ export interface AgentState {
   memories?: string[];
   context?: string;
   recentThoughts?: string[];
+}
+
+interface RoomEventContent {
+  room?: RoomState;
+  agent?: AgentState;
+  relationships?: NetworkLink[];
 }

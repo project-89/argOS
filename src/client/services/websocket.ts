@@ -8,10 +8,10 @@ import {
 import { useSimulationStore } from "../../state/simulation";
 
 export class WebSocketService {
-  private ws: WebSocket;
+  private ws: WebSocket | null = null;
   private handlers: Set<(message: ServerMessage) => void> = new Set();
   private currentRoomId: string | null = null;
-  private currentRoomAgentSubscriptions: Set<string> = new Set();
+  private currentRoomAgentSubscriptions = new Set<string>();
   private url: string;
   private messageQueue: ServerMessage[] = [];
   private isProcessingQueue = false;
@@ -19,29 +19,40 @@ export class WebSocketService {
   private readonly PROCESS_INTERVAL = 100; // Process a message every 100ms
   private lastMessageTimes: Map<string, number> = new Map();
   private readonly DEDUPE_INTERVAL = 100; // Deduplicate messages within 100ms
+  private isDisconnecting = false;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
   constructor(url: string) {
     this.url = url;
-    this.ws = new WebSocket(url);
-    this.setupWebSocket();
-    this.startQueueProcessor();
+    this.connect();
   }
 
   private setupWebSocket() {
+    if (!this.ws) return;
+
     this.ws.onopen = () => {
-      this.broadcast({
-        type: "CONNECTION_UPDATE",
-        connected: true,
-        timestamp: Date.now(),
-      } as ConnectionUpdateMessage);
+      this.isDisconnecting = false;
+      this.handlers.forEach((handler) =>
+        handler({
+          type: "CONNECTION_UPDATE",
+          connected: true,
+          timestamp: Date.now(),
+        } as ConnectionUpdateMessage)
+      );
     };
 
     this.ws.onclose = () => {
-      this.broadcast({
-        type: "CONNECTION_UPDATE",
-        connected: false,
-        timestamp: Date.now(),
-      } as ConnectionUpdateMessage);
+      // Only broadcast disconnect if it wasn't intentional
+      if (!this.isDisconnecting) {
+        this.handlers.forEach((handler) =>
+          handler({
+            type: "CONNECTION_UPDATE",
+            connected: false,
+            timestamp: Date.now(),
+          } as ConnectionUpdateMessage)
+        );
+      }
+      this.ws = null;
     };
 
     this.ws.onmessage = (event) => {
@@ -51,15 +62,55 @@ export class WebSocketService {
   }
 
   connect() {
-    if (this.ws.readyState === WebSocket.CLOSED) {
+    // Clear any pending reconnect
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    // Only connect if we're not already connected/connecting and not intentionally disconnecting
+    if (
+      (!this.ws || this.ws.readyState === WebSocket.CLOSED) &&
+      !this.isDisconnecting
+    ) {
       this.ws = new WebSocket(this.url);
       this.setupWebSocket();
+      this.startQueueProcessor();
     }
   }
 
-  disconnect() {
+  async disconnect() {
+    this.isDisconnecting = true;
     this.stopQueueProcessor();
-    this.ws.close();
+
+    // Clear any pending reconnect
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    if (this.ws) {
+      // Ensure we wait for the connection to fully close
+      await new Promise<void>((resolve) => {
+        if (!this.ws) {
+          resolve();
+          return;
+        }
+
+        const onClose = () => {
+          this.ws?.removeEventListener("close", onClose);
+          resolve();
+        };
+
+        this.ws.addEventListener("close", onClose);
+        this.ws.close();
+      });
+    }
+
+    this.ws = null;
+    this.currentRoomId = null;
+    this.currentRoomAgentSubscriptions.clear();
+    this.messageQueue = [];
   }
 
   subscribe(handler: (message: ServerMessage) => void) {
@@ -81,22 +132,27 @@ export class WebSocketService {
   }
 
   send(message: ClientMessage) {
-    if (this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     }
   }
 
   subscribeToRoom(roomId: string) {
-    if (this.currentRoomId === roomId) return; // Already subscribed to this room
+    // First unsubscribe from current room if any
+    if (this.currentRoomId && this.currentRoomId !== roomId) {
+      this.unsubscribeFromCurrentRoom();
+    }
 
-    this.unsubscribeFromCurrentRoom();
+    // Set new room and subscribe
     this.currentRoomId = roomId;
-
     this.send({
       type: "SUBSCRIBE_ROOM",
       roomId,
       timestamp: Date.now(),
     });
+
+    // Clear any existing agent subscriptions
+    this.currentRoomAgentSubscriptions.clear();
   }
 
   subscribeToRoomAgent(agentId: string, roomId: string) {
@@ -113,21 +169,20 @@ export class WebSocketService {
 
   unsubscribeFromCurrentRoom() {
     if (this.currentRoomId) {
+      // First unsubscribe from all agents in the room
+      this.currentRoomAgentSubscriptions.forEach((agentId) => {
+        this.unsubscribeFromAgent(agentId);
+      });
+
+      // Then unsubscribe from the room
       this.send({
         type: "UNSUBSCRIBE_ROOM",
         roomId: this.currentRoomId,
         timestamp: Date.now(),
       });
 
-      this.currentRoomAgentSubscriptions.forEach((agentId) => {
-        this.send({
-          type: "UNSUBSCRIBE_AGENT",
-          agentId,
-          timestamp: Date.now(),
-        });
-      });
-      this.currentRoomAgentSubscriptions.clear();
       this.currentRoomId = null;
+      this.currentRoomAgentSubscriptions.clear();
     }
   }
 
@@ -138,17 +193,22 @@ export class WebSocketService {
   }
 
   subscribeToAgent(agentId: string, roomId: string) {
-    useSimulationStore.getState().setSelectedAgent(agentId);
-    this.send({
-      type: "SUBSCRIBE_AGENT",
-      agentId,
-      roomId,
-      timestamp: Date.now(),
-    });
+    // Only subscribe if we're in the same room
+    if (this.currentRoomId === roomId) {
+      useSimulationStore.getState().setSelectedAgent(agentId);
+      this.currentRoomAgentSubscriptions.add(agentId);
+      this.send({
+        type: "SUBSCRIBE_AGENT",
+        agentId,
+        roomId,
+        timestamp: Date.now(),
+      });
+    }
   }
 
   unsubscribeFromAgent(agentId: string) {
     useSimulationStore.getState().setSelectedAgent(null);
+    this.currentRoomAgentSubscriptions.delete(agentId);
     this.send({
       type: "UNSUBSCRIBE_AGENT",
       agentId,
@@ -205,25 +265,41 @@ export class WebSocketService {
     if (this.messageQueue.length === 0 || this.isProcessingQueue) return;
 
     this.isProcessingQueue = true;
-    const message = this.messageQueue.shift();
 
-    if (message) {
+    // Batch related messages
+    const messages = this.messageQueue.reduce((batch, message) => {
       // Skip duplicate state updates that are close together
-      if (this.shouldSkipMessage(message)) {
-        this.isProcessingQueue = false;
-        return;
-      }
+      if (this.shouldSkipMessage(message)) return batch;
 
-      try {
-        this.handlers.forEach((handler) => handler(message));
-      } catch (error) {
-        console.error("Error processing message:", error);
+      // Group by type
+      if (!batch[message.type]) {
+        batch[message.type] = [];
       }
+      batch[message.type].push(message);
+      return batch;
+    }, {} as Record<string, ServerMessage[]>);
+
+    // Clear processed messages
+    this.messageQueue = [];
+
+    try {
+      // Process batches in priority order
+      const processingOrder = ["WORLD_UPDATE", "ROOM_UPDATE", "AGENT_UPDATE"];
+
+      processingOrder.forEach((type) => {
+        if (messages[type]?.length) {
+          // For each type, send latest state only
+          const latestMessage = messages[type][messages[type].length - 1];
+          this.handlers.forEach((handler) => handler(latestMessage));
+        }
+      });
+    } catch (error) {
+      console.error("Error processing message batch:", error);
     }
 
     this.isProcessingQueue = false;
 
-    // Process next message if queue not empty
+    // Process next batch if queue not empty
     if (this.messageQueue.length > 0) {
       setTimeout(() => this.processNextMessage(), this.PROCESS_INTERVAL);
     }

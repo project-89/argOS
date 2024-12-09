@@ -151,6 +151,12 @@ export class SimulationRuntime extends EventEmitter {
 
     // Set up component event handlers for specific room and agent channels
     this.setupEventHandlers();
+
+    // Set up world state change handler
+    this.componentSync.onWorldStateChange = () => {
+      const worldState = this.getWorldState();
+      this.emitWorldUpdate(worldState);
+    };
   }
 
   private setupEventHandlers() {
@@ -379,10 +385,10 @@ export class SimulationRuntime extends EventEmitter {
 
   reset() {
     this.cleanup();
-    // Remove all entities
+    // Remove all entities and emit updates
     const allEntities = query(this.world, []);
     for (const eid of allEntities) {
-      removeEntity(this.world, eid);
+      this.removeEntityAndUpdate(eid);
     }
     this.emit("stateChanged", { isRunning: false });
   }
@@ -453,13 +459,30 @@ export class SimulationRuntime extends EventEmitter {
       logger.system(
         `Removed agent ${agentId} from room ${Room.name[currentRoom]}`
       );
+
+      // Emit room update for the old room
+      this.eventBus.emitRoomEvent(currentRoom, "state", {
+        room: this.mapRoomToState(currentRoom),
+      });
     }
 
     // Add new room relationship
     addComponent(this.world, agentId, OccupiesRoom(roomEid));
     logger.system(`Added agent ${agentId} to room ${Room.name[roomEid]}`);
 
-    // Emit updated world state after moving agent
+    // Update agent's appearance to show room transition
+    if (hasComponent(this.world, agentId, Appearance)) {
+      Appearance.currentAction[agentId] = "entered the room";
+      Appearance.lastUpdate[agentId] = Date.now();
+    }
+
+    // Emit room update for the new room
+    this.eventBus.emitRoomEvent(roomEid, "state", {
+      room: this.mapRoomToState(roomEid),
+      agent: this.mapAgentToState(agentId),
+    });
+
+    // Emit updated world state to update relationships
     this.emitWorldState();
   }
 
@@ -519,9 +542,9 @@ export class SimulationRuntime extends EventEmitter {
   }
 
   getWorldState(): WorldState {
-    const agents = Object.keys(Agent.name)
-      .map(Number)
-      .filter((eid) => Agent.name[eid] && Agent.active[eid] === 1)
+    // Get all entities that have the Agent component and are active
+    const agents = query(this.world, [Agent])
+      .filter((eid) => Agent.active[eid] === 1 && Agent.name[eid])
       .map((eid) => this.mapAgentToState(eid));
 
     const rooms = query(this.world, [Room]).map((roomId) =>
@@ -537,7 +560,7 @@ export class SimulationRuntime extends EventEmitter {
     };
   }
 
-  private emitWorldState() {
+  emitWorldState() {
     const worldState = this.getWorldState();
     this.emitWorldUpdate(worldState);
   }
@@ -600,13 +623,15 @@ export class SimulationRuntime extends EventEmitter {
       }
     }
 
-    // Add interaction relationships based on recent communications
-    // This is a placeholder - you might want to track actual interactions
+    // Only add interaction relationships for agents in the same room
     const agents = query(this.world, [Agent]);
     for (const agentId of agents) {
-      for (const otherAgentId of agents) {
-        if (agentId !== otherAgentId && Math.random() > 0.8) {
-          // Random sampling for demo
+      const agentRoom = this.getAgentRoom(agentId);
+      if (!agentRoom) continue;
+
+      const roomOccupants = query(this.world, [OccupiesRoom(agentRoom)]);
+      for (const otherAgentId of roomOccupants) {
+        if (agentId !== otherAgentId) {
           relationships.push({
             source: String(agentId),
             target: String(otherAgentId),
@@ -618,5 +643,24 @@ export class SimulationRuntime extends EventEmitter {
     }
 
     return relationships;
+  }
+
+  // Add this to the removeEntity wrapper
+  private removeEntityAndUpdate(eid: number) {
+    // Get room before removal for update
+    const roomId = this.getAgentRoom(eid);
+
+    // Remove the entity
+    removeEntity(this.world, eid);
+
+    // If entity was in a room, emit room update
+    if (roomId) {
+      this.eventBus.emitRoomEvent(roomId, "state", {
+        room: this.mapRoomToState(roomId),
+      });
+    }
+
+    // Emit world state update to reflect removal
+    this.emitWorldState();
   }
 }

@@ -61,4 +61,14 @@ export class EventEmitter {
       });
     });
   }
+
+  unsubscribeFromCurrentRoom(ws: WebSocket.WebSocket) {
+    const subscriptions = this.subscriptions.get(ws);
+    if (subscriptions) {
+      const roomSubs = Array.from(subscriptions).filter((sub) =>
+        sub.startsWith("room:")
+      );
+      roomSubs.forEach((sub) => subscriptions.delete(sub));
+    }
+  }
 }

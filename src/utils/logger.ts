@@ -42,4 +42,9 @@ export const logger = {
     if (!chalk) return console.log(`ERROR: ${message}\n`);
     return console.log(chalk.red(`[Error] ${message}`) + "\n");
   },
+
+  warn: (message: string) => {
+    if (!chalk) return console.log(`WARN: ${message}\n`);
+    return console.log(chalk.yellow(`[Warn] ${message}`) + "\n");
+  },
 };

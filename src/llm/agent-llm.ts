@@ -2,6 +2,7 @@ import { generateText } from "ai";
 import { geminiFlashModel } from "../config/ai-config";
 import { GENERATE_THOUGHT, PROCESS_STIMULUS } from "../templates";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { EXTRACT_EXPERIENCES } from "../templates/process-stimulus";
 
 export interface ThoughtResponse {
   thought: string;
@@ -83,6 +84,15 @@ export async function generateThought(
   state: AgentState
 ): Promise<ThoughtResponse> {
   try {
+    // Format experiences chronologically with type indicators
+    const formattedExperiences = state.experiences
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((exp) => {
+        const time = new Date(exp.timestamp).toLocaleTimeString();
+        return `[${time}] <${exp.type.toUpperCase()}> ${exp.content}`;
+      })
+      .join("\n");
+
     // Compose the prompt with formatted data
     const prompt = composeFromTemplate(GENERATE_THOUGHT, {
       ...state,
@@ -91,11 +101,7 @@ export async function generateThought(
         narrative: state.perceptions.narrative,
         raw: JSON.stringify(state.perceptions.raw, null, 2),
       },
-      experiences: state.experiences
-        .map(
-          (e) => `[${new Date(e.timestamp).toLocaleTimeString()}] ${e.content}`
-        )
-        .join("\n"),
+      experiences: formattedExperiences,
       tools: state.availableTools
         .map((t) => `${t.name}: ${t.description}`)
         .join("\n"),
@@ -180,5 +186,66 @@ export async function processStimulus(
   } catch (error) {
     console.error("Error processing stimulus:", error);
     return "I am having trouble processing my surroundings.";
+  }
+}
+
+export interface Experience {
+  type: "speech" | "action" | "observation" | "thought";
+  content: string;
+  timestamp: number;
+}
+
+export interface ExtractExperiencesState {
+  name: string;
+  role: string;
+  systemPrompt: string;
+  recentExperiences: Experience[];
+  timestamp: number;
+  stimulus: {
+    type: string;
+    source: number;
+    data: any;
+  }[];
+}
+
+export async function extractExperiences(
+  state: ExtractExperiencesState
+): Promise<Experience[]> {
+  try {
+    const prompt = composeFromTemplate(EXTRACT_EXPERIENCES, {
+      ...state,
+      recentExperiences: JSON.stringify(state.recentExperiences, null, 2),
+      stimulus: JSON.stringify(state.stimulus, null, 2),
+    });
+
+    const text = await callLLM(prompt, state.systemPrompt);
+
+    // Parse and validate experiences
+    const experiences = text
+      .split("\n")
+      .filter((line: string) => line.trim())
+      .map((line: string) => {
+        try {
+          const exp = JSON.parse(line);
+          if (
+            typeof exp === "object" &&
+            ["speech", "action", "observation", "thought"].includes(exp.type) &&
+            typeof exp.content === "string" &&
+            typeof exp.timestamp === "number"
+          ) {
+            return exp as Experience;
+          }
+          throw new Error("Invalid experience format");
+        } catch (e) {
+          console.error("Failed to parse experience line:", line, e);
+          return null;
+        }
+      })
+      .filter((exp): exp is Experience => exp !== null);
+
+    return experiences;
+  } catch (e) {
+    console.error("Failed to extract experiences:", e);
+    return [];
   }
 }

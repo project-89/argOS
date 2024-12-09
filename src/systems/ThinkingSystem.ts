@@ -21,10 +21,14 @@ import {
   processStimulus,
   ProcessStimulusState,
   AgentState,
+  extractExperiences,
+  Experience,
+  ExtractExperiencesState,
 } from "../llm/agent-llm";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { createVisualStimulus } from "../utils/stimulus-utils";
+import { EventCategory } from "../types";
 
 // Helper to find agent's current room
 function findAgentRoom(world: World, agentId: number): number | null {
@@ -103,7 +107,8 @@ function updateAgentMemory(
   world: World,
   eid: number,
   thought: any,
-  perceptions: string
+  perceptions: string,
+  newExperiences: Experience[]
 ) {
   const currentThoughts = Memory.thoughts[eid] || [];
   const currentPerceptionsList = Memory.perceptions[eid] || [];
@@ -116,6 +121,22 @@ function updateAgentMemory(
   const shouldAddThought = thought.thought !== lastThought;
   const shouldAddPerception = perceptions !== lastPerception;
 
+  // Deduplicate experiences by content and timestamp
+  const uniqueExperiences = [...currentExperiences];
+  newExperiences.forEach((exp) => {
+    const isDuplicate = uniqueExperiences.some(
+      (existing) =>
+        existing.content === exp.content &&
+        Math.abs(existing.timestamp - exp.timestamp) < 1000 // Within 1 second
+    );
+    if (!isDuplicate) {
+      uniqueExperiences.push(exp);
+    }
+  });
+
+  // Sort experiences chronologically
+  uniqueExperiences.sort((a, b) => a.timestamp - b.timestamp);
+
   setComponent(world, eid, Memory, {
     lastThought: thought.thought,
     thoughts: shouldAddThought
@@ -127,7 +148,7 @@ function updateAgentMemory(
           { timestamp: Date.now(), content: perceptions },
         ]
       : currentPerceptionsList,
-    experiences: currentExperiences,
+    experiences: uniqueExperiences,
   });
 
   return { shouldAddThought, shouldAddPerception };
@@ -181,6 +202,37 @@ function updateAgentAppearance(
   });
 }
 
+// New Stage: Extract experiences from perceptions
+async function extractPerceptionExperiences(
+  eid: number,
+  perceptions: any[],
+  world: World
+): Promise<Experience[]> {
+  const agentState: ExtractExperiencesState = {
+    name: Agent.name[eid],
+    role: Agent.role[eid],
+    systemPrompt: Agent.systemPrompt[eid],
+    recentExperiences: (Memory.experiences[eid] || []) as Experience[],
+    timestamp: Date.now(),
+    stimulus: perceptions.map((p) => ({
+      type: p.type,
+      source: p.sourceEntity,
+      data: p.content,
+    })),
+  };
+
+  const experiences = await extractExperiences(agentState);
+
+  // Update memory with new experiences
+  const currentExperiences = Memory.experiences[eid] || [];
+  setComponent(world, eid, Memory, {
+    ...Memory,
+    experiences: [...currentExperiences, ...experiences],
+  });
+
+  return experiences;
+}
+
 export const ThinkingSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
     const agents = query(world, [Agent, Memory]);
@@ -218,6 +270,28 @@ export const ThinkingSystem = createSystem<SystemConfig>(
         perceptions
       );
 
+      // Emit experience events
+      const newExperiences = await extractPerceptionExperiences(
+        eid,
+        currentPerceptions,
+        world
+      );
+
+      logger.agent(
+        eid,
+        `Extracted experiences: ${newExperiences}`,
+        Agent.name[eid]
+      );
+
+      newExperiences.forEach((exp: Experience) => {
+        runtime.eventBus.emitAgentEvent(
+          eid,
+          "experience",
+          exp.type as EventCategory,
+          exp
+        );
+      });
+
       // Stage 3: Generate thought based on state
       logger.debug(`Generating thought for ${Agent.name[eid]}`);
       const thought = await generateAgentThought(
@@ -242,7 +316,8 @@ export const ThinkingSystem = createSystem<SystemConfig>(
         world,
         eid,
         thought,
-        perceptions
+        perceptions,
+        newExperiences
       );
 
       // Stage 5: Handle agent actions

@@ -1,4 +1,15 @@
-import { World, observe, onGet, onSet, setComponent } from "bitecs";
+import {
+  World,
+  observe,
+  onGet,
+  onSet,
+  onRemove,
+  setComponent,
+  removeComponent,
+  addComponent,
+  removeEntity,
+  query,
+} from "bitecs";
 import {
   Agent,
   Room,
@@ -14,6 +25,7 @@ import {
 
 export class ComponentSync {
   private observers: (() => void)[] = [];
+  onWorldStateChange?: () => void;
 
   constructor(private world: World) {
     this.setupSyncHooks();
@@ -32,6 +44,7 @@ export class ComponentSync {
         if (params.appearance) Agent.appearance[eid] = params.appearance;
         if (params.attention !== undefined)
           Agent.attention[eid] = params.attention;
+        this.notifyWorldStateChange();
         return params;
       }),
       observe(this.world, onGet(Agent), (eid) => ({
@@ -43,7 +56,44 @@ export class ComponentSync {
         platform: Agent.platform[eid],
         appearance: Agent.appearance[eid],
         attention: Agent.attention[eid],
-      }))
+      })),
+      observe(this.world, onRemove(Agent), (eid) => {
+        console.log("Agent removed:", eid);
+
+        // Clean up all component data for this entity
+        delete Agent.id[eid];
+        delete Agent.name[eid];
+        delete Agent.role[eid];
+        delete Agent.systemPrompt[eid];
+        delete Agent.active[eid];
+        delete Agent.platform[eid];
+        delete Agent.appearance[eid];
+        delete Agent.attention[eid];
+
+        // Clean up related components
+        if (Memory.thoughts[eid]) delete Memory.thoughts[eid];
+        if (Memory.lastThought[eid]) delete Memory.lastThought[eid];
+        if (Memory.perceptions[eid]) delete Memory.perceptions[eid];
+        if (Memory.experiences[eid]) delete Memory.experiences[eid];
+
+        if (Appearance.facialExpression[eid])
+          delete Appearance.facialExpression[eid];
+        if (Appearance.bodyLanguage[eid]) delete Appearance.bodyLanguage[eid];
+        if (Appearance.currentAction[eid]) delete Appearance.currentAction[eid];
+        if (Appearance.socialCues[eid]) delete Appearance.socialCues[eid];
+        if (Appearance.lastUpdate[eid]) delete Appearance.lastUpdate[eid];
+
+        // Remove from any rooms
+        const rooms = query(this.world, [Room]);
+        for (const roomId of rooms) {
+          if (query(this.world, [OccupiesRoom(roomId)]).includes(eid)) {
+            removeComponent(this.world, eid, OccupiesRoom(roomId));
+          }
+        }
+
+        // Notify world state change after cleanup
+        this.notifyWorldStateChange();
+      })
     );
 
     // Memory sync
@@ -149,12 +199,25 @@ export class ComponentSync {
       })
     );
 
-    // Relationship sync handlers
+    // Room relationship sync
     this.observers.push(
       observe(this.world, onSet(OccupiesRoom), (eid, params) => {
-        console.log("OccupiesRoom", eid, params);
+        console.log("OccupiesRoom changed:", eid, params);
+        if (params && typeof params === "object" && "roomId" in params) {
+          addComponent(this.world, eid, OccupiesRoom(params.roomId));
+          this.notifyWorldStateChange();
+        }
         return params;
       }),
+      observe(this.world, onRemove(OccupiesRoom), (eid) => {
+        console.log("OccupiesRoom removed:", eid);
+        // No need to explicitly remove - bitECS handles this
+        this.notifyWorldStateChange();
+      })
+    );
+
+    // Stimulus relationship sync
+    this.observers.push(
       observe(this.world, onSet(StimulusInRoom), (eid, params) => {
         console.log("StimulusInRoom", eid, params);
         const store = StimulusInRoom(params.roomId);
@@ -172,6 +235,12 @@ export class ComponentSync {
         return params;
       })
     );
+  }
+
+  private notifyWorldStateChange() {
+    if (this.onWorldStateChange) {
+      this.onWorldStateChange();
+    }
   }
 
   cleanup() {
