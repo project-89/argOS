@@ -89,6 +89,10 @@ export class SimulationRuntime extends EventEmitter {
     new Set();
   private worldUpdateHandlers: Set<(data: WorldState) => void> = new Set();
 
+  // Add interaction tracking
+  private recentInteractions = new Map<string, number>(); // key: "agent1-agent2", value: timestamp
+  private readonly INTERACTION_TIMEOUT = 5000; // 5 seconds
+
   onAgentUpdate(
     handler: (agentId: number, roomId: number, data: AgentEventMessage) => void
   ) {
@@ -240,6 +244,28 @@ export class SimulationRuntime extends EventEmitter {
               this.emitRoomUpdate(String(roomId), roomEvent);
             });
           }
+        }
+      }
+    });
+
+    // Add interaction tracking for speech events
+    this.eventBus.subscribe("agent:*", (event: AgentEvent | RoomEvent) => {
+      if ("category" in event && event.category === "speech") {
+        const agentId = event.agentId;
+        if (!agentId) return;
+
+        // Get all agents in the same room
+        const agentRooms = this.getAgentRooms(Number(agentId));
+        if (agentRooms.length > 0) {
+          const roomId = agentRooms[0];
+          const roomOccupants = this.getAgentsInRoom(roomId);
+
+          // Track interaction with all agents in the room
+          roomOccupants.forEach((targetId) => {
+            if (String(targetId) !== agentId) {
+              this.trackInteraction(agentId, String(targetId));
+            }
+          });
         }
       }
     });
@@ -599,45 +625,36 @@ export class SimulationRuntime extends EventEmitter {
 
     // Add room occupancy relationships
     for (const room of rooms) {
-      const occupants = query(this.world, [OccupiesRoom(room.eid)]);
+      const occupants = query(this.world, [OccupiesRoom(room.eid)]).filter(
+        (eid) => Agent.active[eid] === 1
+      ); // Only include active agents
+
+      // Add presence relationships (agent -> room)
       for (const agentId of occupants) {
-        // Add presence relationship (agent -> room)
         relationships.push({
           source: String(agentId),
           target: room.id,
           type: "presence",
           value: Agent.attention[agentId] || 1,
         });
+      }
 
-        // Add attention relationships between agents in the same room
+      // Add active interaction relationships
+      for (const agentId of occupants) {
         for (const otherAgentId of occupants) {
-          if (agentId !== otherAgentId) {
+          if (agentId >= otherAgentId) continue; // Skip self and duplicates
+
+          // Only add interaction if there's been recent communication
+          if (
+            this.hasRecentInteraction(String(agentId), String(otherAgentId))
+          ) {
             relationships.push({
               source: String(agentId),
               target: String(otherAgentId),
-              type: "attention",
-              value: Agent.attention[agentId] || 0.5,
+              type: "interaction",
+              value: 1, // Full strength for active interactions
             });
           }
-        }
-      }
-    }
-
-    // Only add interaction relationships for agents in the same room
-    const agents = query(this.world, [Agent]);
-    for (const agentId of agents) {
-      const agentRoom = this.getAgentRoom(agentId);
-      if (!agentRoom) continue;
-
-      const roomOccupants = query(this.world, [OccupiesRoom(agentRoom)]);
-      for (const otherAgentId of roomOccupants) {
-        if (agentId !== otherAgentId) {
-          relationships.push({
-            source: String(agentId),
-            target: String(otherAgentId),
-            type: "interaction",
-            value: 0.5,
-          });
         }
       }
     }
@@ -662,5 +679,18 @@ export class SimulationRuntime extends EventEmitter {
 
     // Emit world state update to reflect removal
     this.emitWorldState();
+  }
+
+  private trackInteraction(sourceId: string, targetId: string) {
+    const key = [sourceId, targetId].sort().join("-");
+    this.recentInteractions.set(key, Date.now());
+  }
+
+  private hasRecentInteraction(agent1: string, agent2: string): boolean {
+    const key = [agent1, agent2].sort().join("-");
+    const lastInteraction = this.recentInteractions.get(key);
+    return (
+      lastInteraction && Date.now() - lastInteraction < this.INTERACTION_TIMEOUT
+    );
   }
 }
