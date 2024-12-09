@@ -268,14 +268,16 @@ export class WebSocketService {
 
     // Batch related messages
     const messages = this.messageQueue.reduce((batch, message) => {
-      // Skip duplicate state updates that are close together
-      if (this.shouldSkipMessage(message)) return batch;
+      // Create composite key for message type + category
+      const key =
+        message.type === "ROOM_UPDATE" || message.type === "AGENT_UPDATE"
+          ? `${message.type}:${message.data.type}`
+          : message.type;
 
-      // Group by type
-      if (!batch[message.type]) {
-        batch[message.type] = [];
+      if (!batch[key]) {
+        batch[key] = [];
       }
-      batch[message.type].push(message);
+      batch[key].push(message);
       return batch;
     }, {} as Record<string, ServerMessage[]>);
 
@@ -283,15 +285,11 @@ export class WebSocketService {
     this.messageQueue = [];
 
     try {
-      // Process batches in priority order
-      const processingOrder = ["WORLD_UPDATE", "ROOM_UPDATE", "AGENT_UPDATE"];
-
-      processingOrder.forEach((type) => {
-        if (messages[type]?.length) {
-          // For each type, send latest state only
-          const latestMessage = messages[type][messages[type].length - 1];
-          this.handlers.forEach((handler) => handler(latestMessage));
-        }
+      // Process all message types
+      Object.values(messages).forEach((messageBatch) => {
+        // For each batch, send latest state only
+        const latestMessage = messageBatch[messageBatch.length - 1];
+        this.handlers.forEach((handler) => handler(latestMessage));
       });
     } catch (error) {
       console.error("Error processing message batch:", error);

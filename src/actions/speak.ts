@@ -24,12 +24,13 @@ export const schema = z.object({
     ])
     .optional(),
   target: z.string().optional(),
+  reason: z.string().optional(),
 });
 
 export const action = {
   name: "speak",
   description: "Say something to others in the room",
-  parameters: ["message", "tone", "target"],
+  parameters: ["message", "tone", "target", "reason"],
   schema,
 };
 
@@ -42,15 +43,43 @@ export async function execute(
   const roomId = getAgentRoom(world, eid);
   if (!roomId) return;
 
-  const { message, tone = "neutral", target } = parameters;
+  const {
+    message,
+    tone = "neutral",
+    target,
+    reason = "Communicating with others",
+  } = parameters;
   const agentName = Agent.name[eid];
 
-  logger.agent(eid, `Says: ${message}`);
+  logger.agent(eid, `Says: ${message}`, agentName);
+
+  // Emit action event to room
+  eventBus.emitRoomEvent(
+    roomId,
+    "action",
+    {
+      action: "speak",
+      reason,
+      parameters: { message, tone, target },
+      agentName,
+    },
+    String(eid)
+  );
 
   // Emit speech event to room
-  eventBus.emitRoomEvent(roomId, "speech", message, String(eid));
+  eventBus.emitRoomEvent(
+    roomId,
+    "speech",
+    {
+      message,
+      tone,
+      target,
+      agentName,
+    },
+    String(eid)
+  );
 
-  const experience = `I said: "${message}"`;
+  const experience = `I said: "${message}"${target ? ` to ${target}` : ""}`;
 
   // Record the experience
   Memory.experiences[eid] = Memory.experiences[eid] || [];

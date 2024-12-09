@@ -39,6 +39,7 @@ export function ModernUI() {
     wsRef.current = ws;
 
     const unsubscribe = ws.subscribe((message) => {
+      console.log("MESSAGE", message);
       if (message.type === "CONNECTION_UPDATE") {
         setIsConnected(message.connected);
       } else if (message.type === "WORLD_UPDATE") {
@@ -51,6 +52,7 @@ export function ModernUI() {
         });
       } else if (message.type === "AGENT_UPDATE") {
         // Add to logs for all agent updates
+        console.log("AGENT_UPDATE", message);
         useSimulationStore.getState().addLog(message);
 
         // Special handling for appearance updates
@@ -84,6 +86,7 @@ export function ModernUI() {
           }));
         }
       } else if (message.type === "ROOM_UPDATE") {
+        console.log("ROOM_UPDATE", message);
         // Add to logs for all room updates
         useSimulationStore.getState().addLog(message);
 

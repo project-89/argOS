@@ -13,7 +13,6 @@ import {
   RoomState,
   AgentState,
 } from "../types";
-import { logger } from "../utils/logger";
 
 export class EventBus {
   private world: World;
@@ -82,17 +81,17 @@ export class EventBus {
 
   // Emit event to a room channel
   emitRoomEvent(
-    roomId: number,
+    roomEid: number,
     type: EventType,
     content: any,
     agentId?: string
   ) {
-    const stringRoomId = Room.id[roomId] || String(roomId);
+    const stringRoomId = Room.id[roomEid] || String(roomEid);
     const event: RoomEvent = {
       type,
       roomId: stringRoomId,
       content:
-        type === "state" ? { room: this.buildRoomState(roomId) } : content,
+        type === "state" ? { room: this.buildRoomState(roomEid) } : content,
       timestamp: Date.now(),
       agentId,
     };

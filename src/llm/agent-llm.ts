@@ -223,29 +223,54 @@ export async function extractExperiences(
     // Parse and validate experiences
     const experiences = text
       .split("\n")
-      .filter((line: string) => line.trim())
-      .map((line: string) => {
+      .reduce((acc: any[], line: string) => {
         try {
-          const exp = JSON.parse(line);
-          if (
-            typeof exp === "object" &&
-            ["speech", "action", "observation", "thought"].includes(exp.type) &&
-            typeof exp.content === "string" &&
-            typeof exp.timestamp === "number"
-          ) {
-            return exp as Experience;
+          // Clean up markdown and other formatting
+          const cleanLine = line.replace(/^```json\s*|\s*```$/g, "").trim();
+          if (!cleanLine || cleanLine.startsWith("#")) return acc;
+
+          // Try parsing as complete JSON object first
+          try {
+            const exp = JSON.parse(cleanLine);
+            if (isValidExperience(exp)) {
+              acc.push(exp);
+            }
+            return acc;
+          } catch {
+            // If not complete JSON, collect lines until we have a complete object
+            acc.push(cleanLine);
+
+            // Try parsing accumulated lines as JSON
+            const joined = acc.join("");
+            if (joined.includes("}")) {
+              try {
+                const exp = JSON.parse(joined);
+                if (isValidExperience(exp)) {
+                  return [exp];
+                }
+              } catch {}
+            }
           }
-          throw new Error("Invalid experience format");
+          return acc;
         } catch (e) {
-          console.error("Failed to parse experience line:", line, e);
-          return null;
+          console.error("Failed to parse experience line:", line);
+          return acc;
         }
-      })
-      .filter((exp): exp is Experience => exp !== null);
+      }, [])
+      .filter((exp): exp is Experience => isValidExperience(exp));
 
     return experiences;
   } catch (e) {
     console.error("Failed to extract experiences:", e);
     return [];
   }
+}
+
+function isValidExperience(exp: any): exp is Experience {
+  return (
+    typeof exp === "object" &&
+    ["speech", "action", "observation", "thought"].includes(exp.type) &&
+    typeof exp.content === "string" &&
+    typeof exp.timestamp === "number"
+  );
 }

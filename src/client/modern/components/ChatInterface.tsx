@@ -2,7 +2,6 @@ import * as React from "react";
 import { useState } from "react";
 import {
   ServerMessage,
-  EventCategory,
   AgentState,
   RoomState,
   AgentUpdateMessage,
@@ -19,15 +18,21 @@ interface ChatInterfaceProps {
   onSendMessage: (message: string, room: string) => void;
 }
 
+// Unified event types for both agent and room messages
 export type EventType =
   | "speech"
   | "thought"
   | "perception"
   | "action"
-  | "appearance"
-  | "state"
-  | "experience"
-  | "agent";
+  | "experience";
+
+const EVENT_TYPES: Record<EventType, { label: string; color: string }> = {
+  speech: { label: "Speech", color: "text-green-400" },
+  action: { label: "Actions", color: "text-yellow-400" },
+  thought: { label: "Thoughts", color: "text-purple-400" },
+  perception: { label: "Perceptions", color: "text-gray-400" },
+  experience: { label: "Experiences", color: "text-emerald-400" },
+};
 
 export function ChatInterface({
   selectedAgent,
@@ -38,9 +43,17 @@ export function ChatInterface({
   onSendMessage,
 }: ChatInterfaceProps) {
   const [message, setMessage] = useState("");
-  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(
-    new Set(["speech", "action", "thought"])
-  );
+  const [selectedTypes, setSelectedTypes] = useState<Set<EventType>>(() => {
+    const initialTypes = new Set<EventType>([
+      "speech",
+      "action",
+      "thought",
+      "perception",
+      "experience",
+    ]);
+    console.log("Setting initial types:", Array.from(initialTypes));
+    return initialTypes;
+  });
 
   const chatRef = React.useRef<HTMLDivElement>(null);
 
@@ -59,7 +72,7 @@ export function ChatInterface({
     }
   };
 
-  const toggleType = (type: string) => {
+  const toggleType = (type: EventType) => {
     const newTypes = new Set(selectedTypes);
     if (newTypes.has(type)) {
       newTypes.delete(type);
@@ -80,68 +93,44 @@ export function ChatInterface({
     return "CHAT: GOD MODE";
   };
 
+  // TODO: This is a bit of a mess, but it works for now
   const getMessageContent = (log: ServerMessage): string => {
-    if (log.type === "AGENT_UPDATE") {
-      const { content } = log.data;
-      if (typeof content === "object" && content !== null) {
-        if ("action" in content) {
-          return `${content.action}${
-            "reason" in content && content.reason ? ` - ${content.reason}` : ""
-          }`;
+    if (log.type === "AGENT_UPDATE" || log.type === "ROOM_UPDATE") {
+      if (log.type === "ROOM_UPDATE") {
+        // Handle different content types
+        if (
+          log.data.type === "action" &&
+          typeof log.data.content === "object" &&
+          "reason" in log.data.content
+        ) {
+          return `${log.data.content.action}: ${log.data.content.reason}`;
         }
-        return JSON.stringify(content);
-      }
-      return String(content);
-    }
-    if (log.type === "ROOM_UPDATE") {
-      const { content } = log.data;
-      if (typeof content === "object" && content !== null) {
-        if ("action" in content) {
-          return `${content.action}${
-            "reason" in content && content.reason ? ` - ${content.reason}` : ""
-          }`;
+        if (
+          log.data.type === "experience" &&
+          typeof log.data.content === "object" &&
+          "content" in log.data.content
+        ) {
+          return log.data.content.content;
         }
-        return JSON.stringify(content);
       }
-      return String(content);
+      return String(log.data.content);
     }
     return "";
   };
 
-  const getMessageType = (log: ServerMessage): EventCategory | string => {
+  const getMessageType = (log: ServerMessage): EventType => {
     if (log.type === "AGENT_UPDATE") {
-      return log.data.category;
+      return log.data.category.toLowerCase() as EventType;
     }
     if (log.type === "ROOM_UPDATE") {
-      return log.data.type;
+      return log.data.type.toLowerCase() as EventType;
     }
-    return log.type.toLowerCase();
+    return "perception";
   };
 
-  const getMessageColor = (type: string) => {
-    switch (type) {
-      case "thought":
-        return "text-purple-400";
-      case "experience":
-        return "text-emerald-400";
-      case "action":
-        return "text-yellow-400";
-      case "appearance":
-        return "text-cyan-400";
-      case "speech":
-        return "text-green-400";
-      default:
-        return "text-gray-400";
-    }
+  const getMessageColor = (type: EventType): string => {
+    return EVENT_TYPES[type]?.color || "text-gray-400";
   };
-
-  const filterTypes = [
-    { id: "speech", label: "Speech" },
-    { id: "action", label: "Actions" },
-    { id: "thought", label: "Thoughts" },
-    { id: "experience", label: "Experiences" },
-    { id: "appearance", label: "Appearance" },
-  ];
 
   const filteredLogs = logs.filter(
     (log): log is AgentUpdateMessage | RoomUpdateMessage => {
@@ -149,15 +138,15 @@ export function ChatInterface({
         return false;
       }
 
+      const messageType = getMessageType(log);
+      const isEnabled = selectedTypes.has(messageType);
+
       if (selectedAgent && log.type === "AGENT_UPDATE") {
-        return (
-          log.channel.agent === selectedAgent &&
-          selectedTypes.has(log.data.category.toLowerCase())
-        );
+        return log.channel.agent === selectedAgent && isEnabled;
       }
 
       if (selectedRoom && log.type === "ROOM_UPDATE") {
-        return selectedTypes.has(log.data.type.toLowerCase());
+        return log.data.roomId === selectedRoom && isEnabled;
       }
 
       return false;
@@ -167,7 +156,6 @@ export function ChatInterface({
   return (
     <div className="h-full flex flex-col">
       <div className="flex flex-col border-b border-cyan-900/30">
-        {/* Top row: Metadata */}
         <div className="px-2 h-8 flex items-center justify-between border-b border-cyan-900/20">
           <h2 className="text-emerald-400">
             <span className="text-gray-500">MSG:</span> {getContextTitle()}
@@ -177,21 +165,20 @@ export function ChatInterface({
           </span>
         </div>
 
-        {/* Bottom row: Filters */}
         <div className="px-2 h-8 flex items-center justify-start gap-2">
           <span className="text-[10px] text-gray-500">FILTER:</span>
           <div className="flex gap-1">
-            {filterTypes.map((type) => (
+            {Object.entries(EVENT_TYPES).map(([type, { label }]) => (
               <button
-                key={type.id}
+                key={type}
                 className={`px-1.5 py-0.5 rounded text-[10px] ${
-                  selectedTypes.has(type.id)
+                  selectedTypes.has(type as EventType)
                     ? "bg-cyan-900/30 text-cyan-400"
                     : "bg-black/20 text-gray-500"
                 }`}
-                onClick={() => toggleType(type.id)}
+                onClick={() => toggleType(type as EventType)}
               >
-                {type.label}
+                {label}
               </button>
             ))}
           </div>
@@ -205,6 +192,7 @@ export function ChatInterface({
         {filteredLogs.map((log, i) => {
           const type = getMessageType(log);
           const content = getMessageContent(log);
+
           const agentName =
             (log.type === "ROOM_UPDATE" && log.data.agentName) ||
             (log.type === "AGENT_UPDATE" &&
@@ -221,7 +209,9 @@ export function ChatInterface({
                   [{agentName}]
                 </span>
               )}{" "}
-              <span className={`text-xs ${getMessageColor(type)}`}>{type}</span>{" "}
+              <span className={`text-xs ${getMessageColor(type)}`}>
+                {EVENT_TYPES[type].label}
+              </span>{" "}
               <span className="text-gray-400">{content}</span>
             </div>
           );
