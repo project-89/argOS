@@ -238,12 +238,28 @@ export class WebSocketService {
   }
 
   sendChat(message: string, roomId?: string) {
+    // Send to server
     this.send({
       type: "CHAT",
       message,
       target: roomId,
       timestamp: Date.now(),
     });
+
+    // Create local room event for immediate display
+    const localMessage: ServerMessage = {
+      type: "ROOM_UPDATE",
+      data: {
+        type: "speech",
+        roomId: roomId || this.currentRoomId || "main",
+        content: message,
+        timestamp: Date.now(),
+        agentName: "User",
+      },
+      timestamp: Date.now(),
+    };
+
+    this.broadcast(localMessage);
   }
 
   private startQueueProcessor() {
