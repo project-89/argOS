@@ -689,8 +689,8 @@ export class SimulationRuntime extends EventEmitter {
   private hasRecentInteraction(agent1: string, agent2: string): boolean {
     const key = [agent1, agent2].sort().join("-");
     const lastInteraction = this.recentInteractions.get(key);
-    return (
-      lastInteraction && Date.now() - lastInteraction < this.INTERACTION_TIMEOUT
-    );
+    return lastInteraction
+      ? Date.now() - lastInteraction < this.INTERACTION_TIMEOUT
+      : false;
   }
 }

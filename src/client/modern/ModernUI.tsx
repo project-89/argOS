@@ -195,7 +195,7 @@ export function ModernUI() {
       <PanelGroup direction="vertical" className="flex-1">
         <Panel defaultSize={85} minSize={50}>
           <PanelGroup direction="horizontal">
-            <Panel defaultSize={25} minSize={20}>
+            <Panel defaultSize={35} minSize={20} maxSize={40}>
               <AgentNetwork
                 agents={agents}
                 rooms={rooms}
@@ -218,7 +218,7 @@ export function ModernUI() {
 
             <PanelResizeHandle className="w-1 bg-cyan-900/30 hover:bg-cyan-500/50 transition-colors" />
 
-            <Panel defaultSize={50} minSize={30}>
+            <Panel defaultSize={40} minSize={30}>
               <ChatInterface
                 selectedAgent={selectedAgent}
                 selectedRoom={selectedRoom}

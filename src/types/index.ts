@@ -20,6 +20,7 @@ export type EventCategory =
   | "action"
   | "appearance"
   | "experience"
+  | "speech"
   | "state";
 
 // Base Event Structure
