@@ -81,16 +81,28 @@ export async function execute(
 
   const experience = `I said: "${message}"${target ? ` to ${target}` : ""}`;
 
-  // Record the experience
+  // Record the experience with deduplication
   Memory.experiences[eid] = Memory.experiences[eid] || [];
-  Memory.experiences[eid].push({
-    type: "speech",
-    content: experience,
-    timestamp: Date.now(),
-  });
+  const recentExperiences = Memory.experiences[eid];
 
-  eventBus.emitAgentEvent(eid, "experience", "experience", {
-    content: experience,
-    timestamp: Date.now(),
-  });
+  // Check for duplicate speech in last 15 seconds
+  const isDuplicate = recentExperiences.some(
+    (exp) =>
+      exp.type === "speech" &&
+      exp.content === experience &&
+      Date.now() - exp.timestamp < 15000
+  );
+
+  if (!isDuplicate) {
+    Memory.experiences[eid].push({
+      type: "speech",
+      content: experience,
+      timestamp: Date.now(),
+    });
+
+    eventBus.emitAgentEvent(eid, "experience", "experience", {
+      content: experience,
+      timestamp: Date.now(),
+    });
+  }
 }

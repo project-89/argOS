@@ -61,11 +61,59 @@ async function processPerceptions(
   perceptions: any[],
   world: World
 ) {
+  // Get recent perceptions from memory, ensuring we have valid perception objects
+  const recentPerceptions = (Memory.perceptions[eid] || []).filter(
+    (p): p is { timestamp: number; content: string } =>
+      p &&
+      typeof p === "object" &&
+      "timestamp" in p &&
+      "content" in p &&
+      typeof p.content === "string"
+  );
+
+  // Deduplicate recent perceptions based on content and close timestamps
+  const deduplicatedPerceptions = recentPerceptions.reduce((acc, curr) => {
+    const isDuplicate = acc.some(
+      (p) =>
+        p.content === curr.content ||
+        (p.content.includes(curr.content) &&
+          Math.abs(p.timestamp - curr.timestamp) < 15000) // Increased to 15 seconds and improved matching
+    );
+    if (!isDuplicate) {
+      acc.push(curr);
+    }
+    return acc;
+  }, [] as typeof recentPerceptions);
+
+  const recentPerceptionsNarrative = deduplicatedPerceptions
+    .slice(-10) // Keep last 10 unique perceptions
+    .map((p) => p.content)
+    .join("\n");
+
+  // Filter out perceptions that are too close to recent ones
+  const filteredNewPerceptions = perceptions.filter((newP) => {
+    // Skip filtering visual stimuli - always let them through
+    if (newP.type === "VISUAL") return true;
+
+    const isDuplicate = deduplicatedPerceptions.some((p) => {
+      // Only exact matches for speech/action
+      const contentMatch =
+        typeof p.content === "string" &&
+        typeof newP.content === "string" &&
+        p.content === newP.content;
+
+      // Compare against perception's own timestamp
+      return contentMatch && Math.abs(p.timestamp - newP.timestamp) < 5000;
+    });
+    return !isDuplicate;
+  });
+
   const agentState: ProcessStimulusState = {
     name: Agent.name[eid],
     role: Agent.role[eid],
     systemPrompt: Agent.systemPrompt[eid],
-    stimulus: perceptions.map((p) => ({
+    recentPerceptions: recentPerceptionsNarrative,
+    stimulus: filteredNewPerceptions.map((p) => ({
       type: p.type,
       source: p.sourceEntity,
       data: p.content,
@@ -128,41 +176,63 @@ function updateAgentMemory(
   const lastPerception =
     currentPerceptionsList[currentPerceptionsList.length - 1]?.content;
 
-  // Always add new thoughts to history, but keep only last 10
+  // Keep more thoughts in history since we have a large context window
+  // Only deduplicate exact matches that are very recent (within last 5 seconds)
   const updatedThoughts = [...currentThoughts];
-  if (thought.thought !== lastThought) {
+  if (
+    thought.thought !== lastThought ||
+    (updatedThoughts.length > 0 && Date.now() - Memory.lastUpdate[eid] > 5000)
+  ) {
     updatedThoughts.push(thought.thought);
   }
-  // Keep only last 10 thoughts
-  const recentThoughts = updatedThoughts.slice(-10);
 
-  // Deduplicate experiences by content and timestamp
+  // Keep up to 100 recent thoughts instead of just 10
+  const recentThoughts = updatedThoughts.slice(-100);
+
+  // Deduplicate experiences by content and timestamp, preserving chronological order
   const uniqueExperiences = [...currentExperiences];
+  const seenExperiences = new Set();
+
   newExperiences.forEach((exp) => {
-    const isDuplicate = uniqueExperiences.some(
-      (existing) =>
-        existing.content === exp.content &&
-        Math.abs(existing.timestamp - exp.timestamp) < 1000 // Within 1 second
-    );
-    if (!isDuplicate) {
-      uniqueExperiences.push(exp);
+    const key = `${exp.type}:${exp.content}`;
+    if (!seenExperiences.has(key)) {
+      const isDuplicate = uniqueExperiences.some(
+        (existing) =>
+          existing.type === exp.type &&
+          existing.content === exp.content &&
+          Math.abs(existing.timestamp - exp.timestamp) < 1000 // Within 1 second
+      );
+      if (!isDuplicate) {
+        uniqueExperiences.push(exp);
+        seenExperiences.add(key);
+      }
     }
   });
 
   // Sort experiences chronologically
   uniqueExperiences.sort((a, b) => a.timestamp - b.timestamp);
 
+  // Keep more perceptions in memory, only deduplicating exact matches
+  const updatedPerceptions =
+    perceptions !== lastPerception
+      ? [
+          ...currentPerceptionsList,
+          {
+            timestamp: Date.now(),
+            content: perceptions,
+          },
+        ]
+      : currentPerceptionsList;
+
+  // Keep up to 50 recent perceptions
+  const recentPerceptions = updatedPerceptions.slice(-50);
+
   setComponent(world, eid, Memory, {
     lastThought: thought.thought,
     thoughts: recentThoughts,
-    perceptions:
-      perceptions !== lastPerception
-        ? [
-            ...currentPerceptionsList,
-            { timestamp: Date.now(), content: perceptions },
-          ]
-        : currentPerceptionsList,
+    perceptions: recentPerceptions,
     experiences: uniqueExperiences,
+    lastUpdate: Date.now(),
   });
 }
 
@@ -190,6 +260,7 @@ function updateAgentAppearance(
   appearance: Record<string, string>,
   runtime: SimulationRuntime
 ) {
+  // Always update the component state
   setComponent(world, eid, Appearance, {
     description: appearance.description || "",
     baseDescription: Appearance.baseDescription[eid],
@@ -201,6 +272,7 @@ function updateAgentAppearance(
     lastUpdate: Date.now(),
   });
 
+  // Create visual stimulus for immediate appearance change
   createVisualStimulus(world, {
     sourceEntity: eid,
     roomId: Room.id[roomId],
@@ -215,12 +287,15 @@ function updateAgentAppearance(
   });
 
   // Emit appearance event
-  runtime.eventBus.emitAgentEvent(
-    eid,
-    "appearance",
-    "appearance",
-    appearance.currentAction || "No action"
-  );
+  runtime.eventBus.emitAgentEvent(eid, "appearance", "appearance", {
+    description: appearance.description || Appearance.description[eid],
+    facialExpression:
+      appearance.facialExpression || Appearance.facialExpression[eid],
+    bodyLanguage: appearance.bodyLanguage || Appearance.bodyLanguage[eid],
+    currentAction: appearance.currentAction || Appearance.currentAction[eid],
+    socialCues: appearance.socialCues || Appearance.socialCues[eid],
+    lastUpdate: Date.now(),
+  });
 }
 
 // New Stage: Extract experiences from perceptions
@@ -230,13 +305,31 @@ async function extractPerceptionExperiences(
   world: World,
   runtime: SimulationRuntime
 ): Promise<Experience[]> {
+  const currentExperiences = Memory.experiences[eid] || [];
+
+  // Filter out perceptions that would create duplicate experiences
+  const filteredPerceptions = perceptions.filter((p) => {
+    const potentialContent = p.content?.toString() || "";
+    return !currentExperiences.some(
+      (exp) =>
+        exp.content.includes(potentialContent) &&
+        Math.abs(exp.timestamp - Date.now()) < 5000
+    );
+  });
+
+  if (filteredPerceptions.length === 0) {
+    return [];
+  }
+
   const agentState: ExtractExperiencesState = {
     name: Agent.name[eid],
     role: Agent.role[eid],
     systemPrompt: Agent.systemPrompt[eid],
-    recentExperiences: (Memory.experiences[eid] || []) as Experience[],
+    recentExperiences: currentExperiences.filter((exp) =>
+      ["thought", "speech", "action", "observation"].includes(exp.type)
+    ) as Experience[],
     timestamp: Date.now(),
-    stimulus: perceptions.map((p) => ({
+    stimulus: filteredPerceptions.map((p) => ({
       type: p.type,
       source: p.sourceEntity,
       data: p.content,
@@ -244,15 +337,6 @@ async function extractPerceptionExperiences(
   };
 
   const experiences = await extractExperiences(agentState);
-
-  // Update memory with new experiences
-  const currentExperiences = Memory.experiences[eid] || [];
-  setComponent(world, eid, Memory, {
-    ...Memory,
-    experiences: [...currentExperiences, ...experiences],
-  });
-
-  logger.agent(eid, `Extracted experiences: ${experiences}`, Agent.name[eid]);
 
   experiences.forEach((exp: Experience) => {
     runtime.eventBus.emitAgentEvent(

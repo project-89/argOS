@@ -16,6 +16,7 @@ export const Agent = {
 export const Memory = {
   thoughts: [] as string[][],
   lastThought: [] as string[],
+  lastUpdate: [] as number[],
   perceptions: [] as Array<{
     timestamp: number;
     content: string;
@@ -104,5 +105,14 @@ export const StimulusSource = createRelation(
     source: [] as string[],
     createdAt: [] as number[],
     strength: [] as number[],
+  }))
+);
+
+// Interaction relationship with metadata store
+export const Interaction = createRelation(
+  withStore(() => ({
+    type: [] as string[],
+    strength: [] as number[],
+    lastUpdate: [] as number[],
   }))
 );
