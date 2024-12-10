@@ -36,6 +36,8 @@ import { IRoomManager } from "./managers/IRoomManager";
 import { RoomManager } from "./managers/RoomManager";
 import { IEventManager } from "./managers/IEventManager";
 import { EventManager } from "./managers/EventManager";
+import { IActionManager } from "./managers/IActionManager";
+import { ActionManager } from "./managers/ActionManager";
 
 // Validate required environment variables
 if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
@@ -68,12 +70,12 @@ export class SimulationRuntime extends EventEmitter {
   private _isRunning = false;
   private updateInterval: number;
   private observers: (() => void)[] = [];
-  public actions: Record<string, ActionModule>;
   public eventBus: EventBus;
   private componentSync: ComponentSync;
   private stateManager: IStateManager;
   private roomManager: IRoomManager;
   private eventManager: IEventManager;
+  private actionManager: IActionManager;
 
   // Add interaction tracking
   private recentInteractions = new Map<string, string>(); // key: "agent1-agent2", value: timestamp
@@ -86,7 +88,6 @@ export class SimulationRuntime extends EventEmitter {
     // Merge config with defaults
     const fullConfig = { ...DEFAULT_CONFIG, ...config };
     this.updateInterval = fullConfig.updateInterval!;
-    this.actions = fullConfig.actions!;
 
     // Initialize systems from factories
     this.systems = fullConfig.systems!.map((factory) => factory(this));
@@ -99,10 +100,16 @@ export class SimulationRuntime extends EventEmitter {
     this.stateManager = new StateManager(this.world, this);
     this.roomManager = new RoomManager(this.world, this);
     this.eventManager = new EventManager(this.world, this, this.eventBus);
+    this.actionManager = new ActionManager(this.world, this, this.eventBus);
+
+    // Register actions
+    Object.entries(fullConfig.actions!).forEach(([name, action]) => {
+      this.actionManager.registerAction(name, action);
+    });
 
     logger.system("Runtime initialized with:");
     logger.system(`- ${this.systems.length} systems`);
-    logger.system(`- ${Object.keys(this.actions).length} actions`);
+    logger.system(`- ${Object.keys(fullConfig.actions!).length} actions`);
     logger.system(`- ${fullConfig.components!.length} components`);
 
     // Set up world state change handler
@@ -123,6 +130,10 @@ export class SimulationRuntime extends EventEmitter {
 
   getEventManager(): IEventManager {
     return this.eventManager;
+  }
+
+  getActionManager(): IActionManager {
+    return this.actionManager;
   }
 
   // Runtime control methods
@@ -150,19 +161,7 @@ export class SimulationRuntime extends EventEmitter {
     this.eventBus.cleanup();
     this.componentSync.cleanup();
     this.eventManager.cleanup();
-  }
-
-  // Action Management
-  getAvailableTools() {
-    return Object.values(this.actions).map((a) => a.action);
-  }
-
-  async executeAction(tool: string, eid: number, parameters: any) {
-    const action = this.actions[tool];
-    if (!action) {
-      throw new Error(`Unknown action: ${tool}`);
-    }
-    await action.execute(this.world, eid, parameters, this.eventBus);
+    this.actionManager.cleanup();
   }
 
   // Interaction tracking

@@ -50,7 +50,7 @@ export const ActionSystem = createSystem<SystemConfig>(
       // Initialize available tools if not set
       if (!Action.availableTools[eid]) {
         setComponent(world, eid, Action, {
-          availableTools: runtime.getAvailableTools(),
+          availableTools: runtime.getActionManager().getAvailableTools(),
           pendingAction: Action.pendingAction[eid],
           lastActionTime: Action.lastActionTime[eid],
         });
@@ -95,11 +95,9 @@ export const ActionSystem = createSystem<SystemConfig>(
       );
 
       // Execute the action
-      await runtime.executeAction(
-        pendingAction.tool,
-        eid,
-        pendingAction.parameters
-      );
+      await runtime
+        .getActionManager()
+        .executeAction(pendingAction.tool, eid, pendingAction.parameters);
 
       // Clear pending action and update last action time
       setComponent(world, eid, Action, {

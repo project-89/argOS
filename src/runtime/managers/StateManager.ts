@@ -34,7 +34,7 @@ export class StateManager implements IStateManager {
       agents,
       rooms,
       relationships: this.getRelationships(),
-      isRunning: true,
+      isRunning: this.runtime.isRunning,
       timestamp: Date.now(),
     };
   }

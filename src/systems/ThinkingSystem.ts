@@ -147,7 +147,7 @@ async function generateAgentThought(
       })),
     },
     experiences: Memory.experiences[eid] || [],
-    availableTools: runtime.getAvailableTools(),
+    availableTools: runtime.getActionManager().getAvailableTools(),
   };
 
   const thought = await generateThought(agentState);
@@ -410,6 +410,15 @@ export const ThinkingSystem = createSystem<SystemConfig>(
           thought.appearance,
           runtime
         );
+      }
+
+      // Initialize available tools if not set
+      if (!Action.availableTools[eid]) {
+        setComponent(world, eid, Action, {
+          availableTools: runtime.getActionManager().getAvailableTools(),
+          pendingAction: Action.pendingAction[eid],
+          lastActionTime: Action.lastActionTime[eid],
+        });
       }
     }
 
