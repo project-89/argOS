@@ -29,6 +29,7 @@ import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { createVisualStimulus } from "../utils/stimulus-utils";
 import { EventCategory } from "../types";
+import { SimulationRuntime } from "../runtime/SimulationRuntime";
 
 // Helper to find agent's current room
 function findAgentRoom(world: World, agentId: number): number | null {
@@ -82,6 +83,8 @@ async function generateAgentThought(
   currentPerceptions: any[],
   runtime: any
 ) {
+  logger.debug(`Generating thought for ${Agent.name[eid]}`);
+
   const agentState: AgentState = {
     name: Agent.name[eid],
     role: Agent.role[eid],
@@ -99,7 +102,14 @@ async function generateAgentThought(
     availableTools: runtime.getAvailableTools(),
   };
 
-  return await generateThought(agentState);
+  const thought = await generateThought(agentState);
+
+  logger.agent(eid, `Thought: ${thought.thought}`, Agent.name[eid]);
+
+  // Emit thought event
+  runtime.eventBus.emitAgentEvent(eid, "thought", "thought", thought.thought);
+
+  return thought;
 }
 
 // Stage 4: Update agent memory
@@ -118,8 +128,13 @@ function updateAgentMemory(
   const lastPerception =
     currentPerceptionsList[currentPerceptionsList.length - 1]?.content;
 
-  const shouldAddThought = thought.thought !== lastThought;
-  const shouldAddPerception = perceptions !== lastPerception;
+  // Always add new thoughts to history, but keep only last 10
+  const updatedThoughts = [...currentThoughts];
+  if (thought.thought !== lastThought) {
+    updatedThoughts.push(thought.thought);
+  }
+  // Keep only last 10 thoughts
+  const recentThoughts = updatedThoughts.slice(-10);
 
   // Deduplicate experiences by content and timestamp
   const uniqueExperiences = [...currentExperiences];
@@ -139,19 +154,16 @@ function updateAgentMemory(
 
   setComponent(world, eid, Memory, {
     lastThought: thought.thought,
-    thoughts: shouldAddThought
-      ? [...currentThoughts, thought.thought]
-      : currentThoughts,
-    perceptions: shouldAddPerception
-      ? [
-          ...currentPerceptionsList,
-          { timestamp: Date.now(), content: perceptions },
-        ]
-      : currentPerceptionsList,
+    thoughts: recentThoughts,
+    perceptions:
+      perceptions !== lastPerception
+        ? [
+            ...currentPerceptionsList,
+            { timestamp: Date.now(), content: perceptions },
+          ]
+        : currentPerceptionsList,
     experiences: uniqueExperiences,
   });
-
-  return { shouldAddThought, shouldAddPerception };
 }
 
 // Stage 5: Handle agent actions
@@ -175,7 +187,8 @@ function updateAgentAppearance(
   world: World,
   eid: number,
   roomId: number,
-  appearance: Record<string, string>
+  appearance: Record<string, string>,
+  runtime: SimulationRuntime
 ) {
   setComponent(world, eid, Appearance, {
     description: appearance.description || "",
@@ -200,13 +213,22 @@ function updateAgentAppearance(
       },
     },
   });
+
+  // Emit appearance event
+  runtime.eventBus.emitAgentEvent(
+    eid,
+    "appearance",
+    "appearance",
+    appearance.currentAction || "No action"
+  );
 }
 
 // New Stage: Extract experiences from perceptions
 async function extractPerceptionExperiences(
   eid: number,
   perceptions: any[],
-  world: World
+  world: World,
+  runtime: SimulationRuntime
 ): Promise<Experience[]> {
   const agentState: ExtractExperiencesState = {
     name: Agent.name[eid],
@@ -228,6 +250,17 @@ async function extractPerceptionExperiences(
   setComponent(world, eid, Memory, {
     ...Memory,
     experiences: [...currentExperiences, ...experiences],
+  });
+
+  logger.agent(eid, `Extracted experiences: ${experiences}`, Agent.name[eid]);
+
+  experiences.forEach((exp: Experience) => {
+    runtime.eventBus.emitAgentEvent(
+      eid,
+      "experience",
+      exp.type as EventCategory,
+      exp
+    );
   });
 
   return experiences;
@@ -260,40 +293,16 @@ export const ThinkingSystem = createSystem<SystemConfig>(
         currentPerceptions,
         world
       );
-      logger.agent(eid, `Perceiving: ${perceptions}`, Agent.name[eid]);
-
-      // Emit perception event
-      runtime.eventBus.emitAgentEvent(
-        eid,
-        "perception",
-        "perception",
-        perceptions
-      );
 
       // Emit experience events
       const newExperiences = await extractPerceptionExperiences(
         eid,
         currentPerceptions,
-        world
+        world,
+        runtime
       );
-
-      logger.agent(
-        eid,
-        `Extracted experiences: ${newExperiences}`,
-        Agent.name[eid]
-      );
-
-      newExperiences.forEach((exp: Experience) => {
-        runtime.eventBus.emitAgentEvent(
-          eid,
-          "experience",
-          exp.type as EventCategory,
-          exp
-        );
-      });
 
       // Stage 3: Generate thought based on state
-      logger.debug(`Generating thought for ${Agent.name[eid]}`);
       const thought = await generateAgentThought(
         world,
         eid,
@@ -301,37 +310,21 @@ export const ThinkingSystem = createSystem<SystemConfig>(
         currentPerceptions,
         runtime
       );
-      logger.agent(eid, `Thought: ${thought.thought}`, Agent.name[eid]);
-
-      // Emit thought event
-      runtime.eventBus.emitAgentEvent(
-        eid,
-        "thought",
-        "thought",
-        thought.thought
-      );
 
       // Stage 4: Update agent memory
-      const { shouldAddThought, shouldAddPerception } = updateAgentMemory(
-        world,
-        eid,
-        thought,
-        perceptions,
-        newExperiences
-      );
+      updateAgentMemory(world, eid, thought, perceptions, newExperiences);
 
       // Stage 5: Handle agent actions
       handleAgentAction(world, eid, thought);
 
       // Stage 6: Update agent appearance
       if (thought.appearance) {
-        updateAgentAppearance(world, eid, agentRoom, thought.appearance);
-        // Emit appearance event
-        runtime.eventBus.emitAgentEvent(
+        updateAgentAppearance(
+          world,
           eid,
-          "appearance",
-          "appearance",
-          thought.appearance.currentAction || "No action"
+          agentRoom,
+          thought.appearance,
+          runtime
         );
       }
     }

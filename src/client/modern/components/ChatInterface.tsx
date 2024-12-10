@@ -112,6 +112,13 @@ export function ChatInterface({
         ) {
           return log.data.content.content;
         }
+        if (
+          log.data.type === "speech" &&
+          typeof log.data.content === "object" &&
+          "message" in log.data.content
+        ) {
+          return log.data.content.message as string;
+        }
       }
       return String(log.data.content);
     }

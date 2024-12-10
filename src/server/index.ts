@@ -142,8 +142,6 @@ function setupRuntimeEventHandlers(runtime: SimulationRuntime) {
   // Add world update handler
   runtime.onWorldUpdate((worldState) => {
     // Send world update to all connected clients
-    console.log("Sending world update to clients");
-    // console.log(JSON.stringify(worldState, null, 2));
     wss.clients.forEach((client: WS) => {
       if (client.readyState === WS.OPEN) {
         sendMessage(client, {
@@ -262,8 +260,6 @@ wss.on("connection", (ws: WS) => {
 
         // First unsubscribe from current room if any
         eventEmitter.unsubscribeFromCurrentRoom(ws);
-
-        console.log(`Client subscribing to room ${roomId}`);
 
         // Find room entity
         const roomEntity = findRoomByStringId(runtime.world, roomId);

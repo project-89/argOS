@@ -39,14 +39,13 @@ export interface RoomEvent<T extends EventType = EventType>
       ? ActionContent
       : T extends "experience"
       ? ExperienceContent
+      : T extends "speech"
+      ? SpeechContent
       : string
   > {
   roomId: string;
   agentId?: string;
   agentName?: string;
-  message?: string;
-  tone?: string;
-  speakerName?: string;
 }
 
 // Agent Event
@@ -290,4 +289,11 @@ export interface ExperienceContent {
   type: EventType;
   content: string;
   timestamp: number;
+}
+
+export interface SpeechContent {
+  message: string;
+  tone?: string;
+  target?: string;
+  agentName: string;
 }

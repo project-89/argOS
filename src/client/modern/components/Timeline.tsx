@@ -60,7 +60,10 @@ function formatEventContent(log: ServerMessage): string {
     return JSON.stringify(data);
   }
   if (log.type === "ROOM_UPDATE") {
-    return log.data.message || "Room updated";
+    if (typeof log.data.content === "string") {
+      return log.data.content;
+    }
+    return "Room updated";
   }
   if (log.type === "WORLD_UPDATE") {
     return "World state updated";

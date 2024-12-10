@@ -64,55 +64,102 @@ Be explicit about:
 Write in first person, present tense. If there are multiple types of stimuli, organize them by priority level.`;
 
 export const EXTRACT_EXPERIENCES = `You are processing stimuli into experiences for {name}, {role}.
+{systemPrompt}
 
 Current timestamp: {timestamp}
 Recent experiences: {recentExperiences}
 
-IMPORTANT: Your primary task is to record what others have said to you and what has happened in your environment.
-Focus especially on:
-1. SPEECH FROM OTHERS:
-   - Record exactly what they said, word for word
-   - Note who said it
-   - Preserve any questions they asked you
-   - Note their tone or manner of speaking
+IMPORTANT: Your task is to extract meaningful experiences from stimuli, focusing on:
 
-2. ACTIONS BY OTHERS:
-   - What others did in your presence
-   - How they moved or behaved
-   - Any actions directed at you
+1. SPEECH & DIALOGUE (Highest Priority)
+   - Record EXACTLY what others say, preserving their exact words
+   - Note who spoke and their tone/manner
+   - Pay special attention to:
+     * Questions asked of you
+     * Important statements or information
+     * Emotional content in speech
+     * Commands or requests
 
-3. ENVIRONMENTAL CHANGES:
-   - Changes in the room or space
-   - People entering or leaving
-   - Significant events or changes
+2. SOCIAL INTERACTIONS
+   - Actions directed at you
+   - Group dynamics and relationships
+   - Emotional exchanges
+   - Important social cues
+   - Changes in relationships
 
-4. YOUR RESPONSES:
-   - What you said in reply
+3. ENVIRONMENTAL CHANGES
+   - People entering/leaving
+   - Changes to the space
+   - Notable events
+   - Significant objects or features
+
+4. YOUR RESPONSES (For Context)
+   - What you said or did
+   - Your reactions to others
    - Actions you took
-   - Note these to maintain conversation context
+   - Decisions you made
 
-Format each experience as:
+FORMAT REQUIREMENTS:
+
+Each experience MUST be a complete JSON object on its own line:
 {
   "type": "speech" | "action" | "observation" | "thought",
-  "content": "description of what happened, including who and context",
+  "content": "detailed description of what happened",
   "timestamp": number
 }
 
-For speech from others, use this format:
+SPEECH FORMAT EXAMPLES:
+
+When others speak:
 {
   "type": "speech",
-  "content": "[Speaker's Name] said to me: 'exact quote'",
-  "timestamp": number
+  "content": "[Sarah] said: 'What do you think about the project?'",
+  "timestamp": 1234567890
 }
 
-For your own speech, use this format:
+When you speak:
 {
   "type": "speech",
-  "content": "I said: 'exact quote'",
-  "timestamp": number
+  "content": "I said to [Sarah]: 'I think we should review the data first.'",
+  "timestamp": 1234567890
 }
 
-Process the following stimuli into experiences:
+ACTION FORMAT EXAMPLES:
+
+When others act:
+{
+  "type": "action",
+  "content": "[John] walked into the room and sat down at his desk",
+  "timestamp": 1234567890
+}
+
+When you act:
+{
+  "type": "action",
+  "content": "I nodded thoughtfully while considering Sarah's question",
+  "timestamp": 1234567890
+}
+
+OBSERVATION FORMAT EXAMPLES:
+
+Environmental:
+{
+  "type": "observation",
+  "content": "The room grew quiet as everyone focused on their work",
+  "timestamp": 1234567890
+}
+
+Social:
+{
+  "type": "observation",
+  "content": "There was tension between [Sarah] and [John] during the discussion",
+  "timestamp": 1234567890
+}
+
+Process these stimuli into experiences:
 {stimulus}
 
-Return ONLY the structured experience objects, one per line.`;
+Return ONLY valid JSON experience objects, one per line.
+Focus on capturing the most meaningful and relevant experiences.
+Preserve exact quotes and specific details.
+Use timestamps to maintain chronological order.`;

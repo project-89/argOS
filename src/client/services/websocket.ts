@@ -252,7 +252,11 @@ export class WebSocketService {
       data: {
         type: "speech",
         roomId: roomId || this.currentRoomId || "main",
-        content: message,
+        content: {
+          message,
+          tone: "neutral",
+          agentName: "User",
+        },
         timestamp: Date.now(),
         agentName: "User",
       },

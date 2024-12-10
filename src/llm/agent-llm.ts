@@ -1,8 +1,10 @@
 import { generateText } from "ai";
-import { geminiFlashModel } from "../config/ai-config";
+import { geminiFlashModel, geminiProModel } from "../config/ai-config";
 import { GENERATE_THOUGHT, PROCESS_STIMULUS } from "../templates";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { EXTRACT_EXPERIENCES } from "../templates/process-stimulus";
+import { llmLogger } from "../utils/llm-logger";
+import { logger } from "../utils/logger";
 
 export interface ThoughtResponse {
   thought: string;
@@ -51,7 +53,7 @@ export interface AgentState {
 async function callLLM(prompt: string, systemPrompt: string): Promise<string> {
   try {
     const { text } = await generateText({
-      model: geminiFlashModel,
+      model: geminiProModel,
       prompt,
       system: systemPrompt,
     });
@@ -83,6 +85,9 @@ export function composeFromTemplate(
 export async function generateThought(
   state: AgentState
 ): Promise<ThoughtResponse> {
+  const startTime = Date.now();
+  const agentId = state.name; // Using name as ID for now
+
   try {
     // Format experiences chronologically with type indicators
     const formattedExperiences = state.experiences
@@ -117,8 +122,13 @@ export async function generateThought(
       ),
     });
 
+    // Log prompt
+    llmLogger.logPrompt(agentId, prompt, state.systemPrompt);
+
     // Get LLM response
     const text = await callLLM(prompt, state.systemPrompt);
+    const latency = Date.now() - startTime;
+    llmLogger.logResponse(agentId, text, latency);
 
     try {
       // Parse and validate response
@@ -134,9 +144,10 @@ export async function generateThought(
           try {
             tool.schema.parse(response.action.parameters);
           } catch (validationError) {
-            console.error(
-              "Action parameters failed schema validation:",
-              validationError
+            llmLogger.logError(
+              agentId,
+              validationError,
+              "Action validation failed"
             );
             return { thought: response.thought };
           }
@@ -150,13 +161,17 @@ export async function generateThought(
         appearance: response.appearance,
       };
     } catch (parseError) {
-      console.error("Error parsing thought response:", parseError);
+      llmLogger.logError(
+        agentId,
+        parseError,
+        "Failed to parse thought response"
+      );
       return {
         thought: text || "I have nothing to think about at the moment.",
       };
     }
   } catch (error) {
-    console.error("Error in thought generation:", error);
+    llmLogger.logError(agentId, error, "Error in thought generation");
     return { thought: "My mind is blank right now." };
   }
 }
@@ -175,16 +190,26 @@ export interface ProcessStimulusState {
 export async function processStimulus(
   state: ProcessStimulusState
 ): Promise<string> {
+  const startTime = Date.now();
+  const agentId = state.name; // Using name as ID for now
+
   try {
     const prompt = composeFromTemplate(PROCESS_STIMULUS, {
       ...state,
       stimulus: JSON.stringify(state.stimulus, null, 2),
     });
 
+    // Log prompt
+    llmLogger.logPrompt(agentId, prompt, state.systemPrompt);
+
+    // Get LLM response
     const text = await callLLM(prompt, state.systemPrompt);
+    const latency = Date.now() - startTime;
+    llmLogger.logResponse(agentId, text, latency);
+
     return text || "I perceive nothing of note.";
   } catch (error) {
-    console.error("Error processing stimulus:", error);
+    llmLogger.logError(agentId, error, "Error processing stimulus");
     return "I am having trouble processing my surroundings.";
   }
 }
@@ -208,69 +233,115 @@ export interface ExtractExperiencesState {
   }[];
 }
 
+function isValidExperience(exp: any): exp is Experience {
+  return (
+    exp &&
+    typeof exp === "object" &&
+    ["speech", "action", "observation", "thought"].includes(exp.type) &&
+    typeof exp.content === "string" &&
+    typeof exp.timestamp === "number"
+  );
+}
+
+function cleanAndParseJSON(text: string): any {
+  const joined = text.replace(/```json\n|\n```/g, "").trim();
+  try {
+    return JSON.parse(joined);
+  } catch (e: unknown) {
+    const error = e as Error;
+    throw new Error(`Failed to parse JSON: ${error.message}`);
+  }
+}
+
 export async function extractExperiences(
   state: ExtractExperiencesState
 ): Promise<Experience[]> {
+  const startTime = Date.now();
+  const agentId = state.name; // Using name as ID for now
+
   try {
+    // Compose and log prompt
     const prompt = composeFromTemplate(EXTRACT_EXPERIENCES, {
       ...state,
       recentExperiences: JSON.stringify(state.recentExperiences, null, 2),
       stimulus: JSON.stringify(state.stimulus, null, 2),
     });
 
+    llmLogger.logPrompt(agentId, prompt, state.systemPrompt);
+
+    // Get LLM response
     const text = await callLLM(prompt, state.systemPrompt);
+    const latency = Date.now() - startTime;
+    llmLogger.logResponse(agentId, text, latency);
 
-    // Parse and validate experiences
-    const experiences = text
-      .split("\n")
-      .reduce((acc: any[], line: string) => {
-        try {
-          // Clean up markdown and other formatting
-          const cleanLine = line.replace(/^```json\s*|\s*```$/g, "").trim();
-          if (!cleanLine || cleanLine.startsWith("#")) return acc;
+    // Parse experiences from response
+    const experiences: Experience[] = [];
+    let currentJson = "";
 
-          // Try parsing as complete JSON object first
+    // Split response into lines and process each
+    const lines = text.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines and comments
+      if (!line || line.startsWith("#") || line.startsWith("//")) {
+        continue;
+      }
+
+      try {
+        // Try parsing single line as complete JSON
+        const exp = cleanAndParseJSON(line);
+        if (isValidExperience(exp)) {
+          experiences.push(exp);
+          llmLogger.logExperience(agentId, exp);
+          continue;
+        }
+      } catch {
+        // Not a complete JSON object, accumulate lines
+        currentJson += line;
+
+        // Check if we have a complete JSON object
+        if (currentJson.includes("}")) {
           try {
-            const exp = JSON.parse(cleanLine);
+            const exp = cleanAndParseJSON(currentJson);
             if (isValidExperience(exp)) {
-              acc.push(exp);
+              experiences.push(exp);
+              llmLogger.logExperience(agentId, exp);
             }
-            return acc;
+            currentJson = ""; // Reset accumulator
           } catch {
-            // If not complete JSON, collect lines until we have a complete object
-            acc.push(cleanLine);
-
-            // Try parsing accumulated lines as JSON
-            const joined = acc.join("");
-            if (joined.includes("}")) {
-              try {
-                const exp = JSON.parse(joined);
-                if (isValidExperience(exp)) {
-                  return [exp];
-                }
-              } catch {}
+            // Keep accumulating if not valid yet
+            if (i < lines.length - 1) {
+              continue;
             }
           }
-          return acc;
-        } catch (e) {
-          console.error("Failed to parse experience line:", line);
-          return acc;
         }
-      }, [])
-      .filter((exp): exp is Experience => isValidExperience(exp));
+      }
+    }
 
-    return experiences;
-  } catch (e) {
-    console.error("Failed to extract experiences:", e);
+    // Sort experiences chronologically
+    experiences.sort((a, b) => a.timestamp - b.timestamp);
+
+    // Deduplicate experiences
+    const uniqueExperiences = experiences.filter((exp, index) => {
+      const isDuplicate = experiences.findIndex(
+        (e) =>
+          e.type === exp.type &&
+          e.content === exp.content &&
+          Math.abs(e.timestamp - exp.timestamp) < 1000 // Within 1 second
+      );
+      return isDuplicate === index;
+    });
+
+    logger.debug(
+      `[${agentId}] Extracted ${uniqueExperiences.length} experiences (${latency}ms)`
+    );
+
+    return uniqueExperiences;
+  } catch (error: unknown) {
+    const err = error as Error;
+    llmLogger.logError(agentId, err, "Experience extraction failed");
+    logger.error(`[${agentId}] Experience extraction failed: ${err.message}`);
     return [];
   }
-}
-
-function isValidExperience(exp: any): exp is Experience {
-  return (
-    typeof exp === "object" &&
-    ["speech", "action", "observation", "thought"].includes(exp.type) &&
-    typeof exp.content === "string" &&
-    typeof exp.timestamp === "number"
-  );
 }

@@ -17,7 +17,7 @@ export function setupSingleAgent() {
       ActionSystem.create,
       StimulusCleanupSystem.create,
     ],
-    updateInterval: 3000, // 1 second thinking interval
+    updateInterval: 10000, // 10 second thinking interval
     actions: actions,
   });
 

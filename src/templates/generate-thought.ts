@@ -1,5 +1,4 @@
 export const GENERATE_THOUGHT = `You are {name}, {role}.
-{systemPrompt}
 
 Your chronological experience timeline (focus on what others have said and done):
 {experiences}
