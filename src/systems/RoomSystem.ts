@@ -56,13 +56,8 @@ export const RoomSystem = createSystem<SystemConfig>(
             sourceEntity: agentId,
             source: "ROOM",
             timestamp: Date.now(),
-            decay: 1,
             content: JSON.stringify(appearanceContent),
           })
-        );
-
-        logger.system(
-          `Created visual stimulus for ${Agent.name[agentId]} in ${Room.name[roomId]}`
         );
       }
     }

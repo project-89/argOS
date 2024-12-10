@@ -19,6 +19,7 @@ export type EventCategory =
   | "perception"
   | "action"
   | "appearance"
+  | "engine"
   | "experience"
   | "speech"
   | "state";
@@ -227,6 +228,7 @@ export type ActionModules = Record<string, ActionModule>;
 // Room State
 export interface RoomState {
   id: string;
+  eid: number;
   name: string;
   type: RoomType;
   description: string;

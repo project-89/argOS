@@ -2,30 +2,19 @@ import "dotenv/config";
 import {
   World,
   addEntity,
-  addComponent,
   removeEntity,
   query,
   hasComponent,
   removeComponent,
-  setComponent,
 } from "bitecs";
 import {
   WorldState,
-  Room as RoomData,
-  AgentEventMessage,
+  AgentState,
+  RoomState,
+  NetworkLink,
+  ActionModule,
   RoomEvent,
   AgentEvent,
-  ServerMessage,
-  RoomUpdateMessage,
-  EventType,
-  MessageType,
-  Agent as AgentType,
-  ActionModule,
-  AgentUpdateMessage,
-  RoomState,
-  AgentState,
-  InternalRoomState,
-  NetworkLink,
 } from "../types";
 import { logger } from "../utils/logger";
 import {
@@ -41,6 +30,12 @@ import { EventBus } from "./EventBus";
 import { ComponentSync } from "./ComponentSync";
 import EventEmitter from "events";
 import { EventPayload } from "../types/events";
+import { IStateManager } from "./managers/IStateManager";
+import { StateManager } from "./managers/StateManager";
+import { IRoomManager } from "./managers/IRoomManager";
+import { RoomManager } from "./managers/RoomManager";
+import { IEventManager } from "./managers/IEventManager";
+import { EventManager } from "./managers/EventManager";
 
 // Validate required environment variables
 if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
@@ -76,61 +71,13 @@ export class SimulationRuntime extends EventEmitter {
   public actions: Record<string, ActionModule>;
   public eventBus: EventBus;
   private componentSync: ComponentSync;
-
-  // Subscription tracking
-  private roomSubscriptions = new Map<string, Set<(data: any) => void>>();
-  private agentSubscriptions = new Map<number, Set<(data: any) => void>>();
-
-  // Event handlers
-  private agentUpdateHandlers: Set<
-    (agentId: number, roomId: number, data: AgentEventMessage) => void
-  > = new Set();
-  private roomUpdateHandlers: Set<(roomId: string, data: RoomEvent) => void> =
-    new Set();
-  private worldUpdateHandlers: Set<(data: WorldState) => void> = new Set();
+  private stateManager: IStateManager;
+  private roomManager: IRoomManager;
+  private eventManager: IEventManager;
 
   // Add interaction tracking
-  private recentInteractions = new Map<string, number>(); // key: "agent1-agent2", value: timestamp
+  private recentInteractions = new Map<string, string>(); // key: "agent1-agent2", value: timestamp
   private readonly INTERACTION_TIMEOUT = 5000; // 5 seconds
-
-  onAgentUpdate(
-    handler: (agentId: number, roomId: number, data: AgentEventMessage) => void
-  ) {
-    this.agentUpdateHandlers.add(handler);
-    return () => this.agentUpdateHandlers.delete(handler);
-  }
-
-  onRoomUpdate(handler: (roomId: string, data: RoomEvent) => void) {
-    this.roomUpdateHandlers.add(handler);
-    return () => this.roomUpdateHandlers.delete(handler);
-  }
-
-  onWorldUpdate(handler: (data: WorldState) => void) {
-    this.worldUpdateHandlers.add(handler);
-    return () => this.worldUpdateHandlers.delete(handler);
-  }
-
-  private emitAgentUpdate(
-    agentId: number,
-    roomId: number,
-    data: AgentEventMessage
-  ) {
-    this.agentUpdateHandlers.forEach((handler) =>
-      handler(agentId, roomId, data)
-    );
-  }
-
-  private emitRoomUpdate(roomId: string, data: RoomEvent) {
-    this.roomUpdateHandlers.forEach((handler) => handler(roomId, data));
-  }
-
-  private emitWorldUpdate(data: WorldState) {
-    this.worldUpdateHandlers.forEach((handler) => handler(data));
-  }
-
-  get isRunning() {
-    return this._isRunning;
-  }
 
   constructor(world: World, config: Partial<RuntimeConfig> = {}) {
     super();
@@ -144,263 +91,44 @@ export class SimulationRuntime extends EventEmitter {
     // Initialize systems from factories
     this.systems = fullConfig.systems!.map((factory) => factory(this));
 
+    // Initialize event bus and component sync
+    this.eventBus = new EventBus(this.world);
+    this.componentSync = new ComponentSync(this.world);
+
+    // Initialize managers
+    this.stateManager = new StateManager(this.world, this);
+    this.roomManager = new RoomManager(this.world, this);
+    this.eventManager = new EventManager(this.world, this, this.eventBus);
+
     logger.system("Runtime initialized with:");
     logger.system(`- ${this.systems.length} systems`);
     logger.system(`- ${Object.keys(this.actions).length} actions`);
     logger.system(`- ${fullConfig.components!.length} components`);
 
-    // Set up observers
-    this.componentSync = new ComponentSync(this.world);
-    this.eventBus = new EventBus(this.world);
-
-    // Set up component event handlers for specific room and agent channels
-    this.setupEventHandlers();
-
     // Set up world state change handler
     this.componentSync.onWorldStateChange = () => {
-      const worldState = this.getWorldState();
-      this.emitWorldUpdate(worldState);
+      const worldState = this.stateManager.getWorldState();
+      this.eventManager.emitWorldUpdate(worldState);
     };
   }
 
-  private setupEventHandlers() {
-    // Handle all events for rooms
-    this.eventBus.subscribe("room:*", (event: RoomEvent | AgentEvent) => {
-      if ("roomId" in event) {
-        const roomId = event.roomId;
-        if (!roomId) {
-          console.error("No roomId in event data:", event);
-          return;
-        }
-
-        // Only emit pure room events (not agent events) as room updates
-        if (!("category" in event)) {
-          this.emitRoomUpdate(roomId, event);
-        }
-      }
-    });
-
-    // Handle agent-specific events
-    this.eventBus.subscribe("agent:*", (event: AgentEvent | RoomEvent) => {
-      if ("category" in event) {
-        const agentId = event.agentId;
-        if (!agentId) {
-          console.error("No agentId in event data:", event);
-          return;
-        }
-
-        // Get all rooms where agent is present
-        const agentRooms = this.getAgentRooms(Number(agentId));
-
-        if (agentRooms.length > 0) {
-          // Send full event to direct agent subscribers
-          const agentEvent: AgentUpdateMessage = {
-            type: "AGENT_UPDATE",
-            channel: {
-              room: String(agentRooms[0]), // Primary room for agent updates
-              agent: String(agentId),
-            },
-            data: event,
-            timestamp: event.timestamp,
-          };
-
-          // Send to agent subscribers
-          this.emitAgentUpdate(Number(agentId), agentRooms[0], agentEvent);
-
-          // Categories that directly affect a specific room
-          const roomSpecificCategories = ["speech", "action", "appearance"];
-
-          // Categories that are processed globally
-          const globalCategories = ["thought", "perception"];
-
-          // Internal categories that stay private
-          const privateCategories = ["experience", "state"];
-
-          // For room-specific events, send only to the current room
-          if (roomSpecificCategories.includes(event.category)) {
-            const currentRoom = this.getAgentRoom(Number(agentId));
-            if (currentRoom) {
-              const roomEvent: RoomEvent = {
-                type: event.type as EventType,
-                roomId: String(currentRoom),
-                content: event.content,
-                timestamp: event.timestamp,
-                agentId: event.agentId,
-              };
-              this.emitRoomUpdate(String(currentRoom), roomEvent);
-            }
-          }
-
-          // For global categories like thoughts, send to all rooms where agent is present
-          if (globalCategories.includes(event.category)) {
-            agentRooms.forEach((roomId) => {
-              const roomEvent: RoomEvent = {
-                type: event.type as EventType,
-                roomId: String(roomId),
-                content: event.content,
-                timestamp: event.timestamp,
-                agentId: event.agentId,
-              };
-              this.emitRoomUpdate(String(roomId), roomEvent);
-            });
-          }
-        }
-      }
-    });
-
-    // Add interaction tracking for speech events
-    this.eventBus.subscribe("agent:*", (event: AgentEvent | RoomEvent) => {
-      if ("category" in event && event.category === "speech") {
-        const agentId = event.agentId;
-        if (!agentId) return;
-
-        // Get all agents in the same room
-        const agentRooms = this.getAgentRooms(Number(agentId));
-        if (agentRooms.length > 0) {
-          const roomId = agentRooms[0];
-          const roomOccupants = this.getAgentsInRoom(roomId);
-
-          // Track interaction with all agents in the room
-          roomOccupants.forEach((targetId) => {
-            if (String(targetId) !== agentId) {
-              this.trackInteraction(agentId, String(targetId));
-            }
-          });
-        }
-      }
-    });
+  // Getters for managers
+  getStateManager(): IStateManager {
+    return this.stateManager;
   }
 
-  // Helper method to get all rooms where an agent is present
-  private getAgentRooms(agentId: number): number[] {
-    return query(this.world, [Room]).filter((roomId) =>
-      hasComponent(this.world, agentId, OccupiesRoom(roomId))
-    );
+  getRoomManager(): IRoomManager {
+    return this.roomManager;
   }
 
-  // Methods for event subscription
-  subscribeToRoom(roomId: number, handler: (event: ServerMessage) => void) {
-    console.log("Subscribing to room:", roomId);
-    const stringRoomId = Room.id[roomId] || String(roomId);
-    if (!this.roomSubscriptions.has(stringRoomId)) {
-      this.roomSubscriptions.set(stringRoomId, new Set());
-    }
-    this.roomSubscriptions.get(stringRoomId)?.add(handler);
-
-    // Send initial room state
-    const roomState = this.mapRoomToState(roomId);
-    handler({
-      type: "ROOM_UPDATE",
-      data: {
-        type: "state",
-        roomId: stringRoomId,
-        content: { room: roomState },
-        timestamp: Date.now(),
-      },
-      timestamp: Date.now(),
-    });
-
-    // Send initial state for all agents in the room
-    const agents = this.getAgentsInRoom(roomId);
-    agents.forEach((agentId) => {
-      const agentState = this.mapAgentToState(agentId);
-      handler({
-        type: "ROOM_UPDATE",
-        data: {
-          type: "state",
-          roomId: stringRoomId,
-          content: { agent: agentState },
-          timestamp: Date.now(),
-          agentId: String(agentId),
-        },
-        timestamp: Date.now(),
-      });
-    });
+  getEventManager(): IEventManager {
+    return this.eventManager;
   }
 
-  subscribeToAgent(agentId: number, handler: (event: ServerMessage) => void) {
-    console.log("Subscribing to agent:", agentId);
-    if (!this.agentSubscriptions.has(agentId)) {
-      this.agentSubscriptions.set(agentId, new Set());
-    }
-    this.agentSubscriptions.get(agentId)?.add(handler);
-
-    // Send initial agent state
-    const agentState = this.mapAgentToState(agentId);
-    const roomId = this.getAgentRoom(agentId);
-    if (roomId) {
-      handler({
-        type: "AGENT_UPDATE",
-        channel: {
-          room: String(roomId),
-          agent: String(agentId),
-        },
-        data: {
-          type: "state",
-          agentId: String(agentId),
-          category: "state",
-          content: { agent: agentState },
-          timestamp: Date.now(),
-        },
-        timestamp: Date.now(),
-      });
-    }
-  }
-
-  private getAgentsInRoom(roomId: number): number[] {
-    return query(this.world, [Agent]).filter((eid) =>
-      hasComponent(this.world, eid, OccupiesRoom(roomId))
-    );
-  }
-
-  getAgentRoom(agentId: number): number | null {
-    const rooms = query(this.world, [Room]);
-    for (const roomId of rooms) {
-      if (hasComponent(this.world, agentId, OccupiesRoom(roomId))) {
-        return roomId;
-      }
-    }
-    return null;
-  }
-
-  cleanup() {
-    this.eventBus.cleanup();
-    this.componentSync.cleanup();
-  }
-
-  getWorld(): World {
-    return this.world;
-  }
-
+  // Runtime control methods
   start() {
     if (this._isRunning) return;
     this._isRunning = true;
-
-    // Emit initial state through component events
-    const agents = query(this.world, [Agent]);
-    const rooms = query(this.world, [Room]);
-
-    rooms.forEach((roomId) => {
-      const roomState = this.mapRoomToState(roomId);
-      this.eventBus.broadcast(`room:${roomId}`, {
-        type: "state",
-        roomId: String(roomId),
-        content: { room: roomState },
-        timestamp: Date.now(),
-      });
-    });
-
-    agents.forEach((eid) => {
-      const agentState = this.mapAgentToState(eid);
-      this.eventBus.broadcast(`agent:${Agent.id[eid]}`, {
-        type: "state",
-        agentId: String(eid),
-        category: "state",
-        content: { agent: agentState },
-        timestamp: Date.now(),
-      });
-    });
-
     this.run();
   }
 
@@ -411,14 +139,47 @@ export class SimulationRuntime extends EventEmitter {
 
   reset() {
     this.cleanup();
-    // Remove all entities and emit updates
     const allEntities = query(this.world, []);
     for (const eid of allEntities) {
-      this.removeEntityAndUpdate(eid);
+      removeEntity(this.world, eid);
     }
     this.emit("stateChanged", { isRunning: false });
   }
 
+  cleanup() {
+    this.eventBus.cleanup();
+    this.componentSync.cleanup();
+    this.eventManager.cleanup();
+  }
+
+  // Action Management
+  getAvailableTools() {
+    return Object.values(this.actions).map((a) => a.action);
+  }
+
+  async executeAction(tool: string, eid: number, parameters: any) {
+    const action = this.actions[tool];
+    if (!action) {
+      throw new Error(`Unknown action: ${tool}`);
+    }
+    await action.execute(this.world, eid, parameters, this.eventBus);
+  }
+
+  // Interaction tracking
+  hasRecentInteraction(agent1: string, agent2: string): boolean {
+    const key = [agent1, agent2].sort().join("-");
+    const lastInteraction = this.recentInteractions.get(key);
+    return lastInteraction
+      ? Date.now() - Number(lastInteraction) < this.INTERACTION_TIMEOUT
+      : false;
+  }
+
+  private trackInteraction(sourceId: string, targetId: string) {
+    const key = [sourceId, targetId].sort().join("-");
+    this.recentInteractions.set(key, Date.now().toString());
+  }
+
+  // Private helper methods
   private async run() {
     while (this.isRunning) {
       const startTime = Date.now();
@@ -429,7 +190,7 @@ export class SimulationRuntime extends EventEmitter {
           this.world = await system(this.world);
         }
 
-        // Update component event bus - this will trigger component change events
+        // Update component event bus
         this.eventBus.update();
 
         // Calculate time spent and adjust delay
@@ -453,244 +214,7 @@ export class SimulationRuntime extends EventEmitter {
     }
   }
 
-  // Room Management
-  createRoom(roomData: Partial<RoomData>): number {
-    const roomEntity = addEntity(this.world);
-
-    setComponent(this.world, roomEntity, Room, {
-      id: roomData.id || String(roomEntity),
-      name: roomData.name || "New Room",
-      description: roomData.description || "",
-      type: roomData.type || "physical",
-    });
-
-    return roomEntity;
-  }
-
-  moveAgentToRoom(agentId: number, roomEid: number): void {
-    // Verify room exists
-    const rooms = query(this.world, [Room]);
-    if (!rooms.includes(roomEid)) {
-      logger.error(`Room ${roomEid} not found`);
-      return;
-    }
-
-    // Find current room relationship and remove it
-    const currentRooms = query(this.world, [Room]).filter((eid) =>
-      hasComponent(this.world, agentId, OccupiesRoom(eid))
-    );
-
-    for (const currentRoom of currentRooms) {
-      removeComponent(this.world, agentId, OccupiesRoom(currentRoom));
-      logger.system(
-        `Removed agent ${agentId} from room ${Room.name[currentRoom]}`
-      );
-
-      // Emit room update for the old room
-      this.eventBus.emitRoomEvent(currentRoom, "state", {
-        room: this.mapRoomToState(currentRoom),
-      });
-    }
-
-    // Add new room relationship
-    addComponent(this.world, agentId, OccupiesRoom(roomEid));
-    logger.system(`Added agent ${agentId} to room ${Room.name[roomEid]}`);
-
-    // Update agent's appearance to show room transition
-    if (hasComponent(this.world, agentId, Appearance)) {
-      Appearance.currentAction[agentId] = "entered the room";
-      Appearance.lastUpdate[agentId] = Date.now();
-    }
-
-    // Emit room update for the new room
-    this.eventBus.emitRoomEvent(roomEid, "state", {
-      room: this.mapRoomToState(roomEid),
-      agent: this.mapAgentToState(agentId),
-    });
-
-    // Emit updated world state to update relationships
-    this.emitWorldState();
-  }
-
-  // Action Management
-  getAvailableTools() {
-    return Object.values(this.actions).map((a) => a.action);
-  }
-
-  async executeAction(tool: string, eid: number, parameters: any) {
-    const action = this.actions[tool];
-    if (!action) {
-      throw new Error(`Unknown action: ${tool}`);
-    }
-    await action.execute(this.world, eid, parameters, this.eventBus);
-  }
-
-  // State Management
-  private mapAgentToState(eid: number): AgentState {
-    return {
-      id: String(eid),
-      name: Agent.name[eid],
-      role: Agent.role[eid],
-      systemPrompt: Agent.systemPrompt[eid],
-      active: Agent.active[eid] === 1,
-      platform: Agent.platform[eid],
-      appearance: Agent.appearance[eid],
-      attention: Agent.attention[eid],
-      roomId: this.getAgentRoom(eid) ? Room.id[this.getAgentRoom(eid)!] : null,
-      facialExpression: Appearance.facialExpression[eid],
-      bodyLanguage: Appearance.bodyLanguage[eid],
-      currentAction: Appearance.currentAction[eid],
-      socialCues: Appearance.socialCues[eid],
-      lastUpdate: Appearance.lastUpdate[eid] || Date.now(),
-    };
-  }
-
-  private mapRoomToState(roomId: number): InternalRoomState {
-    return {
-      id: Room.id[roomId] || String(roomId),
-      eid: roomId,
-      name: Room.name[roomId],
-      description: Room.description[roomId],
-      type: Room.type[roomId],
-      occupants: this.getRoomOccupants(roomId).map((eid) => ({
-        id: String(eid),
-        name: Agent.name[eid],
-        attention: Agent.attention[eid],
-      })),
-      stimuli: this.getRoomStimuli(roomId).map((eid) => ({
-        type: Stimulus.type[eid],
-        content: Stimulus.content[eid],
-        source: String(Stimulus.sourceEntity[eid]),
-        timestamp: Stimulus.timestamp[eid],
-      })),
-      lastUpdate: Date.now(),
-    };
-  }
-
-  getWorldState(): WorldState {
-    // Get all entities that have the Agent component and are active
-    const agents = query(this.world, [Agent])
-      .filter((eid) => Agent.active[eid] === 1 && Agent.name[eid])
-      .map((eid) => this.mapAgentToState(eid));
-
-    const rooms = query(this.world, [Room]).map((roomId) =>
-      this.mapRoomToState(roomId)
-    );
-
-    return {
-      agents,
-      rooms,
-      relationships: this.getRelationships(),
-      isRunning: this._isRunning,
-      timestamp: Date.now(),
-    };
-  }
-
-  emitWorldState() {
-    const worldState = this.getWorldState();
-    this.emitWorldUpdate(worldState);
-  }
-
-  getRooms(): InternalRoomState[] {
-    return query(this.world, [Room]).map((roomId) =>
-      this.mapRoomToState(roomId)
-    );
-  }
-
-  private getRoomStimuli(roomId: number): number[] {
-    const roomStringId = Room.id[roomId] || String(roomId);
-    return Object.keys(Stimulus.roomId)
-      .map(Number)
-      .filter((eid) => Stimulus.roomId[eid] === roomStringId);
-  }
-
-  // Helper methods
-  getRoomOccupants(roomId: number): number[] {
-    return this.eventBus.getRoomOccupants(roomId);
-  }
-
-  getAgentByName(name: string): { eid: number } | null {
-    const agents = query(this.world, [Agent]);
-    for (const eid of agents) {
-      if (Agent.name[eid] === name) {
-        return { eid };
-      }
-    }
-    return null;
-  }
-
-  getRelationships(): NetworkLink[] {
-    const relationships: NetworkLink[] = [];
-    const rooms = this.getRooms();
-
-    // Add room occupancy relationships
-    for (const room of rooms) {
-      const occupants = query(this.world, [OccupiesRoom(room.eid)]).filter(
-        (eid) => Agent.active[eid] === 1
-      ); // Only include active agents
-
-      // Add presence relationships (agent -> room)
-      for (const agentId of occupants) {
-        relationships.push({
-          source: String(agentId),
-          target: room.id,
-          type: "presence",
-          value: Agent.attention[agentId] || 1,
-        });
-      }
-
-      // Add active interaction relationships
-      for (const agentId of occupants) {
-        for (const otherAgentId of occupants) {
-          if (agentId >= otherAgentId) continue; // Skip self and duplicates
-
-          // Only add interaction if there's been recent communication
-          if (
-            this.hasRecentInteraction(String(agentId), String(otherAgentId))
-          ) {
-            relationships.push({
-              source: String(agentId),
-              target: String(otherAgentId),
-              type: "interaction",
-              value: 1, // Full strength for active interactions
-            });
-          }
-        }
-      }
-    }
-
-    return relationships;
-  }
-
-  // Add this to the removeEntity wrapper
-  private removeEntityAndUpdate(eid: number) {
-    // Get room before removal for update
-    const roomId = this.getAgentRoom(eid);
-
-    // Remove the entity
-    removeEntity(this.world, eid);
-
-    // If entity was in a room, emit room update
-    if (roomId) {
-      this.eventBus.emitRoomEvent(roomId, "state", {
-        room: this.mapRoomToState(roomId),
-      });
-    }
-
-    // Emit world state update to reflect removal
-    this.emitWorldState();
-  }
-
-  private trackInteraction(sourceId: string, targetId: string) {
-    const key = [sourceId, targetId].sort().join("-");
-    this.recentInteractions.set(key, Date.now());
-  }
-
-  private hasRecentInteraction(agent1: string, agent2: string): boolean {
-    const key = [agent1, agent2].sort().join("-");
-    const lastInteraction = this.recentInteractions.get(key);
-    return lastInteraction
-      ? Date.now() - lastInteraction < this.INTERACTION_TIMEOUT
-      : false;
+  get isRunning(): boolean {
+    return this._isRunning;
   }
 }

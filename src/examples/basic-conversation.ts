@@ -7,7 +7,7 @@ import { Room, OccupiesRoom } from "../components/agent/Agent";
 export async function setupBasicConversation(runtime: SimulationRuntime) {
   logger.system("Setting up basic conversation scenario...");
 
-  const world = runtime.getWorld();
+  const world = runtime.world;
 
   // Create a room
   const gardenRoom = addEntity(world);

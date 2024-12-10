@@ -48,6 +48,7 @@ export class EventBus {
 
     return {
       id: Room.id[roomId] || String(roomId),
+      eid: roomId,
       name: Room.name[roomId],
       type: Room.type[roomId],
       description: Room.description[roomId],

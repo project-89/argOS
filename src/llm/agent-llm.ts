@@ -54,6 +54,7 @@ async function callLLM(prompt: string, systemPrompt: string): Promise<string> {
   try {
     const { text } = await generateText({
       model: geminiProModel,
+      // model: geminiFlashModel,
       prompt,
       system: systemPrompt,
     });
@@ -177,9 +178,10 @@ export async function generateThought(
 }
 
 export interface ProcessStimulusState {
-  systemPrompt: string;
   name: string;
   role: string;
+  systemPrompt: string;
+  recentPerceptions: string;
   stimulus: Array<{
     type: string;
     source: number;

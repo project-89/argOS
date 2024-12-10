@@ -6,6 +6,7 @@ import {
   ChatMessage,
   AgentUpdateMessage,
   RoomUpdateMessage,
+  RoomEvent,
 } from "../types";
 import { setupSingleAgent } from "../examples/single-agent-setup";
 import { Agent, Room } from "../components/agent/Agent";
@@ -50,7 +51,7 @@ async function cleanupUserConnection(ws: WS, userConn: { entity: number }) {
     removeEntity(runtime.world, userConn.entity);
     // Wait a tick to ensure entity removal is processed
     await new Promise((resolve) => setTimeout(resolve, 0));
-    runtime.emitWorldState();
+    runtime.getEventManager().emitWorldState();
   } catch (error) {
     logger.error(`Error cleaning up user entity: ${error}`);
   }
@@ -87,33 +88,37 @@ const activeUserEntities = new Set<number>();
 
 // Set up runtime event handlers
 function setupRuntimeEventHandlers(runtime: SimulationRuntime) {
-  runtime.onAgentUpdate((agentId, roomId, data) => {
-    const stringRoomId = Room.id[roomId] || String(roomId);
-    const stringAgentId = String(agentId);
+  const eventManager = runtime.getEventManager();
 
-    // Send agent updates only to direct agent subscribers
-    wss.clients.forEach((client: WS) => {
-      const subs = eventEmitter.getSubscriptions(client);
-      if (
-        subs?.has(`${stringRoomId}:${stringAgentId}`) &&
-        client.readyState === WS.OPEN
-      ) {
-        // Send as AGENT_UPDATE to direct agent subscribers
-        const message: AgentUpdateMessage = {
-          type: "AGENT_UPDATE",
-          channel: {
-            room: stringRoomId,
-            agent: stringAgentId,
-          },
-          data: data.data,
-          timestamp: data.timestamp,
-        };
-        sendMessage(client, message);
-      }
-    });
-  });
+  eventManager.onAgentUpdate(
+    (agentId: number, roomId: number, data: AgentUpdateMessage) => {
+      const stringRoomId = Room.id[roomId] || String(roomId);
+      const stringAgentId = String(agentId);
 
-  runtime.onRoomUpdate((roomId, data) => {
+      // Send agent updates only to direct agent subscribers
+      wss.clients.forEach((client: WS) => {
+        const subs = eventEmitter.getSubscriptions(client);
+        if (
+          subs?.has(`${stringRoomId}:${stringAgentId}`) &&
+          client.readyState === WS.OPEN
+        ) {
+          // Send as AGENT_UPDATE to direct agent subscribers
+          const message: AgentUpdateMessage = {
+            type: "AGENT_UPDATE",
+            channel: {
+              room: stringRoomId,
+              agent: stringAgentId,
+            },
+            data: data.data,
+            timestamp: data.timestamp,
+          };
+          sendMessage(client, message);
+        }
+      });
+    }
+  );
+
+  eventManager.onRoomUpdate((roomId: string, data: RoomEvent) => {
     // Send room events to room subscribers
     wss.clients.forEach((client: WS) => {
       const subs = eventEmitter.getSubscriptions(client);
@@ -127,6 +132,7 @@ function setupRuntimeEventHandlers(runtime: SimulationRuntime) {
             agentId: data.agentId,
             agentName: data.agentId
               ? runtime
+                  .getStateManager()
                   .getWorldState()
                   .agents.find((a) => a.id === data.agentId)?.name
               : undefined,
@@ -140,7 +146,7 @@ function setupRuntimeEventHandlers(runtime: SimulationRuntime) {
   });
 
   // Add world update handler
-  runtime.onWorldUpdate((worldState) => {
+  eventManager.onWorldUpdate((worldState) => {
     // Send world update to all connected clients
     wss.clients.forEach((client: WS) => {
       if (client.readyState === WS.OPEN) {
@@ -190,7 +196,7 @@ wss.on("connection", (ws: WS) => {
   );
 
   // Send initial world state
-  const worldState = runtime.getWorldState();
+  const worldState = runtime.getStateManager().getWorldState();
   sendMessage(ws, {
     type: "WORLD_UPDATE",
     data: worldState,
@@ -270,11 +276,11 @@ wss.on("connection", (ws: WS) => {
 
         eventEmitter.subscribe(ws, { room: roomId });
 
-        // Move user entity to the subscribed room
-        runtime.moveAgentToRoom(userConn.entity, roomEntity);
+        // Move user entity to the subscribed room using RoomManager
+        runtime.getRoomManager().moveAgentToRoom(userConn.entity, roomEntity);
 
         // Emit updated world state after moving user
-        runtime.emitWorldState();
+        runtime.getEventManager().emitWorldState();
         break;
       }
 
@@ -292,11 +298,11 @@ wss.on("connection", (ws: WS) => {
           });
         } else {
           // Broadcast to all rooms
-          const rooms = runtime.getRooms();
+          const rooms = runtime.getStateManager().getWorldState().rooms;
           rooms.forEach((room) => {
             createAuditoryStimulus(runtime.world, {
               sourceEntity: userConn.entity,
-              roomId: Room.id[room.eid],
+              roomId: room.id,
               message: chatMessage,
               tone: "neutral",
             });
@@ -309,7 +315,7 @@ wss.on("connection", (ws: WS) => {
         runtime.start();
         sendMessage(ws, {
           type: "WORLD_UPDATE",
-          data: runtime.getWorldState(),
+          data: runtime.getStateManager().getWorldState(),
           timestamp: Date.now(),
         });
         break;
@@ -319,7 +325,7 @@ wss.on("connection", (ws: WS) => {
         sendMessage(ws, {
           type: "WORLD_UPDATE",
           data: {
-            ...runtime.getWorldState(),
+            ...runtime.getStateManager().getWorldState(),
             isRunning: false,
           },
           timestamp: Date.now(),
@@ -337,7 +343,10 @@ wss.on("connection", (ws: WS) => {
         // Send fresh world state
         sendMessage(ws, {
           type: "WORLD_UPDATE",
-          data: { ...runtime.getWorldState(), isRunning: false },
+          data: {
+            ...runtime.getStateManager().getWorldState(),
+            isRunning: false,
+          },
           timestamp: Date.now(),
         });
         break;

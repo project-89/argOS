@@ -22,7 +22,7 @@ export function setupSingleAgent() {
   });
 
   // Create initial room
-  const roomEntity = runtime.createRoom({
+  const roomEntity = runtime.getRoomManager().createRoom({
     id: "main",
     name: "The Void",
     description:
@@ -49,7 +49,7 @@ You should be helpful, precise, and maintain awareness of the system's state. On
   });
 
   // Place agent in room
-  runtime.moveAgentToRoom(agentEntity, roomEntity);
+  runtime.getRoomManager().moveAgentToRoom(agentEntity, roomEntity);
 
   return {
     runtime,
