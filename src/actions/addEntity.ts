@@ -6,13 +6,12 @@ import { Agent } from "../components/agent/Agent";
 
 export const schema = z.object({
   name: z.string(),
-  type: z.enum(["agent", "room"]).optional(),
 });
 
 export const action = {
   name: "addEntity",
   description: "Add a new entity to the world",
-  parameters: ["name", "type"],
+  parameters: ["name"],
   schema,
 };
 
@@ -31,13 +30,11 @@ export async function execute(
   // Emit creation event
   eventBus.emitAgentEvent(eid, "action", "engine", {
     name: parameters.name,
-    type: parameters.type || "entity",
     entityId: newEntityId,
   });
 
   return {
     id: newEntityId,
     name: parameters.name,
-    type: parameters.type || "entity",
   };
 }

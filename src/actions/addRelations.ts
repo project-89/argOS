@@ -2,13 +2,14 @@ import { z } from "zod";
 import { World, addComponent } from "bitecs";
 import { EventBus } from "../runtime/EventBus";
 import { logger } from "../utils/logger";
-import {
-  Agent,
-  Interaction,
-  OccupiesRoom,
-  StimulusInRoom,
-  StimulusSource,
-} from "../components/agent/Agent";
+import { Agent } from "../components/agent/Agent";
+import { SimulationRuntime } from "../runtime/SimulationRuntime";
+
+type RelationStore = {
+  type?: Record<number, string>;
+  strength?: Record<number, number>;
+  lastUpdate?: Record<number, number>;
+};
 
 // Schema matches AddRelationParams from bitECSAgent.ts
 export const schema = z.object({
@@ -34,7 +35,8 @@ export async function execute(
   world: World,
   eid: number,
   parameters: z.infer<typeof schema>,
-  eventBus: EventBus
+  eventBus: EventBus,
+  runtime: SimulationRuntime
 ) {
   const agentName = Agent.name[eid];
   logger.agent(eid, `Adding relations between entities`, agentName);
@@ -46,35 +48,22 @@ export async function execute(
     metadata = {},
   } = parameters;
 
-  // Get the relation based on name
-  let relation;
-  switch (relationName.toLowerCase()) {
-    case "interaction":
-      relation = Interaction;
-      break;
-    case "occupiesroom":
-      relation = OccupiesRoom;
-      break;
-    case "stimulusinroom":
-      relation = StimulusInRoom;
-      break;
-    case "stimulussource":
-      relation = StimulusSource;
-      break;
-    default:
-      logger.warn(`Unknown relation: ${relationName}`);
-      return "Unknown relation type";
+  // Get relation from state manager
+  const relationComponent = runtime.getStateManager().getRelation(relationName);
+  if (!relationComponent) {
+    logger.warn(`Unknown relation: ${relationName}`);
+    return "Unknown relation type";
   }
 
   // Add relations
   for (const entityId of entities) {
     for (const subjectId of relationSubjects) {
-      const relationInstance = relation(subjectId);
-      addComponent(world, relationInstance, entityId);
+      const relationInstance = relationComponent.relation(subjectId);
+      addComponent(world, entityId, relationInstance);
 
       // Set metadata if available
       if (metadata && relationInstance.store) {
-        const store = relationInstance.store;
+        const store = relationInstance.store as RelationStore;
         if (metadata.type !== undefined && store.type) {
           store.type[entityId] = metadata.type;
         }

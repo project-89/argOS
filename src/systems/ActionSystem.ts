@@ -97,7 +97,12 @@ export const ActionSystem = createSystem<SystemConfig>(
       // Execute the action
       await runtime
         .getActionManager()
-        .executeAction(pendingAction.tool, eid, pendingAction.parameters);
+        .executeAction(
+          pendingAction.tool,
+          eid,
+          pendingAction.parameters,
+          runtime
+        );
 
       // Clear pending action and update last action time
       setComponent(world, eid, Action, {

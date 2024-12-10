@@ -62,32 +62,37 @@ async function processPerceptions(
   world: World
 ) {
   // Get recent perceptions from memory, ensuring we have valid perception objects
+  type Perception = { timestamp: number; content: string };
   const recentPerceptions = (Memory.perceptions[eid] || []).filter(
-    (p): p is { timestamp: number; content: string } =>
+    (p: any): p is Perception =>
       p &&
       typeof p === "object" &&
       "timestamp" in p &&
       "content" in p &&
+      typeof p.timestamp === "number" &&
       typeof p.content === "string"
   );
 
   // Deduplicate recent perceptions based on content and close timestamps
-  const deduplicatedPerceptions = recentPerceptions.reduce((acc, curr) => {
-    const isDuplicate = acc.some(
-      (p) =>
-        p.content === curr.content ||
-        (p.content.includes(curr.content) &&
-          Math.abs(p.timestamp - curr.timestamp) < 15000) // Increased to 15 seconds and improved matching
-    );
-    if (!isDuplicate) {
-      acc.push(curr);
-    }
-    return acc;
-  }, [] as typeof recentPerceptions);
+  const deduplicatedPerceptions = recentPerceptions.reduce(
+    (acc: Perception[], curr: Perception) => {
+      const isDuplicate = acc.some(
+        (p: Perception) =>
+          p.content === curr.content ||
+          (p.content.includes(curr.content) &&
+            Math.abs(p.timestamp - curr.timestamp) < 15000) // Increased to 15 seconds and improved matching
+      );
+      if (!isDuplicate) {
+        acc.push(curr);
+      }
+      return acc;
+    },
+    [] as typeof recentPerceptions
+  );
 
   const recentPerceptionsNarrative = deduplicatedPerceptions
     .slice(-10) // Keep last 10 unique perceptions
-    .map((p) => p.content)
+    .map((p: Perception) => p.content)
     .join("\n");
 
   // Filter out perceptions that are too close to recent ones
@@ -95,15 +100,28 @@ async function processPerceptions(
     // Skip filtering visual stimuli - always let them through
     if (newP.type === "VISUAL") return true;
 
-    const isDuplicate = deduplicatedPerceptions.some((p) => {
+    const isDuplicate = deduplicatedPerceptions.some((p: Perception) => {
       // Only exact matches for speech/action
       const contentMatch =
         typeof p.content === "string" &&
         typeof newP.content === "string" &&
         p.content === newP.content;
 
+      // Special handling for speech and actions
+      const isConversationalAction =
+        newP.type === "SPEECH" || newP.type === "ACTION";
+
+      // Allow alternating speech/action patterns even if content is similar
+      const isAlternatingPattern =
+        isConversationalAction &&
+        deduplicatedPerceptions.length > 0 &&
+        deduplicatedPerceptions[deduplicatedPerceptions.length - 1].type !==
+          newP.type;
+
       // Compare against perception's own timestamp
-      return contentMatch && Math.abs(p.timestamp - newP.timestamp) < 5000;
+      const isRecent = Math.abs(p.timestamp - newP.timestamp) < 15000;
+
+      return contentMatch && isRecent && !isAlternatingPattern;
     });
     return !isDuplicate;
   });
@@ -200,9 +218,19 @@ function updateAgentMemory(
         (existing) =>
           existing.type === exp.type &&
           existing.content === exp.content &&
-          Math.abs(existing.timestamp - exp.timestamp) < 1000 // Within 1 second
+          Math.abs(existing.timestamp - exp.timestamp) < 15000 // Within 15 seconds
       );
-      if (!isDuplicate) {
+
+      // Special handling for speech and actions
+      const isConversationalAction =
+        exp.type === "speech" || exp.type === "action";
+      const shouldAdd =
+        !isDuplicate ||
+        (isConversationalAction &&
+          uniqueExperiences.length > 0 &&
+          uniqueExperiences[uniqueExperiences.length - 1].type !== exp.type);
+
+      if (shouldAdd) {
         uniqueExperiences.push(exp);
         seenExperiences.add(key);
       }
@@ -311,7 +339,7 @@ async function extractPerceptionExperiences(
   const filteredPerceptions = perceptions.filter((p) => {
     const potentialContent = p.content?.toString() || "";
     return !currentExperiences.some(
-      (exp) =>
+      (exp: Experience) =>
         exp.content.includes(potentialContent) &&
         Math.abs(exp.timestamp - Date.now()) < 5000
     );
@@ -325,7 +353,7 @@ async function extractPerceptionExperiences(
     name: Agent.name[eid],
     role: Agent.role[eid],
     systemPrompt: Agent.systemPrompt[eid],
-    recentExperiences: currentExperiences.filter((exp) =>
+    recentExperiences: currentExperiences.filter((exp: Experience) =>
       ["thought", "speech", "action", "observation"].includes(exp.type)
     ) as Experience[],
     timestamp: Date.now(),

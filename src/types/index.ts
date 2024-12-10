@@ -1,6 +1,7 @@
 import { RoomType } from "../components/agent/Agent";
 import { World } from "bitecs";
 import { EventBus } from "../runtime/EventBus";
+import { SimulationRuntime } from "../runtime/SimulationRuntime";
 
 // Core Event Types - Used for event content classification
 export type EventType =
@@ -219,7 +220,8 @@ export interface ActionModule {
     world: World,
     eid: number,
     parameters: any,
-    eventBus: EventBus
+    eventBus: EventBus,
+    runtime: SimulationRuntime
   ) => Promise<void>;
 }
 

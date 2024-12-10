@@ -1,20 +1,39 @@
 import { World } from "bitecs";
-import { WorldState, AgentState, RoomState } from "../../types";
+import { WorldState, AgentState, RoomState, NetworkLink } from "../../types";
+import { z } from "zod";
+import { ComponentWithSchema } from "../../components/createComponent";
+import { RelationWithSchema } from "../../components/createRelation";
 
 export interface IStateManager {
   // Core state management
   getWorldState(): WorldState;
   getAgentState(eid: number): AgentState;
-  getRoomState(roomId: number): RoomState;
+  getRoomState(eid: number): RoomState;
+  getRelationships(): NetworkLink[];
 
-  // Global state and prompt management
-  registerPromptTemplate(key: string, template: string): void;
-  getPromptTemplate(key: string): string | undefined;
-  getGlobalState(): Record<string, any>;
-  updateGlobalState(updates: Record<string, any>): void;
+  // Component Registry
+  registerComponent(component: ComponentWithSchema<z.ZodObject<any>>): void;
+  getComponent(name: string): ComponentWithSchema<z.ZodObject<any>> | undefined;
+  getComponents(): Record<string, ComponentWithSchema<z.ZodObject<any>>>;
 
-  // State composition
-  composeState(localState: Record<string, any>): Record<string, any>;
+  // Relationship Registry
+  registerRelation(relation: RelationWithSchema<z.ZodObject<any>>): void;
+  getRelation(name: string): RelationWithSchema<z.ZodObject<any>> | undefined;
+  getRelations(): Record<string, RelationWithSchema<z.ZodObject<any>>>;
+
+  // Prompt Management
+  registerPrompt(key: string, template: string): void;
+  getPrompt(key: string): string | undefined;
+  composePrompts(keys: string[], variables?: Record<string, any>): string;
+  hasPrompt(key: string): boolean;
+
+  // Template variables
+  setTemplateVariable(key: string, value: any): void;
+  getTemplateVariable(key: string): any;
+  getTemplateVariables(): Record<string, any>;
+
+  // Cleanup
+  cleanup(): void;
 }
 
 // Constants for standard prompt template keys

@@ -138,7 +138,7 @@ export class ComponentSync {
           // Validate action against available tools
           const tools = Action.availableTools[eid] || [];
           const isValidTool = tools.some(
-            (t) => t.name === params.pendingAction.tool
+            (t: { name: string }) => t.name === params.pendingAction.tool
           );
           if (!isValidTool) {
             console.warn(

@@ -18,12 +18,17 @@ export class ActionManager implements IActionManager {
     return Object.values(this.actions).map((a) => a.action);
   }
 
-  async executeAction(tool: string, eid: number, parameters: any) {
+  async executeAction(
+    tool: string,
+    eid: number,
+    parameters: any,
+    runtime: SimulationRuntime
+  ) {
     const action = this.actions[tool];
     if (!action) {
       throw new Error(`Unknown action: ${tool}`);
     }
-    await action.execute(this.world, eid, parameters, this.eventBus);
+    await action.execute(this.world, eid, parameters, this.eventBus, runtime);
   }
 
   // Action Registration

@@ -49,7 +49,7 @@ export async function execute(
 
     // Add component to each entity
     for (const entityId of entities) {
-      addComponent(world, component, entityId);
+      addComponent(world, entityId, component);
     }
   }
 

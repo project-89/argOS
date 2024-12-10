@@ -4,6 +4,7 @@ import { Memory, Room, Agent } from "../components/agent/Agent";
 import { logger } from "../utils/logger";
 import { getAgentRoom } from "../utils/queries";
 import { EventBus } from "../runtime/EventBus";
+import { Experience } from "../llm/agent-llm";
 
 export const schema = z.object({
   message: z.string(),
@@ -87,7 +88,7 @@ export async function execute(
 
   // Check for duplicate speech in last 15 seconds
   const isDuplicate = recentExperiences.some(
-    (exp) =>
+    (exp: { type: string; content: string; timestamp: number }) =>
       exp.type === "speech" &&
       exp.content === experience &&
       Date.now() - exp.timestamp < 15000

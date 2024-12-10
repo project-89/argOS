@@ -1,4 +1,5 @@
 import { ActionModule } from "../../types";
+import { SimulationRuntime } from "../SimulationRuntime";
 
 export interface IActionManager {
   // Action Management
@@ -9,7 +10,12 @@ export interface IActionManager {
     schema: any;
   }>;
 
-  executeAction(tool: string, eid: number, parameters: any): Promise<void>;
+  executeAction(
+    tool: string,
+    eid: number,
+    parameters: any,
+    runtime: SimulationRuntime
+  ): Promise<void>;
 
   // Action Registration
   registerAction(name: string, action: ActionModule): void;
