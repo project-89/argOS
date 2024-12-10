@@ -64,6 +64,21 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   components: [Room, Agent, Memory, Stimulus, Perception],
 };
 
+// Modify the types
+type LifecycleHook = (
+  world: World,
+  runtime: SimulationRuntime
+) => Promise<void>;
+
+interface LifecycleHookConfig {
+  hook: LifecycleHook;
+  once?: boolean;
+}
+
+interface LifecycleSubscriptions {
+  beforeSystems: LifecycleHookConfig[];
+}
+
 export class SimulationRuntime extends EventEmitter {
   public world: World;
   private systems: ((world: World) => Promise<World>)[];
@@ -80,6 +95,11 @@ export class SimulationRuntime extends EventEmitter {
   // Add interaction tracking
   private recentInteractions = new Map<string, string>(); // key: "agent1-agent2", value: timestamp
   private readonly INTERACTION_TIMEOUT = 5000; // 5 seconds
+
+  // Modify property to store hook configs
+  private lifecycleSubscriptions: LifecycleSubscriptions = {
+    beforeSystems: [],
+  };
 
   constructor(world: World, config: Partial<RuntimeConfig> = {}) {
     super();
@@ -162,6 +182,10 @@ export class SimulationRuntime extends EventEmitter {
     this.componentSync.cleanup();
     this.eventManager.cleanup();
     this.actionManager.cleanup();
+    // Clear all lifecycle subscriptions
+    Object.keys(this.lifecycleSubscriptions).forEach((phase) => {
+      this.lifecycleSubscriptions[phase as keyof LifecycleSubscriptions] = [];
+    });
   }
 
   // Interaction tracking
@@ -178,12 +202,71 @@ export class SimulationRuntime extends EventEmitter {
     this.recentInteractions.set(key, Date.now().toString());
   }
 
+  // Modify subscription method to accept once option
+  public subscribeToLifecycle(
+    phase: keyof LifecycleSubscriptions,
+    hook: LifecycleHook,
+    options: { once?: boolean } = {}
+  ) {
+    const hookConfig = {
+      hook,
+      once: options.once ?? false,
+    };
+
+    this.lifecycleSubscriptions[phase].push(hookConfig);
+    logger.system(
+      `Lifecycle hook subscribed to ${phase}${options.once ? " (once)" : ""}`
+    );
+
+    return () => this.unsubscribeFromLifecycle(phase, hook);
+  }
+
+  private unsubscribeFromLifecycle(
+    phase: keyof LifecycleSubscriptions,
+    hook: LifecycleHook
+  ) {
+    const hooks = this.lifecycleSubscriptions[phase];
+    const index = hooks.findIndex((config) => config.hook === hook);
+    if (index > -1) {
+      hooks.splice(index, 1);
+      logger.system(`Lifecycle hook unsubscribed from ${phase}`);
+    }
+  }
+
+  // Modify execute method to handle once hooks
+  private async executeLifecycleHooks(phase: keyof LifecycleSubscriptions) {
+    const hooks = this.lifecycleSubscriptions[phase];
+    const remainingHooks: LifecycleHookConfig[] = [];
+
+    for (const hookConfig of hooks) {
+      try {
+        await hookConfig.hook(this.world, this);
+        // Only keep hooks that aren't 'once' or haven't run yet
+        if (!hookConfig.once) {
+          remainingHooks.push(hookConfig);
+        }
+      } catch (error) {
+        logger.error(`Error in ${phase} lifecycle hook: ${error}`);
+        // Keep the hook even if it errors, unless it's a 'once' hook
+        if (!hookConfig.once) {
+          remainingHooks.push(hookConfig);
+        }
+      }
+    }
+
+    // Update the hooks list with remaining hooks
+    this.lifecycleSubscriptions[phase] = remainingHooks;
+  }
+
   // Private helper methods
   private async run() {
     while (this.isRunning) {
       const startTime = Date.now();
 
       try {
+        // Execute beforeSystems hooks
+        await this.executeLifecycleHooks("beforeSystems");
+
         // Run all systems
         for (const system of this.systems) {
           this.world = await system(this.world);

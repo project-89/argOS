@@ -99,6 +99,16 @@ export class RoomManager implements IRoomManager {
     if (hasComponent(this.world, agentId, Appearance)) {
       Appearance.currentAction[agentId] = "entered the room";
       Appearance.lastUpdate[agentId] = Date.now();
+
+      this.runtime.subscribeToLifecycle(
+        "beforeSystems",
+        async () => {
+          // Update agent's appearance to be present after the room transition
+          Appearance.currentAction[agentId] = "present";
+          Appearance.lastUpdate[agentId] = Date.now();
+        },
+        { once: true }
+      );
     }
 
     // Emit room update for the new room

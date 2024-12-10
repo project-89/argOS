@@ -37,6 +37,15 @@ export const MemorySchema = z.object({
     z.object({
       timestamp: z.number(),
       content: z.string(),
+      category: z.enum(["speech", "action", "observation", "thought"]),
+      context: z
+        .object({
+          speaker: z.string().optional(),
+          target: z.string().optional(),
+          location: z.string().optional(),
+          relatedTo: z.string().optional(),
+        })
+        .optional(),
     })
   ),
   experiences: z.array(
@@ -44,8 +53,23 @@ export const MemorySchema = z.object({
       type: z.string(),
       content: z.string(),
       timestamp: z.number(),
+      context: z
+        .object({
+          category: z.string(),
+          relatedExperiences: z.array(z.number()),
+          conversationState: z.any(),
+        })
+        .optional(),
     })
   ),
+  conversationState: z.object({
+    lastSpeaker: z.string(),
+    lastSpeechTime: z.number(),
+    greetingMade: z.boolean(),
+    unansweredQuestions: z.number(),
+    engagementLevel: z.enum(["none", "minimal", "active"]),
+    attemptsSinceResponse: z.number(),
+  }),
 });
 
 export const MemoryComponent = createComponent("Memory", MemorySchema, {
@@ -117,6 +141,14 @@ export const ActionSchema = z.object({
     })
     .nullable(),
   lastActionTime: z.number(),
+  lastActionResult: z
+    .object({
+      action: z.string(),
+      success: z.boolean(),
+      result: z.string(),
+      timestamp: z.number(),
+    })
+    .nullable(),
   availableTools: z.array(
     z.object({
       name: z.string(),
@@ -133,6 +165,12 @@ export const ActionComponent = createComponent("Action", ActionSchema, {
     parameters: any;
   } | null)[],
   lastActionTime: [] as number[],
+  lastActionResult: [] as ({
+    action: string;
+    success: boolean;
+    result: string;
+    timestamp: number;
+  } | null)[],
   availableTools: [] as Array<{
     name: string;
     description: string;

@@ -5,6 +5,8 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { EXTRACT_EXPERIENCES } from "../templates/process-stimulus";
 import { llmLogger } from "../utils/llm-logger";
 import { logger } from "../utils/logger";
+import { ActionResult } from "../systems/ThinkingSystem";
+import { GENERATE_THOUGHT_SIMPLE } from "../templates/generate-thought";
 
 export interface ThoughtResponse {
   thought: string;
@@ -39,6 +41,14 @@ export interface AgentState {
     content: string;
     timestamp: number;
   }>;
+  conversationState: {
+    lastSpeaker: string;
+    lastSpeechTime: number;
+    greetingMade: boolean;
+    unansweredQuestions: number;
+    engagementLevel: "none" | "minimal" | "active";
+    attemptsSinceResponse: number;
+  };
   availableTools: Array<{
     name: string;
     description: string;
@@ -100,7 +110,7 @@ export async function generateThought(
       .join("\n");
 
     // Compose the prompt with formatted data
-    const prompt = composeFromTemplate(GENERATE_THOUGHT, {
+    const prompt = composeFromTemplate(GENERATE_THOUGHT_SIMPLE, {
       ...state,
       thoughtHistory: state.thoughtHistory.join("\n"),
       perceptions: {
@@ -182,10 +192,22 @@ export interface ProcessStimulusState {
   role: string;
   systemPrompt: string;
   recentPerceptions: string;
+  timeSinceLastPerception: number;
+  currentTimestamp: number;
+  lastAction?: ActionResult;
+  conversationState: {
+    lastSpeaker: string;
+    lastSpeechTime: number;
+    greetingMade: boolean;
+    unansweredQuestions: number;
+    engagementLevel: "none" | "minimal" | "active";
+    attemptsSinceResponse: number;
+  };
   stimulus: Array<{
     type: string;
     source: number;
     data: any;
+    timestamp: number;
   }>;
 }
 

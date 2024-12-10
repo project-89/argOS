@@ -5,6 +5,28 @@ import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { getRooms, getRoomOccupants, getActiveAgents } from "../utils/queries";
 
+// Queue to hold pending stimuli between system ticks
+type PendingStimulus = {
+  type: string;
+  sourceEntity: number;
+  source: string;
+  content: any;
+  roomId: string;
+  timestamp: number;
+};
+
+const pendingStimuliByRoom = new Map<string, PendingStimulus[]>();
+
+// Helper to queue a stimulus for next tick
+export function queueStimulus(stimulus: PendingStimulus) {
+  const roomStimuli = pendingStimuliByRoom.get(stimulus.roomId) || [];
+  roomStimuli.push(stimulus);
+  pendingStimuliByRoom.set(stimulus.roomId, roomStimuli);
+  logger.debug(
+    `Queued stimulus for room ${stimulus.roomId}: ${JSON.stringify(stimulus)}`
+  );
+}
+
 // System for managing rooms and generating stimuli about occupants
 export const RoomSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
@@ -24,9 +46,58 @@ export const RoomSystem = createSystem<SystemConfig>(
     // Process each room
     for (const roomId of rooms) {
       const occupants = getRoomOccupants(world, roomId);
+      const roomStringId = Room.id[roomId] || String(roomId);
 
       // Skip empty rooms
       if (occupants.length === 0) continue;
+
+      // Process any pending stimuli for this room
+      const pendingStimuli = pendingStimuliByRoom.get(roomStringId) || [];
+      while (pendingStimuli.length > 0) {
+        const stimulus = pendingStimuli.shift()!;
+        const stimulusEntity = addEntity(world);
+
+        // Handle content based on type
+        let contentStr = "";
+        if (stimulus.type === "AUDITORY") {
+          // For auditory stimuli, we expect a structured content object
+          const auditoryContent =
+            typeof stimulus.content === "string"
+              ? { message: stimulus.content, tone: "neutral", type: "speech" }
+              : stimulus.content;
+
+          contentStr = JSON.stringify(auditoryContent);
+        } else {
+          // Other types might be objects that need stringifying
+          contentStr =
+            typeof stimulus.content === "string"
+              ? stimulus.content
+              : JSON.stringify(stimulus.content);
+        }
+
+        addComponent(
+          world,
+          stimulusEntity,
+          set(Stimulus, {
+            type: stimulus.type,
+            sourceEntity: stimulus.sourceEntity,
+            source: stimulus.source,
+            timestamp: stimulus.timestamp,
+            content: contentStr,
+            roomId: stimulus.roomId,
+          })
+        );
+
+        logger.debug(
+          `Created stimulus entity for queued stimulus: ${JSON.stringify({
+            ...stimulus,
+            content: contentStr,
+          })}`
+        );
+      }
+
+      // Clear processed stimuli
+      pendingStimuliByRoom.set(roomStringId, []);
 
       // Generate visual stimuli for each occupant's appearance
       for (const agentId of occupants) {

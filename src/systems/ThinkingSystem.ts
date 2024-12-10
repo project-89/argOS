@@ -59,86 +59,87 @@ function gatherRoomPerceptions(world: World, eid: number, roomId: string) {
 async function processPerceptions(
   eid: number,
   perceptions: any[],
-  world: World
+  world: World,
+  runtime: SimulationRuntime
 ) {
-  // Get recent perceptions from memory, ensuring we have valid perception objects
-  type Perception = { timestamp: number; content: string };
+  // Get recent perceptions with timing info
   const recentPerceptions = (Memory.perceptions[eid] || []).filter(
-    (p: any): p is Perception =>
+    (p: {
+      timestamp: number;
+      content: string;
+    }): p is { timestamp: number; content: string } =>
       p &&
       typeof p === "object" &&
       "timestamp" in p &&
       "content" in p &&
-      typeof p.timestamp === "number" &&
       typeof p.content === "string"
   );
 
-  // Deduplicate recent perceptions based on content and close timestamps
-  const deduplicatedPerceptions = recentPerceptions.reduce(
-    (acc: Perception[], curr: Perception) => {
-      const isDuplicate = acc.some(
-        (p: Perception) =>
-          p.content === curr.content ||
-          (p.content.includes(curr.content) &&
-            Math.abs(p.timestamp - curr.timestamp) < 15000) // Increased to 15 seconds and improved matching
-      );
-      if (!isDuplicate) {
-        acc.push(curr);
-      }
-      return acc;
-    },
-    [] as typeof recentPerceptions
-  );
+  // Calculate time since last perception
+  const lastPerceptionTime =
+    recentPerceptions.length > 0
+      ? recentPerceptions[recentPerceptions.length - 1].timestamp
+      : Date.now();
+  const timeSinceLastPerception = Date.now() - lastPerceptionTime;
 
-  const recentPerceptionsNarrative = deduplicatedPerceptions
-    .slice(-10) // Keep last 10 unique perceptions
-    .map((p: Perception) => p.content)
+  // Create narrative with timing information
+  const recentPerceptionsNarrative = recentPerceptions
+    .slice(-30)
+    .map((p: typeof recentPerceptions) => {
+      const timeAgo = Date.now() - p.timestamp;
+      // Add categories and better formatting
+      return `[${new Date(
+        p.timestamp
+      ).toLocaleTimeString()}] <${getExperienceType(p)}> ${p.content}`;
+    })
     .join("\n");
 
-  // Filter out perceptions that are too close to recent ones
-  const filteredNewPerceptions = perceptions.filter((newP) => {
-    // Skip filtering visual stimuli - always let them through
-    if (newP.type === "VISUAL") return true;
+  // Get last action result if any
+  const lastActionResult = Action.lastActionResult?.[eid];
+  const lastActionTime = Action.lastActionTime?.[eid];
 
-    const isDuplicate = deduplicatedPerceptions.some((p: Perception) => {
-      // Only exact matches for speech/action
-      const contentMatch =
-        typeof p.content === "string" &&
-        typeof newP.content === "string" &&
-        p.content === newP.content;
+  // Add action result to narrative if recent
+  let actionResultNarrative = "";
+  if (lastActionResult && Date.now() - lastActionTime < 5000) {
+    actionResultNarrative = `\nLast Action Result: ${lastActionResult.result}`;
+  }
 
-      // Special handling for speech and actions
-      const isConversationalAction =
-        newP.type === "SPEECH" || newP.type === "ACTION";
-
-      // Allow alternating speech/action patterns even if content is similar
-      const isAlternatingPattern =
-        isConversationalAction &&
-        deduplicatedPerceptions.length > 0 &&
-        deduplicatedPerceptions[deduplicatedPerceptions.length - 1].type !==
-          newP.type;
-
-      // Compare against perception's own timestamp
-      const isRecent = Math.abs(p.timestamp - newP.timestamp) < 15000;
-
-      return contentMatch && isRecent && !isAlternatingPattern;
-    });
-    return !isDuplicate;
-  });
+  // Get current experiences
+  const currentExperiences = Memory.experiences[eid] || [];
 
   const agentState: ProcessStimulusState = {
     name: Agent.name[eid],
     role: Agent.role[eid],
     systemPrompt: Agent.systemPrompt[eid],
-    recentPerceptions: recentPerceptionsNarrative,
-    stimulus: filteredNewPerceptions.map((p) => ({
+    recentPerceptions: recentPerceptionsNarrative + actionResultNarrative,
+    timeSinceLastPerception,
+    currentTimestamp: Date.now(),
+    lastAction: lastActionResult,
+    conversationState: {
+      lastSpeaker: findLastSpeaker(currentExperiences),
+      lastSpeechTime: findLastSpeechTime(currentExperiences),
+      greetingMade: hasGreeted(currentExperiences),
+      unansweredQuestions: countUnansweredQuestions(currentExperiences),
+      engagementLevel: calculateEngagementLevel(currentExperiences),
+      attemptsSinceResponse: countAttemptsSinceResponse(currentExperiences),
+    },
+    stimulus: perceptions.map((p) => ({
       type: p.type,
       source: p.sourceEntity,
       data: p.content,
+      timestamp: p.timestamp || Date.now(),
     })),
   };
 
   return await processStimulus(agentState);
+}
+
+// Add helper to categorize experiences
+function getExperienceType(perception: any) {
+  if (perception.content.includes("said:")) return "SPEECH";
+  if (perception.content.includes("thought about:")) return "THOUGHT";
+  if (perception.content.includes("waited for:")) return "ACTION";
+  return "OBSERVATION";
 }
 
 // Stage 3: Generate thought based on state
@@ -147,7 +148,7 @@ async function generateAgentThought(
   eid: number,
   perceptions: string,
   currentPerceptions: any[],
-  runtime: any
+  runtime: SimulationRuntime
 ) {
   logger.debug(`Generating thought for ${Agent.name[eid]}`);
 
@@ -166,6 +167,18 @@ async function generateAgentThought(
     },
     experiences: Memory.experiences[eid] || [],
     availableTools: runtime.getActionManager().getAvailableTools(),
+    conversationState: {
+      lastSpeaker: findLastSpeaker(Memory.experiences[eid] || []),
+      lastSpeechTime: findLastSpeechTime(Memory.experiences[eid] || []),
+      greetingMade: hasGreeted(Memory.experiences[eid] || []),
+      unansweredQuestions: countUnansweredQuestions(
+        Memory.experiences[eid] || []
+      ),
+      engagementLevel: calculateEngagementLevel(Memory.experiences[eid] || []),
+      attemptsSinceResponse: countAttemptsSinceResponse(
+        Memory.experiences[eid] || []
+      ),
+    },
   };
 
   const thought = await generateThought(agentState);
@@ -204,8 +217,8 @@ function updateAgentMemory(
     updatedThoughts.push(thought.thought);
   }
 
-  // Keep up to 100 recent thoughts instead of just 10
-  const recentThoughts = updatedThoughts.slice(-100);
+  // Keep up to 150 recent thoughts instead of just 10
+  const recentThoughts = updatedThoughts.slice(-150);
 
   // Deduplicate experiences by content and timestamp, preserving chronological order
   const uniqueExperiences = [...currentExperiences];
@@ -218,19 +231,9 @@ function updateAgentMemory(
         (existing) =>
           existing.type === exp.type &&
           existing.content === exp.content &&
-          Math.abs(existing.timestamp - exp.timestamp) < 15000 // Within 15 seconds
+          Math.abs(existing.timestamp - exp.timestamp) < 1000 // Within 1 second
       );
-
-      // Special handling for speech and actions
-      const isConversationalAction =
-        exp.type === "speech" || exp.type === "action";
-      const shouldAdd =
-        !isDuplicate ||
-        (isConversationalAction &&
-          uniqueExperiences.length > 0 &&
-          uniqueExperiences[uniqueExperiences.length - 1].type !== exp.type);
-
-      if (shouldAdd) {
+      if (!isDuplicate) {
         uniqueExperiences.push(exp);
         seenExperiences.add(key);
       }
@@ -252,8 +255,18 @@ function updateAgentMemory(
         ]
       : currentPerceptionsList;
 
-  // Keep up to 50 recent perceptions
-  const recentPerceptions = updatedPerceptions.slice(-50);
+  // Keep up to 75 recent perceptions
+  const recentPerceptions = updatedPerceptions.slice(-75);
+
+  // Track conversation state
+  const conversationState: ConversationState = {
+    lastSpeaker: findLastSpeaker(currentExperiences),
+    lastSpeechTime: findLastSpeechTime(currentExperiences),
+    greetingMade: hasGreeted(currentExperiences),
+    unansweredQuestions: countUnansweredQuestions(currentExperiences),
+    engagementLevel: calculateEngagementLevel(currentExperiences),
+    attemptsSinceResponse: countAttemptsSinceResponse(currentExperiences),
+  };
 
   setComponent(world, eid, Memory, {
     lastThought: thought.thought,
@@ -261,6 +274,7 @@ function updateAgentMemory(
     perceptions: recentPerceptions,
     experiences: uniqueExperiences,
     lastUpdate: Date.now(),
+    conversationState,
   });
 }
 
@@ -272,9 +286,32 @@ function handleAgentAction(world: World, eid: number, thought: any) {
       `I decided to take the action: ${thought.action.tool}`,
       Agent.name[eid]
     );
+
+    // Create action result
+    const actionResult: ActionResult = {
+      action: thought.action.tool,
+      success: true, // We can make this more sophisticated
+      result: `Performed ${thought.action.tool}: ${
+        thought.action.parameters.message || thought.action.parameters.reason
+      }`,
+      timestamp: Date.now(),
+    };
+
+    // Add to experiences
+    const actionExperience: Experience = {
+      type: "action",
+      content: actionResult.result,
+      timestamp: actionResult.timestamp,
+    };
+
+    // Update agent memory
+    const currentExperiences = Memory.experiences[eid] || [];
+    currentExperiences.push(actionExperience);
+
     setComponent(world, eid, Action, {
       pendingAction: thought.action,
-      lastActionTime: Action.lastActionTime[eid],
+      lastActionTime: Date.now(),
+      lastActionResult: actionResult,
       availableTools: Action.availableTools[eid],
     });
   }
@@ -353,7 +390,7 @@ async function extractPerceptionExperiences(
     name: Agent.name[eid],
     role: Agent.role[eid],
     systemPrompt: Agent.systemPrompt[eid],
-    recentExperiences: currentExperiences.filter((exp: Experience) =>
+    recentExperiences: currentExperiences.filter((exp: any) =>
       ["thought", "speech", "action", "observation"].includes(exp.type)
     ) as Experience[],
     timestamp: Date.now(),
@@ -376,6 +413,79 @@ async function extractPerceptionExperiences(
   });
 
   return experiences;
+}
+
+// Add new type for action results
+export interface ActionResult {
+  action: string;
+  success: boolean;
+  result: string;
+  timestamp: number;
+  context?: {
+    previousAction?: string;
+    responseToAction?: string;
+    conversationState?: string;
+  };
+}
+
+// Add to agent memory
+const actionResults: ActionResult[] = [];
+
+interface ConversationState {
+  lastSpeaker: string;
+  lastSpeechTime: number;
+  greetingMade: boolean;
+  unansweredQuestions: number;
+  engagementLevel: "none" | "minimal" | "active";
+  attemptsSinceResponse: number;
+}
+
+function findLastSpeaker(experiences: Experience[]): string {
+  const lastSpeech = [...experiences]
+    .reverse()
+    .find((exp) => exp.type === "speech");
+  return lastSpeech?.content.split("said:")[0].trim() || "none";
+}
+
+function findLastSpeechTime(experiences: Experience[]): number {
+  const lastSpeech = [...experiences]
+    .reverse()
+    .find((exp) => exp.type === "speech");
+  return lastSpeech?.timestamp || 0;
+}
+
+function hasGreeted(experiences: Experience[]): boolean {
+  return experiences.some(
+    (exp) =>
+      exp.type === "speech" && exp.content.toLowerCase().includes("greet")
+  );
+}
+
+function countUnansweredQuestions(experiences: Experience[]): number {
+  return experiences.filter(
+    (exp) => exp.type === "speech" && exp.content.includes("?")
+  ).length;
+}
+
+function calculateEngagementLevel(
+  experiences: Experience[]
+): "none" | "minimal" | "active" {
+  const recentExperiences = experiences.slice(-10);
+  const speechCount = recentExperiences.filter(
+    (exp) => exp.type === "speech"
+  ).length;
+  if (speechCount > 5) return "active";
+  if (speechCount > 0) return "minimal";
+  return "none";
+}
+
+function countAttemptsSinceResponse(experiences: Experience[]): number {
+  let count = 0;
+  for (const exp of [...experiences].reverse()) {
+    if (exp.type === "speech" && !exp.content.includes("I said:")) break;
+    if (exp.type === "speech" && exp.content.includes("I said:")) count++;
+  }
+  return count;
 }
 
 export const ThinkingSystem = createSystem<SystemConfig>(
@@ -403,7 +513,8 @@ export const ThinkingSystem = createSystem<SystemConfig>(
       const perceptions = await processPerceptions(
         eid,
         currentPerceptions,
-        world
+        world,
+        runtime
       );
 
       // Emit experience events
@@ -438,15 +549,6 @@ export const ThinkingSystem = createSystem<SystemConfig>(
           thought.appearance,
           runtime
         );
-      }
-
-      // Initialize available tools if not set
-      if (!Action.availableTools[eid]) {
-        setComponent(world, eid, Action, {
-          availableTools: runtime.getActionManager().getAvailableTools(),
-          pendingAction: Action.pendingAction[eid],
-          lastActionTime: Action.lastActionTime[eid],
-        });
       }
     }
 

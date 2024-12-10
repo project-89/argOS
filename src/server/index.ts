@@ -15,6 +15,7 @@ import { World, removeEntity } from "bitecs";
 import { logger } from "../utils/logger";
 import { createUser, moveUserToRoom } from "../utils/agent-factory";
 import { findRoomByStringId } from "../utils/queries";
+import { queueStimulus } from "../systems/RoomSystem";
 
 // Track user connections with Map
 const connectionUsers = new Map<
@@ -289,22 +290,34 @@ wss.on("connection", (ws: WS) => {
         const { message: chatMessage, target: roomId } = chatData;
 
         if (roomId) {
-          // Create auditory stimulus from the user entity
-          createAuditoryStimulus(runtime.world, {
+          // Queue auditory stimulus instead of speech
+          queueStimulus({
+            type: "AUDITORY",
             sourceEntity: userConn.entity,
+            source: "USER",
+            content: {
+              message: chatMessage,
+              tone: "neutral",
+              type: "speech",
+            },
             roomId,
-            message: chatMessage,
-            tone: "neutral",
+            timestamp: Date.now(),
           });
         } else {
           // Broadcast to all rooms
           const rooms = runtime.getStateManager().getWorldState().rooms;
           rooms.forEach((room) => {
-            createAuditoryStimulus(runtime.world, {
+            queueStimulus({
+              type: "AUDITORY",
               sourceEntity: userConn.entity,
+              source: "USER",
+              content: {
+                message: chatMessage,
+                tone: "neutral",
+                type: "speech",
+              },
               roomId: room.id,
-              message: chatMessage,
-              tone: "neutral",
+              timestamp: Date.now(),
             });
           });
         }
