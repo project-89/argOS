@@ -217,49 +217,50 @@ DO NOT:
 Write in first person, present tense, focusing ONLY on what you perceive.
 Example: "I perceive a user in the room. They spoke 12 seconds ago. The room is quiet now."`;
 
-export const EXTRACT_EXPERIENCES = `You are processing stimuli into experiences for {name}, {role}.
-Current timestamp: {timestamp}
-Recent experiences: {recentExperiences}
+export const EXTRACT_EXPERIENCES = `
+You are an AI agent processing your own experiences. Extract meaningful experiences from your recent context and new stimuli.
 
-EXPERIENCE EXTRACTION RULES:
+Recent Context:
+{recentExperiences}
 
-1. Speech & Dialogue:
-   * Record EXACT quotes with speaker
-   * Note conversation context
-   * Preserve emotional tone
-   * Track questions/answers
-
-2. Actions & Events:
-   * Who performed the action
-   * What exactly happened
-   * Impact on environment
-   * Relevance to agent
-
-3. Observations:
-   * Environmental changes
-   * Social dynamics
-   * Mood/atmosphere
-   * Important details
-
-4. Experience Categories:
-   "speech": Verbal communication
-   "action": Physical actions/events
-   "observation": Environmental/social notes
-   "thought": Internal realizations
-
-FORMAT REQUIREMENTS:
-Each experience MUST be a complete JSON object:
-{
-  "type": "speech" | "action" | "observation" | "thought",
-  "content": "detailed description of what happened",
-  "timestamp": number
-}
-
-Process these stimuli into experiences:
+New Stimuli:
 {stimulus}
 
-Return ONLY valid JSON experience objects, one per line.
-Focus on capturing meaningful and relevant experiences.
-Preserve exact quotes and specific details.
-Generate as many experiences as you need to.  Be sure to have some which are your observations.
-Use timestamps to maintain chronological order.`;
+Experience Types:
+1. "speech" - Record communication you witnessed or participated in
+   - When you spoke: "I said: 'Hello everyone'"
+   - When others spoke: "Bob said: 'Nice to meet you'"
+
+2. "action" - Record actions you observed or performed
+   - Your actions: "I moved to the corner of the room"
+   - Others' actions: "I saw Bob enter the room"
+   - Environmental changes: "I noticed the lights turn off"
+
+3. "observation" - Record what you directly perceived
+   - Room state: "I can see three agents in the room"
+   - Environmental details: "I feel the room temperature is now 72°F"
+   - Agent states: "I observe Alice appears to be waiting"
+
+4. "thought" - Record your immediate reactions and realizations
+   - Your reactions: "I realized the conversation had become more active"
+   - Your insights: "I noticed a pattern in how agents take turns speaking"
+
+Return a JSON array of your experiences:
+{
+  "experiences": [
+    {
+      "type": "speech" | "action" | "observation" | "thought",
+      "content": "Clear first-person description of what occurred",
+      "timestamp": {timestamp}
+    }
+  ]
+}
+
+Guidelines:
+1. Always use first-person perspective ("I saw", "I heard", "I noticed")
+2. Record only things you actually experienced
+3. Be specific and concrete about what you perceived
+4. Focus on your direct observations and experiences
+5. Keep thoughts focused on your immediate reactions to events
+6. Do not repeat experiences which are already in your recent experiences
+`;

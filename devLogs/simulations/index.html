@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Oneirocom Simulation Logs</title>
+    <link href="terminal.css" rel="stylesheet" />
+    <script src="https://unpkg.com/vue@3"></script>
+  </head>
+  <body>
+    <div id="app">
+      <div class="terminal-container">
+        <div class="terminal-header">
+          <h1>ONEIROCOM SIMULATION LOGS</h1>
+          <div class="terminal-status">
+            <span>STATUS: ONLINE</span>
+            <span class="timestamp">{{ currentTime }}</span>
+          </div>
+        </div>
+
+        <div class="simulation-grid">
+          <div v-for="log in logs" :key="log.id" class="simulation-card">
+            <div class="card-header">
+              <h2>{{ formatDate(log.timestamp) }}</h2>
+              <span class="sim-id">SIM_ID: {{ log.id }}</span>
+            </div>
+
+            <div class="terminal-stats">
+              <span>
+                <span class="stat-label">EVENTS:</span>
+                {{ log.metadata.eventCount }}
+              </span>
+              <span>
+                <span class="stat-label">DURATION:</span>
+                {{ (log.metadata.duration / 1000).toFixed(2) }}s
+              </span>
+              <span>
+                <span class="stat-label">AGENTS:</span>
+                {{ log.metadata.agents.length }}
+              </span>
+              <span>
+                <span class="stat-label">ROOMS:</span>
+                {{ log.metadata.rooms.length }}
+              </span>
+            </div>
+
+            <div class="terminal-links">
+              <a :href="'sims/' + log.id + '/index.html'" class="terminal-link"
+                >VIEW DETAILS</a
+              >
+              <a :href="'sims/' + log.id + '/data.json'" class="terminal-link"
+                >RAW DATA</a
+              >
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      Vue.createApp({
+        data() {
+          return {
+            logs: [],
+            currentTime: new Date().toLocaleTimeString(),
+          };
+        },
+        methods: {
+          formatDate(timestamp) {
+            return new Date(timestamp).toLocaleString();
+          },
+          async loadLogs() {
+            try {
+              const response = await fetch("sim_1734030766995.json");
+              const data = await response.json();
+              this.logs = [data];
+
+              // Load other simulation logs
+              const otherLogs = [
+                "sim_1733986170829.json",
+                "sim_1733957886524.json",
+                "sim_1733948554510.json",
+                "sim_1733948043727.json",
+              ];
+
+              for (const logFile of otherLogs) {
+                try {
+                  const resp = await fetch(logFile);
+                  const logData = await resp.json();
+                  this.logs.push(logData);
+                } catch (e) {
+                  console.error("Error loading log:", logFile, e);
+                }
+              }
+
+              // Sort by timestamp descending
+              this.logs.sort((a, b) => b.timestamp - a.timestamp);
+            } catch (e) {
+              console.error("Error loading logs:", e);
+            }
+          },
+          updateTime() {
+            this.currentTime = new Date().toLocaleTimeString();
+          },
+        },
+        mounted() {
+          this.loadLogs();
+          setInterval(this.updateTime, 1000);
+        },
+      }).mount("#app");
+    </script>
+  </body>
+</html>

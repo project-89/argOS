@@ -1,8 +1,13 @@
 To do
 
-[] - Handle appearabnce and other things with relationships
-[] - get realtime appearance data showin gup
-[] - Handle alternation between different agents better
+[] - Clean up action system
+[] - Figure out agenta across multiple rooms
+[] - Track agent...?
+[] - Global simulation time
+[] - Time control
+[x] - Handle appearabnce and other things with relationships
+[x] - get realtime appearance data showin gup
+[x] - Handle alternation between different agents better
 [] - Agents can take physical actions with their bodies, perceived by other agents
 [] - Add goals and planning to agents
 [] - Agents work together to achieve goals

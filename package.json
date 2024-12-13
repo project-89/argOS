@@ -8,9 +8,9 @@
   },
   "scripts": {
     "start": "tsx src/examples/basic-conversation.ts",
-    "dev": "concurrently \"npm run dev:server\" \"vite src/client\"",
+    "dev": "concurrently \"npm run dev:debug\" \"vite src/client\"",
     "dev:server": "tsx watch src/server/index.ts",
-    "debug": "tsx --inspect src/server/index.ts",
+    "dev:debug": "tsx watch --inspect src/server/index.ts",
     "debug:brk": "tsx --inspect-brk src/server/index.ts",
     "build": "vite build src/client",
     "test": "jest"

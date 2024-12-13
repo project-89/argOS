@@ -1,9 +1,17 @@
 import { World } from "../types/bitecs";
 import { query, setComponent, addEntity, addComponent } from "bitecs";
-import { Agent, Action, Room, OccupiesRoom } from "../components/agent/Agent";
+import {
+  Agent,
+  Action,
+  Room,
+  OccupiesRoom,
+  Memory,
+} from "../components/agent/Agent";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { getAgentRoom } from "../utils/queries";
+import { ActionResult } from "../types/actions";
+import { Experience } from "../llm/agent-llm";
 
 // Helper to get or create private room for agent
 async function getOrCreatePrivateRoom(world: World, eid: number, runtime: any) {
@@ -32,12 +40,6 @@ async function getOrCreatePrivateRoom(world: World, eid: number, runtime: any) {
   return roomEid;
 }
 
-// Helper to determine if action needs room context
-function isRoomBasedAction(tool: string) {
-  const ROOM_BASED_ACTIONS = ["speak", "wait"];
-  return ROOM_BASED_ACTIONS.includes(tool);
-}
-
 // System for handling agent actions and tool usage
 export const ActionSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
@@ -63,19 +65,15 @@ export const ActionSystem = createSystem<SystemConfig>(
       const agentName = Agent.name[eid];
       let roomEid;
 
-      // Get appropriate room context
-      if (isRoomBasedAction(pendingAction.tool)) {
-        // For room-based actions, use current room
-        roomEid = getAgentRoom(world, eid);
-        if (!roomEid) {
-          logger.error(
-            `No room found for agent ${agentName} (${eid}) - required for ${pendingAction.tool}`
-          );
-          continue;
-        }
-      } else {
-        // For private actions, use or create private room
-        roomEid = await getOrCreatePrivateRoom(world, eid, runtime);
+      // All actions for now are room-based.
+      // to
+      roomEid = getAgentRoom(world, eid);
+
+      if (!roomEid) {
+        logger.error(
+          `No room found for agent ${agentName} (${eid}) - required for ${pendingAction.tool}`
+        );
+        continue;
       }
 
       logger.agent(eid, `Processing action: ${pendingAction.tool}`, agentName);
@@ -89,13 +87,13 @@ export const ActionSystem = createSystem<SystemConfig>(
           reason: pendingAction.parameters.reason || "Taking action",
           parameters: pendingAction.parameters,
           agentName,
-          context: isRoomBasedAction(pendingAction.tool) ? "room" : "private",
+          context: "room",
         },
         String(eid)
       );
 
       // Execute the action
-      await runtime
+      const result = await runtime
         .getActionManager()
         .executeAction(
           pendingAction.tool,
@@ -104,12 +102,30 @@ export const ActionSystem = createSystem<SystemConfig>(
           runtime
         );
 
-      // Clear pending action and update last action time
+      // Store full result in Action component
       setComponent(world, eid, Action, {
         pendingAction: null,
         lastActionTime: Date.now(),
+        lastActionResult: result, // Store complete result
         availableTools: Action.availableTools[eid],
       });
+
+      const experienceMessage = `${pendingAction.tool}: ${result.message}`;
+      const experience: Experience = {
+        type: "action",
+        content: experienceMessage,
+        timestamp: result.timestamp,
+      };
+
+      const oldExperiences = Memory.experiences[eid] || [];
+      const newExperiences = [...oldExperiences, experience];
+
+      setComponent(world, eid, Memory, {
+        experiences: newExperiences,
+      });
+
+      // Emit action experience event
+      runtime.eventBus.emitAgentEvent(eid, "experience", "action", experience);
     }
 
     return world;

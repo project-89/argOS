@@ -22,6 +22,7 @@ import {
   StimulusInRoom,
   StimulusSource,
 } from "../components/agent/Agent";
+import { logger } from "../utils/logger";
 
 export class ComponentSync {
   private observers: (() => void)[] = [];
@@ -101,8 +102,11 @@ export class ComponentSync {
       observe(this.world, onSet(Memory), (eid, params) => {
         if (params.thoughts) Memory.thoughts[eid] = params.thoughts;
         if (params.lastThought) Memory.lastThought[eid] = params.lastThought;
+        if (params.lastUpdate) Memory.lastUpdate[eid] = params.lastUpdate;
         if (params.perceptions) Memory.perceptions[eid] = params.perceptions;
         if (params.experiences) Memory.experiences[eid] = params.experiences;
+        if (params.conversationState)
+          Memory.conversationState[eid] = params.conversationState;
         return params;
       }),
       observe(this.world, onGet(Memory), (eid) => ({
@@ -119,6 +123,8 @@ export class ComponentSync {
         const timestamp = Date.now();
         if (params.baseDescription)
           Appearance.baseDescription[eid] = params.baseDescription;
+        if (params.description)
+          Appearance.description[eid] = params.description;
         if (params.facialExpression)
           Appearance.facialExpression[eid] = params.facialExpression;
         if (params.bodyLanguage)
@@ -138,16 +144,18 @@ export class ComponentSync {
           // Validate action against available tools
           const tools = Action.availableTools[eid] || [];
           const isValidTool = tools.some(
-            (t: { name: string }) => t.name === params.pendingAction.tool
+            (toolName: string) => toolName === params.pendingAction.tool
           );
           if (!isValidTool) {
-            console.warn(
+            logger.warn(
               `Invalid tool ${params.pendingAction.tool} for entity ${eid}`
             );
             return null;
           }
           Action.pendingAction[eid] = params.pendingAction;
         }
+        if (params.lastActionResult)
+          Action.lastActionResult[eid] = params.lastActionResult;
         if (params.availableTools)
           Action.availableTools[eid] = params.availableTools;
         Action.lastActionTime[eid] = Date.now();
@@ -237,7 +245,7 @@ export class ComponentSync {
     );
   }
 
-  private notifyWorldStateChange() {
+  notifyWorldStateChange() {
     if (this.onWorldStateChange) {
       this.onWorldStateChange();
     }

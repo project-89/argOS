@@ -6,6 +6,7 @@ import {
   RoomState,
   AgentUpdateMessage,
   RoomUpdateMessage,
+  ActionContent,
 } from "../../../types";
 import { getTailwindColor } from "../../../utils/colors";
 
@@ -97,29 +98,33 @@ export function ChatInterface({
   const getMessageContent = (log: ServerMessage): string => {
     if (log.type === "AGENT_UPDATE" || log.type === "ROOM_UPDATE") {
       if (log.type === "ROOM_UPDATE") {
+        const content = log.data.content;
+
         // Handle different content types
-        if (
-          log.data.type === "action" &&
-          typeof log.data.content === "object" &&
-          "reason" in log.data.content
-        ) {
-          return `${log.data.content.action}: ${log.data.content.reason}`;
+        if (typeof content === "object") {
+          // Skip speak actions since we have speech events
+          if ("action" in content && content.action !== "speak") {
+            const actionContent = content as ActionContent;
+            const actionStr = actionContent.action;
+            const reasonStr = actionContent.result
+              ? ` (${actionContent.result})`
+              : "";
+            const paramsStr = actionContent.parameters
+              ? `: ${JSON.stringify(actionContent.parameters, null, 2)}`
+              : "";
+            return `${actionStr}${reasonStr}${paramsStr}`;
+          }
+          if ("message" in content) {
+            return content.message;
+          }
+          if ("content" in content) {
+            return content.content;
+          }
         }
-        if (
-          log.data.type === "experience" &&
-          typeof log.data.content === "object" &&
-          "content" in log.data.content
-        ) {
-          return log.data.content.content;
-        }
-        if (
-          log.data.type === "speech" &&
-          typeof log.data.content === "object" &&
-          "message" in log.data.content
-        ) {
-          return log.data.content.message as string;
-        }
+        // Direct string content (like thoughts, observations)
+        return String(content);
       }
+      // Handle AGENT_UPDATE content
       return String(log.data.content);
     }
     return "";

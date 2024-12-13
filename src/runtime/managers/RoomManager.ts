@@ -115,6 +115,8 @@ export class RoomManager implements IRoomManager {
     this.runtime.eventBus.emitRoomEvent(roomId, "state", {
       room: this.runtime.getStateManager().getRoomState(roomId),
     });
+
+    this.runtime.notifyWorldStateChange();
   }
 
   getRoomOccupants(roomId: number): number[] {

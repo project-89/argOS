@@ -46,6 +46,7 @@ You should be helpful, precise, and maintain awareness of the system's state. On
     appearance:
       "A dignified presence, radiating calm authority and systematic precision",
     platform: "simulation",
+    tools: ["speak", "wait", "spawnAgent"],
   });
 
   // Place agent in room

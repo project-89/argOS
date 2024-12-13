@@ -19,8 +19,8 @@ import {
 } from "../components/agent/Agent";
 import { AgentConfig } from "../types/agent";
 import { logger } from "../utils/logger";
-import { availableTools } from "../types/tools";
 import { findRoomByStringId, getAgentRoom } from "../utils/queries";
+import { actions } from "../actions";
 
 const USER_APPEARANCE =
   "A presence in the system, representing direct human interaction. Their words carry the weight of reality itself.";
@@ -103,7 +103,10 @@ export function moveUserToRoom(
   }
 }
 
-export function createAgent(world: World, config: AgentConfig) {
+export function createAgent(
+  world: World,
+  config: AgentConfig & { tools?: string[] }
+) {
   const {
     name,
     role,
@@ -111,6 +114,7 @@ export function createAgent(world: World, config: AgentConfig) {
     platform = "default",
     appearance = "A nondescript figure",
     active = 1,
+    tools = ["speak", "wait"], // Default tools
   } = config;
 
   const eid = addEntity(world);
@@ -151,14 +155,18 @@ export function createAgent(world: World, config: AgentConfig) {
     })
   );
 
-  // Add action component
+  // make sure tools are valid
+  const agentTools = Object.keys(actions).filter((tool) =>
+    tools.includes(tool)
+  );
+
   addComponent(
     world,
     eid,
     set(Action, {
       pendingAction: null,
       lastActionTime: Date.now(),
-      availableTools,
+      availableTools: agentTools,
     })
   );
 

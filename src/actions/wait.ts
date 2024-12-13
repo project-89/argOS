@@ -8,6 +8,7 @@ import {
   createVisualStimulus,
 } from "../utils/stimulus-utils";
 import { EventBus } from "../runtime/EventBus";
+import { ActionResult } from "../types/actions";
 
 export const schema = z.object({
   reason: z.string(),
@@ -26,9 +27,20 @@ export async function execute(
   eid: number,
   parameters: z.infer<typeof schema>,
   eventBus: EventBus
-) {
+): Promise<ActionResult> {
   const roomId = getAgentRoom(world, eid);
-  if (roomId === undefined) return;
+  if (!roomId) {
+    return {
+      success: false,
+      message: "Cannot wait - agent not in a room",
+      timestamp: Date.now(),
+      actionName: "wait",
+      parameters,
+      data: {
+        metadata: { error: "No room found" },
+      },
+    };
+  }
 
   const { reason, isThinking = false } = parameters;
   const agentName = Agent.name[eid];
@@ -69,11 +81,20 @@ export async function execute(
     decay: isThinking ? 2 : 1,
   });
 
-  // Record the experience
-  Memory.experiences[eid] = Memory.experiences[eid] || [];
-  Memory.experiences[eid].push({
-    type: "action",
-    content: `I ${isThinking ? "thought about" : "waited for"}: ${reason}`,
+  return {
+    success: true,
+    message: `${parameters.isThinking ? "Processed" : "Waited"}: ${
+      parameters.reason
+    }`,
+    actionName: "wait",
     timestamp: Date.now(),
-  });
+    parameters,
+    data: {
+      content: parameters.reason,
+      metadata: {
+        isThinking: parameters.isThinking,
+        reason: parameters.reason,
+      },
+    },
+  };
 }

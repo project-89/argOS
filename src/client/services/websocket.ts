@@ -4,6 +4,8 @@ import {
   Agent,
   ConnectionUpdateMessage,
   AgentState,
+  RoomUpdateMessage,
+  AgentUpdateMessage,
 } from "../../types";
 import { useSimulationStore } from "../../state/simulation";
 
@@ -286,33 +288,40 @@ export class WebSocketService {
 
     this.isProcessingQueue = true;
 
-    // Batch related messages
-    const messages = this.messageQueue.reduce((batch, message) => {
-      // Create composite key for message type + category
-      const key =
-        message.type === "ROOM_UPDATE" || message.type === "AGENT_UPDATE"
-          ? `${message.type}:${message.data.type}`
-          : message.type;
-
-      if (!batch[key]) {
-        batch[key] = [];
-      }
-      batch[key].push(message);
-      return batch;
-    }, {} as Record<string, ServerMessage[]>);
-
-    // Clear processed messages
-    this.messageQueue = [];
-
     try {
-      // Process all message types
-      Object.values(messages).forEach((messageBatch) => {
-        // For each batch, send latest state only
-        const latestMessage = messageBatch[messageBatch.length - 1];
-        this.handlers.forEach((handler) => handler(latestMessage));
+      // Take messages to process, maintaining chronological order
+      const messagesToProcess = this.messageQueue
+        .splice(0, 10)
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      // Only deduplicate state updates, keep all other messages
+      const stateUpdates = new Map<string, ServerMessage>();
+      const otherMessages: ServerMessage[] = [];
+
+      messagesToProcess.forEach((message) => {
+        if (
+          (message.type === "ROOM_UPDATE" || message.type === "AGENT_UPDATE") &&
+          message.data.type === "state"
+        ) {
+          // For state updates, keep latest per entity
+          const key =
+            message.type === "ROOM_UPDATE"
+              ? `room:${message.data.roomId}`
+              : `agent:${message.data.agentId}`;
+          stateUpdates.set(key, message);
+        } else {
+          otherMessages.push(message);
+        }
       });
+
+      // Send messages in chronological order
+      [...otherMessages, ...stateUpdates.values()]
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .forEach((message) => {
+          this.handlers.forEach((handler) => handler(message));
+        });
     } catch (error) {
-      console.error("Error processing message batch:", error);
+      console.error("Error processing messages:", error);
     }
 
     this.isProcessingQueue = false;
