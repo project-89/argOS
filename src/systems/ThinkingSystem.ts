@@ -131,7 +131,23 @@ async function processPerceptions(
     })),
   };
 
-  return await processStimulus(agentState);
+  const newPerception = await processStimulus(agentState);
+
+  logger.agent(
+    eid,
+    `Processed stimuli into perception: ${newPerception}`,
+    Agent.name[eid]
+  );
+
+  // emit new perceptions
+  runtime.eventBus.emitAgentEvent(
+    eid,
+    "perception",
+    "perception",
+    newPerception
+  );
+
+  return newPerception;
 }
 
 // Add helper to categorize experiences
@@ -166,7 +182,7 @@ async function generateAgentThought(
       })),
     },
     experiences: Memory.experiences[eid] || [],
-    availableTools: runtime.getActionManager().getAvailableTools(),
+    availableTools: runtime.getActionManager().getEntityTools(eid),
     conversationState: {
       lastSpeaker: findLastSpeaker(Memory.experiences[eid] || []),
       lastSpeechTime: findLastSpeechTime(Memory.experiences[eid] || []),
@@ -179,6 +195,19 @@ async function generateAgentThought(
         Memory.experiences[eid] || []
       ),
     },
+    lastAction: Action.lastActionResult[eid]
+      ? {
+          success: Action.lastActionResult[eid].success,
+          message: Action.lastActionResult[eid].message,
+          actionName: Action.lastActionResult[eid].actionName,
+          timestamp: Action.lastActionResult[eid].timestamp,
+          parameters: Action.lastActionResult[eid].parameters,
+          data: Action.lastActionResult[eid].data,
+        }
+      : undefined,
+    timeSinceLastAction: Action.lastActionTime[eid]
+      ? Date.now() - Action.lastActionTime[eid]
+      : undefined,
   };
 
   const thought = await generateThought(agentState);
@@ -287,31 +316,26 @@ function handleAgentAction(world: World, eid: number, thought: any) {
       Agent.name[eid]
     );
 
-    // Create action result
-    const actionResult: ActionResult = {
-      action: thought.action.tool,
-      success: true, // We can make this more sophisticated
-      result: `Performed ${thought.action.tool}: ${
-        thought.action.parameters.message || thought.action.parameters.reason
-      }`,
+    // Store action intent in memory
+    const actionIntent: Experience = {
+      type: "action",
+      content: `Decided to ${thought.action.tool}: ${JSON.stringify(
+        thought.action.parameters
+      )}`,
       timestamp: Date.now(),
     };
 
-    // Add to experiences
-    const actionExperience: Experience = {
-      type: "action",
-      content: actionResult.result,
-      timestamp: actionResult.timestamp,
-    };
+    const oldExperiences = Memory.experiences[eid] || [];
+    const newExperiences = [...oldExperiences, actionIntent];
 
-    // Update agent memory
-    const currentExperiences = Memory.experiences[eid] || [];
-    currentExperiences.push(actionExperience);
+    setComponent(world, eid, Memory, {
+      experiences: newExperiences,
+    });
 
+    // Store pending action
     setComponent(world, eid, Action, {
       pendingAction: thought.action,
       lastActionTime: Date.now(),
-      lastActionResult: actionResult,
       availableTools: Action.availableTools[eid],
     });
   }
@@ -372,20 +396,6 @@ async function extractPerceptionExperiences(
 ): Promise<Experience[]> {
   const currentExperiences = Memory.experiences[eid] || [];
 
-  // Filter out perceptions that would create duplicate experiences
-  const filteredPerceptions = perceptions.filter((p) => {
-    const potentialContent = p.content?.toString() || "";
-    return !currentExperiences.some(
-      (exp: Experience) =>
-        exp.content.includes(potentialContent) &&
-        Math.abs(exp.timestamp - Date.now()) < 5000
-    );
-  });
-
-  if (filteredPerceptions.length === 0) {
-    return [];
-  }
-
   const agentState: ExtractExperiencesState = {
     name: Agent.name[eid],
     role: Agent.role[eid],
@@ -394,7 +404,7 @@ async function extractPerceptionExperiences(
       ["thought", "speech", "action", "observation"].includes(exp.type)
     ) as Experience[],
     timestamp: Date.now(),
-    stimulus: filteredPerceptions.map((p) => ({
+    stimulus: perceptions.map((p) => ({
       type: p.type,
       source: p.sourceEntity,
       data: p.content,
@@ -402,6 +412,12 @@ async function extractPerceptionExperiences(
   };
 
   const experiences = await extractExperiences(agentState);
+
+  logger.agent(
+    eid,
+    `Extracted ${experiences.length} experiences`,
+    Agent.name[eid]
+  );
 
   experiences.forEach((exp: Experience) => {
     runtime.eventBus.emitAgentEvent(
@@ -414,22 +430,6 @@ async function extractPerceptionExperiences(
 
   return experiences;
 }
-
-// Add new type for action results
-export interface ActionResult {
-  action: string;
-  success: boolean;
-  result: string;
-  timestamp: number;
-  context?: {
-    previousAction?: string;
-    responseToAction?: string;
-    conversationState?: string;
-  };
-}
-
-// Add to agent memory
-const actionResults: ActionResult[] = [];
 
 interface ConversationState {
   lastSpeaker: string;

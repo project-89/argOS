@@ -107,6 +107,7 @@ export class SimulationRuntime extends EventEmitter {
 
     // Merge config with defaults
     const fullConfig = { ...DEFAULT_CONFIG, ...config };
+
     this.updateInterval = fullConfig.updateInterval!;
 
     // Initialize systems from factories
@@ -137,6 +138,10 @@ export class SimulationRuntime extends EventEmitter {
       const worldState = this.stateManager.getWorldState();
       this.eventManager.emitWorldUpdate(worldState);
     };
+  }
+
+  notifyWorldStateChange() {
+    this.componentSync.notifyWorldStateChange();
   }
 
   // Getters for managers

@@ -4,6 +4,7 @@ import { Agent, Room, Appearance, Stimulus } from "../components/agent/Agent";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { getRooms, getRoomOccupants, getActiveAgents } from "../utils/queries";
+import { createVisualStimulus } from "../utils/stimulus-utils";
 
 // Queue to hold pending stimuli between system ticks
 type PendingStimulus = {
@@ -30,7 +31,7 @@ export function queueStimulus(stimulus: PendingStimulus) {
 // System for managing rooms and generating stimuli about occupants
 export const RoomSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
-    const rooms = getRooms(world);
+    const rooms = query(world, [Room]);
 
     // First, clean up any previous room-generated stimuli
     const existingStimuli = query(world, [Stimulus]);
@@ -131,6 +132,23 @@ export const RoomSystem = createSystem<SystemConfig>(
           })
         );
       }
+    }
+
+    // Generate room ambient stimuli
+    for (const roomId of rooms) {
+      createVisualStimulus(world, {
+        sourceEntity: roomId,
+        roomId: Room.id[roomId],
+        appearance: true,
+        data: {
+          type: "ROOM_AMBIENCE",
+          description: Room.description[roomId],
+          name: Room.name[roomId],
+          roomType: Room.type[roomId],
+          occupants: getRoomOccupants(world, roomId).length,
+          actionType: "OBSERVE",
+        },
+      });
     }
 
     return world;

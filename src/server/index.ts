@@ -8,7 +8,7 @@ import {
   RoomUpdateMessage,
   RoomEvent,
 } from "../types";
-import { setupSingleAgent } from "../examples/single-agent-setup";
+// import { setupSingleAgent } from "../examples/single-agent-setup";
 import { Agent, Room } from "../components/agent/Agent";
 import { createAuditoryStimulus } from "../utils/stimulus-utils";
 import { World, removeEntity } from "bitecs";
@@ -16,6 +16,7 @@ import { logger } from "../utils/logger";
 import { createUser, moveUserToRoom } from "../utils/agent-factory";
 import { findRoomByStringId } from "../utils/queries";
 import { queueStimulus } from "../systems/RoomSystem";
+import { setupEmergentBeing } from "../examples/emergentGemini";
 
 // Track user connections with Map
 const connectionUsers = new Map<
@@ -81,7 +82,7 @@ async function cleanupInactiveUsers() {
 setInterval(cleanupInactiveUsers, HEARTBEAT_INTERVAL);
 
 // Set up initial runtime and event emitter
-let { runtime } = setupSingleAgent();
+let { runtime } = setupEmergentBeing();
 const eventEmitter = new EventEmitter();
 
 // Track active user entities
@@ -349,7 +350,7 @@ wss.on("connection", (ws: WS) => {
         // Clean up old runtime
         runtime.cleanup();
         // Create fresh runtime
-        const setup = setupSingleAgent();
+        const setup = setupEmergentBeing();
         runtime = setup.runtime;
         // Set up event handlers for new runtime
         setupRuntimeEventHandlers(runtime);

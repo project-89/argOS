@@ -5,6 +5,7 @@ import { logger } from "../utils/logger";
 import { getAgentRoom } from "../utils/queries";
 import { EventBus } from "../runtime/EventBus";
 import { Experience } from "../llm/agent-llm";
+import { ActionResult } from "../types/actions";
 
 export const schema = z.object({
   message: z.string(),
@@ -40,9 +41,21 @@ export async function execute(
   eid: number,
   parameters: z.infer<typeof schema>,
   eventBus: EventBus
-) {
+): Promise<ActionResult> {
   const roomId = getAgentRoom(world, eid);
-  if (!roomId) return;
+  if (!roomId) {
+    return {
+      success: false,
+      message: "Cannot speak - agent not in a room",
+      timestamp: Date.now(),
+      actionName: "speak",
+      parameters,
+      data: {
+        content: parameters.message,
+        metadata: { error: "No room found" },
+      },
+    };
+  }
 
   const {
     message,
@@ -82,28 +95,18 @@ export async function execute(
 
   const experience = `I said: "${message}"${target ? ` to ${target}` : ""}`;
 
-  // Record the experience with deduplication
-  Memory.experiences[eid] = Memory.experiences[eid] || [];
-  const recentExperiences = Memory.experiences[eid];
-
-  // Check for duplicate speech in last 15 seconds
-  const isDuplicate = recentExperiences.some(
-    (exp: { type: string; content: string; timestamp: number }) =>
-      exp.type === "speech" &&
-      exp.content === experience &&
-      Date.now() - exp.timestamp < 15000
-  );
-
-  if (!isDuplicate) {
-    Memory.experiences[eid].push({
-      type: "speech",
-      content: experience,
-      timestamp: Date.now(),
-    });
-
-    eventBus.emitAgentEvent(eid, "experience", "experience", {
-      content: experience,
-      timestamp: Date.now(),
-    });
-  }
+  return {
+    success: true,
+    message: experience,
+    timestamp: Date.now(),
+    actionName: "speak",
+    parameters,
+    data: {
+      content: parameters.message,
+      metadata: {
+        tone: parameters.tone,
+        target: parameters.target,
+      },
+    },
+  };
 }

@@ -15,24 +15,3 @@ export const toolSchemas = {
     duration: z.number().optional(),
   }),
 };
-
-export const availableTools = [
-  {
-    name: "speak",
-    description: "Say something to others in the room",
-    parameters: ["message", "tone", "target"],
-    schema: toolSchemas.speak,
-  },
-  {
-    name: "listen",
-    description: "Actively listen and pay attention to what's happening",
-    parameters: ["focus", "duration"],
-    schema: toolSchemas.listen,
-  },
-  {
-    name: "wait",
-    description: "Choose to wait and observe the situation",
-    parameters: ["reason", "duration"],
-    schema: toolSchemas.wait,
-  },
-];

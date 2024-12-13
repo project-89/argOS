@@ -13,6 +13,7 @@ import {
   RoomState,
   AgentState,
 } from "../types";
+import { SimulationLogger } from "../utils/simulation-logger";
 
 export class EventBus {
   private world: World;
@@ -21,9 +22,12 @@ export class EventBus {
     Set<(data: RoomEvent | AgentEvent) => void>
   >();
   private roomOccupants = new Map<number, Set<number>>();
+  private simulationLogger: SimulationLogger;
 
   constructor(world: World) {
     this.world = world;
+    console.log("Initializing SimulationLogger...");
+    this.simulationLogger = new SimulationLogger();
   }
 
   // Get room an agent is in
@@ -88,6 +92,10 @@ export class EventBus {
     agentId?: string
   ) {
     const stringRoomId = Room.id[roomEid] || String(roomEid);
+    console.log(
+      `[EventBus] Emitting room event: ${type} from agent ${agentId} in room ${stringRoomId}`
+    );
+
     const event: RoomEvent = {
       type,
       roomId: stringRoomId,
@@ -96,7 +104,15 @@ export class EventBus {
       timestamp: Date.now(),
       agentId,
     };
+
+    // First broadcast to subscribers
     this.broadcast(`room:${stringRoomId}`, event);
+
+    // Then log event
+    if (type === "state" && content.room) {
+      this.simulationLogger.updateRoomState(stringRoomId, content.room);
+    }
+    this.simulationLogger.logRoomEvent(event);
   }
 
   // Emit event to an agent channel
@@ -115,12 +131,18 @@ export class EventBus {
         type === "state" ? { agent: this.buildAgentState(agentId) } : content,
       timestamp: Date.now(),
     };
+
+    // First broadcast to subscribers
     this.broadcast(`agent:${stringAgentId}`, event);
 
-    // Also emit to room if agent is in one
+    // Then emit to room and log
     const roomId = this.getAgentRoom(agentId);
     if (roomId) {
+      const stringRoomId = Room.id[roomId] || String(roomId);
+      // Emit to room channel
       this.emitRoomEvent(roomId, type, content, stringAgentId);
+      // Log agent event
+      this.simulationLogger.logAgentEvent(event, stringRoomId);
     }
   }
 
@@ -190,6 +212,12 @@ export class EventBus {
   }
 
   broadcast(channel: string, data: RoomEvent | AgentEvent) {
+    console.log(
+      `[EventBus] Broadcasting to channel: ${channel}, handlers: ${
+        this.handlers.get(channel)?.size || 0
+      }`
+    );
+
     // Exact channel handlers
     const handlers = this.handlers.get(channel);
     if (handlers) {

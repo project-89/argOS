@@ -170,6 +170,7 @@ export const ActionComponent = createComponent("Action", ActionSchema, {
     success: boolean;
     result: string;
     timestamp: number;
+    data: Record<string, any>;
   } | null)[],
   availableTools: [] as Array<{
     name: string;
@@ -180,6 +181,26 @@ export const ActionComponent = createComponent("Action", ActionSchema, {
 });
 
 export const Action = ActionComponent.component;
+
+// Define a schema for the output of the perception system
+export const PerceptionsSchema = z.object({
+  summary: z.string(),
+  context: z.any().optional(),
+});
+
+export type Perceptions = z.infer<typeof PerceptionsSchema>;
+
+// Create the actual component with a name and schema
+export const PerceptionsComponent = createComponent(
+  "Perceptions",
+  PerceptionsSchema,
+  {
+    summary: [] as string[],
+    context: [] as Record<string, any>[],
+  }
+);
+
+export const Perceptions = PerceptionsComponent.component;
 
 // Appearance schema and component
 export const AppearanceSchema = z.object({

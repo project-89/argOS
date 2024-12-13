@@ -2,6 +2,7 @@ import { RoomType } from "../components/agent/Agent";
 import { World } from "bitecs";
 import { EventBus } from "../runtime/EventBus";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
+import { ActionResult } from "./actions";
 
 // Core Event Types - Used for event content classification
 export type EventType =
@@ -222,7 +223,7 @@ export interface ActionModule {
     parameters: any,
     eventBus: EventBus,
     runtime: SimulationRuntime
-  ) => Promise<void>;
+  ) => Promise<ActionResult>;
 }
 
 export type ActionModules = Record<string, ActionModule>;
@@ -283,7 +284,7 @@ interface RoomEventContent {
 
 export interface ActionContent {
   action: string;
-  reason: string;
+  result: string;
   parameters?: Record<string, any>;
   agentName: string;
   context?: "room" | "private";
