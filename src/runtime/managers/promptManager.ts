@@ -163,7 +163,6 @@ export class PromptManager {
         lastUpdate: Memory.lastUpdate[entityId],
         perceptions: Memory.perceptions[entityId] || [],
         experiences: Memory.experiences[entityId] || [],
-        conversationState: Memory.conversationState[entityId],
       },
       action: {
         pendingAction: Action.pendingAction[entityId],

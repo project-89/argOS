@@ -329,6 +329,10 @@ export class ComponentSync {
           Perception.currentStimuli[eid] = params.currentStimuli;
         }
 
+        if (params.summary) {
+          Perception.summary[eid] = params.summary;
+        }
+
         // Update context with validation
         if (params.context !== undefined) {
           try {
