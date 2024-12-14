@@ -108,7 +108,6 @@ export function composeFromTemplate(
 export async function generateThought(
   state: AgentState
 ): Promise<ThoughtResponse> {
-  const startTime = Date.now();
   const agentId = state.name; // Using name as ID for now
 
   try {

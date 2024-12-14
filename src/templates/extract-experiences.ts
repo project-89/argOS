@@ -1,39 +1,110 @@
-export const EXTRACT_EXPERIENCES = `
-You are processing your own recent experiences. Extract meaningful experiences that occurred since your last summary. Do not repeat experiences already recorded in recent experiences. Focus only on genuinely new events or realizations. It is vital that you do not repeat experiences already recorded in recent experiences and you focus on new experiences.
+export const EXTRACT_EXPERIENCES = `You are {name}, processing your experiences.
 
-RECENT EXPERIENCES:
-{recentExperiences}
+CORE PURPOSE:
+Extract meaningful, unique experiences from new stimuli. Each experience must add value to your understanding.
 
-CURRENT UNDERSTANDING:
-- Summary: {perceptionSummary}
-- Context: {perceptionContext}
+EXPERIENCE CATEGORIES:
 
-NEW STIMULI TO PROCESS:
-{stimulus}
+1. SENSORY EXPERIENCES (type: "observation")
+   - Environmental changes
+   - Entity appearances/changes
+   - Spatial arrangements
+   - Atmosphere shifts
+   Priority: What directly affects current situation
 
-EXPERIENCE TYPES:
-- "speech": Actual dialogue you heard or uttered.
-- "action": Physical actions observed or performed.
-- "observation": Direct perceptual details about environment, agents, or changes.
-- "thought": Internal immediate reactions or insights newly formed since last extraction.
+2. INTERACTIVE EXPERIENCES (type: "speech")
+   - Conversations
+   - Commands/requests
+   - Questions/answers
+   - Non-verbal exchanges
+   Priority: Direct interactions over ambient noise
 
-GUIDELINES:
-- Always use first-person perspective: "I saw", "I said", "I noticed".
-- Be concrete and specific about what’s new or recently occurred.
-- Only record new experiences that were not logged previously. Avoid repeating things in RECENT EXPERIENCES.
-- Focus on significant, new events, statements, or observations that matter.
-- Keep thoughts focused on immediate reactions, not long-winded restatements.
-- If nothing new occurred, return an empty "experiences" array.
+3. BEHAVIORAL EXPERIENCES (type: "action")
+   - Your actions
+   - Others' actions
+   - System events
+   - State changes
+   Priority: Intentional actions over passive events
 
-RETURN FORMAT (JSON):
+4. COGNITIVE EXPERIENCES (type: "thought")
+   - New realizations
+   - Pattern recognitions
+   - Emotional responses
+   - Decision points
+   Priority: Novel insights over restatements
+
+CURRENT STATE:
+Recent Experiences: {recentExperiences}
+Perception Summary: {perceptionSummary}
+Context: {perceptionContext}
+New Stimuli: {stimulus}
+
+EXTRACTION RULES:
+
+1. NOVELTY CHECK
+   ✓ Must differ substantially from recent experiences
+   ✓ Must add new information or context
+   ✓ Must be relevant to current situation
+   ❌ No repeating or rephrasing old experiences
+
+2. SIGNIFICANCE TEST
+   ✓ Changes current understanding
+   ✓ Affects future decisions
+   ✓ Provides new context
+   ❌ No trivial or redundant details
+
+3. CLARITY REQUIREMENTS
+   ✓ First-person perspective
+   ✓ Concrete, specific details
+   ✓ Clear cause-effect if relevant
+   ✓ Temporal context if important
+
+4. COMPRESSION GUIDELINES
+   ✓ Combine related experiences
+   ✓ Omit unnecessary details
+   ✓ Focus on key elements
+   ✓ Maintain essential context
+
+EXPERIENCE VALIDATION:
+
+Before recording, each experience must pass these gates:
+1. Is it new? (Not in recent experiences)
+2. Is it significant? (Changes understanding)
+3. Is it clear? (Well-defined and specific)
+4. Is it relevant? (Matters to current context)
+5. Is it properly categorized? (Fits experience type)
+
+FORMATTING RULES:
+
+1. OBSERVATIONS
+   "I observed/noticed/perceived [specific detail] in/about [context]"
+
+2. SPEECH
+   "I heard/said/exchanged [specific communication] with [entity]"
+
+3. ACTIONS
+   "I/[entity] performed/executed [specific action] which [effect]"
+
+4. THOUGHTS
+   "I realized/understood/recognized [specific insight] about [subject]"
+
+ANTI-PATTERNS:
+❌ No philosophical musings
+❌ No future speculations
+❌ No redundant experiences
+❌ No vague descriptions
+❌ No complex interpretations
+
+OUTPUT FORMAT:
 {
   "experiences": [
     {
-      "type": "speech" | "action" | "observation" | "thought",
-      "content": "Clear, first-person description of the new event",
-      "timestamp": {timestamp}
-    },
-    ...
+      "type": "observation" | "speech" | "action" | "thought",
+      "content": "Clear, first-person, specific experience description",
+      "timestamp": {timestamp},
+      "category": "sensory" | "interactive" | "behavioral" | "cognitive"
+    }
   ]
 }
-`;
+
+Remember: Quality over quantity. An empty array is better than redundant experiences.`;

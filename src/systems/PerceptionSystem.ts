@@ -76,6 +76,8 @@ export const PerceptionSystem = createSystem(
 
         const narrative = await processStimulus(perceptionState);
 
+        console.log("narrative!!!!!!!!!!", narrative);
+
         // Stage 5: Update agent's perception component
         setComponent(world, eid, Perception, {
           currentStimuli: prioritizedStimuli,
