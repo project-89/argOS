@@ -2,6 +2,7 @@ import { createRelation, withStore } from "bitecs";
 import { z } from "zod";
 import { createComponent } from "../createComponent";
 import { createSchemaRelation } from "../createRelation";
+import { StimulusTypes, StimulusType, SourceTypes } from "../../types/stimulus";
 
 // Core Agent schema and component
 export const AgentSchema = z.object({
@@ -62,14 +63,6 @@ export const MemorySchema = z.object({
         .optional(),
     })
   ),
-  conversationState: z.object({
-    lastSpeaker: z.string(),
-    lastSpeechTime: z.number(),
-    greetingMade: z.boolean(),
-    unansweredQuestions: z.number(),
-    engagementLevel: z.enum(["none", "minimal", "active"]),
-    attemptsSinceResponse: z.number(),
-  }),
 });
 
 export const MemoryComponent = createComponent("Memory", MemorySchema, {
@@ -84,6 +77,7 @@ export const MemoryComponent = createComponent("Memory", MemorySchema, {
     type: string;
     content: string;
     timestamp: number;
+    context: any;
   }>[],
 });
 
@@ -115,22 +109,41 @@ export const RoomComponent = createComponent("Room", RoomSchema, {
 
 export const Room = RoomComponent.component;
 
-// Perception schema and component
-export const PerceptionSchema = z.object({
-  currentStimuli: z.array(z.any()),
-  lastProcessedTime: z.number(),
+// Define the schema for the RecentActions component
+export const RecentActionsSchema = z.object({
+  actions: z.array(
+    z.object({
+      actionName: z.string(),
+      parameters: z.any(),
+      success: z.boolean(),
+      message: z.string(),
+      timestamp: z.number(),
+      data: z.any().optional(),
+    })
+  ),
 });
 
-export const PerceptionComponent = createComponent(
-  "Perception",
-  PerceptionSchema,
+// Create the actual component with a name and schema
+export const RecentActionsComponent = createComponent(
+  "RecentActions",
+  RecentActionsSchema,
   {
-    currentStimuli: [] as any[][],
-    lastProcessedTime: [] as number[],
+    actions: [] as Array<{
+      actionName: string;
+      parameters: any;
+      success: boolean;
+      message: string;
+      timestamp: number;
+      data: Record<string, any>;
+    }>[],
   }
 );
 
-export const Perception = PerceptionComponent.component;
+// Export the component
+export const RecentActions = RecentActionsComponent.component;
+
+// TypeScript types for convenience
+export type RecentActionsType = z.infer<typeof RecentActionsSchema>;
 
 // Action schema and component
 export const ActionSchema = z.object({
@@ -182,25 +195,31 @@ export const ActionComponent = createComponent("Action", ActionSchema, {
 
 export const Action = ActionComponent.component;
 
-// Define a schema for the output of the perception system
-export const PerceptionsSchema = z.object({
-  summary: z.string(),
+// Define a schema for the Perception component
+export const PerceptionSchema = z.object({
+  currentStimuli: z.array(z.any()).optional(),
+  lastProcessedTime: z.number().optional(),
+  lastUpdate: z.number().optional(),
+  summary: z.string().optional(),
   context: z.any().optional(),
 });
 
-export type Perceptions = z.infer<typeof PerceptionsSchema>;
+export type PerceptionType = z.infer<typeof PerceptionSchema>;
 
 // Create the actual component with a name and schema
-export const PerceptionsComponent = createComponent(
-  "Perceptions",
-  PerceptionsSchema,
+export const PerceptionComponent = createComponent(
+  "Perception",
+  PerceptionSchema,
   {
+    currentStimuli: [] as any[][],
+    lastProcessedTime: [] as number[],
+    lastUpdate: [] as number[],
     summary: [] as string[],
     context: [] as Record<string, any>[],
   }
 );
 
-export const Perceptions = PerceptionsComponent.component;
+export const Perception = PerceptionComponent.component;
 
 // Appearance schema and component
 export const AppearanceSchema = z.object({
@@ -231,23 +250,36 @@ export const Appearance = AppearanceComponent.component;
 
 // Stimulus schema and component
 export const StimulusSchema = z.object({
-  type: z.string(),
+  type: z.enum([
+    StimulusTypes.VISUAL,
+    StimulusTypes.AUDITORY,
+    StimulusTypes.COGNITIVE,
+    StimulusTypes.TECHNICAL,
+    StimulusTypes.ENVIRONMENTAL,
+  ]),
   sourceEntity: z.number(),
-  source: z.string(),
-  content: z.string(),
+  source: z.enum([
+    SourceTypes.AGENT,
+    SourceTypes.ROOM,
+    SourceTypes.USER,
+    SourceTypes.SYSTEM,
+  ]),
   timestamp: z.number(),
-  decay: z.number(),
   roomId: z.string(),
+  content: z.string(),
+  priority: z.number().optional(),
+  decay: z.number().optional(),
 });
 
 export const StimulusComponent = createComponent("Stimulus", StimulusSchema, {
-  type: [] as string[],
+  type: [] as StimulusType[],
   sourceEntity: [] as number[],
   source: [] as string[],
   content: [] as string[],
   timestamp: [] as number[],
   decay: [] as number[],
   roomId: [] as string[],
+  priority: [] as number[],
 });
 
 export const Stimulus = StimulusComponent.component;

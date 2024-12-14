@@ -11,12 +11,6 @@ export function setupSingleAgent() {
   // Create world and runtime with configuration
   const world = createWorld();
   const runtime = new SimulationRuntime(world, {
-    systems: [
-      RoomSystem.create,
-      ThinkingSystem.create,
-      ActionSystem.create,
-      StimulusCleanupSystem.create,
-    ],
     updateInterval: 10000, // 10 second thinking interval
     actions: actions,
   });

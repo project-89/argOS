@@ -10,9 +10,9 @@ export const logger = {
       chalk.gray(`[${systemName || "System"}] ${message}`) + "\n"
     );
   },
-  debug: (message: string) => {
+  debug: (message: string, data?: any) => {
     if (!DEBUG) return;
-    return console.log(chalk.gray(`[Debug] ${message}`) + "\n");
+    return console.log(chalk.gray(`[Debug] ${message} ${data}`) + "\n");
   },
   emphasize: (message: string) => {
     if (!chalk) return console.log(message + "\n");
@@ -38,9 +38,9 @@ export const logger = {
     return console.log(chalk.cyan(`[Conversation] ${message}`) + "\n");
   },
 
-  error: (message: string) => {
-    if (!chalk) return console.log(`ERROR: ${message}\n`);
-    return console.log(chalk.red(`[Error] ${message}`) + "\n");
+  error: (message: string, error: any) => {
+    if (!chalk) return console.log(`ERROR: ${message}`, error);
+    return console.log(chalk.red(`[Error] ${message}`) + "\n", error);
   },
 
   warn: (message: string) => {

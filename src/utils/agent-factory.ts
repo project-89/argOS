@@ -16,6 +16,8 @@ import {
   Appearance,
   Room,
   OccupiesRoom,
+  RecentActions,
+  Perception,
 } from "../components/agent/Agent";
 import { AgentConfig } from "../types/agent";
 import { logger } from "../utils/logger";
@@ -78,7 +80,7 @@ export function moveUserToRoom(
 ) {
   const roomEntity = findRoomByStringId(world, roomId);
   if (!roomEntity) {
-    logger.error(`Room ${roomId} not found`);
+    logger.error(`Room ${roomId} not found`, { roomId });
     return;
   }
 
@@ -153,6 +155,16 @@ export function createAgent(
       perceptions: [],
       experiences: [],
     })
+  );
+
+  // Add recent actions component
+  addComponent(world, eid, set(RecentActions, { actions: [] }));
+
+  // Add perception component
+  addComponent(
+    world,
+    eid,
+    set(Perception, { currentStimuli: [], lastProcessedTime: 0 })
   );
 
   // make sure tools are valid

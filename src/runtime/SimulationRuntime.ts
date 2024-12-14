@@ -1,21 +1,6 @@
 import "dotenv/config";
-import {
-  World,
-  addEntity,
-  removeEntity,
-  query,
-  hasComponent,
-  removeComponent,
-} from "bitecs";
-import {
-  WorldState,
-  AgentState,
-  RoomState,
-  NetworkLink,
-  ActionModule,
-  RoomEvent,
-  AgentEvent,
-} from "../types";
+import { World, removeEntity, query } from "bitecs";
+import { ActionModule } from "../types";
 import { logger } from "../utils/logger";
 import {
   Agent,
@@ -23,13 +8,10 @@ import {
   Perception,
   Room,
   Stimulus,
-  OccupiesRoom,
-  Appearance,
 } from "../components/agent/Agent";
 import { EventBus } from "./EventBus";
 import { ComponentSync } from "./ComponentSync";
 import EventEmitter from "events";
-import { EventPayload } from "../types/events";
 import { IStateManager } from "./managers/IStateManager";
 import { StateManager } from "./managers/StateManager";
 import { IRoomManager } from "./managers/IRoomManager";
@@ -38,6 +20,14 @@ import { IEventManager } from "./managers/IEventManager";
 import { EventManager } from "./managers/EventManager";
 import { IActionManager } from "./managers/IActionManager";
 import { ActionManager } from "./managers/ActionManager";
+import { RoomSystem } from "../systems/RoomSystem";
+import { ThinkingSystem } from "../systems/ThinkingSystem";
+import { ActionSystem } from "../systems/ActionSystem";
+import { StimulusCleanupSystem } from "../systems/StimulusCleanupSystem";
+import { PerceptionSystem } from "../systems/PerceptionSystem";
+import { ExperienceSystem } from "../systems/ExperienceSystem";
+import { PromptManager } from "./managers/promptManager";
+import { perceptionPrompt } from "../prompts/perception";
 
 // Validate required environment variables
 if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
@@ -57,9 +47,18 @@ export interface RuntimeConfig {
   components?: any[];
 }
 
+const defaultSystems = [
+  RoomSystem.create,
+  PerceptionSystem.create,
+  ExperienceSystem.create,
+  ThinkingSystem.create,
+  ActionSystem.create,
+  StimulusCleanupSystem.create,
+];
+
 const DEFAULT_CONFIG: RuntimeConfig = {
   updateInterval: 100,
-  systems: [],
+  systems: defaultSystems,
   actions: {},
   components: [Room, Agent, Memory, Stimulus, Perception],
 };
@@ -91,6 +90,7 @@ export class SimulationRuntime extends EventEmitter {
   private roomManager: IRoomManager;
   private eventManager: IEventManager;
   private actionManager: IActionManager;
+  private promptManager: PromptManager;
 
   // Add interaction tracking
   private recentInteractions = new Map<string, string>(); // key: "agent1-agent2", value: timestamp
@@ -111,7 +111,9 @@ export class SimulationRuntime extends EventEmitter {
     this.updateInterval = fullConfig.updateInterval!;
 
     // Initialize systems from factories
-    this.systems = fullConfig.systems!.map((factory) => factory(this));
+    const systems = fullConfig.systems || defaultSystems;
+
+    this.systems = systems.map((factory) => factory(this));
 
     // Initialize event bus and component sync
     this.eventBus = new EventBus(this.world);
@@ -122,6 +124,13 @@ export class SimulationRuntime extends EventEmitter {
     this.roomManager = new RoomManager(this.world, this);
     this.eventManager = new EventManager(this.world, this, this.eventBus);
     this.actionManager = new ActionManager(this.world, this, this.eventBus);
+    this.promptManager = new PromptManager(
+      {
+        templates: [perceptionPrompt],
+        defaultState: {},
+      },
+      this
+    );
 
     // Register actions
     Object.entries(fullConfig.actions!).forEach(([name, action]) => {
@@ -251,7 +260,7 @@ export class SimulationRuntime extends EventEmitter {
           remainingHooks.push(hookConfig);
         }
       } catch (error) {
-        logger.error(`Error in ${phase} lifecycle hook: ${error}`);
+        logger.error(`Error in ${phase} lifecycle hook:`, error);
         // Keep the hook even if it errors, unless it's a 'once' hook
         if (!hookConfig.once) {
           remainingHooks.push(hookConfig);
@@ -294,7 +303,7 @@ export class SimulationRuntime extends EventEmitter {
           );
         }
       } catch (error) {
-        logger.error(`Runtime error: ${error}`);
+        logger.error(`Runtime error}`, error);
         this.emit("error", error);
         this.stop();
       }

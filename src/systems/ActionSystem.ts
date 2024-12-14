@@ -71,7 +71,12 @@ export const ActionSystem = createSystem<SystemConfig>(
 
       if (!roomEid) {
         logger.error(
-          `No room found for agent ${agentName} (${eid}) - required for ${pendingAction.tool}`
+          `No room found for agent ${agentName} (${eid}) - required for ${pendingAction.tool}`,
+          {
+            agentName,
+            eid,
+            pendingAction,
+          }
         );
         continue;
       }

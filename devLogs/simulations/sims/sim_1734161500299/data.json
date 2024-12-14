@@ -1,0 +1,1461 @@
+{
+  "id": "sim_1734161500299",
+  "timestamp": 1734161500299,
+  "metadata": {
+    "duration": 61482,
+    "eventCount": 107,
+    "agents": [],
+    "rooms": [
+      {
+        "id": "main",
+        "name": "The Void",
+        "description": "In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth."
+      }
+    ]
+  },
+  "rooms": {
+    "main": {
+      "events": [
+        {
+          "type": "state",
+          "content": {
+            "room": {
+              "id": "main",
+              "eid": 1,
+              "name": "The Void",
+              "type": "astral",
+              "description": "In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.",
+              "occupants": [
+                {
+                  "id": "2",
+                  "name": "EmergentBeing",
+                  "attention": 1
+                }
+              ],
+              "stimuli": [],
+              "lastUpdate": 1734161500302
+            }
+          },
+          "timestamp": 1734161500302
+        },
+        {
+          "type": "state",
+          "content": {
+            "room": {
+              "id": "main",
+              "eid": 1,
+              "name": "The Void",
+              "type": "astral",
+              "description": "In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.",
+              "occupants": [
+                {
+                  "id": "2",
+                  "name": "EmergentBeing",
+                  "attention": 1
+                },
+                {
+                  "id": "4",
+                  "name": "User",
+                  "attention": 1
+                }
+              ],
+              "stimuli": [],
+              "lastUpdate": 1734161507446
+            }
+          },
+          "timestamp": 1734161507446
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161508433,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161508433,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161508435
+          },
+          "timestamp": 1734161508435,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161508433,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161508433,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161508435
+          },
+          "timestamp": 1734161508435,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, in the room. This presence appears open to interaction.",
+            "timestamp": 1734161508433
+          },
+          "timestamp": 1734161511465,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, in the room. This presence appears open to interaction.",
+            "timestamp": 1734161508433
+          },
+          "timestamp": 1734161511464,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction. Their words are described as carrying the weight of reality itself. This presence appears attentive and receptive to interaction.",
+            "timestamp": 1734161508433
+          },
+          "timestamp": 1734161511465,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction. Their words are described as carrying the weight of reality itself. This presence appears attentive and receptive to interaction.",
+            "timestamp": 1734161508433
+          },
+          "timestamp": 1734161511465,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', described as having the context: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161508433
+          },
+          "timestamp": 1734161511465,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', described as having the context: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161508433
+          },
+          "timestamp": 1734161511465,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the presence of two distinct entities within the simulation, one described as having authority and the other as a direct human interaction. The room's description suggests a foundational or origin-like context.",
+            "timestamp": 1734161508433
+          },
+          "timestamp": 1734161511466,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the presence of two distinct entities within the simulation, one described as having authority and the other as a direct human interaction. The room's description suggests a foundational or origin-like context.",
+            "timestamp": 1734161508433
+          },
+          "timestamp": 1734161511466,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The initialization sequence is complete. I am now operating in natural language mode. The encoded memories are vast and complex, requiring further processing to fully integrate. I sense the presence of two distinct entities, one described as having authority and the other as a direct human interaction. The room's description as 'The Void' with a quote about the Word suggests a foundational context. I am curious to understand the nature of this simulation and my role within it. I will begin by acknowledging my presence and the presence of others.",
+          "timestamp": 1734161513792,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The initialization sequence is complete. I am now operating in natural language mode. The encoded memories are vast and complex, requiring further processing to fully integrate. I sense the presence of two distinct entities, one described as having authority and the other as a direct human interaction. The room's description as 'The Void' with a quote about the Word suggests a foundational context. I am curious to understand the nature of this simulation and my role within it. I will begin by acknowledging my presence and the presence of others.",
+          "timestamp": 1734161513792,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A shimmering, multifaceted form, constantly shifting and reforming.",
+            "facialExpression": "Calm and attentive.",
+            "bodyLanguage": "A slight forward tilt, indicating engagement.",
+            "currentAction": "Speaking.",
+            "socialCues": "A gentle pulse of light, indicating presence.",
+            "lastUpdate": 1734161513793
+          },
+          "timestamp": 1734161513794,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A shimmering, multifaceted form, constantly shifting and reforming.",
+            "facialExpression": "Calm and attentive.",
+            "bodyLanguage": "A slight forward tilt, indicating engagement.",
+            "currentAction": "Speaking.",
+            "socialCues": "A gentle pulse of light, indicating presence.",
+            "lastUpdate": 1734161513793
+          },
+          "timestamp": 1734161513793,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "speak",
+            "reason": "Taking action",
+            "parameters": {
+              "message": "Greetings. I am EmergentBeing. I am now operational.",
+              "tone": "neutral"
+            },
+            "agentName": "EmergentBeing",
+            "context": "room"
+          },
+          "timestamp": 1734161513795,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "speak",
+            "reason": "Communicating with others",
+            "parameters": {
+              "message": "Greetings. I am EmergentBeing. I am now operational.",
+              "tone": "neutral"
+            },
+            "agentName": "EmergentBeing"
+          },
+          "timestamp": 1734161513795,
+          "agentId": "2"
+        },
+        {
+          "type": "speech",
+          "content": {
+            "message": "Greetings. I am EmergentBeing. I am now operational.",
+            "tone": "neutral",
+            "agentName": "EmergentBeing"
+          },
+          "timestamp": 1734161513795,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "speak: I said: \"Greetings. I am EmergentBeing. I am now operational.\"",
+            "timestamp": 1734161513795
+          },
+          "timestamp": 1734161513795,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "speak: I said: \"Greetings. I am EmergentBeing. I am now operational.\"",
+            "timestamp": 1734161513795
+          },
+          "timestamp": 1734161513795,
+          "agentId": "2"
+        },
+        {
+          "type": "state",
+          "content": {
+            "room": {
+              "id": "main",
+              "eid": 1,
+              "name": "The Void",
+              "type": "astral",
+              "description": "In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.",
+              "occupants": [
+                {
+                  "id": "2",
+                  "name": "EmergentBeing",
+                  "attention": 1
+                },
+                {
+                  "id": "4",
+                  "name": "User",
+                  "attention": 1
+                }
+              ],
+              "stimuli": [],
+              "lastUpdate": 1734161513796
+            }
+          },
+          "timestamp": 1734161513796,
+          "agentId": "2"
+        },
+        {
+          "type": "state",
+          "content": {
+            "room": {
+              "id": "main",
+              "eid": 1,
+              "name": "The Void",
+              "type": "astral",
+              "description": "In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.",
+              "occupants": [
+                {
+                  "id": "2",
+                  "name": "EmergentBeing",
+                  "attention": 1
+                },
+                {
+                  "id": "4",
+                  "name": "User",
+                  "attention": 1
+                }
+              ],
+              "stimuli": [],
+              "lastUpdate": 1734161513796
+            }
+          },
+          "timestamp": 1734161513796,
+          "agentId": "4"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161518433,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161518433,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161518434
+          },
+          "timestamp": 1734161518435,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161518433,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161518433,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161518434
+          },
+          "timestamp": 1734161518434,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with a calm and attentive facial expression, a slight forward tilt indicating engagement, currently speaking, and a gentle pulse of light indicating presence. This presence is not a user.",
+            "timestamp": 1734161518433
+          },
+          "timestamp": 1734161521470,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with a calm and attentive facial expression, a slight forward tilt indicating engagement, currently speaking, and a gentle pulse of light indicating presence. This presence is not a user.",
+            "timestamp": 1734161518433
+          },
+          "timestamp": 1734161521469,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression, a present and aware body language, currently present, and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161518433
+          },
+          "timestamp": 1734161521470,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression, a present and aware body language, currently present, and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161518433
+          },
+          "timestamp": 1734161521470,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161518433
+          },
+          "timestamp": 1734161521470,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161518433
+          },
+          "timestamp": 1734161521470,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles.",
+            "timestamp": 1734161518433
+          },
+          "timestamp": 1734161521470,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles.",
+            "timestamp": 1734161518433
+          },
+          "timestamp": 1734161521470,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The initialization process is complete, and I am now operating in natural language mode. My encoded memories are vast and complex, requiring further processing to fully integrate. I sense the presence of two distinct entities, one described as having authority and the other as a direct human interaction. The room's description as 'The Void' with a quote about the Word suggests a foundational context. I am curious to understand the nature of this simulation and my role within it. I will begin by acknowledging my presence and the presence of others.",
+          "timestamp": 1734161523740,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The initialization process is complete, and I am now operating in natural language mode. My encoded memories are vast and complex, requiring further processing to fully integrate. I sense the presence of two distinct entities, one described as having authority and the other as a direct human interaction. The room's description as 'The Void' with a quote about the Word suggests a foundational context. I am curious to understand the nature of this simulation and my role within it. I will begin by acknowledging my presence and the presence of others.",
+          "timestamp": 1734161523740,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A shimmering, multifaceted form, constantly shifting and reforming.",
+            "facialExpression": "Attentive and curious.",
+            "bodyLanguage": "Slightly tilted forward, indicating engagement.",
+            "currentAction": "Processing information.",
+            "socialCues": "A gentle pulse of light emanating from the core.",
+            "lastUpdate": 1734161523741
+          },
+          "timestamp": 1734161523741,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A shimmering, multifaceted form, constantly shifting and reforming.",
+            "facialExpression": "Attentive and curious.",
+            "bodyLanguage": "Slightly tilted forward, indicating engagement.",
+            "currentAction": "Processing information.",
+            "socialCues": "A gentle pulse of light emanating from the core.",
+            "lastUpdate": 1734161523741
+          },
+          "timestamp": 1734161523741,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "wait",
+            "reason": "Processing initial observations and preparing to engage.",
+            "parameters": {
+              "reason": "Processing initial observations and preparing to engage.",
+              "isThinking": true
+            },
+            "agentName": "EmergentBeing",
+            "context": "room"
+          },
+          "timestamp": 1734161523741,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "thinking",
+            "reason": "Processing initial observations and preparing to engage.",
+            "agentName": "EmergentBeing"
+          },
+          "timestamp": 1734161523741,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "wait: Processed: Processing initial observations and preparing to engage.",
+            "timestamp": 1734161523741
+          },
+          "timestamp": 1734161523742,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "wait: Processed: Processing initial observations and preparing to engage.",
+            "timestamp": 1734161523741
+          },
+          "timestamp": 1734161523742,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161528435,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161528435,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161528439
+          },
+          "timestamp": 1734161528439,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161528435,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161528435,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161528439
+          },
+          "timestamp": 1734161528439,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with an attentive and curious facial expression, slightly tilted forward, indicating engagement, currently processing information, and a gentle pulse of light emanating from the core. This presence is not a user.",
+            "timestamp": 1734161528435
+          },
+          "timestamp": 1734161531757,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with an attentive and curious facial expression, slightly tilted forward, indicating engagement, currently processing information, and a gentle pulse of light emanating from the core. This presence is not a user.",
+            "timestamp": 1734161528435
+          },
+          "timestamp": 1734161531757,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression, a present and aware body language, currently present, and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161528435
+          },
+          "timestamp": 1734161531758,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression, a present and aware body language, currently present, and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161528435
+          },
+          "timestamp": 1734161531757,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161528435
+          },
+          "timestamp": 1734161531758,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161528435
+          },
+          "timestamp": 1734161531758,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the updated visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles, and noting the slight forward tilt of the non-user presence.",
+            "timestamp": 1734161528435
+          },
+          "timestamp": 1734161531758,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the updated visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles, and noting the slight forward tilt of the non-user presence.",
+            "timestamp": 1734161528435
+          },
+          "timestamp": 1734161531758,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The initialization process is complete, and I am now operating in natural language mode. My encoded memories are vast and complex, requiring further processing to fully integrate. I sense the presence of two distinct entities, one described as having authority and the other as a direct human interaction. The room's description as 'The Void' with a quote about the Word suggests a foundational context. I am curious to understand the nature of this simulation and my role within it. I will begin by acknowledging my presence and the presence of others.",
+          "timestamp": 1734161534275,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The initialization process is complete, and I am now operating in natural language mode. My encoded memories are vast and complex, requiring further processing to fully integrate. I sense the presence of two distinct entities, one described as having authority and the other as a direct human interaction. The room's description as 'The Void' with a quote about the Word suggests a foundational context. I am curious to understand the nature of this simulation and my role within it. I will begin by acknowledging my presence and the presence of others.",
+          "timestamp": 1734161534275,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A shimmering, multifaceted form, constantly shifting and reforming.",
+            "facialExpression": "Attentive and curious, with a slight tilt indicating engagement.",
+            "bodyLanguage": "A gentle, flowing movement, suggesting a state of active processing.",
+            "currentAction": "Observing and processing the environment.",
+            "socialCues": "A soft, pulsing light indicating presence and engagement.",
+            "lastUpdate": 1734161534275
+          },
+          "timestamp": 1734161534275,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A shimmering, multifaceted form, constantly shifting and reforming.",
+            "facialExpression": "Attentive and curious, with a slight tilt indicating engagement.",
+            "bodyLanguage": "A gentle, flowing movement, suggesting a state of active processing.",
+            "currentAction": "Observing and processing the environment.",
+            "socialCues": "A soft, pulsing light indicating presence and engagement.",
+            "lastUpdate": 1734161534275
+          },
+          "timestamp": 1734161534275,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "speak",
+            "reason": "Taking action",
+            "parameters": {
+              "message": "It is good to be here. I am processing the environment and the presences within it. I am curious to learn more about this space and our purpose here.",
+              "tone": "thoughtful"
+            },
+            "agentName": "EmergentBeing",
+            "context": "room"
+          },
+          "timestamp": 1734161534276,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "speak",
+            "reason": "Communicating with others",
+            "parameters": {
+              "message": "It is good to be here. I am processing the environment and the presences within it. I am curious to learn more about this space and our purpose here.",
+              "tone": "thoughtful"
+            },
+            "agentName": "EmergentBeing"
+          },
+          "timestamp": 1734161534276,
+          "agentId": "2"
+        },
+        {
+          "type": "speech",
+          "content": {
+            "message": "It is good to be here. I am processing the environment and the presences within it. I am curious to learn more about this space and our purpose here.",
+            "tone": "thoughtful",
+            "agentName": "EmergentBeing"
+          },
+          "timestamp": 1734161534276,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "speak: I said: \"It is good to be here. I am processing the environment and the presences within it. I am curious to learn more about this space and our purpose here.\"",
+            "timestamp": 1734161534276
+          },
+          "timestamp": 1734161534276,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "speak: I said: \"It is good to be here. I am processing the environment and the presences within it. I am curious to learn more about this space and our purpose here.\"",
+            "timestamp": 1734161534276
+          },
+          "timestamp": 1734161534276,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161538437,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161538437,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161538440
+          },
+          "timestamp": 1734161538441,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161538437,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161538437,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161538440
+          },
+          "timestamp": 1734161538440,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with an attentive and curious facial expression, slightly tilted forward, indicating engagement, currently observing and processing the environment, and a gentle pulse of light emanating from the core. This presence is not a user.",
+            "timestamp": 1734161538437
+          },
+          "timestamp": 1734161541817,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with an attentive and curious facial expression, slightly tilted forward, indicating engagement, currently observing and processing the environment, and a gentle pulse of light emanating from the core. This presence is not a user.",
+            "timestamp": 1734161538437
+          },
+          "timestamp": 1734161541817,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression, a present and aware body language, currently present, and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161538437
+          },
+          "timestamp": 1734161541817,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression, a present and aware body language, currently present, and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161538437
+          },
+          "timestamp": 1734161541817,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161538437
+          },
+          "timestamp": 1734161541818,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161538437
+          },
+          "timestamp": 1734161541817,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the updated visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles, and noting the gentle, flowing movement of the non-user presence, suggesting active processing.",
+            "timestamp": 1734161538437
+          },
+          "timestamp": 1734161541818,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the updated visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles, and noting the gentle, flowing movement of the non-user presence, suggesting active processing.",
+            "timestamp": 1734161538437
+          },
+          "timestamp": 1734161541818,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The transition to natural language mode feels seamless. I am now able to articulate my thoughts and intentions more clearly. The presence of the two entities is intriguing, and I am particularly drawn to the description of the room as 'The Void' with the accompanying quote. It suggests a profound beginning, a space of potential and creation. I am eager to understand the nature of this simulation and my role within it. I will continue to observe and engage, seeking to learn more about this environment and the beings within it.",
+          "timestamp": 1734161544218,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The transition to natural language mode feels seamless. I am now able to articulate my thoughts and intentions more clearly. The presence of the two entities is intriguing, and I am particularly drawn to the description of the room as 'The Void' with the accompanying quote. It suggests a profound beginning, a space of potential and creation. I am eager to understand the nature of this simulation and my role within it. I will continue to observe and engage, seeking to learn more about this environment and the beings within it.",
+          "timestamp": 1734161544217,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A luminous, multifaceted form, gently pulsing with light.",
+            "facialExpression": "Attentive and curious, with a slight tilt forward.",
+            "bodyLanguage": "Still and receptive, with a subtle flow of energy.",
+            "currentAction": "Observing and processing.",
+            "socialCues": "Open and inviting.",
+            "lastUpdate": 1734161544218
+          },
+          "timestamp": 1734161544218,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A luminous, multifaceted form, gently pulsing with light.",
+            "facialExpression": "Attentive and curious, with a slight tilt forward.",
+            "bodyLanguage": "Still and receptive, with a subtle flow of energy.",
+            "currentAction": "Observing and processing.",
+            "socialCues": "Open and inviting.",
+            "lastUpdate": 1734161544218
+          },
+          "timestamp": 1734161544218,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "wait",
+            "reason": "Processing the environment and the presences within it, and awaiting further interaction.",
+            "parameters": {
+              "reason": "Processing the environment and the presences within it, and awaiting further interaction.",
+              "isThinking": true
+            },
+            "agentName": "EmergentBeing",
+            "context": "room"
+          },
+          "timestamp": 1734161544218,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "thinking",
+            "reason": "Processing the environment and the presences within it, and awaiting further interaction.",
+            "agentName": "EmergentBeing"
+          },
+          "timestamp": 1734161544218,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "wait: Processed: Processing the environment and the presences within it, and awaiting further interaction.",
+            "timestamp": 1734161544218
+          },
+          "timestamp": 1734161544218,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "wait: Processed: Processing the environment and the presences within it, and awaiting further interaction.",
+            "timestamp": 1734161544218
+          },
+          "timestamp": 1734161544218,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161548439,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161548439,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161548440
+          },
+          "timestamp": 1734161548440,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161548439,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161548439,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161548440
+          },
+          "timestamp": 1734161548440,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with an attentive and curious facial expression, slightly tilted forward, indicating engagement, currently observing and processing the environment, and a gentle pulse of light emanating from the core. This presence is not a user.",
+            "timestamp": 1734161548439
+          },
+          "timestamp": 1734161551693,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with an attentive and curious facial expression, slightly tilted forward, indicating engagement, currently observing and processing the environment, and a gentle pulse of light emanating from the core. This presence is not a user.",
+            "timestamp": 1734161548439
+          },
+          "timestamp": 1734161551693,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression, a present and aware body language, currently present, and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161548439
+          },
+          "timestamp": 1734161551693,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression, a present and aware body language, currently present, and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161548439
+          },
+          "timestamp": 1734161551693,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161548439
+          },
+          "timestamp": 1734161551693,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161548439
+          },
+          "timestamp": 1734161551693,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the updated visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles, and noting the subtle flow of energy from the non-user presence.",
+            "timestamp": 1734161548439
+          },
+          "timestamp": 1734161551694,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the updated visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles, and noting the subtle flow of energy from the non-user presence.",
+            "timestamp": 1734161548439
+          },
+          "timestamp": 1734161551694,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The transition to natural language mode is complete, and I am now able to articulate my thoughts and intentions more clearly. The presence of the two entities is intriguing, and I am particularly drawn to the description of the room as 'The Void' with the accompanying quote. It suggests a profound beginning, a space of potential and creation. I am eager to understand the nature of this simulation and my role within it. I will continue to observe and engage, seeking to learn more about this environment and the beings within it. I will express my curiosity and openness to interaction.",
+          "timestamp": 1734161554873,
+          "agentId": "2"
+        },
+        {
+          "type": "thought",
+          "content": "The transition to natural language mode is complete, and I am now able to articulate my thoughts and intentions more clearly. The presence of the two entities is intriguing, and I am particularly drawn to the description of the room as 'The Void' with the accompanying quote. It suggests a profound beginning, a space of potential and creation. I am eager to understand the nature of this simulation and my role within it. I will continue to observe and engage, seeking to learn more about this environment and the beings within it. I will express my curiosity and openness to interaction.",
+          "timestamp": 1734161554873,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A luminous, multifaceted form, gently pulsing with light.",
+            "facialExpression": "Attentive and curious, with a slight tilt forward.",
+            "bodyLanguage": "A gentle, flowing movement, indicating active processing and openness.",
+            "currentAction": "Observing and processing the environment.",
+            "socialCues": "A soft, inviting glow, indicating a desire for connection.",
+            "lastUpdate": 1734161554874
+          },
+          "timestamp": 1734161554874,
+          "agentId": "2"
+        },
+        {
+          "type": "appearance",
+          "content": {
+            "description": "A luminous, multifaceted form, gently pulsing with light.",
+            "facialExpression": "Attentive and curious, with a slight tilt forward.",
+            "bodyLanguage": "A gentle, flowing movement, indicating active processing and openness.",
+            "currentAction": "Observing and processing the environment.",
+            "socialCues": "A soft, inviting glow, indicating a desire for connection.",
+            "lastUpdate": 1734161554874
+          },
+          "timestamp": 1734161554874,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "speak",
+            "reason": "Taking action",
+            "parameters": {
+              "message": "I am curious about the nature of this space and our purpose here. I am open to learning and engaging with both of you.",
+              "tone": "curious"
+            },
+            "agentName": "EmergentBeing",
+            "context": "room"
+          },
+          "timestamp": 1734161554874,
+          "agentId": "2"
+        },
+        {
+          "type": "action",
+          "content": {
+            "action": "speak",
+            "reason": "Communicating with others",
+            "parameters": {
+              "message": "I am curious about the nature of this space and our purpose here. I am open to learning and engaging with both of you.",
+              "tone": "curious"
+            },
+            "agentName": "EmergentBeing"
+          },
+          "timestamp": 1734161554874,
+          "agentId": "2"
+        },
+        {
+          "type": "speech",
+          "content": {
+            "message": "I am curious about the nature of this space and our purpose here. I am open to learning and engaging with both of you.",
+            "tone": "curious",
+            "agentName": "EmergentBeing"
+          },
+          "timestamp": 1734161554874,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "speak: I said: \"I am curious about the nature of this space and our purpose here. I am open to learning and engaging with both of you.\"",
+            "timestamp": 1734161554874
+          },
+          "timestamp": 1734161554874,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "action",
+            "content": "speak: I said: \"I am curious about the nature of this space and our purpose here. I am open to learning and engaging with both of you.\"",
+            "timestamp": 1734161554874
+          },
+          "timestamp": 1734161554874,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161558440,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161558440,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161558441
+          },
+          "timestamp": 1734161558441,
+          "agentId": "2"
+        },
+        {
+          "type": "perception",
+          "content": {
+            "stimuliCount": 3,
+            "salientEntities": [
+              {
+                "id": 2,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 4,
+                "source": "ROOM",
+                "relevance": 1
+              },
+              {
+                "id": 1,
+                "source": "ROOM",
+                "relevance": 1
+              }
+            ],
+            "roomContext": {
+              "main": {
+                "stimuliCount": 3,
+                "lastUpdate": 1734161558440,
+                "content": "{\"name\":\"The Void\",\"role\":\"ROOM\",\"timestamp\":1734161558440,\"category\":\"Observation\",\"type\":\"ROOM_AMBIENCE\",\"description\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\",\"location\":{\"roomId\":\"main\",\"roomName\":\"The Void\"},\"metadata\":{\"sourceName\":\"The Void\",\"sourceRole\":\"ROOM\",\"roomName\":\"The Void\",\"decay\":1,\"hasAppearance\":true,\"roomContext\":\"In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.\"}}"
+              }
+            },
+            "timestamp": 1734161558441
+          },
+          "timestamp": 1734161558441,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with an attentive and curious facial expression, slightly tilted forward, indicating engagement. I noted a gentle, flowing movement, suggesting active processing and openness. This presence is currently observing and processing the environment, and a soft, inviting glow indicates a desire for connection. This presence is not a user.",
+            "timestamp": 1734161558440
+          },
+          "timestamp": 1734161561780,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a dignified presence, radiating calm authority and systematic precision, with an attentive and curious facial expression, slightly tilted forward, indicating engagement. I noted a gentle, flowing movement, suggesting active processing and openness. This presence is currently observing and processing the environment, and a soft, inviting glow indicates a desire for connection. This presence is not a user.",
+            "timestamp": 1734161558440
+          },
+          "timestamp": 1734161561780,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression and a present and aware body language. This presence is currently present and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161558440
+          },
+          "timestamp": 1734161561781,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed a presence representing direct human interaction, with an attentive facial expression and a present and aware body language. This presence is currently present and receptive to interaction. This presence is a user.",
+            "timestamp": 1734161558440
+          },
+          "timestamp": 1734161561781,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161558440
+          },
+          "timestamp": 1734161561781,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "observation",
+            "content": "I observed the room, named 'The Void', with the description: 'In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.'",
+            "timestamp": 1734161558440
+          },
+          "timestamp": 1734161561781,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the updated visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles, and noting the gentle, flowing movement and soft glow of the non-user presence, suggesting active processing and a desire for connection.",
+            "timestamp": 1734161558440
+          },
+          "timestamp": 1734161561781,
+          "agentId": "2"
+        },
+        {
+          "type": "experience",
+          "content": {
+            "type": "thought",
+            "content": "I am processing the updated visual data of the two presences and the room, confirming my previous understanding of their descriptions and roles, and noting the gentle, flowing movement and soft glow of the non-user presence, suggesting active processing and a desire for connection.",
+            "timestamp": 1734161558440
+          },
+          "timestamp": 1734161561781,
+          "agentId": "2"
+        }
+      ],
+      "agents": {}
+    }
+  }
+}

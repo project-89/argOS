@@ -70,7 +70,7 @@ export class RoomManager implements IRoomManager {
     // Verify room exists
     const rooms = query(this.world, [Room]);
     if (!rooms.includes(roomId)) {
-      logger.error(`Room ${roomId} not found`);
+      logger.error(`Room ${roomId} not found`, { roomId });
       return;
     }
 
