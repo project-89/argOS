@@ -55,7 +55,7 @@ async function cleanupUserConnection(ws: WS, userConn: { entity: number }) {
     await new Promise((resolve) => setTimeout(resolve, 0));
     runtime.getEventManager().emitWorldState();
   } catch (error) {
-    logger.error(`Error cleaning up user entity: ${error}`);
+    logger.error(`Error cleaning up user entity:`, { error });
   }
 }
 
@@ -215,7 +215,7 @@ wss.on("connection", (ws: WS) => {
 
   // Update error and close handlers
   ws.on("error", async (error) => {
-    logger.error(`WebSocket error: ${error}`);
+    logger.error(`WebSocket error:`, { error });
     const userConn = connectionUsers.get(ws);
     if (userConn) {
       await cleanupUserConnection(ws, userConn);
@@ -236,7 +236,7 @@ wss.on("connection", (ws: WS) => {
     const userConn = connectionUsers.get(ws);
 
     if (!userConn) {
-      logger.error("No user entity found for connection");
+      logger.error("No user entity found for connection", { ws });
       return;
     }
 
@@ -272,7 +272,7 @@ wss.on("connection", (ws: WS) => {
         // Find room entity
         const roomEntity = findRoomByStringId(runtime.world, roomId);
         if (!roomEntity) {
-          logger.error(`Room ${roomId} not found`);
+          logger.error(`Room ${roomId} not found`, { roomId });
           break;
         }
 

@@ -1,8 +1,10 @@
 To do
 
-[] - Clean up action system
+[] - reactor out perception, experience systems
+[] - Prompt Manager
+[] -
+[x] - Clean up action system
 [] - Figure out agenta across multiple rooms
-[] - Track agent...?
 [] - Global simulation time
 [] - Time control
 [x] - Handle appearabnce and other things with relationships

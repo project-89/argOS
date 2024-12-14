@@ -120,6 +120,7 @@ export const RoomSystem = createSystem<SystemConfig>(
           isUser: Agent.name[agentId] === "User",
         };
 
+        // Now add the component with values
         addComponent(
           world,
           stimulusEntity,
@@ -129,6 +130,7 @@ export const RoomSystem = createSystem<SystemConfig>(
             source: "ROOM",
             timestamp: Date.now(),
             content: JSON.stringify(appearanceContent),
+            roomId: Room.id[roomId] || String(roomId),
           })
         );
       }
@@ -139,14 +141,15 @@ export const RoomSystem = createSystem<SystemConfig>(
       createVisualStimulus(world, {
         sourceEntity: roomId,
         roomId: Room.id[roomId],
+        source: "ROOM",
+        decay: 1,
         appearance: true,
         data: {
+          name: Room.name[roomId],
+          timestamp: Date.now(),
+          category: "Observation",
           type: "ROOM_AMBIENCE",
           description: Room.description[roomId],
-          name: Room.name[roomId],
-          roomType: Room.type[roomId],
-          occupants: getRoomOccupants(world, roomId).length,
-          actionType: "OBSERVE",
         },
       });
     }

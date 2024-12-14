@@ -27,6 +27,13 @@ export function getAgentRoom(
   );
 }
 
+export function getAgentRooms(world: World, agentEid: number): number[] {
+  const rooms = query(world, [Room]);
+  return rooms.filter((roomEid) =>
+    hasComponent(world, agentEid, OccupiesRoom(roomEid))
+  );
+}
+
 /**
  * Find a room entity by its string ID
  */

@@ -4,9 +4,12 @@ import {
   gemini2FlashModel,
   geminiProModel,
 } from "../config/ai-config";
-import { GENERATE_THOUGHT, PROCESS_STIMULUS } from "../templates";
+import {
+  GENERATE_THOUGHT,
+  EXTRACT_EXPERIENCES,
+  PROCESS_STIMULUS,
+} from "../templates";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { EXTRACT_EXPERIENCES } from "../templates/process-stimulus";
 import { llmLogger } from "../utils/llm-logger";
 import { logger } from "../utils/logger";
 import { GENERATE_THOUGHT_SIMPLE } from "../templates/generate-thought";
@@ -47,14 +50,6 @@ export interface AgentState {
     content: string;
     timestamp: number;
   }>;
-  conversationState: {
-    lastSpeaker: string;
-    lastSpeechTime: number;
-    greetingMade: boolean;
-    unansweredQuestions: number;
-    engagementLevel: "none" | "minimal" | "active";
-    attemptsSinceResponse: number;
-  };
   availableTools: Array<{
     name: string;
     description: string;
@@ -66,8 +61,15 @@ export interface AgentState {
 /**
  * Core LLM call with consistent error handling and system prompt
  */
-async function callLLM(prompt: string, systemPrompt: string): Promise<string> {
+async function callLLM(
+  prompt: string,
+  systemPrompt: string,
+  agentId: string
+): Promise<string> {
   try {
+    llmLogger.logPrompt(agentId, prompt, systemPrompt);
+    const startTime = Date.now();
+
     const { text } = await generateText({
       model: gemini2FlashModel,
       // model: geminiProModel,
@@ -75,6 +77,9 @@ async function callLLM(prompt: string, systemPrompt: string): Promise<string> {
       prompt,
       system: systemPrompt,
     });
+
+    llmLogger.logResponse(agentId, text, Date.now() - startTime);
+
     return text || "";
   } catch (error) {
     console.error("LLM call failed:", error);
@@ -140,13 +145,8 @@ export async function generateThought(
       ),
     });
 
-    // Log prompt
-    llmLogger.logPrompt(agentId, prompt, state.systemPrompt);
-
     // Get LLM response
-    const text = await callLLM(prompt, state.systemPrompt);
-    const latency = Date.now() - startTime;
-    llmLogger.logResponse(agentId, text, latency);
+    const text = await callLLM(prompt, state.systemPrompt, agentId);
 
     try {
       // Parse and validate response
@@ -202,26 +202,28 @@ export interface ProcessStimulusState {
   timeSinceLastPerception: number;
   currentTimestamp: number;
   lastAction?: ActionResult;
-  conversationState: {
-    lastSpeaker: string;
-    lastSpeechTime: number;
-    greetingMade: boolean;
-    unansweredQuestions: number;
-    engagementLevel: "none" | "minimal" | "active";
-    attemptsSinceResponse: number;
-  };
   stimulus: Array<{
     type: string;
     source: number;
     data: any;
     timestamp: number;
   }>;
+  context?: {
+    salientEntities: Array<{ id: number; type: string; relevance: number }>;
+    roomContext: Record<string, any>;
+    recentEvents: Array<{
+      type: string;
+      timestamp: number;
+      description: string;
+    }>;
+    agentRole: string;
+    agentPrompt: string;
+  };
 }
 
 export async function processStimulus(
   state: ProcessStimulusState
 ): Promise<string> {
-  const startTime = Date.now();
   const agentId = state.name; // Using name as ID for now
 
   try {
@@ -230,13 +232,8 @@ export async function processStimulus(
       stimulus: JSON.stringify(state.stimulus, null, 2),
     });
 
-    // Log prompt
-    llmLogger.logPrompt(agentId, prompt, state.systemPrompt);
-
     // Get LLM response
-    const text = await callLLM(prompt, state.systemPrompt);
-    const latency = Date.now() - startTime;
-    llmLogger.logResponse(agentId, text, latency);
+    const text = await callLLM(prompt, state.systemPrompt, agentId);
 
     return text || "I perceive nothing of note.";
   } catch (error) {
@@ -253,25 +250,54 @@ export interface Experience {
 
 export interface ExtractExperiencesState {
   name: string;
+  agentId: string;
   role: string;
   systemPrompt: string;
   recentExperiences: Experience[];
   timestamp: number;
-  stimulus: {
+  perceptionSummary: string;
+  perceptionContext: any[];
+  stimulus: Array<{
     type: string;
     source: number;
     data: any;
-  }[];
+    timestamp: number;
+  }>;
 }
 
 function isValidExperience(exp: any): exp is Experience {
-  return (
-    exp &&
-    typeof exp === "object" &&
-    ["speech", "action", "observation", "thought"].includes(exp.type) &&
-    typeof exp.content === "string" &&
-    typeof exp.timestamp === "number"
-  );
+  // Add detailed validation logging
+  if (!exp || typeof exp !== "object") {
+    logger.error("Experience validation failed: not an object", { exp });
+    return false;
+  }
+
+  if (!exp.type) {
+    logger.error("Experience validation failed: missing type", { exp });
+    return false;
+  }
+
+  if (!["speech", "action", "observation", "thought"].includes(exp.type)) {
+    logger.error("Experience validation failed: invalid type", {
+      exp,
+      type: exp.type,
+    });
+    return false;
+  }
+
+  if (typeof exp.content !== "string") {
+    logger.error("Experience validation failed: content not a string", { exp });
+    return false;
+  }
+
+  if (typeof exp.timestamp !== "number") {
+    logger.error("Experience validation failed: timestamp not a number", {
+      exp,
+    });
+    return false;
+  }
+
+  return true;
 }
 
 function cleanAndParseJSON(text: string): Experience[] {
@@ -280,16 +306,36 @@ function cleanAndParseJSON(text: string): Experience[] {
 
   try {
     const parsed = JSON.parse(jsonContent);
+
+    // Add logging for the parsed content
+    logger.debug("Parsed experience JSON:", { parsed });
+
+    if (!parsed || typeof parsed !== "object") {
+      logger.error("Invalid JSON structure: not an object", { parsed });
+      return [];
+    }
+
     if (!Array.isArray(parsed.experiences)) {
-      throw new Error("Expected experiences array");
+      logger.error("Invalid JSON structure: experiences not an array", {
+        parsed,
+      });
+      return [];
     }
 
     return parsed.experiences
-      .map((exp: Experience) => (isValidExperience(exp) ? exp : null))
-      .filter((exp: Experience): exp is Experience => exp !== null);
+      .map((exp: any) => {
+        if (!isValidExperience(exp)) {
+          logger.error("Invalid experience object", { exp });
+          return null;
+        }
+        return exp;
+      })
+      .filter((exp: Experience | null): exp is Experience => exp !== null);
   } catch (e: unknown) {
     const error = e as Error;
-    logger.error(`Failed to parse experiences: ${error.message}`);
+    logger.error(`Failed to parse experiences JSON: ${error.message}`, {
+      text,
+    });
     return [];
   }
 }
@@ -298,17 +344,34 @@ export async function extractExperiences(
   state: ExtractExperiencesState
 ): Promise<Experience[]> {
   try {
+    // Log the state before processing
+    logger.debug("Extracting experiences from state:", {
+      agentName: state.name,
+      stimuliCount: state.stimulus.length,
+      recentExperiencesCount: state.recentExperiences.length,
+      perceptionSummaryLength: state.perceptionSummary.length,
+    });
+
     // Compose and log prompt using EXTRACT_EXPERIENCES template
     const prompt = composeFromTemplate(EXTRACT_EXPERIENCES, {
       ...state,
       recentExperiences: JSON.stringify(state.recentExperiences, null, 2),
       stimulus: JSON.stringify(state.stimulus, null, 2),
+      perceptionSummary: state.perceptionSummary,
     });
 
-    const text = await callLLM(prompt, state.systemPrompt);
-    return cleanAndParseJSON(text);
+    const text = await callLLM(prompt, state.systemPrompt, state.agentId);
+    const experiences = cleanAndParseJSON(text);
+
+    // Log the results
+    logger.debug("Extracted experiences:", {
+      count: experiences.length,
+      types: experiences.map((e) => e.type),
+    });
+
+    return experiences;
   } catch (error) {
-    logger.error(`Failed to extract experiences: ${error}`);
+    logger.error(`Failed to extract experiences:`, error);
     return [];
   }
 }

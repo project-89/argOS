@@ -17,7 +17,8 @@ export const schema = z.object({
 
 export const action = {
   name: "wait",
-  description: "Choose to wait, either to listen or process information",
+  description:
+    "Temporarily suspend active engagement to observe, process information, or allow space in conversation. Used when an agent needs time to think, wants to show they are listening attentively, or is being socially considerate by not interrupting. The wait action helps create natural conversation flow and shows social awareness.",
   parameters: ["reason", "isThinking"],
   schema,
 };

@@ -21,8 +21,16 @@ import {
   OccupiesRoom,
   StimulusInRoom,
   StimulusSource,
+  RecentActions,
+  Interaction,
 } from "../components/agent/Agent";
 import { logger } from "../utils/logger";
+import { StimulusType } from "../utils/stimulus-utils";
+import {
+  StimulusTypes,
+  isValidStimulusData,
+  validateStimulusContent,
+} from "../types/stimulus";
 
 export class ComponentSync {
   private observers: (() => void)[] = [];
@@ -114,7 +122,15 @@ export class ComponentSync {
         lastThought: Memory.lastThought[eid],
         perceptions: Memory.perceptions[eid],
         experiences: Memory.experiences[eid],
-      }))
+      })),
+      observe(this.world, onRemove(Memory), (eid) => {
+        delete Memory.thoughts[eid];
+        delete Memory.lastThought[eid];
+        delete Memory.lastUpdate[eid];
+        delete Memory.perceptions[eid];
+        delete Memory.experiences[eid];
+        delete Memory.conversationState[eid];
+      })
     );
 
     // Appearance sync with validation
@@ -159,17 +175,6 @@ export class ComponentSync {
         if (params.availableTools)
           Action.availableTools[eid] = params.availableTools;
         Action.lastActionTime[eid] = Date.now();
-        return params;
-      })
-    );
-
-    // Perception sync with processing timestamp
-    this.observers.push(
-      observe(this.world, onSet(Perception), (eid, params) => {
-        if (params.currentStimuli) {
-          Perception.currentStimuli[eid] = params.currentStimuli;
-          Perception.lastProcessedTime[eid] = Date.now();
-        }
         return params;
       })
     );
@@ -242,6 +247,143 @@ export class ComponentSync {
           store.strength[eid] = params.strength;
         return params;
       })
+    );
+
+    // RecentActions sync
+    this.observers.push(
+      observe(this.world, onSet(RecentActions), (eid, params) => {
+        if (params.actions) {
+          RecentActions.actions[eid] = params.actions;
+        }
+        return params;
+      }),
+      observe(this.world, onGet(RecentActions), (eid) => ({
+        actions: RecentActions.actions[eid] || [],
+      })),
+      observe(this.world, onRemove(RecentActions), (eid) => {
+        delete RecentActions.actions[eid];
+      })
+    );
+
+    // Add missing onRemove handlers for Perception
+    this.observers.push(
+      observe(this.world, onRemove(Perception), (eid) => {
+        delete Perception.currentStimuli[eid];
+        delete Perception.lastProcessedTime[eid];
+        delete Perception.summary[eid];
+        delete Perception.context[eid];
+      })
+    );
+
+    // Add missing onRemove handlers for Stimulus
+    this.observers.push(
+      observe(this.world, onRemove(Stimulus), (eid) => {
+        delete Stimulus.type[eid];
+        delete Stimulus.sourceEntity[eid];
+        delete Stimulus.source[eid];
+        delete Stimulus.content[eid];
+        delete Stimulus.timestamp[eid];
+        delete Stimulus.decay[eid];
+        delete Stimulus.roomId[eid];
+      })
+    );
+
+    // Add missing onRemove handlers for Room
+    this.observers.push(
+      observe(this.world, onRemove(Room), (eid) => {
+        delete Room.id[eid];
+        delete Room.name[eid];
+        delete Room.description[eid];
+        delete Room.type[eid];
+      })
+    );
+
+    // Add missing onRemove handlers for Action
+    this.observers.push(
+      observe(this.world, onRemove(Action), (eid) => {
+        delete Action.pendingAction[eid];
+        delete Action.lastActionTime[eid];
+        delete Action.lastActionResult[eid];
+        delete Action.availableTools[eid];
+      })
+    );
+
+    // Add missing onRemove handlers for Appearance
+    this.observers.push(
+      observe(this.world, onRemove(Appearance), (eid) => {
+        delete Appearance.baseDescription[eid];
+        delete Appearance.description[eid];
+        delete Appearance.facialExpression[eid];
+        delete Appearance.bodyLanguage[eid];
+        delete Appearance.currentAction[eid];
+        delete Appearance.socialCues[eid];
+        delete Appearance.lastUpdate[eid];
+      })
+    );
+
+    // Update Perception sync with improved structure and validation
+    this.observers.push(
+      observe(this.world, onSet(Perception), (eid, params) => {
+        // Handle current stimuli
+        if (params.currentStimuli) {
+          Perception.currentStimuli[eid] = params.currentStimuli;
+        }
+
+        // Update context with validation
+        if (params.context !== undefined) {
+          try {
+            const validContext = {
+              salientEntities: Array.isArray(params.context.salientEntities)
+                ? params.context.salientEntities
+                : [],
+              roomContext: params.context.roomContext || {},
+              stats: {
+                totalStimuli: params.context.stats?.totalStimuli || 0,
+                processedTimestamp: Date.now(),
+              },
+            };
+            Perception.context[eid] = validContext;
+          } catch (error) {
+            logger.error(`Invalid context format for entity ${eid}:`, {
+              error: error instanceof Error ? error.message : String(error),
+              context: JSON.stringify(params.context),
+            });
+            Perception.context[eid] = {
+              salientEntities: [],
+              roomContext: {},
+              stats: {
+                totalStimuli: 0,
+                processedTimestamp: Date.now(),
+              },
+            };
+          }
+        }
+
+        // Always update processing timestamp
+        if (params.lastProcessedTime) {
+          Perception.lastProcessedTime[eid] = params.lastProcessedTime;
+        }
+
+        // Update lastUpdate timestamp
+        if (params.lastUpdate) {
+          Perception.lastUpdate[eid] = params.lastUpdate;
+        }
+
+        return params;
+      }),
+      observe(this.world, onGet(Perception), (eid) => ({
+        currentStimuli: Perception.currentStimuli[eid] || [],
+        context: Perception.context[eid] || {
+          salientEntities: [],
+          roomContext: {},
+          stats: {
+            totalStimuli: 0,
+            processedTimestamp: 0,
+          },
+        },
+        lastProcessedTime: Perception.lastProcessedTime[eid] || 0,
+        lastUpdate: Perception.lastUpdate[eid] || 0,
+      }))
     );
   }
 

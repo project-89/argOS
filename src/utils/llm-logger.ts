@@ -23,7 +23,7 @@ class LLMLogger {
       fs.mkdirSync(this.logDir, { recursive: true });
       logger.debug(`Created LLM log directory: ${this.logDir}`);
     } catch (error) {
-      logger.error(`Failed to create LLM log directory: ${error}`);
+      logger.error(`Failed to create LLM log directory}`, error);
     }
   }
 
@@ -37,7 +37,7 @@ class LLMLogger {
       try {
         fs.writeFileSync(logPath, ""); // Create empty file
       } catch (error) {
-        logger.error(`Failed to create log file ${logPath}: ${error}`);
+        logger.error(`Failed to create log file ${logPath}`, error);
       }
     }
     return logPath;
@@ -47,13 +47,13 @@ class LLMLogger {
     try {
       fs.appendFileSync(logPath, content);
     } catch (error) {
-      logger.error(`Failed to write to log ${logPath}: ${error}`);
+      logger.error(`Failed to write to log ${logPath}}`, error);
       // Try to recreate directory and retry
       this.ensureLogDir();
       try {
         fs.appendFileSync(logPath, content);
       } catch (retryError) {
-        logger.error(`Retry failed for ${logPath}: ${retryError}`);
+        logger.error(`Retry failed for ${logPath}}`, retryError);
       }
     }
   }

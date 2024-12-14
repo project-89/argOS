@@ -10,6 +10,7 @@ import {
   RoomComponent,
   AppearanceComponent,
   StimulusComponent,
+  RecentActionsComponent,
 } from "../../components/agent/Agent";
 import { IStateManager } from "./IStateManager";
 import { logger } from "../../utils/logger";
@@ -35,6 +36,7 @@ export class StateManager implements IStateManager {
     this.registerComponent(RoomComponent);
     this.registerComponent(AppearanceComponent);
     this.registerComponent(StimulusComponent);
+    this.registerComponent(RecentActionsComponent);
   }
 
   // Component Registry

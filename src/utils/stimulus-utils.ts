@@ -21,6 +21,7 @@ interface BaseStimulus {
   sourceEntity: number;
   roomId: string;
   decay?: number;
+  source?: string;
 }
 
 function createStimulus(
@@ -29,40 +30,42 @@ function createStimulus(
   options: BaseStimulus,
   content: Record<string, any>
 ) {
-  const { sourceEntity, roomId } = options;
+  const { sourceEntity, roomId, source = "AGENT" } = options;
   const roomEntity = findRoomByStringId(world, roomId);
   if (!roomEntity) return;
 
   const decay = options.decay ?? DEFAULT_DECAY_BY_TYPE[type];
   const stimulusEntity = addEntity(world);
 
-  // Create stimulus content
-  const stimulusContent = {
-    name: Agent.name[sourceEntity],
-    role: Agent.role[sourceEntity],
+  // Serialize stimulus content
+  const stimulusContent = JSON.stringify({
+    name:
+      source === "ROOM" ? Room.name[sourceEntity] : Agent.name[sourceEntity],
+    role: source === "ROOM" ? "ROOM" : Agent.role[sourceEntity],
     timestamp: Date.now(),
     category: getStimulusCategory(type),
     ...content,
     metadata: {
-      sourceName: Agent.name[sourceEntity],
-      sourceRole: Agent.role[sourceEntity],
+      sourceName:
+        source === "ROOM" ? Room.name[sourceEntity] : Agent.name[sourceEntity],
+      sourceRole: source === "ROOM" ? "ROOM" : Agent.role[sourceEntity],
       roomName: Room.name[roomEntity],
       decay,
       ...content.metadata,
     },
-  };
+  });
 
-  // Add stimulus component with all properties
+  // Add stimulus component with serialized content
   addComponent(
     world,
     stimulusEntity,
     set(Stimulus, {
       type,
       sourceEntity,
-      source: "AGENT",
+      source,
       timestamp: Date.now(),
       decay,
-      content: JSON.stringify(stimulusContent),
+      content: stimulusContent,
       roomId,
     })
   );
