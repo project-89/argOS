@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { World } from "../types/bitecs";
-import { Memory, Room, Agent } from "../components/agent/Agent";
+import { Memory, Room, Agent } from "../components";
 import { logger } from "../utils/logger";
 import { getAgentRoom } from "../utils/queries";
 import { EventBus } from "../runtime/EventBus";
 import { Experience } from "../llm/agent-llm";
 import { ActionResult } from "../types/actions";
+import { queueStimulus } from "../systems/RoomSystem";
 
 export const schema = z.object({
   message: z.string(),
@@ -66,6 +67,21 @@ export async function execute(
   const agentName = Agent.name[eid];
 
   logger.agent(eid, `Says: ${message}`, agentName);
+
+  // Queue auditory stimulus
+  queueStimulus({
+    type: "AUDITORY",
+    sourceEntity: eid,
+    source: agentName,
+    content: {
+      message,
+      tone,
+      type: "speech",
+      target,
+    },
+    roomId: Room.id[roomId],
+    timestamp: Date.now(),
+  });
 
   // Emit action event to room
   eventBus.emitRoomEvent(

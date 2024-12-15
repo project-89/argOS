@@ -1,5 +1,5 @@
 import { World, query, hasComponent } from "bitecs";
-import { Agent, Room, OccupiesRoom } from "../components/agent/Agent";
+import { Agent, Room, OccupiesRoom } from "../components";
 
 /**
  * Get all occupants of a room

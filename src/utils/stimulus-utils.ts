@@ -5,7 +5,7 @@ import {
   Stimulus,
   StimulusInRoom,
   StimulusSource,
-} from "../components/agent/Agent";
+} from "../components";
 import { findRoomByStringId } from "./queries";
 import { STIMULUS_DECAY, DEFAULT_DECAY_BY_TYPE } from "./stimulus-constants";
 

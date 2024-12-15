@@ -9,7 +9,7 @@ import {
   StimulusSchema,
   RecentActionsSchema,
   InteractionSchema,
-} from "../components/agent/Agent";
+} from "../components";
 import { ActionResult } from "./actions";
 import { ComponentWithSchema } from "../components/createComponent";
 import { RelationWithSchema } from "../components/createRelation";

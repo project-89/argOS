@@ -23,7 +23,9 @@ import {
   StimulusSource,
   RecentActions,
   Interaction,
-} from "../components/agent/Agent";
+  Goal,
+  Plan,
+} from "../components";
 import { logger } from "../utils/logger";
 import { StimulusType } from "../utils/stimulus-utils";
 import {
@@ -318,6 +320,48 @@ export class ComponentSync {
         delete Appearance.currentAction[eid];
         delete Appearance.socialCues[eid];
         delete Appearance.lastUpdate[eid];
+      })
+    );
+
+    // Goal sync
+    this.observers.push(
+      observe(this.world, onSet(Goal), (eid, params) => {
+        if (params.goals) Goal.goals[eid] = params.goals;
+        if (params.activeGoalIds)
+          Goal.activeGoalIds[eid] = params.activeGoalIds;
+        if (params.lastUpdate) Goal.lastUpdate[eid] = params.lastUpdate;
+        return params;
+      }),
+      observe(this.world, onGet(Goal), (eid) => ({
+        goals: Goal.goals[eid] || [],
+        activeGoalIds: Goal.activeGoalIds[eid] || [],
+        lastUpdate: Goal.lastUpdate[eid] || Date.now(),
+      })),
+      observe(this.world, onRemove(Goal), (eid) => {
+        delete Goal.goals[eid];
+        delete Goal.activeGoalIds[eid];
+        delete Goal.lastUpdate[eid];
+      })
+    );
+
+    // Plan sync
+    this.observers.push(
+      observe(this.world, onSet(Plan), (eid, params) => {
+        if (params.plans) Plan.plans[eid] = params.plans;
+        if (params.activePlanIds)
+          Plan.activePlanIds[eid] = params.activePlanIds;
+        if (params.lastUpdate) Plan.lastUpdate[eid] = params.lastUpdate;
+        return params;
+      }),
+      observe(this.world, onGet(Plan), (eid) => ({
+        plans: Plan.plans[eid] || [],
+        activePlanIds: Plan.activePlanIds[eid] || [],
+        lastUpdate: Plan.lastUpdate[eid] || Date.now(),
+      })),
+      observe(this.world, onRemove(Plan), (eid) => {
+        delete Plan.plans[eid];
+        delete Plan.activePlanIds[eid];
+        delete Plan.lastUpdate[eid];
       })
     );
 

@@ -1,6 +1,6 @@
 import { World } from "../types/bitecs";
 import { addEntity, addComponent, removeEntity, query, set } from "bitecs";
-import { Agent, Room, Appearance, Stimulus } from "../components/agent/Agent";
+import { Agent, Room, Appearance, Stimulus } from "../components";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { getRooms, getRoomOccupants, getActiveAgents } from "../utils/queries";

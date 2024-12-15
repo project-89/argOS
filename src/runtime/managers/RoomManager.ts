@@ -15,7 +15,7 @@ import {
   Appearance,
   OccupiesRoom,
   Stimulus,
-} from "../../components/agent/Agent";
+} from "../../components";
 import { IRoomManager } from "./IRoomManager";
 import { logger } from "../../utils/logger";
 import { SimulationRuntime } from "../SimulationRuntime";

@@ -11,7 +11,9 @@ import {
   AppearanceComponent,
   StimulusComponent,
   RecentActionsComponent,
-} from "../../components/agent/Agent";
+  GoalComponent,
+  PlanComponent,
+} from "../../components";
 import { IStateManager } from "./IStateManager";
 import { logger } from "../../utils/logger";
 import { SimulationRuntime } from "../SimulationRuntime";
@@ -37,6 +39,8 @@ export class StateManager implements IStateManager {
     this.registerComponent(AppearanceComponent);
     this.registerComponent(StimulusComponent);
     this.registerComponent(RecentActionsComponent);
+    this.registerComponent(GoalComponent);
+    this.registerComponent(PlanComponent);
   }
 
   // Component Registry

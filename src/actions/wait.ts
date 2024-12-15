@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { World } from "../types/bitecs";
-import { Memory, Room, Agent } from "../components/agent/Agent";
+import { Memory, Room, Agent } from "../components";
 import { getAgentRoom } from "../utils/queries";
 import { logger } from "../utils/logger";
 import {

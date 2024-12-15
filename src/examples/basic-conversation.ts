@@ -2,7 +2,7 @@ import { createWorld, addEntity, addComponent, set } from "bitecs";
 import { createAgent } from "../utils/agent-factory";
 import { logger } from "../utils/logger";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
-import { Room, OccupiesRoom } from "../components/agent/Agent";
+import { Room, OccupiesRoom } from "../components";
 
 export async function setupBasicConversation(runtime: SimulationRuntime) {
   logger.system("Setting up basic conversation scenario...");

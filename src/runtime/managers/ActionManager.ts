@@ -3,7 +3,7 @@ import { ActionModule } from "../../types";
 import { IActionManager } from "./IActionManager";
 import { SimulationRuntime } from "../SimulationRuntime";
 import { EventBus } from "../EventBus";
-import { Action, Agent } from "../../components/agent/Agent";
+import { Action, Agent } from "../../components";
 import { logger } from "../../utils/logger";
 
 export class ActionManager implements IActionManager {

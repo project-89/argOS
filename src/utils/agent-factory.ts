@@ -18,7 +18,7 @@ import {
   OccupiesRoom,
   RecentActions,
   Perception,
-} from "../components/agent/Agent";
+} from "../components";
 import { AgentConfig } from "../types/agent";
 import { logger } from "../utils/logger";
 import { findRoomByStringId, getAgentRoom } from "../utils/queries";

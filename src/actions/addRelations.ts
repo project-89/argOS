@@ -2,7 +2,7 @@ import { z } from "zod";
 import { World, addComponent } from "bitecs";
 import { EventBus } from "../runtime/EventBus";
 import { logger } from "../utils/logger";
-import { Agent } from "../components/agent/Agent";
+import { Agent } from "../components";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 
 type RelationStore = {

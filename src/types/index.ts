@@ -1,4 +1,4 @@
-import { RoomType } from "../components/agent/Agent";
+import { RoomType } from "../components";
 import { World } from "bitecs";
 import { EventBus } from "../runtime/EventBus";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";

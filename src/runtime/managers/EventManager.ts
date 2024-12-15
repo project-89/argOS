@@ -11,7 +11,7 @@ import {
 import { IEventManager } from "./IEventManager";
 import { EventBus } from "../EventBus";
 import { SimulationRuntime } from "../SimulationRuntime";
-import { Agent, Room } from "../../components/agent/Agent";
+import { Agent, Room } from "../../components";
 import { logger } from "../../utils/logger";
 
 type EventWithCategory = {

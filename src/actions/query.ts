@@ -3,7 +3,7 @@ import { World } from "../types/bitecs";
 import { EventBus } from "../runtime/EventBus";
 import { logger } from "../utils/logger";
 import { query } from "bitecs";
-import { Agent, Room } from "../components/agent/Agent";
+import { Agent, Room } from "../components";
 
 // Schema matches the QueryParams from bitECSAgent.ts
 export const schema = z.object({

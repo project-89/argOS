@@ -56,6 +56,50 @@ export interface AgentState {
     parameters: string[];
     schema: any;
   }>;
+  goals?: Array<{
+    id: string;
+    description: string;
+    priority: number;
+    type: "long_term" | "short_term" | "immediate";
+    status: "active" | "completed" | "failed" | "suspended";
+    progress: number;
+    deadline?: number;
+    parentGoalId?: string;
+  }>;
+  activeGoals?: Array<{
+    id: string;
+    description: string;
+    priority: number;
+    type: "long_term" | "short_term" | "immediate";
+    status: "active";
+    progress: number;
+    deadline?: number;
+    parentGoalId?: string;
+  }>;
+  activePlans?: Array<{
+    id: string;
+    goalId: string;
+    steps: Array<{
+      id: string;
+      description: string;
+      status: "pending" | "in_progress" | "completed" | "failed";
+      requiredTools?: string[];
+      expectedOutcome: string;
+    }>;
+    currentStepId?: string;
+    status: "active";
+  }>;
+  currentPlanSteps?: Array<{
+    planId: string;
+    goalId: string;
+    step: {
+      id: string;
+      description: string;
+      status: "pending" | "in_progress" | "completed" | "failed";
+      requiredTools?: string[];
+      expectedOutcome: string;
+    };
+  }>;
 }
 
 /**

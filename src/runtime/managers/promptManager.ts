@@ -7,7 +7,7 @@ import {
   Appearance,
   RecentActions,
   Room,
-} from "../../components/agent/Agent";
+} from "../../components";
 import {
   PromptTemplate,
   PromptContext,

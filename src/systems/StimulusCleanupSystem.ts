@@ -1,5 +1,5 @@
 import { World, query, removeEntity } from "bitecs";
-import { Stimulus } from "../components/agent/Agent";
+import { Stimulus } from "../components";
 import { logger } from "../utils/logger";
 import { createSystem } from "./System";
 

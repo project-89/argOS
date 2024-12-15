@@ -2,7 +2,7 @@ import { z } from "zod";
 import { World, addEntity as addBitECSEntity } from "bitecs";
 import { EventBus } from "../runtime/EventBus";
 import { logger } from "../utils/logger";
-import { Agent } from "../components/agent/Agent";
+import { Agent } from "../components";
 
 export const schema = z.object({
   name: z.string(),
