@@ -6,7 +6,7 @@ import { createAgent as createAgentFactory } from "../utils/agent-factory";
 import { getAgentRoom } from "../utils/queries";
 import { ActionResult } from "../types/actions";
 import { ActionContent } from "../types";
-import { Agent } from "../components/agent/Agent";
+import { Agent } from "../components";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 
 export const schema = z

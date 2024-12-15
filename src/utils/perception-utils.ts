@@ -1,5 +1,5 @@
 import { World, query, hasComponent } from "bitecs";
-import { Room, Stimulus, OccupiesRoom } from "../components/agent/Agent";
+import { Room, Stimulus, OccupiesRoom } from "../components";
 import { logger } from "./logger";
 import {
   StimulusData,

@@ -2,13 +2,7 @@ import "dotenv/config";
 import { World, removeEntity, query } from "bitecs";
 import { ActionModule } from "../types";
 import { logger } from "../utils/logger";
-import {
-  Agent,
-  Memory,
-  Perception,
-  Room,
-  Stimulus,
-} from "../components/agent/Agent";
+import { Agent, Memory, Perception, Room, Stimulus } from "../components";
 import { EventBus } from "./EventBus";
 import { ComponentSync } from "./ComponentSync";
 import EventEmitter from "events";

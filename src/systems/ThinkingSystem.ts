@@ -7,7 +7,12 @@ import {
   Room,
   OccupiesRoom,
   Perception,
-} from "../components/agent/Agent";
+  Goal,
+  Plan,
+  PlanStepType,
+  SinglePlanType,
+  SingleGoalType,
+} from "../components";
 import { generateThought, AgentState, Experience } from "../llm/agent-llm";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
@@ -64,6 +69,28 @@ async function generateAgentThought(
     timeSinceLastAction: Action.lastActionTime[eid]
       ? Date.now() - Action.lastActionTime[eid]
       : undefined,
+    goals: Goal.goals[eid] || [],
+    activeGoals: (Goal.goals[eid] || []).filter(
+      (g: SingleGoalType) => g.status === "active"
+    ),
+    activePlans: (Plan.plans[eid] || []).filter(
+      (p: SinglePlanType) => p.status === "active"
+    ),
+    currentPlanSteps: (Plan.plans[eid] || ([] as SinglePlanType[]))
+      .filter((p: SinglePlanType) => p.status === "active")
+      .map((p: SinglePlanType) => {
+        const currentStep = p.steps.find(
+          (s: PlanStepType) => s.id === p.currentStepId
+        );
+        return currentStep
+          ? {
+              planId: p.id,
+              goalId: p.goalId,
+              step: currentStep,
+            }
+          : null;
+      })
+      .filter(Boolean),
   };
 
   const thought = await generateThought(agentState);

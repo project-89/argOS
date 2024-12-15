@@ -1,5 +1,5 @@
 import { World, query, setComponent } from "bitecs";
-import { Agent, Memory, Perception } from "../components/agent/Agent";
+import { Agent, Memory, Perception } from "../components";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import {

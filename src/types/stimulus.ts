@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { StimulusSchema } from "../components/agent/Agent";
+import { StimulusSchema } from "../components";
 
 // Core stimulus types
 export const StimulusTypes = {

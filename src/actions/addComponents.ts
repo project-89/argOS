@@ -2,7 +2,7 @@ import { z } from "zod";
 import { World, addComponent } from "bitecs";
 import { EventBus } from "../runtime/EventBus";
 import { logger } from "../utils/logger";
-import { Agent, Room, Appearance } from "../components/agent/Agent";
+import { Agent, Room, Appearance } from "../components";
 
 // Schema matches AddComponentParams from bitECSAgent.ts
 export const schema = z.object({

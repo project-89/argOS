@@ -9,7 +9,7 @@ import {
   RoomEvent,
 } from "../types";
 // import { setupSingleAgent } from "../examples/single-agent-setup";
-import { Agent, Room } from "../components/agent/Agent";
+import { Agent, Room } from "../components";
 import { createAuditoryStimulus } from "../utils/stimulus-utils";
 import { World, removeEntity } from "bitecs";
 import { logger } from "../utils/logger";

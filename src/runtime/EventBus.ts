@@ -1,10 +1,5 @@
 import { World, query } from "bitecs";
-import {
-  Room,
-  OccupiesRoom,
-  Agent,
-  Appearance,
-} from "../components/agent/Agent";
+import { Room, OccupiesRoom, Agent, Appearance } from "../components";
 import {
   RoomEvent,
   AgentEvent,

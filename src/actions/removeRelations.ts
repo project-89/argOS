@@ -8,7 +8,7 @@ import {
   OccupiesRoom,
   StimulusInRoom,
   StimulusSource,
-} from "../components/agent/Agent";
+} from "../components";
 
 // Schema matches AddRelationParams from bitECSAgent.ts (same schema for removal)
 export const schema = z.object({
