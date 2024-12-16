@@ -27,6 +27,7 @@ import {
   Plan,
 } from "../components";
 import { logger } from "../utils/logger";
+import { AgentState } from "../types/state";
 
 export class ComponentSync {
   private observers: (() => void)[] = [];
@@ -320,20 +321,23 @@ export class ComponentSync {
     // Goal sync
     this.observers.push(
       observe(this.world, onSet(Goal), (eid, params) => {
-        if (params.goals) Goal.goals[eid] = params.goals;
-        if (params.activeGoalIds)
-          Goal.activeGoalIds[eid] = params.activeGoalIds;
-        if (params.lastUpdate) Goal.lastUpdate[eid] = params.lastUpdate;
+        if (params.current !== undefined) {
+          Goal.current[eid] = params.current;
+        }
+        if (params.completed !== undefined) {
+          Goal.completed[eid] = params.completed;
+        }
+        Goal.lastUpdate[eid] = Date.now();
         return params;
       }),
       observe(this.world, onGet(Goal), (eid) => ({
-        goals: Goal.goals[eid] || [],
-        activeGoalIds: Goal.activeGoalIds[eid] || [],
+        current: Goal.current[eid] || [],
+        completed: Goal.completed[eid] || [],
         lastUpdate: Goal.lastUpdate[eid] || Date.now(),
       })),
       observe(this.world, onRemove(Goal), (eid) => {
-        delete Goal.goals[eid];
-        delete Goal.activeGoalIds[eid];
+        delete Goal.current[eid];
+        delete Goal.completed[eid];
         delete Goal.lastUpdate[eid];
       })
     );

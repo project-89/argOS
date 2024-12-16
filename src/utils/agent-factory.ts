@@ -18,6 +18,8 @@ import {
   OccupiesRoom,
   RecentActions,
   Perception,
+  Goal,
+  Plan,
 } from "../components";
 import { AgentConfig } from "../types/agent";
 import { logger } from "../utils/logger";
@@ -107,7 +109,7 @@ export function moveUserToRoom(
 
 export function createAgent(
   world: World,
-  config: AgentConfig & { tools?: string[] }
+  config: AgentConfig & { tools?: string[]; initialGoals?: string[] }
 ) {
   const {
     name,
@@ -117,6 +119,7 @@ export function createAgent(
     appearance = "A nondescript figure",
     active = 1,
     tools = ["speak", "wait"], // Default tools
+    initialGoals = [], // Default to empty goals
   } = config;
 
   const eid = addEntity(world);
@@ -165,6 +168,38 @@ export function createAgent(
     world,
     eid,
     set(Perception, { currentStimuli: [], lastProcessedTime: 0 })
+  );
+
+  // Add goals component with initial goals if provided
+  addComponent(
+    world,
+    eid,
+    set(Goal, {
+      current: initialGoals.map((description) => ({
+        id: `goal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        description,
+        priority: 0.5,
+        type: "long_term",
+        status: "active",
+        progress: 0,
+        success_criteria: [],
+        progress_indicators: [],
+        created_at: Date.now(),
+      })),
+      completed: [],
+      lastUpdate: Date.now(),
+    })
+  );
+
+  // Add plans component
+  addComponent(
+    world,
+    eid,
+    set(Plan, {
+      current: [], // Active plans
+      completed: [], // Completed plans history
+      lastUpdate: Date.now(),
+    })
   );
 
   // make sure tools are valid

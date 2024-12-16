@@ -1,13 +1,7 @@
-import { AgentSchema } from "../components/Agent";
-import { RoomSchema } from "../components/Room";
 import { NetworkLink } from "./network";
 import { AgentEvent, RoomEvent } from "./events";
-import { z } from "zod";
 import { EventCategory, EventType } from "./events";
 import { AgentState, RoomState } from "./state";
-
-type AgentType = z.infer<typeof AgentSchema>;
-type RoomType = z.infer<typeof RoomSchema>;
 
 // WebSocket Message Types
 export type MessageType =
@@ -32,8 +26,8 @@ export interface BaseMessage {
 
 // World State Message
 export interface WorldState {
-  agents: AgentType[];
-  rooms: RoomType[];
+  agents: AgentState[];
+  rooms: RoomState[];
   relationships: NetworkLink[];
   isRunning: boolean;
   timestamp: number;

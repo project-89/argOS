@@ -13,7 +13,8 @@ import {
   SinglePlanType,
   SingleGoalType,
 } from "../components";
-import { generateThought, AgentState, Experience } from "../llm/agent-llm";
+import { generateThought, Experience } from "../llm/agent-llm";
+import { AgentState } from "../types/state";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { createVisualStimulus } from "../utils/stimulus-utils";
@@ -45,56 +46,46 @@ async function generateAgentThought(
 ): Promise<ThoughtResult> {
   logger.debug(`Generating thought for ${Agent.name[eid]}`);
 
-  const agentState: AgentState = {
+  const state: AgentState = {
+    id: String(eid),
     name: Agent.name[eid],
     role: Agent.role[eid],
     systemPrompt: Agent.systemPrompt[eid],
+    active: Agent.active[eid],
+    platform: Agent.platform[eid],
+    attention: Agent.attention[eid],
     thoughtHistory: Memory.thoughts[eid] || [],
     perceptions: {
-      narrative: Perception.summary[eid],
-      raw: Perception.context[eid],
+      narrative: Perception.summary[eid] || "",
+      raw: Perception.currentStimuli[eid] || [],
     },
-    experiences: Memory.experiences[eid] || [],
-    availableTools: runtime.getActionManager().getEntityTools(eid),
-    lastAction: Action.lastActionResult[eid]
-      ? {
-          success: Action.lastActionResult[eid].success,
-          message: Action.lastActionResult[eid].message,
-          actionName: Action.lastActionResult[eid].actionName,
-          timestamp: Action.lastActionResult[eid].timestamp,
-          parameters: Action.lastActionResult[eid].parameters,
-          data: Action.lastActionResult[eid].data,
-        }
-      : undefined,
+    lastAction: Action.lastActionResult[eid],
     timeSinceLastAction: Action.lastActionTime[eid]
       ? Date.now() - Action.lastActionTime[eid]
-      : undefined,
-    goals: Goal.goals[eid] || [],
-    activeGoals: (Goal.goals[eid] || []).filter(
-      (g: SingleGoalType) => g.status === "active"
-    ),
-    activePlans: (Plan.plans[eid] || []).filter(
-      (p: SinglePlanType) => p.status === "active"
-    ),
-    currentPlanSteps: (Plan.plans[eid] || ([] as SinglePlanType[]))
-      .filter((p: SinglePlanType) => p.status === "active")
-      .map((p: SinglePlanType) => {
-        const currentStep = p.steps.find(
-          (s: PlanStepType) => s.id === p.currentStepId
-        );
-        return currentStep
-          ? {
-              planId: p.id,
-              goalId: p.goalId,
-              step: currentStep,
-            }
-          : null;
-      })
-      .filter(Boolean),
+      : 0,
+    experiences: Memory.experiences[eid] || [],
+    availableTools: runtime.getActionManager().getEntityTools(eid),
+    goals: Goal.current[eid] || [],
+    completedGoals: Goal.completed[eid] || [],
+    appearance: {
+      description: Appearance.baseDescription[eid],
+      facialExpression: Appearance.facialExpression[eid],
+      bodyLanguage: Appearance.bodyLanguage[eid],
+      currentAction: Appearance.currentAction[eid],
+      socialCues: Appearance.socialCues[eid],
+    },
   };
 
-  const thought = await generateThought(agentState);
-  logger.agent(eid, `Thought: ${thought.thought}`, Agent.name[eid]);
+  console.log("THINKING State:", state);
+
+  const thought = await generateThought(state);
+
+  console.log("Thought:", thought);
+  logger.agent(
+    eid,
+    `Thought: ${JSON.stringify(thought, null, 2)}`,
+    Agent.name[eid]
+  );
 
   // Emit thought event
   runtime.eventBus.emitAgentEvent(eid, "thought", "thought", thought.thought);
@@ -128,7 +119,9 @@ function handleAgentAction(world: World, eid: number, thought: ThoughtResult) {
   if (thought.action) {
     logger.agent(
       eid,
-      `I decided to take the action: ${thought.action.tool}`,
+      `I decided to take the action: ${
+        thought.action.tool
+      }\nParameters: ${JSON.stringify(thought.action.parameters, null, 2)}`,
       Agent.name[eid]
     );
 

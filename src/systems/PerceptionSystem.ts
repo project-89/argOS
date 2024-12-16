@@ -14,18 +14,25 @@ import { PerceptionContext } from "../types/perception";
 export const PerceptionSystem = createSystem(
   (runtime) => async (world: World) => {
     const agents = query(world, [Agent, Memory, Perception]);
-    logger.system(`PerceptionSystem processing ${agents.length} agents`);
+    logger.system("PerceptionSystem", `Processing ${agents.length} agents`);
 
     for (const eid of agents) {
       try {
+        const agentName = Agent.name[eid];
+
         // Skip inactive agents
         if (!Agent.active[eid]) {
-          logger.debug(`Agent ${Agent.name[eid]} is not active, skipping`);
+          logger.debug(`Agent ${agentName} is not active, skipping`);
           continue;
         }
 
         // Stage 1: Gather all relevant stimuli for the agent
         const rawStimuli = gatherStimuliForAgent(world, eid);
+        logger.agent(
+          eid,
+          `Gathered ${rawStimuli.length} raw stimuli`,
+          agentName
+        );
 
         // Skip if no new stimuli and last process was recent
         const lastProcessTime = Perception.lastProcessedTime[eid] || 0;
@@ -42,6 +49,11 @@ export const PerceptionSystem = createSystem(
           0,
           eid
         );
+        logger.agent(
+          eid,
+          `Prioritized ${prioritizedStimuli.length} stimuli for processing`,
+          agentName
+        );
 
         // Stage 3: Build perception context
         const context: PerceptionContext = {
@@ -56,9 +68,15 @@ export const PerceptionSystem = createSystem(
           },
         };
 
+        logger.agent(
+          eid,
+          `Built perception context with ${context.salientEntities.length} salient entities`,
+          agentName
+        );
+
         // Stage 4: Generate narrative perception using processStimulus
         const perceptionState = {
-          name: Agent.name[eid],
+          name: agentName,
           role: Agent.role[eid],
           systemPrompt: Agent.systemPrompt[eid],
           recentPerceptions: Memory.perceptions[eid] || "",
@@ -75,8 +93,11 @@ export const PerceptionSystem = createSystem(
         };
 
         const narrative = await processStimulus(perceptionState);
-
-        console.log("narrative!!!!!!!!!!", narrative);
+        logger.agent(
+          eid,
+          `Generated perception narrative: ${narrative.substring(0, 100)}...`,
+          agentName
+        );
 
         // Stage 5: Update agent's perception component
         setComponent(world, eid, Perception, {
@@ -101,11 +122,17 @@ export const PerceptionSystem = createSystem(
           timestamp: Date.now(),
         });
 
-        logger.debug(
-          `Updated perception for ${Agent.name[eid]}: ${prioritizedStimuli.length} stimuli processed`
+        logger.agent(
+          eid,
+          `Completed perception cycle: ${prioritizedStimuli.length} stimuli processed`,
+          agentName
         );
       } catch (error) {
-        logger.error(`Error in PerceptionSystem for agent ${eid}:`, error);
+        const agentName = Agent.name[eid];
+        logger.error(
+          `Error in PerceptionSystem for agent ${agentName}:`,
+          error
+        );
       }
     }
 

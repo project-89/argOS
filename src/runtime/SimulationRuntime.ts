@@ -22,6 +22,7 @@ import { PerceptionSystem } from "../systems/PerceptionSystem";
 import { ExperienceSystem } from "../systems/ExperienceSystem";
 import { PromptManager } from "./managers/promptManager";
 import { perceptionPrompt } from "../prompts/perception";
+import { GoalPlanningSystem } from "../systems/GoalPlanningSystem";
 
 // Validate required environment variables
 if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
@@ -47,6 +48,7 @@ const defaultSystems = [
   ExperienceSystem.create,
   ThinkingSystem.create,
   ActionSystem.create,
+  GoalPlanningSystem.create,
   StimulusCleanupSystem.create,
 ];
 

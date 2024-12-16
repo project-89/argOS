@@ -110,7 +110,7 @@ export function ChatInterface({
               ? ` (${actionContent.result})`
               : "";
             const paramsStr = actionContent.parameters
-              ? `: ${JSON.stringify(actionContent.parameters, null, 2)}`
+              ? `: ${JSON.stringify(actionContent.parameters)}`
               : "";
             return `${actionStr}${reasonStr}${paramsStr}`;
           }
@@ -118,14 +118,33 @@ export function ChatInterface({
             return content.message;
           }
           if ("content" in content) {
-            return content.content;
+            return typeof content.content === "object"
+              ? JSON.stringify(content.content)
+              : content.content;
           }
+          // For perception events, extract just the narrative
+          if ("narrative" in content && typeof content.narrative === "string") {
+            return content.narrative;
+          }
+          // Fallback for other object types
+          return JSON.stringify(content);
         }
         // Direct string content (like thoughts, observations)
         return String(content);
       }
       // Handle AGENT_UPDATE content
-      return String(log.data.content);
+      const content = log.data.content;
+      if (
+        typeof content === "object" &&
+        content !== null &&
+        "narrative" in content &&
+        typeof content.narrative === "string"
+      ) {
+        return content.narrative;
+      }
+      return typeof content === "object"
+        ? JSON.stringify(content)
+        : String(content);
     }
     return "";
   };
