@@ -1,12 +1,14 @@
 import { World, query, hasComponent } from "bitecs";
-import { Room, Stimulus, OccupiesRoom } from "../components";
-import { logger } from "./logger";
 import {
-  StimulusData,
+  Room,
+  Stimulus,
+  OccupiesRoom,
+  StimulusTypes,
   StimulusType,
   SourceType,
-  StimulusTypes,
-} from "../types/stimulus";
+} from "../components";
+import { logger } from "./logger";
+import { StimulusData } from "../types/stimulus";
 
 // Priority mapping for different stimulus types
 export const STIMULUS_PRIORITIES = {

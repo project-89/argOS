@@ -1,11 +1,7 @@
 import {
   ServerMessage,
   ClientMessage,
-  Agent,
   ConnectionUpdateMessage,
-  AgentState,
-  RoomUpdateMessage,
-  AgentUpdateMessage,
 } from "../../types";
 import { useSimulationStore } from "../../state/simulation";
 

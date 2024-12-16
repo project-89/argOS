@@ -1,6 +1,26 @@
 import { z } from "zod";
 import { createComponent } from "./createComponent";
-import { StimulusTypes, StimulusType, SourceTypes } from "../types/stimulus";
+
+// Core stimulus types
+export const StimulusTypes = {
+  VISUAL: "VISUAL",
+  AUDITORY: "AUDITORY",
+  COGNITIVE: "COGNITIVE",
+  TECHNICAL: "TECHNICAL",
+  ENVIRONMENTAL: "ENVIRONMENTAL",
+} as const;
+
+export type StimulusType = (typeof StimulusTypes)[keyof typeof StimulusTypes];
+
+// Source types for stimuli
+export const SourceTypes = {
+  AGENT: "AGENT",
+  ROOM: "ROOM",
+  USER: "USER",
+  SYSTEM: "SYSTEM",
+} as const;
+
+export type SourceType = (typeof SourceTypes)[keyof typeof SourceTypes];
 
 // Stimulus schema and component
 export const StimulusSchema = z.object({

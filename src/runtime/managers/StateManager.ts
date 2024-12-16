@@ -109,7 +109,7 @@ export class StateManager implements IStateManager {
       name: agentComponent.component.name[eid],
       role: agentComponent.component.role[eid],
       systemPrompt: agentComponent.component.systemPrompt[eid],
-      active: agentComponent.component.active[eid] === 1,
+      active: agentComponent.component.active[eid],
       platform: agentComponent.component.platform[eid],
       appearance: agentComponent.component.appearance[eid],
       attention: agentComponent.component.attention[eid],
