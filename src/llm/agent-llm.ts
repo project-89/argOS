@@ -4,16 +4,22 @@ import {
   gemini2FlashModel,
   geminiProModel,
 } from "../config/ai-config";
-import {
-  GENERATE_THOUGHT,
-  EXTRACT_EXPERIENCES,
-  PROCESS_STIMULUS,
-} from "../templates";
+import { EXTRACT_EXPERIENCES, PROCESS_STIMULUS } from "../templates";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { llmLogger } from "../utils/llm-logger";
 import { logger } from "../utils/logger";
+import { parseJSON } from "../utils/json";
 import { GENERATE_THOUGHT_SIMPLE } from "../templates/generate-thought";
 import { ActionResult } from "../types/actions";
+import { World } from "bitecs";
+import { Agent, Memory, Perception } from "../components";
+import { SimulationRuntime } from "../runtime/SimulationRuntime";
+import { GENERATE_GOALS } from "../templates/generate-goals";
+import {
+  EVALUATE_GOAL_PROGRESS,
+  GoalEvaluation,
+} from "../templates/evaluate-goal-progress";
+import { DETECT_SIGNIFICANT_CHANGES } from "../templates/detect-significant-changes";
 
 export interface ThoughtResponse {
   thought: string;
@@ -115,8 +121,8 @@ async function callLLM(
     const startTime = Date.now();
 
     const { text } = await generateText({
-      model: gemini2FlashModel,
-      // model: geminiProModel,
+      // model: gemini2FlashModel,
+      model: geminiProModel,
       // model: geminiFlashModel,
       prompt,
       system: systemPrompt,
@@ -289,6 +295,7 @@ export interface Experience {
   type: "speech" | "action" | "observation" | "thought";
   content: string;
   timestamp: number;
+  category?: string;
 }
 
 export interface ExtractExperiencesState {
@@ -302,100 +309,58 @@ export interface ExtractExperiencesState {
   perceptionContext: any[];
   stimulus: Array<{
     type: string;
-    source: number;
+    source: string | number;
     data: any;
     timestamp: number;
   }>;
 }
 
-function isValidExperience(exp: any): exp is Experience {
-  // Add detailed validation logging
-  if (!exp || typeof exp !== "object") {
-    logger.error("Experience validation failed: not an object", { exp });
-    return false;
-  }
-
-  if (!exp.type) {
-    logger.error("Experience validation failed: missing type", { exp });
-    return false;
-  }
-
-  if (!["speech", "action", "observation", "thought"].includes(exp.type)) {
-    logger.error("Experience validation failed: invalid type", {
-      exp,
-      type: exp.type,
+function validateExperiences(experiences: any[]): experiences is Experience[] {
+  if (!Array.isArray(experiences)) {
+    logger.error("Experiences validation failed: not an array", {
+      experiences,
     });
     return false;
   }
 
-  if (typeof exp.content !== "string") {
-    logger.error("Experience validation failed: content not a string", { exp });
-    return false;
-  }
-
-  if (typeof exp.timestamp !== "number") {
-    logger.error("Experience validation failed: timestamp not a number", {
-      exp,
-    });
-    return false;
-  }
-
-  return true;
-}
-
-function cleanAndParseJSON(text: string): Experience[] {
-  // Remove JSON code block markers
-  const jsonContent = text.replace(/```json\n|\n```/g, "").trim();
-
-  try {
-    const parsed = JSON.parse(jsonContent);
-
-    // Add logging for the parsed content
-    logger.debug("Parsed experience JSON:", { parsed });
-
-    if (!parsed || typeof parsed !== "object") {
-      logger.error("Invalid JSON structure: not an object", { parsed });
-      return [];
+  return experiences.every((exp) => {
+    if (!exp || typeof exp !== "object") {
+      logger.error("Experience validation failed: not an object", { exp });
+      return false;
     }
 
-    if (!Array.isArray(parsed.experiences)) {
-      logger.error("Invalid JSON structure: experiences not an array", {
-        parsed,
+    const validType = ["speech", "action", "observation", "thought"].includes(
+      exp.type
+    );
+    const validContent =
+      typeof exp.content === "string" && exp.content.length > 0;
+    const validTimestamp =
+      typeof exp.timestamp === "number" && exp.timestamp > 0;
+
+    if (!validType || !validContent || !validTimestamp) {
+      logger.error("Experience validation failed", {
+        exp,
+        validType,
+        validContent,
+        validTimestamp,
       });
-      return [];
+      return false;
     }
 
-    return parsed.experiences
-      .map((exp: any) => {
-        if (!isValidExperience(exp)) {
-          logger.error("Invalid experience object", { exp });
-          return null;
-        }
-        return exp;
-      })
-      .filter((exp: Experience | null): exp is Experience => exp !== null);
-  } catch (e: unknown) {
-    const error = e as Error;
-    logger.error(`Failed to parse experiences JSON: ${error.message}`, {
-      text,
-    });
-    return [];
-  }
+    return true;
+  });
 }
 
 export async function extractExperiences(
   state: ExtractExperiencesState
 ): Promise<Experience[]> {
   try {
-    // Log the state before processing
     logger.debug("Extracting experiences from state:", {
       agentName: state.name,
       stimuliCount: state.stimulus.length,
       recentExperiencesCount: state.recentExperiences.length,
-      perceptionSummaryLength: state.perceptionSummary.length,
     });
 
-    // Compose and log prompt using EXTRACT_EXPERIENCES template
     const prompt = composeFromTemplate(EXTRACT_EXPERIENCES, {
       ...state,
       recentExperiences: JSON.stringify(state.recentExperiences, null, 2),
@@ -404,17 +369,163 @@ export async function extractExperiences(
     });
 
     const text = await callLLM(prompt, state.systemPrompt, state.agentId);
-    const experiences = cleanAndParseJSON(text);
+    const parsed = parseJSON<{ experiences: any[] }>(text);
 
-    // Log the results
+    // Validate experiences
+    if (!validateExperiences(parsed.experiences)) {
+      throw new Error("Invalid experiences format");
+    }
+
     logger.debug("Extracted experiences:", {
-      count: experiences.length,
-      types: experiences.map((e) => e.type),
+      count: parsed.experiences.length,
+      types: parsed.experiences.map((e) => e.type),
     });
 
-    return experiences;
+    return parsed.experiences;
   } catch (error) {
     logger.error(`Failed to extract experiences:`, error);
     return [];
+  }
+}
+
+export interface GenerateGoalsState {
+  name: string;
+  role: string;
+  systemPrompt: string;
+  agentId: string;
+  currentGoals: any[];
+  recentExperiences: any[];
+  perceptionSummary: string;
+  perceptionContext: string;
+}
+
+export interface EvaluateGoalState {
+  name: string;
+  systemPrompt: string;
+  agentId: string;
+  goalDescription: string;
+  goalType: string;
+  successCriteria: string[];
+  progressIndicators: string[];
+  currentProgress: number;
+  recentExperiences: any[];
+  perceptionSummary: string;
+  perceptionContext: string;
+}
+
+export interface DetectChangesState {
+  name: string;
+  role: string;
+  systemPrompt: string;
+  agentId: string;
+  currentGoals: any[];
+  recentExperiences: any[];
+  perceptionSummary: string;
+  perceptionContext: string;
+}
+
+export async function generateGoals(state: GenerateGoalsState) {
+  try {
+    logger.debug("Generating goals for agent:", {
+      agentName: state.name,
+      currentGoalsCount: state.currentGoals.length,
+      recentExperiencesCount: state.recentExperiences.length,
+    });
+
+    const prompt = composeFromTemplate(GENERATE_GOALS, {
+      ...state,
+      currentGoals: JSON.stringify(state.currentGoals, null, 2),
+      recentExperiences: JSON.stringify(state.recentExperiences, null, 2),
+    });
+
+    const text = await callLLM(prompt, state.systemPrompt, state.agentId);
+    const parsed = parseJSON<{ goals: any[] }>(text);
+
+    logger.debug("Generated goals:", {
+      count: parsed.goals.length,
+      types: parsed.goals.map((g) => g.type),
+    });
+
+    return parsed.goals;
+  } catch (error) {
+    logger.error(`Failed to generate goals:`, error);
+    return [];
+  }
+}
+
+export async function evaluateGoalProgress(
+  state: EvaluateGoalState
+): Promise<GoalEvaluation["evaluation"]> {
+  try {
+    logger.debug("Evaluating goal progress:", {
+      agentName: state.name,
+      goalDescription: state.goalDescription,
+      currentProgress: state.currentProgress,
+    });
+
+    const prompt = composeFromTemplate(EVALUATE_GOAL_PROGRESS, {
+      ...state,
+      successCriteria: JSON.stringify(state.successCriteria, null, 2),
+      progressIndicators: JSON.stringify(state.progressIndicators, null, 2),
+      recentExperiences: JSON.stringify(state.recentExperiences, null, 2),
+    });
+
+    const text = await callLLM(prompt, state.systemPrompt, state.agentId);
+    const parsed = parseJSON<GoalEvaluation>(text);
+
+    logger.debug("Goal evaluation:", {
+      complete: parsed.evaluation.complete,
+      progress: parsed.evaluation.progress,
+      criteriaMetCount: parsed.evaluation.criteria_met.length,
+    });
+
+    return parsed.evaluation;
+  } catch (error) {
+    logger.error(`Failed to evaluate goal progress:`, error);
+    return {
+      complete: false,
+      progress: 0,
+      criteria_met: [],
+      criteria_partial: [],
+      criteria_blocked: [],
+      recent_advancements: [],
+      blockers: [],
+      next_steps: [],
+    };
+  }
+}
+
+export async function detectSignificantChanges(state: DetectChangesState) {
+  try {
+    logger.debug("Detecting significant changes for agent:", {
+      agentName: state.name,
+      currentGoalsCount: state.currentGoals.length,
+      recentExperiencesCount: state.recentExperiences.length,
+    });
+
+    const prompt = composeFromTemplate(DETECT_SIGNIFICANT_CHANGES, {
+      ...state,
+      currentGoals: JSON.stringify(state.currentGoals, null, 2),
+      recentExperiences: JSON.stringify(state.recentExperiences, null, 2),
+    });
+
+    const text = await callLLM(prompt, state.systemPrompt, state.agentId);
+    const parsed = parseJSON<{ analysis: any }>(text);
+
+    logger.debug("Change analysis:", {
+      significantChange: parsed.analysis.significant_change,
+      changeCount: parsed.analysis.changes.length,
+      recommendation: parsed.analysis.recommendation,
+    });
+
+    return parsed.analysis;
+  } catch (error) {
+    logger.error(`Failed to detect significant changes:`, error);
+    return {
+      significant_change: false,
+      changes: [],
+      recommendation: "maintain_goals",
+      reasoning: ["Error in change detection"],
+    };
   }
 }
