@@ -186,7 +186,7 @@ export async function generateThought(
         Object.fromEntries(
           state.availableTools.map((tool) => [
             tool.name,
-            zodToJsonSchema(tool.schema, { name: tool.name }),
+            tool.schema && tool.schema._def ? zodToJsonSchema(tool.schema) : {},
           ])
         ),
         null,
@@ -238,6 +238,7 @@ export async function generateThought(
       };
     }
   } catch (error) {
+    console.error("Error in thought generation", error);
     llmLogger.logError(agentId, error, "Error in thought generation");
     return { thought: "My mind is blank right now." };
   }

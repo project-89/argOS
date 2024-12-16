@@ -13,6 +13,10 @@ import {
   RecentActionsComponent,
   GoalComponent,
   PlanComponent,
+  Memory,
+  Perception,
+  Action,
+  Goal,
 } from "../../components";
 import { IStateManager } from "./IStateManager";
 import { logger } from "../../utils/logger";
@@ -100,25 +104,37 @@ export class StateManager implements IStateManager {
 
   getAgentState(eid: number): AgentState {
     const roomId = this.runtime.getRoomManager().getAgentRoom(eid);
-    const agentComponent = this.getComponent("Agent")!;
-    const appearanceComponent = this.getComponent("Appearance")!;
-    const roomComponent = this.getComponent("Room")!;
 
     return {
       id: String(eid),
-      name: agentComponent.component.name[eid],
-      role: agentComponent.component.role[eid],
-      systemPrompt: agentComponent.component.systemPrompt[eid],
-      active: agentComponent.component.active[eid],
-      platform: agentComponent.component.platform[eid],
-      appearance: agentComponent.component.appearance[eid],
-      attention: agentComponent.component.attention[eid],
-      roomId: roomId ? roomComponent.component.id[roomId] : null,
-      facialExpression: appearanceComponent.component.facialExpression[eid],
-      bodyLanguage: appearanceComponent.component.bodyLanguage[eid],
-      currentAction: appearanceComponent.component.currentAction[eid],
-      socialCues: appearanceComponent.component.socialCues[eid],
-      lastUpdate: appearanceComponent.component.lastUpdate[eid] || Date.now(),
+      name: Agent.name[eid],
+      role: Agent.role[eid],
+      systemPrompt: Agent.systemPrompt[eid],
+      active: Agent.active[eid],
+      platform: Agent.platform[eid],
+      appearance: {
+        description: Appearance.description[eid] || "",
+        facialExpression: Appearance.facialExpression[eid] || "",
+        bodyLanguage: Appearance.bodyLanguage[eid] || "",
+        currentAction: Appearance.currentAction[eid] || "",
+        socialCues: Appearance.socialCues[eid] || [],
+      },
+      attention: Agent.attention[eid],
+      roomId: roomId ? Room.id[roomId] : null,
+      lastUpdate: Appearance.lastUpdate[eid] || Date.now(),
+      thoughtHistory: Memory.thoughts[eid] || [],
+      perceptions: {
+        narrative: Perception.summary[eid] || "",
+        raw: Perception.currentStimuli[eid] || [],
+      },
+      lastAction: Action.lastActionResult[eid],
+      timeSinceLastAction: Action.lastActionTime[eid]
+        ? Date.now() - Action.lastActionTime[eid]
+        : 0,
+      experiences: Memory.experiences[eid] || [],
+      availableTools: Action.availableTools[eid] || [],
+      goals: Goal.current[eid] || [],
+      completedGoals: Goal.completed[eid] || [],
     };
   }
 

@@ -1,187 +1,239 @@
-import { World, query, setComponent, hasComponent } from "bitecs";
+import { World, query } from "bitecs";
+import { createSystem } from "./System";
+import { Agent, Goal, Memory, Perception } from "../components";
 import {
-  Agent,
-  Memory,
-  Goal,
-  Plan,
-  Action,
-  SinglePlanType,
-  GoalType,
-  SingleGoalType,
-} from "../components";
-import { createSystem, SystemConfig } from "./System";
+  generateGoals,
+  evaluateGoalProgress,
+  detectSignificantChanges,
+} from "../llm/agent-llm";
+import { CognitiveStimulus } from "../types/stimulus";
+import { EventBus } from "../runtime/EventBus";
 import { logger } from "../utils/logger";
-import { SimulationRuntime } from "../runtime/SimulationRuntime";
-import { v4 as uuidv4 } from "uuid";
+import { ChangeAnalysis } from "../types/cognitive";
 
-// Helper to generate goals based on agent state
-async function generateGoals(
-  world: World,
-  eid: number,
-  runtime: SimulationRuntime
-) {
-  const agentState = {
-    name: Agent.name[eid],
-    role: Agent.role[eid],
-    systemPrompt: Agent.systemPrompt[eid],
-    thoughts: Memory.thoughts[eid] || [],
-    experiences: Memory.experiences[eid] || [],
-    currentGoals: Goal.goals[eid] || [],
-  };
-
-  // TODO: Use LLM to generate appropriate goals based on agent state
-  // For now, return a simple goal if none exist
-  if (!Goal.goals[eid] || Goal.goals[eid].length === 0) {
-    return [
-      {
-        id: uuidv4(),
-        description: `Understand my role as ${Agent.role[eid]}`,
-        priority: 1,
-        type: "long_term",
-        status: "active",
-        progress: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-    ];
-  }
-
-  return Goal.goals[eid];
-}
-
-// Helper to create plans for active goals
-async function createPlans(
-  world: World,
-  eid: number,
-  goals: any[],
-  runtime: SimulationRuntime
-) {
-  const existingPlans: SinglePlanType[] = Plan.plans[eid] || [];
-  const newPlans: SinglePlanType[] = [];
-
-  for (const goal of goals) {
-    // Skip if goal already has an active plan
-    if (
-      existingPlans.some((p) => p.goalId === goal.id && p.status === "active")
-    ) {
-      continue;
-    }
-
-    // TODO: Use LLM to generate appropriate plan steps
-    // For now, create a simple plan
-    newPlans.push({
-      id: uuidv4(),
-      goalId: goal.id,
-      description: `Plan to achieve: ${goal.description}`,
-      priority: goal.priority || 1,
-      steps: [
-        {
-          id: uuidv4(),
-          description: `Think about how to achieve: ${goal.description}`,
-          status: "pending",
-          order: 0,
-          expectedOutcome: "Better understanding of the goal",
-        },
-      ],
-      status: "active",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-  }
-
-  return [...existingPlans, ...newPlans];
-}
-
-// Helper to update goal and plan progress
-function updateProgress(world: World, eid: number, runtime: SimulationRuntime) {
-  const goals = Goal.goals[eid] || [];
-  const plans = Plan.plans[eid] || [];
-  const updatedGoals = [...goals];
-  const updatedPlans = [...plans];
-
-  for (const plan of updatedPlans) {
-    if (plan.status !== "active") continue;
-
-    // Update plan progress
-    const completedSteps = plan.steps.filter(
-      (s: SinglePlanType) => s.status === "completed"
-    ).length;
-    const progress = completedSteps / plan.steps.length;
-
-    // Update corresponding goal progress
-    const goalIndex = updatedGoals.findIndex((g) => g.id === plan.goalId);
-    if (goalIndex >= 0) {
-      updatedGoals[goalIndex] = {
-        ...updatedGoals[goalIndex],
-        progress,
-        status: progress >= 1 ? "completed" : "active",
-        updatedAt: Date.now(),
-      };
-    }
-
-    // Update plan status if all steps complete
-    if (progress >= 1) {
-      plan.status = "completed";
-      plan.updatedAt = Date.now();
-    }
-  }
-
-  return { updatedGoals, updatedPlans };
-}
-
-export const GoalPlanningSystem = createSystem<SystemConfig>(
+export const GoalPlanningSystem = createSystem(
   (runtime) => async (world: World) => {
-    const agents = query(world, [Agent, Memory, Goal, Plan]);
-    logger.debug(`GoalPlanningSystem processing ${agents.length} agents`);
+    logger.system("GoalPlanningSystem", "Starting goal planning cycle");
+    const agents = query(world, [Agent, Goal, Memory, Perception]);
+    logger.system("GoalPlanningSystem", `Processing ${agents.length} agents`);
 
     for (const eid of agents) {
+      if (!Agent.active[eid]) continue;
+
+      const agentName = Agent.name[eid];
+      logger.agent(eid, "Starting goal planning process", agentName);
+
+      const currentGoals = Goal.current[eid] || [];
+      const memories = Memory.experiences[eid] || [];
+      const perceptions = Perception.currentStimuli[eid] || [];
+
       try {
-        // Skip inactive agents
-        if (!Agent.active[eid]) continue;
+        logger.agent(eid, "Detecting significant changes", agentName);
+        const changeAnalysis = await detectSignificantChanges({
+          name: agentName,
+          role: Agent.role[eid],
+          systemPrompt: Agent.systemPrompt[eid],
+          agentId: Agent.id[eid],
+          currentGoals,
+          recentExperiences: memories,
+          perceptionSummary: JSON.stringify(perceptions),
+          perceptionContext: getContextSummary(eid, runtime),
+        });
 
-        // Stage 1: Generate/update goals
-        const goals = await generateGoals(world, eid, runtime);
+        if (changeAnalysis.significant_change) {
+          logger.agent(
+            eid,
+            `Significant changes detected: ${JSON.stringify({
+              changes: changeAnalysis.changes.length,
+              recommendation: changeAnalysis.recommendation,
+            })}`,
+            agentName
+          );
 
-        // Stage 2: Create/update plans for active goals
-        const activeGoals = goals.filter(
-          (g: SingleGoalType) => g.status === "active"
-        );
-        const plans = await createPlans(world, eid, activeGoals, runtime);
+          // Emit cognitive stimuli for significant changes
+          changeAnalysis.changes.forEach(
+            (change: ChangeAnalysis["changes"][0]) => {
+              logger.agent(
+                eid,
+                `Processing change: ${JSON.stringify({
+                  description: change.description,
+                })}`,
+                agentName
+              );
+              const stimulus: CognitiveStimulus = {
+                type: "cognitive",
+                subtype: "realization",
+                intensity: change.impact_level / 5,
+                content: {
+                  description: change.description,
+                  metadata: { change },
+                },
+                private: true,
+              };
 
-        // Stage 3: Update progress
-        const { updatedGoals, updatedPlans } = updateProgress(
-          world,
+              runtime.eventBus.emitAgentEvent(
+                eid,
+                "perception",
+                "cognitive",
+                stimulus
+              );
+            }
+          );
+
+          // Generate new goals if recommended
+          if (changeAnalysis.recommendation !== "maintain_goals") {
+            logger.agent(eid, "Generating new goals", agentName);
+            const newGoals = await generateGoals({
+              name: agentName,
+              role: Agent.role[eid],
+              systemPrompt: Agent.systemPrompt[eid],
+              agentId: Agent.id[eid],
+              currentGoals,
+              recentExperiences: memories,
+              perceptionSummary: JSON.stringify(perceptions),
+              perceptionContext: getContextSummary(eid, runtime),
+            });
+
+            logger.agent(
+              eid,
+              `Generated ${newGoals.length} new goals`,
+              agentName
+            );
+
+            // Emit cognitive stimuli for new goals
+            newGoals.forEach((goal) => {
+              logger.agent(
+                eid,
+                `Processing new goal: ${JSON.stringify({ goalId: goal.id })}`,
+                agentName
+              );
+              const stimulus: CognitiveStimulus = {
+                type: "cognitive",
+                subtype: "goal_created",
+                intensity: 0.8,
+                content: {
+                  goalId: goal.id,
+                  description: `Created new goal: ${goal.description}`,
+                  metadata: { goal },
+                },
+                private: true,
+              };
+
+              runtime.eventBus.emitAgentEvent(
+                eid,
+                "perception",
+                "cognitive",
+                stimulus
+              );
+            });
+
+            // Update agent's goals
+            Goal.current[eid] = [...currentGoals, ...newGoals];
+          }
+        } else {
+          logger.agent(eid, "No significant changes detected", agentName);
+        }
+
+        // Check progress on current goals
+        logger.agent(
           eid,
-          runtime
+          `Evaluating progress on ${currentGoals.length} goals`,
+          agentName
         );
+        for (const goal of currentGoals) {
+          if (goal.status === "in_progress") {
+            logger.agent(
+              eid,
+              `Evaluating goal progress: ${JSON.stringify({
+                goalId: goal.id,
+              })}`,
+              agentName
+            );
+            const evaluation = await evaluateGoalProgress({
+              name: agentName,
+              systemPrompt: Agent.systemPrompt[eid],
+              agentId: Agent.id[eid],
+              goalDescription: goal.description,
+              goalType: goal.type,
+              successCriteria: goal.success_criteria,
+              progressIndicators: goal.progress_indicators,
+              currentProgress: goal.progress,
+              recentExperiences: memories,
+              perceptionSummary: JSON.stringify(perceptions),
+              perceptionContext: getContextSummary(eid, runtime),
+            });
 
-        // Stage 4: Update components
-        setComponent(world, eid, Goal, {
-          goals: updatedGoals,
-          activeGoalIds: updatedGoals
-            .filter((g) => g.status === "active")
-            .map((g) => g.id),
-          lastUpdate: Date.now(),
-        });
+            if (evaluation.complete) {
+              logger.agent(
+                eid,
+                `Goal completed: ${JSON.stringify({ goalId: goal.id })}`,
+                agentName
+              );
+              goal.status = "completed";
+              emitGoalStimulus(eid, goal, "goal_complete", runtime.eventBus);
+            } else if (evaluation.progress !== goal.progress) {
+              logger.agent(
+                eid,
+                `Goal progress updated: ${JSON.stringify({
+                  goalId: goal.id,
+                  progress: evaluation.progress,
+                })}`,
+                agentName
+              );
+              goal.progress = evaluation.progress;
+              emitGoalStimulus(eid, goal, "goal_progress", runtime.eventBus);
+            }
 
-        setComponent(world, eid, Plan, {
-          plans: updatedPlans,
-          activePlanIds: updatedPlans
-            .filter((p) => p.status === "active")
-            .map((p) => p.id),
-          lastUpdate: Date.now(),
-        });
+            // Update goal details based on evaluation
+            goal.criteria_met = evaluation.criteria_met;
+            goal.criteria_partial = evaluation.criteria_partial;
+            goal.criteria_blocked = evaluation.criteria_blocked;
+            goal.next_steps = evaluation.next_steps;
+          }
+        }
 
-        // Emit events for goal/plan updates
-        // runtime.eventBus.emitAgentEvent(eid, "goals", "goals_updated", {
-        //   goals: updatedGoals,
-        //   plans: updatedPlans,
-        // });
+        logger.agent(eid, "Completed goal planning cycle", agentName);
       } catch (error) {
-        logger.error(`Error in GoalPlanningSystem for agent ${eid}`, error);
+        logger.error(
+          `Error in GoalPlanningSystem for agent ${agentName}:`,
+          error
+        );
       }
     }
 
+    logger.system("GoalPlanningSystem", "Completed goal planning cycle");
     return world;
   }
 );
+
+function getContextSummary(eid: number, runtime: any): string {
+  const roomId = runtime.getRoomManager().getAgentRoom(eid);
+  const room = roomId ? runtime.getStateManager().getRoomState(roomId) : null;
+
+  return JSON.stringify({
+    currentRoom: room?.name || "unknown",
+    currentTime: new Date().toISOString(),
+    activeAgents: runtime.getStateManager().getWorldState().agents.length,
+  });
+}
+
+function emitGoalStimulus(
+  eid: number,
+  goal: any,
+  subtype: CognitiveStimulus["subtype"],
+  eventBus: EventBus
+) {
+  const stimulus: CognitiveStimulus = {
+    type: "cognitive",
+    subtype,
+    intensity: 0.7,
+    content: {
+      goalId: goal.id,
+      description: `Goal ${subtype}: ${goal.description}`,
+      metadata: { goal },
+    },
+    private: true,
+  };
+
+  eventBus.emitAgentEvent(eid, "perception", "cognitive", stimulus);
+}

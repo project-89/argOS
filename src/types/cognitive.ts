@@ -17,3 +17,13 @@ export interface CognitiveSystem {
     state: AgentCognitiveState
   ): Promise<void>;
 }
+
+export interface ChangeAnalysis {
+  significant_change: boolean;
+  changes: Array<{
+    description: string;
+    impact_level: number;
+  }>;
+  recommendation: "maintain_goals" | "update_goals" | "new_goals";
+  reasoning: string[];
+}

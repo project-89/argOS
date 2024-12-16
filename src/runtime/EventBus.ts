@@ -21,7 +21,6 @@ export class EventBus {
 
   constructor(world: World) {
     this.world = world;
-    console.log("Initializing SimulationLogger...");
     this.simulationLogger = new SimulationLogger();
   }
 
@@ -68,7 +67,13 @@ export class EventBus {
       systemPrompt: Agent.systemPrompt[eid],
       active: Agent.active[eid],
       platform: Agent.platform[eid],
-      appearance: Agent.appearance[eid],
+      appearance: {
+        description: Appearance.description[eid],
+        facialExpression: Appearance.facialExpression[eid],
+        bodyLanguage: Appearance.bodyLanguage[eid],
+        currentAction: Appearance.currentAction[eid],
+        socialCues: Appearance.socialCues[eid],
+      },
       attention: Agent.attention[eid],
       roomId: roomId ? Room.id[roomId] || String(roomId) : null,
       facialExpression: Appearance.facialExpression[eid],
@@ -76,6 +81,24 @@ export class EventBus {
       currentAction: Appearance.currentAction[eid],
       socialCues: Appearance.socialCues[eid],
       lastUpdate: Date.now(),
+      thoughtHistory: [],
+      perceptions: {
+        narrative: "",
+        raw: [],
+      },
+      lastAction: {
+        success: false,
+        message: "No action taken yet",
+        timestamp: Date.now(),
+        actionName: "none",
+        parameters: {},
+        data: {},
+      },
+      timeSinceLastAction: 0,
+      experiences: [],
+      availableTools: [],
+      goals: [],
+      completedGoals: [],
     };
   }
 
@@ -87,10 +110,6 @@ export class EventBus {
     agentId?: string
   ) {
     const stringRoomId = Room.id[roomEid] || String(roomEid);
-    console.log(
-      `[EventBus] Emitting room event: ${type} from agent ${agentId} in room ${stringRoomId}`
-    );
-
     const event: RoomEvent = {
       type,
       roomId: stringRoomId,
@@ -207,12 +226,6 @@ export class EventBus {
   }
 
   broadcast(channel: string, data: RoomEvent | AgentEvent) {
-    console.log(
-      `[EventBus] Broadcasting to channel: ${channel}, handlers: ${
-        this.handlers.get(channel)?.size || 0
-      }`
-    );
-
     // Exact channel handlers
     const handlers = this.handlers.get(channel);
     if (handlers) {

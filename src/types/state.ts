@@ -77,7 +77,13 @@ export interface AgentState {
   systemPrompt: string;
   active: number;
   platform: string;
-  appearance: string;
+  appearance: {
+    description: string;
+    facialExpression: string;
+    bodyLanguage: string;
+    currentAction: string;
+    socialCues: string[];
+  };
   attention: number;
   roomId?: string | null;
   facialExpression?: string;
@@ -85,4 +91,48 @@ export interface AgentState {
   currentAction?: string;
   socialCues?: string[];
   lastUpdate?: number;
+  thoughtHistory: string[];
+  perceptions: {
+    narrative: string;
+    raw: Array<{
+      type: string;
+      source: number;
+      data: any;
+    }>;
+  };
+  lastAction: ActionResult;
+  timeSinceLastAction: number;
+  experiences: Array<{
+    type: string;
+    content: string;
+    timestamp: number;
+  }>;
+  availableTools: Array<{
+    name: string;
+    description: string;
+    parameters: string[];
+    schema: any;
+  }>;
+  goals?: Array<{
+    id: string;
+    description: string;
+    priority: number;
+    type: "long_term" | "short_term" | "immediate";
+    status: "active" | "completed" | "failed" | "suspended";
+    progress: number;
+    success_criteria: string[];
+    progress_indicators: string[];
+    created_at: number;
+  }>;
+  completedGoals?: Array<{
+    id: string;
+    description: string;
+    priority: number;
+    type: "long_term" | "short_term" | "immediate";
+    status: "active" | "completed" | "failed" | "suspended";
+    progress: number;
+    success_criteria: string[];
+    progress_indicators: string[];
+    created_at: number;
+  }>;
 }

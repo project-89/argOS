@@ -10,19 +10,20 @@ import { Experience } from "../llm/agent-llm";
 // Helper to get or create private room for agent
 async function getOrCreatePrivateRoom(world: World, eid: number, runtime: any) {
   const privateRoomId = `private_${eid}`;
+  const agentName = Agent.name[eid];
 
   // Check if private room exists
   const rooms = query(world, [Room]);
   const privateRoom = rooms.find((rid) => Room.id[rid] === privateRoomId);
 
   if (privateRoom) {
+    logger.agent(eid, "Using existing private room", agentName);
     return privateRoom;
   }
 
   // Create new private room
   const roomEid = addEntity(world);
   addComponent(world, roomEid, Room);
-  const agentName = Agent.name[eid];
 
   setComponent(world, roomEid, Room, {
     id: privateRoomId,
@@ -31,6 +32,7 @@ async function getOrCreatePrivateRoom(world: World, eid: number, runtime: any) {
     type: "private",
   });
 
+  logger.agent(eid, "Created new private room", agentName);
   return roomEid;
 }
 
@@ -38,13 +40,16 @@ async function getOrCreatePrivateRoom(world: World, eid: number, runtime: any) {
 export const ActionSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
     const agents = query(world, [Agent, Action]);
-    logger.system(`Processing actions for ${agents.length} agents`);
+    logger.system("ActionSystem", `Processing ${agents.length} agents`);
 
     for (const eid of agents) {
       if (!Agent.active[eid]) continue;
 
+      const agentName = Agent.name[eid];
+
       // Initialize available tools if not set
       if (!Action.availableTools[eid]) {
+        logger.agent(eid, "Initializing available tools", agentName);
         setComponent(world, eid, Action, {
           availableTools: runtime.getActionManager().getAvailableTools(),
           pendingAction: Action.pendingAction[eid],
@@ -56,26 +61,24 @@ export const ActionSystem = createSystem<SystemConfig>(
       const pendingAction = Action.pendingAction[eid];
       if (!pendingAction) continue;
 
-      const agentName = Agent.name[eid];
-      let roomEid;
-
-      // All actions for now are room-based.
-      // to
-      roomEid = getAgentRoom(world, eid);
+      let roomEid = getAgentRoom(world, eid);
 
       if (!roomEid) {
-        logger.error(
-          `No room found for agent ${agentName} (${eid}) - required for ${pendingAction.tool}`,
-          {
-            agentName,
-            eid,
-            pendingAction,
-          }
+        logger.agent(
+          eid,
+          `No room found - required for action: ${pendingAction.tool}`,
+          agentName
         );
         continue;
       }
 
-      logger.agent(eid, `Processing action: ${pendingAction.tool}`, agentName);
+      logger.agent(
+        eid,
+        `Executing action: ${pendingAction.tool} with params: ${JSON.stringify(
+          pendingAction.parameters
+        )}`,
+        agentName
+      );
 
       // Emit action event to appropriate room context
       runtime.eventBus.emitRoomEvent(
@@ -101,11 +104,37 @@ export const ActionSystem = createSystem<SystemConfig>(
           runtime
         );
 
+      logger.agent(
+        eid,
+        `Action completed: ${pendingAction.tool}\nParameters: ${JSON.stringify(
+          pendingAction.parameters,
+          null,
+          2
+        )}\nResult: ${result.message}`,
+        agentName
+      );
+
+      // Broadcast action result to room
+      runtime.eventBus.emitRoomEvent(
+        roomEid,
+        "action",
+        {
+          action: pendingAction.tool,
+          parameters: pendingAction.parameters,
+          result: result.message,
+          success: result.success,
+          agentName,
+          context: "room",
+          timestamp: Date.now(),
+        },
+        String(eid)
+      );
+
       // Store full result in Action component
       setComponent(world, eid, Action, {
         pendingAction: null,
         lastActionTime: Date.now(),
-        lastActionResult: result, // Store complete result
+        lastActionResult: result,
         availableTools: Action.availableTools[eid],
       });
 
@@ -125,6 +154,7 @@ export const ActionSystem = createSystem<SystemConfig>(
 
       // Emit action experience event
       runtime.eventBus.emitAgentEvent(eid, "experience", "action", experience);
+      logger.agent(eid, "Action cycle completed", agentName);
     }
 
     return world;

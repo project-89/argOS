@@ -29,3 +29,28 @@ export function validateStimulusContent(
     return false;
   }
 }
+
+export type CognitiveStimulusType =
+  | "cognitive"
+  | "goal_progress"
+  | "goal_complete"
+  | "goal_failed"
+  | "goal_created"
+  | "action_success"
+  | "action_failure"
+  | "realization"
+  | "emotional_shift";
+
+export interface CognitiveStimulus {
+  type: "cognitive";
+  subtype: CognitiveStimulusType;
+  intensity: number;
+  content: {
+    goalId?: string;
+    actionId?: string;
+    emotion?: string;
+    description: string;
+    metadata?: Record<string, any>;
+  };
+  private: boolean; // Indicates if this is only visible to the agent
+}

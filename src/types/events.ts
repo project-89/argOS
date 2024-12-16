@@ -12,6 +12,8 @@ export type EventType =
   | "speech" // Agent speaking in room
   | "thought" // Agent internal thoughts
   | "perception" // What agent perceives
+  | "goal" // Goals
+  | "cognitive" // Cognitive events
   | "action" // Physical actions
   | "appearance" // Appearance changes
   | "state" // State changes
@@ -26,6 +28,7 @@ export type EventCategory =
   | "appearance"
   | "engine"
   | "experience"
+  | "cognitive"
   | "speech"
   | "state";
 
@@ -73,7 +76,7 @@ export interface AgentEvent<T = EventType> {
 // Event Content Types
 export interface RoomEventContent {
   room?: RoomType;
-  agent?: AgentType;
+  agent?: AgentState;
   relationships?: NetworkLink[];
 }
 
