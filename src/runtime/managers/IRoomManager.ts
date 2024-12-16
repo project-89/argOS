@@ -1,5 +1,5 @@
 import { World } from "bitecs";
-import { Room as RoomData, RoomState } from "../../types";
+import { Room as RoomData, RoomState } from "../../types/state";
 
 export interface IRoomManager {
   // Room CRUD

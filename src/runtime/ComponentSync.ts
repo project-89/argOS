@@ -27,12 +27,6 @@ import {
   Plan,
 } from "../components";
 import { logger } from "../utils/logger";
-import { StimulusType } from "../utils/stimulus-utils";
-import {
-  StimulusTypes,
-  isValidStimulusData,
-  validateStimulusContent,
-} from "../types/stimulus";
 
 export class ComponentSync {
   private observers: (() => void)[] = [];

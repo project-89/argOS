@@ -1,26 +1,5 @@
+import { StimulusSchema, StimulusType } from "../components/Stimulus";
 import { z } from "zod";
-import { StimulusSchema } from "../components";
-
-// Core stimulus types
-export const StimulusTypes = {
-  VISUAL: "VISUAL",
-  AUDITORY: "AUDITORY",
-  COGNITIVE: "COGNITIVE",
-  TECHNICAL: "TECHNICAL",
-  ENVIRONMENTAL: "ENVIRONMENTAL",
-} as const;
-
-export type StimulusType = (typeof StimulusTypes)[keyof typeof StimulusTypes];
-
-// Source types for stimuli
-export const SourceTypes = {
-  AGENT: "AGENT",
-  ROOM: "ROOM",
-  USER: "USER",
-  SYSTEM: "SYSTEM",
-} as const;
-
-export type SourceType = (typeof SourceTypes)[keyof typeof SourceTypes];
 
 // Use the schema type instead of a separate interface
 export type StimulusData = z.infer<typeof StimulusSchema>;

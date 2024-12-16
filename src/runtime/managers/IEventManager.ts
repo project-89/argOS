@@ -1,6 +1,6 @@
 import {
   WorldState,
-  AgentEventMessage,
+  AgentUpdateMessage,
   RoomEvent,
   ServerMessage,
 } from "../../types";
@@ -10,7 +10,7 @@ export interface IEventManager {
   emitAgentUpdate(
     agentId: number,
     roomId: number,
-    data: AgentEventMessage
+    data: AgentUpdateMessage
   ): void;
   emitRoomUpdate(roomId: string, data: RoomEvent): void;
   emitWorldUpdate(data: WorldState): void;
@@ -18,7 +18,7 @@ export interface IEventManager {
 
   // Event subscriptions
   onAgentUpdate(
-    handler: (agentId: number, roomId: number, data: AgentEventMessage) => void
+    handler: (agentId: number, roomId: number, data: AgentUpdateMessage) => void
   ): () => void;
   onRoomUpdate(handler: (roomId: string, data: RoomEvent) => void): () => void;
   onWorldUpdate(handler: (data: WorldState) => void): () => void;

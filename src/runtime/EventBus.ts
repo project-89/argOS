@@ -66,7 +66,7 @@ export class EventBus {
       name: Agent.name[eid],
       role: Agent.role[eid],
       systemPrompt: Agent.systemPrompt[eid],
-      active: Agent.active[eid] === 1,
+      active: Agent.active[eid],
       platform: Agent.platform[eid],
       appearance: Agent.appearance[eid],
       attention: Agent.attention[eid],

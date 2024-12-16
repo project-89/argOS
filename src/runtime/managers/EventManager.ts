@@ -1,7 +1,7 @@
 import { World } from "bitecs";
 import {
   WorldState,
-  AgentEventMessage,
+  AgentUpdateMessage,
   RoomEvent,
   ServerMessage,
   EventType,
@@ -25,7 +25,7 @@ type EventWithCategory = {
 export class EventManager implements IEventManager {
   // Event handlers
   private agentUpdateHandlers = new Set<
-    (agentId: number, roomId: number, data: AgentEventMessage) => void
+    (agentId: number, roomId: number, data: AgentUpdateMessage) => void
   >();
   private roomUpdateHandlers = new Set<
     (roomId: string, data: RoomEvent) => void
@@ -48,7 +48,7 @@ export class EventManager implements IEventManager {
   emitAgentUpdate(
     agentId: number,
     roomId: number,
-    data: AgentEventMessage
+    data: AgentUpdateMessage
   ): void {
     this.agentUpdateHandlers.forEach((handler) =>
       handler(agentId, roomId, data)
@@ -70,7 +70,7 @@ export class EventManager implements IEventManager {
 
   // Event subscriptions
   onAgentUpdate(
-    handler: (agentId: number, roomId: number, data: AgentEventMessage) => void
+    handler: (agentId: number, roomId: number, data: AgentUpdateMessage) => void
   ): () => void {
     this.agentUpdateHandlers.add(handler);
     return () => this.agentUpdateHandlers.delete(handler);
@@ -204,7 +204,7 @@ export class EventManager implements IEventManager {
             .getAgentRoom(Number(agentId));
           if (agentRoom) {
             // Send full event to direct agent subscribers
-            const agentEvent: AgentEventMessage = {
+            const agentEvent: AgentUpdateMessage = {
               type: "AGENT_UPDATE",
               channel: {
                 room: String(agentRoom),
