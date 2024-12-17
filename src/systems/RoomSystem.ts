@@ -33,17 +33,6 @@ export const RoomSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
     const rooms = query(world, [Room]);
 
-    // First, clean up any previous room-generated stimuli
-    const existingStimuli = query(world, [Stimulus]);
-    for (const sid of existingStimuli) {
-      if (
-        Stimulus.type[sid] === "VISUAL" &&
-        Stimulus.source?.[sid] === "ROOM"
-      ) {
-        removeEntity(world, sid);
-      }
-    }
-
     // Process each room
     for (const roomId of rooms) {
       const occupants = getRoomOccupants(world, roomId);
