@@ -65,7 +65,7 @@ export function AgentInspector({ agent, logs }: AgentInspectorProps) {
         <div className="p-2 border-b border-cyan-900/30">
           <div className="text-xs text-gray-500 mb-1">Description</div>
           <div className="text-sm text-cyan-400">
-            {agent.appearance || "No description available"}
+            {agent.appearance.description || "No description available"}
           </div>
         </div>
 

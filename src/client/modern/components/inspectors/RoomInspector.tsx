@@ -139,7 +139,7 @@ export function RoomInspector({ room, agents, logs }: RoomInspectorProps) {
               <div>
                 <div className="text-xs text-gray-500">Appearance</div>
                 <div className="text-sm text-cyan-400">
-                  {selectedAgentDetails.appearance}
+                  {selectedAgentDetails.appearance.description}
                 </div>
               </div>
               {selectedAgentDetails.facialExpression && (

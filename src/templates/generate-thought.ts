@@ -129,7 +129,7 @@ OUTPUT FORMAT:
 {
   "thought": {
     "content": "Your evolved internal monologue",
-    "focus": "immediate" | "analytical" | "reflective" | "predictive",
+    "focus": "mmediate" | "analytical" | "reflective" | "predictive",i
     "context": "What prompted this thought progression"
   },
   "action": {

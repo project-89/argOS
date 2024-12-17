@@ -8,17 +8,12 @@ import {
   OccupiesRoom,
   Perception,
   Goal,
-  Plan,
-  PlanStepType,
-  SinglePlanType,
-  SingleGoalType,
 } from "../components";
-import { generateThought, Experience } from "../llm/agent-llm";
+import { generateThought } from "../llm/agent-llm";
 import { AgentState } from "../types/state";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { createVisualStimulus } from "../utils/stimulus-utils";
-import { EventCategory } from "../types";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 
 interface ThoughtResult {
@@ -76,11 +71,8 @@ async function generateAgentThought(
     },
   };
 
-  console.log("THINKING State:", state);
-
   const thought = await generateThought(state);
 
-  console.log("Thought:", thought);
   logger.agent(
     eid,
     `Thought: ${JSON.stringify(thought, null, 2)}`,
