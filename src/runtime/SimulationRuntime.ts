@@ -36,27 +36,61 @@ export type SystemFactory = (
   runtime: SimulationRuntime
 ) => (world: World) => Promise<World>;
 
+// Define consciousness levels
+export enum ConsciousnessLevel {
+  CONSCIOUS = "conscious",
+  SUBCONSCIOUS = "subconscious",
+  UNCONSCIOUS = "unconscious",
+}
+
+// Define system loop configuration
+export interface SystemLoopConfig {
+  level: ConsciousnessLevel;
+  updateInterval: number;
+  systems: SystemFactory[];
+}
+
 export interface RuntimeConfig {
-  updateInterval?: number;
-  systems?: SystemFactory[];
+  systemLoops?: SystemLoopConfig[];
   actions?: Record<string, ActionModule>;
   components?: readonly any[];
 }
 
-const defaultSystems = [
+// Define default system configurations
+const defaultConsciousSystems = [
   RoomSystem.create,
   PerceptionSystem.create,
-  ExperienceSystem.create,
   ThinkingSystem.create,
   ActionSystem.create,
-  GoalPlanningSystem.create,
-  PlanningSystem.create,
   CleanupSystem.create,
 ];
 
+const defaultSubconsciousSystems = [
+  ExperienceSystem.create,
+  GoalPlanningSystem.create,
+  PlanningSystem.create,
+];
+
+const defaultUnconsciousSystems: SystemFactory[] = [];
+
 const DEFAULT_CONFIG: RuntimeConfig = {
-  updateInterval: 100,
-  systems: defaultSystems,
+  systemLoops: [
+    {
+      level: ConsciousnessLevel.CONSCIOUS,
+      updateInterval: 10000, // Fast updates for conscious processes
+      systems: defaultConsciousSystems,
+    },
+    {
+      level: ConsciousnessLevel.SUBCONSCIOUS,
+      updateInterval: 25000, // Slower updates for background processes
+      systems: defaultSubconsciousSystems,
+    },
+    {
+      level: ConsciousnessLevel.UNCONSCIOUS,
+      updateInterval: 50000, // Very slow updates for maintenance processes
+      systems: defaultUnconsciousSystems,
+    },
+  ],
   actions: {},
   components: ALL_COMPONENTS,
 };
@@ -76,11 +110,20 @@ interface LifecycleSubscriptions {
   beforeSystems: LifecycleHookConfig[];
 }
 
+// Define system loop state interface
+interface SystemLoop {
+  level: ConsciousnessLevel;
+  systems: ((world: World) => Promise<World>)[];
+  factories: SystemFactory[];
+  updateInterval: number;
+  lastUpdate: number;
+  isRunning: boolean;
+}
+
 export class SimulationRuntime extends EventEmitter {
   public world: World;
-  private systems: ((world: World) => Promise<World>)[];
+  private systemLoops: Map<ConsciousnessLevel, SystemLoop>;
   private _isRunning = false;
-  private updateInterval: number;
   private observers: (() => void)[] = [];
   public eventBus: EventBus;
   private componentSync: ComponentSync;
@@ -91,10 +134,9 @@ export class SimulationRuntime extends EventEmitter {
   private promptManager: PromptManager;
 
   // Add interaction tracking
-  private recentInteractions = new Map<string, string>(); // key: "agent1-agent2", value: timestamp
-  private readonly INTERACTION_TIMEOUT = 5000; // 5 seconds
+  private recentInteractions = new Map<string, string>();
+  private readonly INTERACTION_TIMEOUT = 5000;
 
-  // Modify property to store hook configs
   private lifecycleSubscriptions: LifecycleSubscriptions = {
     beforeSystems: [],
   };
@@ -106,18 +148,24 @@ export class SimulationRuntime extends EventEmitter {
     // Merge config with defaults
     const fullConfig = { ...DEFAULT_CONFIG, ...config };
 
-    this.updateInterval = fullConfig.updateInterval!;
+    // Initialize system loops
+    this.systemLoops = new Map();
+    (fullConfig.systemLoops || DEFAULT_CONFIG.systemLoops!).forEach(
+      (loopConfig) => {
+        this.systemLoops.set(loopConfig.level, {
+          level: loopConfig.level,
+          factories: loopConfig.systems,
+          systems: loopConfig.systems.map((factory) => factory(this)),
+          updateInterval: loopConfig.updateInterval,
+          lastUpdate: 0,
+          isRunning: false,
+        });
+      }
+    );
 
-    // Initialize systems from factories
-    const systems = fullConfig.systems || defaultSystems;
-
-    this.systems = systems.map((factory) => factory(this));
-
-    // Initialize event bus and component sync
+    // Initialize managers and other components
     this.eventBus = new EventBus(this.world);
     this.componentSync = new ComponentSync(this.world);
-
-    // Initialize managers
     this.stateManager = new StateManager(this.world, this);
     this.roomManager = new RoomManager(this.world, this);
     this.eventManager = new EventManager(this.world, this, this.eventBus);
@@ -135,8 +183,13 @@ export class SimulationRuntime extends EventEmitter {
       this.actionManager.registerAction(name, action);
     });
 
+    // Log initialization
     logger.system("Runtime initialized with:");
-    logger.system(`- ${this.systems.length} systems`);
+    for (const [level, loop] of this.systemLoops) {
+      logger.system(`${level}:`);
+      logger.system(`- ${loop.systems.length} systems`);
+      logger.system(`- ${loop.updateInterval}ms interval`);
+    }
     logger.system(`- ${Object.keys(fullConfig.actions!).length} actions`);
     logger.system(`- ${fullConfig.components!.length} components`);
 
@@ -172,11 +225,17 @@ export class SimulationRuntime extends EventEmitter {
   start() {
     if (this._isRunning) return;
     this._isRunning = true;
-    this.run();
+    for (const loop of this.systemLoops.values()) {
+      loop.isRunning = true;
+      this.runLoop(loop); // Start each loop independently
+    }
   }
 
   stop() {
     this._isRunning = false;
+    for (const loop of this.systemLoops.values()) {
+      loop.isRunning = false;
+    }
     this.emit("stateChanged", { isRunning: false });
   }
 
@@ -271,41 +330,67 @@ export class SimulationRuntime extends EventEmitter {
   }
 
   // Private helper methods
-  private async run() {
-    while (this.isRunning) {
+  private async runLoop(loop: SystemLoop) {
+    while (this._isRunning && loop.isRunning) {
       const startTime = Date.now();
 
       try {
-        // Execute beforeSystems hooks
-        await this.executeLifecycleHooks("beforeSystems");
-
-        // Run all systems
-        for (const system of this.systems) {
+        // Run systems for this consciousness level
+        logger.debug(`Running ${loop.level} systems`);
+        for (const system of loop.systems) {
+          if (!this._isRunning || !loop.isRunning) break;
           this.world = await system(this.world);
         }
 
-        // Update component event bus
-        this.eventBus.update();
-
         // Calculate time spent and adjust delay
         const elapsed = Date.now() - startTime;
-        const delay = Math.max(0, this.updateInterval - elapsed);
+        const delay = Math.max(0, loop.updateInterval - elapsed);
 
-        await new Promise((resolve) => setTimeout(resolve, delay));
-
-        if (elapsed > this.updateInterval) {
+        if (elapsed > loop.updateInterval) {
           logger.system(
-            `Warning: Update took ${elapsed}ms (${Math.round(
-              (elapsed / this.updateInterval) * 100
+            `Warning: ${loop.level} loop took ${elapsed}ms (${Math.round(
+              (elapsed / loop.updateInterval) * 100
             )}% of interval)`
           );
         }
+
+        // Update component event bus (each loop can trigger updates)
+        this.eventBus.update();
+
+        // Wait for next interval
+        await new Promise((resolve) => setTimeout(resolve, delay));
       } catch (error) {
-        logger.error(`Runtime error}`, error);
-        this.emit("error", error);
-        this.stop();
+        logger.error(`Runtime error in ${loop.level} loop:`, error);
+        // Don't stop other loops if one fails
+        loop.isRunning = false;
       }
     }
+  }
+
+  // Add methods to control individual consciousness levels
+  startLevel(level: ConsciousnessLevel) {
+    const loop = this.systemLoops.get(level);
+    if (loop) {
+      loop.isRunning = true;
+      logger.system(`Started ${level} systems`);
+    }
+  }
+
+  stopLevel(level: ConsciousnessLevel) {
+    const loop = this.systemLoops.get(level);
+    if (loop) {
+      loop.isRunning = false;
+      logger.system(`Stopped ${level} systems`);
+    }
+  }
+
+  isLevelRunning(level: ConsciousnessLevel): boolean {
+    return this.systemLoops.get(level)?.isRunning || false;
+  }
+
+  getLevelSystems(level: ConsciousnessLevel): SystemFactory[] {
+    const loop = this.systemLoops.get(level);
+    return loop ? loop.factories : [];
   }
 
   get isRunning(): boolean {
