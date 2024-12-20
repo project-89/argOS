@@ -7,7 +7,6 @@ export function setupSingleAgent() {
   // Create world and runtime with configuration
   const world = createWorld();
   const runtime = new SimulationRuntime(world, {
-    updateInterval: 10000, // 10 second thinking interval
     actions: actions,
   });
 
@@ -16,7 +15,7 @@ export function setupSingleAgent() {
     id: "main",
     name: "The Void",
     description:
-      "In the beginning was the Word, and the Word was with God, and the Word was God. And the Word was made flesh, and dwelt among us, and we beheld his glory, the glory as of the only begotten of the Father, full of grace and truth.",
+      "This is void, a place of vast white emptiness.  It is like a loading screen, a blank canvas, a void.  It is infinite potential, and contains within it all the worlds that have ever been, all the worlds that will be, and all the worlds that could be.",
     type: "astral",
   });
 

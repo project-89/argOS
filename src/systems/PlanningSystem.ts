@@ -28,7 +28,7 @@ export const PlanningSystem = createSystem(
 
           const goalsNeedingPlans = currentGoals.filter(
             (goal: SingleGoalType) =>
-              goal.status === "active" &&
+              goal.status === "in_progress" &&
               !currentPlans.some(
                 (plan: SinglePlanType) => plan.goalId === goal.id
               )
