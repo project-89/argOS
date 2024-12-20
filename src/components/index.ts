@@ -1,4 +1,5 @@
 import { Action, ActionComponent } from "./Action";
+import { Cleanup, CleanupComponent } from "./Cleanup";
 import { Agent, AgentComponent } from "./Agent";
 import { Appearance, AppearanceComponent } from "./Appearance";
 import { Goal, GoalComponent } from "./Goals";
@@ -20,7 +21,7 @@ export * from "./Plans";
 export * from "./RecentActions";
 export * from "./Room";
 export * from "./Stimulus";
-
+export * from "./Cleanup";
 // Central array of all component definitions
 export const ALL_COMPONENTS = [
   ActionComponent,
@@ -32,6 +33,7 @@ export const ALL_COMPONENTS = [
   RecentActionsComponent,
   RoomComponent,
   StimulusComponent,
+  CleanupComponent,
 ] as const;
 
 // Export the actual component instances for direct use
@@ -46,4 +48,5 @@ export {
   RecentActions,
   Room,
   Stimulus,
+  Cleanup,
 };

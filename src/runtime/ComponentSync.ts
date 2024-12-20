@@ -196,16 +196,55 @@ export class ComponentSync {
     // Stimulus sync with decay handling
     this.observers.push(
       observe(this.world, onSet(Stimulus), (eid, params) => {
+        // Return early if no component data
+        if (!params || typeof params !== "object") {
+          logger.warn(
+            `Invalid stimulus component data for ${eid}: ${JSON.stringify(
+              params
+            )}`
+          );
+          return null;
+        }
+
+        // When using set(), params is the actual component data
         if (params.type) Stimulus.type[eid] = params.type;
-        if (params.sourceEntity)
-          Stimulus.sourceEntity[eid] = params.sourceEntity;
         if (params.source) Stimulus.source[eid] = params.source;
         if (params.content) Stimulus.content[eid] = params.content;
-        if (params.decay !== undefined) Stimulus.decay[eid] = params.decay;
-        if (params.roomId) Stimulus.roomId[eid] = params.roomId;
+        if (params.subtype) Stimulus.subtype[eid] = params.subtype;
+        if (params.intensity) Stimulus.intensity[eid] = params.intensity;
+        if (params.private) Stimulus.private[eid] = params.private;
+        if (params.decay) Stimulus.decay[eid] = params.decay;
+        if (params.priority) Stimulus.priority[eid] = params.priority;
+        if (params.metadata) Stimulus.metadata[eid] = params.metadata;
 
-        // Always set timestamp on updates
-        Stimulus.timestamp[eid] = Date.now();
+        // Set timestamp, using provided or current time
+        Stimulus.timestamp[eid] = params.timestamp || Date.now();
+
+        logger.debug(`Stimulus component updated for ${eid}:`, params);
+      }),
+      observe(this.world, onGet(Stimulus), (eid) => ({
+        type: Stimulus.type[eid],
+        source: Stimulus.source[eid],
+        content: Stimulus.content[eid],
+        subtype: Stimulus.subtype[eid],
+        intensity: Stimulus.intensity[eid],
+        private: Stimulus.private[eid],
+        decay: Stimulus.decay[eid],
+        priority: Stimulus.priority[eid],
+        metadata: Stimulus.metadata[eid],
+        timestamp: Stimulus.timestamp[eid],
+      })),
+      observe(this.world, onRemove(Stimulus), (eid) => {
+        delete Stimulus.type[eid];
+        delete Stimulus.source[eid];
+        delete Stimulus.content[eid];
+        delete Stimulus.timestamp[eid];
+        delete Stimulus.decay[eid];
+        delete Stimulus.subtype[eid];
+        delete Stimulus.intensity[eid];
+        delete Stimulus.private[eid];
+        delete Stimulus.priority[eid];
+        delete Stimulus.metadata[eid];
       })
     );
 
@@ -229,19 +268,35 @@ export class ComponentSync {
     // Stimulus relationship sync
     this.observers.push(
       observe(this.world, onSet(StimulusInRoom), (eid, params) => {
-        console.log("StimulusInRoom", eid, params);
+        // Return early if no params or roomId
+        if (!params || typeof params !== "object" || !("roomId" in params)) {
+          logger.warn(
+            `Invalid StimulusInRoom params for ${eid} ${JSON.stringify(params)}`
+          );
+          return null;
+        }
+
         const store = StimulusInRoom(params.roomId);
         store.enteredAt[eid] = Date.now();
-        if (params.intensity !== undefined)
+        if ("intensity" in params && params.intensity !== undefined) {
           store.intensity[eid] = params.intensity;
+        }
         return params;
       }),
       observe(this.world, onSet(StimulusSource), (eid, params) => {
-        console.log("StimulusSource", eid, params);
+        // Return early if no params or source
+        if (!params || typeof params !== "object" || !("source" in params)) {
+          logger.warn(
+            `Invalid StimulusSource params for ${eid} ${JSON.stringify(params)}`
+          );
+          return null;
+        }
+
         const store = StimulusSource(params.source);
         store.createdAt[eid] = Date.now();
-        if (params.strength !== undefined)
+        if ("strength" in params && params.strength !== undefined) {
           store.strength[eid] = params.strength;
+        }
         return params;
       })
     );
@@ -276,12 +331,15 @@ export class ComponentSync {
     this.observers.push(
       observe(this.world, onRemove(Stimulus), (eid) => {
         delete Stimulus.type[eid];
-        delete Stimulus.sourceEntity[eid];
         delete Stimulus.source[eid];
         delete Stimulus.content[eid];
         delete Stimulus.timestamp[eid];
         delete Stimulus.decay[eid];
-        delete Stimulus.roomId[eid];
+        delete Stimulus.subtype[eid];
+        delete Stimulus.intensity[eid];
+        delete Stimulus.private[eid];
+        delete Stimulus.priority[eid];
+        delete Stimulus.metadata[eid];
       })
     );
 

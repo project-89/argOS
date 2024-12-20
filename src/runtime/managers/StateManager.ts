@@ -17,6 +17,7 @@ import {
   Perception,
   Action,
   Goal,
+  ALL_COMPONENTS,
 } from "../../components";
 import { IStateManager } from "./IStateManager";
 import { logger } from "../../utils/logger";
@@ -37,14 +38,9 @@ export class StateManager implements IStateManager {
     this.components = new Map();
     this.relations = new Map();
 
-    // Register built-in components
-    this.registerComponent(AgentComponent);
-    this.registerComponent(RoomComponent);
-    this.registerComponent(AppearanceComponent);
-    this.registerComponent(StimulusComponent);
-    this.registerComponent(RecentActionsComponent);
-    this.registerComponent(GoalComponent);
-    this.registerComponent(PlanComponent);
+    ALL_COMPONENTS.forEach((component) => {
+      this.registerComponent(component);
+    });
   }
 
   // Component Registry
@@ -150,11 +146,18 @@ export class StateManager implements IStateManager {
     }));
 
     const stimuli = query(this.world, [stimulusComponent.component])
-      .filter(
-        (sid) =>
-          stimulusComponent.component.roomId[sid] ===
-          roomComponent.component.id[eid]
-      )
+      .filter((sid) => {
+        try {
+          const content = stimulusComponent.component.content[sid];
+          if (!content) return false;
+          const parsedContent = JSON.parse(content);
+          return (
+            parsedContent.metadata?.roomId === roomComponent.component.id[eid]
+          );
+        } catch (e) {
+          return false;
+        }
+      })
       .map((sid) => ({
         type: stimulusComponent.component.type[sid],
         content: stimulusComponent.component.content[sid],

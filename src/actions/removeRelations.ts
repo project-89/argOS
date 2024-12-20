@@ -36,7 +36,7 @@ export async function execute(
   const { relationName, relationSubjects, entities } = parameters;
 
   // Get the relation based on name
-  let relation;
+  let relation: any;
   switch (relationName.toLowerCase()) {
     case "interaction":
       relation = Interaction;

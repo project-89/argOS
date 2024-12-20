@@ -1,61 +1,44 @@
-import { z } from "zod";
 import { createComponent } from "./createComponent";
+import { StimulusType, StimulusSource } from "../types/stimulus";
+import { z } from "zod";
 
-// Core stimulus types
-export const StimulusTypes = {
-  VISUAL: "VISUAL",
-  AUDITORY: "AUDITORY",
-  COGNITIVE: "COGNITIVE",
-  TECHNICAL: "TECHNICAL",
-  ENVIRONMENTAL: "ENVIRONMENTAL",
-} as const;
+export const StimulusMetadataSchema = z
+  .object({
+    roomId: z.string().optional(),
+    targetId: z.number().optional(),
+    duration: z.number().optional(),
+  })
+  .catchall(z.any());
 
-export type StimulusType = (typeof StimulusTypes)[keyof typeof StimulusTypes];
-
-// Source types for stimuli
-export const SourceTypes = {
-  AGENT: "AGENT",
-  ROOM: "ROOM",
-  USER: "USER",
-  SYSTEM: "SYSTEM",
-} as const;
-
-export type SourceType = (typeof SourceTypes)[keyof typeof SourceTypes];
-
-// Stimulus schema and component
-export const StimulusSchema = z.object({
-  type: z.enum([
-    StimulusTypes.VISUAL,
-    StimulusTypes.AUDITORY,
-    StimulusTypes.COGNITIVE,
-    StimulusTypes.TECHNICAL,
-    StimulusTypes.ENVIRONMENTAL,
-  ]),
-  sourceEntity: z.number(),
-  source: z.enum([
-    SourceTypes.AGENT,
-    SourceTypes.ROOM,
-    SourceTypes.USER,
-    SourceTypes.SYSTEM,
-  ]),
-  timestamp: z.number(),
-  roomId: z.string(),
-  content: z.string(),
-  priority: z.number().optional(),
-  decay: z.number().optional(),
+export const StimulusContentSchema = z.object({
+  data: z.any(),
+  metadata: StimulusMetadataSchema.optional(),
 });
 
-export type StimulusComponentType = z.infer<typeof StimulusSchema>;
+export const StimulusSchema = z.object({
+  type: z.nativeEnum(StimulusType),
+  source: z.nativeEnum(StimulusSource),
+  timestamp: z.number(),
+  content: z.string(), // JSON stringified StimulusContent
+  subtype: z.string().optional(),
+  intensity: z.number().optional(),
+  private: z.boolean().optional(),
+  decay: z.number().optional(),
+  priority: z.number().optional(),
+  metadata: StimulusMetadataSchema.optional(),
+});
 
 export const StimulusComponent = createComponent("Stimulus", StimulusSchema, {
   type: [] as StimulusType[],
-  sourceEntity: [] as number[],
-  source: [] as string[],
+  source: [] as StimulusSource[],
   content: [] as string[],
   timestamp: [] as number[],
   decay: [] as number[],
-  roomId: [] as string[],
   priority: [] as number[],
+  subtype: [] as string[],
+  intensity: [] as number[],
+  private: [] as boolean[],
+  metadata: [] as Record<string, any>[],
 });
 
 export const Stimulus = StimulusComponent.component;
@@ -68,7 +51,7 @@ export const StimulusInRoomSchema = z.object({
 });
 
 export const StimulusSourceSchema = z.object({
-  source: z.string(),
+  source: z.nativeEnum(StimulusSource),
   createdAt: z.number(),
   strength: z.number(),
 });

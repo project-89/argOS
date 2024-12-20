@@ -14,7 +14,8 @@ import { removeEntity } from "bitecs";
 import { logger } from "../utils/logger";
 import { createUser, moveUserToRoom } from "../utils/agent-factory";
 import { findRoomByStringId } from "../utils/queries";
-import { queueStimulus } from "../systems/RoomSystem";
+import { createAuditoryStimulus } from "../factories/stimulusFactory";
+import { StimulusSource, StimulusType } from "../types/stimulus";
 // import { setupEmergentBeing } from "../examples/emergentGemini";
 
 // Track user connections with Map
@@ -290,35 +291,60 @@ wss.on("connection", (ws: WS) => {
         const { message: chatMessage, target: roomId } = chatData;
 
         if (roomId) {
-          // Queue auditory stimulus instead of speech
-          queueStimulus({
-            type: "AUDITORY",
-            sourceEntity: userConn.entity,
-            source: "USER",
-            content: {
-              message: chatMessage,
-              tone: "neutral",
-              type: "speech",
-            },
-            roomId,
-            timestamp: Date.now(),
-          });
+          const roomEntity = findRoomByStringId(runtime.world, roomId);
+          if (!roomEntity) {
+            logger.error(`Room ${roomId} not found`, { roomId });
+            break;
+          }
+
+          const stimulusId = createAuditoryStimulus(
+            runtime.world,
+            userConn.entity,
+            chatMessage,
+            {
+              source: StimulusSource.USER,
+              metadata: {
+                roomId,
+                type: "speech",
+                tone: "neutral",
+              },
+              decay: 1,
+            }
+          );
+
+          if (stimulusId) {
+            runtime.getRoomManager().addStimulusToRoom(stimulusId, roomEntity);
+          }
         } else {
           // Broadcast to all rooms
           const rooms = runtime.getStateManager().getWorldState().rooms;
           rooms.forEach((room) => {
-            queueStimulus({
-              type: "AUDITORY",
-              sourceEntity: userConn.entity,
-              source: "USER",
-              content: {
-                message: chatMessage,
-                tone: "neutral",
-                type: "speech",
-              },
-              roomId: room.id,
-              timestamp: Date.now(),
-            });
+            const roomEntity = findRoomByStringId(runtime.world, room.id);
+            if (!roomEntity) {
+              logger.error(`Room ${room.id} not found`, { roomId: room.id });
+              return;
+            }
+
+            const stimulusId = createAuditoryStimulus(
+              runtime.world,
+              userConn.entity,
+              chatMessage,
+              {
+                source: StimulusSource.USER,
+                metadata: {
+                  roomId: room.id,
+                  type: "speech",
+                  tone: "neutral",
+                },
+                decay: 1,
+              }
+            );
+
+            if (stimulusId) {
+              runtime
+                .getRoomManager()
+                .addStimulusToRoom(stimulusId, roomEntity);
+            }
           });
         }
         break;

@@ -2,7 +2,7 @@ import "dotenv/config";
 import { World, removeEntity, query } from "bitecs";
 import { ActionModule } from "../types";
 import { logger } from "../utils/logger";
-import { Agent, Memory, Perception, Room, Stimulus } from "../components";
+import { ALL_COMPONENTS } from "../components";
 import { EventBus } from "./EventBus";
 import { ComponentSync } from "./ComponentSync";
 import EventEmitter from "events";
@@ -17,12 +17,13 @@ import { ActionManager } from "./managers/ActionManager";
 import { RoomSystem } from "../systems/RoomSystem";
 import { ThinkingSystem } from "../systems/ThinkingSystem";
 import { ActionSystem } from "../systems/ActionSystem";
-import { StimulusCleanupSystem } from "../systems/StimulusCleanupSystem";
+import { CleanupSystem } from "../systems/CleanupSystem";
 import { PerceptionSystem } from "../systems/PerceptionSystem";
 import { ExperienceSystem } from "../systems/ExperienceSystem";
 import { PromptManager } from "./managers/promptManager";
 import { perceptionPrompt } from "../prompts/perception";
 import { GoalPlanningSystem } from "../systems/GoalPlanningSystem";
+import { PlanningSystem } from "../systems/PlanningSystem";
 
 // Validate required environment variables
 if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
@@ -39,7 +40,7 @@ export interface RuntimeConfig {
   updateInterval?: number;
   systems?: SystemFactory[];
   actions?: Record<string, ActionModule>;
-  components?: any[];
+  components?: readonly any[];
 }
 
 const defaultSystems = [
@@ -49,14 +50,15 @@ const defaultSystems = [
   ThinkingSystem.create,
   ActionSystem.create,
   GoalPlanningSystem.create,
-  StimulusCleanupSystem.create,
+  PlanningSystem.create,
+  CleanupSystem.create,
 ];
 
 const DEFAULT_CONFIG: RuntimeConfig = {
   updateInterval: 100,
   systems: defaultSystems,
   actions: {},
-  components: [Room, Agent, Memory, Stimulus, Perception],
+  components: ALL_COMPONENTS,
 };
 
 // Modify the types

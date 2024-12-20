@@ -1,56 +1,46 @@
-import { StimulusSchema, StimulusType } from "../components/Stimulus";
 import { z } from "zod";
 
-// Use the schema type instead of a separate interface
-export type StimulusData = z.infer<typeof StimulusSchema>;
-
-// Helper function to validate stimulus data
-export function isValidStimulusData(data: any): data is StimulusData {
-  try {
-    StimulusSchema.parse(data);
-    return true;
-  } catch (error) {
-    return false;
-  }
+export enum StimulusType {
+  VISUAL = "visual",
+  AUDITORY = "auditory",
+  COGNITIVE = "cognitive",
+  TECHNICAL = "technical",
+  ENVIRONMENTAL = "environmental",
 }
 
-// Simple content validation - just check if it's valid JSON
-export function validateStimulusContent(
-  type: StimulusType,
-  content: any
-): boolean {
-  try {
-    if (typeof content === "string") {
-      JSON.parse(content);
-      return true;
-    }
-    return false;
-  } catch (error) {
-    return false;
-  }
+export enum StimulusSource {
+  AGENT = "agent",
+  ROOM = "room",
+  USER = "user",
+  SYSTEM = "system",
 }
 
-export type CognitiveStimulusType =
-  | "cognitive"
-  | "goal_progress"
-  | "goal_complete"
-  | "goal_failed"
-  | "goal_created"
-  | "action_success"
-  | "action_failure"
-  | "realization"
-  | "emotional_shift";
-
-export interface CognitiveStimulus {
-  type: "cognitive";
-  subtype: CognitiveStimulusType;
-  intensity: number;
-  content: {
-    goalId?: string;
-    actionId?: string;
-    emotion?: string;
-    description: string;
-    metadata?: Record<string, any>;
-  };
-  private: boolean; // Indicates if this is only visible to the agent
+export interface StimulusMetadata {
+  roomId?: string;
+  targetId?: number;
+  duration?: number;
+  [key: string]: any;
 }
+
+export interface StimulusContent<T = any> {
+  data: T;
+  metadata?: StimulusMetadata;
+}
+
+export interface StimulusData {
+  eid: number;
+  type: StimulusType;
+  source: StimulusSource;
+  timestamp: number;
+  content: string; // JSON stringified StimulusContent
+  subtype?: string;
+  intensity?: number;
+  private?: boolean;
+  decay?: number;
+  priority?: number;
+  metadata?: StimulusMetadata;
+  perceived?: boolean;
+}
+
+// Type alias for backward compatibility
+export type SourceType = StimulusSource;

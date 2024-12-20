@@ -1,4 +1,4 @@
-import { World } from "../types/bitecs";
+import { World } from "bitecs";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 
 export interface SystemConfig {
