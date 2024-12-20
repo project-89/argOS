@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ComponentWithSchema } from "../components/createComponent";
 import { RelationWithSchema } from "../components/createRelation";
 import { ActionResult } from "./actions";
+import { StimulusData, StimulusSource, StimulusType } from "./stimulus";
 
 // Agent summary type for global state
 export interface AgentSummary {
@@ -94,11 +95,7 @@ export interface AgentState {
   thoughtHistory: string[];
   perceptions: {
     narrative: string;
-    raw: Array<{
-      type: string;
-      source: number;
-      data: any;
-    }>;
+    raw: StimulusData[];
   };
   lastAction: ActionResult;
   timeSinceLastAction: number;

@@ -19,6 +19,7 @@ import {
 import { IRoomManager } from "./IRoomManager";
 import { logger } from "../../utils/logger";
 import { SimulationRuntime } from "../SimulationRuntime";
+import { addStimulusToRoom as addStimulusToRoomRelation } from "../../components/relationships/stimulus";
 
 export class RoomManager implements IRoomManager {
   constructor(private world: World, private runtime: SimulationRuntime) {}
@@ -159,5 +160,24 @@ export class RoomManager implements IRoomManager {
 
       logger.system(`Updated room: ${Room.name[roomId]}`);
     }
+  }
+
+  addStimulusToRoom(stimulusId: number, roomId: number): void {
+    if (!hasComponent(this.world, stimulusId, Stimulus)) {
+      logger.error(`Stimulus ${stimulusId} not found`, { stimulusId });
+      return;
+    }
+
+    if (!hasComponent(this.world, roomId, Room)) {
+      logger.error(`Room ${roomId} not found`, { roomId });
+      return;
+    }
+
+    // Add room relationship using the addStimulusToRoom helper
+    addStimulusToRoomRelation(this.world, stimulusId, roomId, 1.0, {
+      type: "room",
+    });
+
+    logger.debug(`Added stimulus ${stimulusId} to room ${Room.name[roomId]}`);
   }
 }

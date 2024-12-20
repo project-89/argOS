@@ -9,6 +9,7 @@ import {
 } from "../llm/agent-llm";
 import { EventCategory } from "../types";
 import { StimulusData } from "../types/stimulus";
+import { processConcurrentAgents } from "../utils/system-utils";
 
 // Valid experience types
 const VALID_EXPERIENCE_TYPES = [
@@ -46,14 +47,15 @@ interface ExperienceState {
 export const ExperienceSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
     const agents = query(world, [Agent, Memory, Perception]);
-    logger.system(`ExperienceSystem processing ${agents.length} agents`);
 
-    for (const eid of agents) {
-      try {
-        // Skip inactive agents
+    await processConcurrentAgents(
+      world,
+      agents,
+      "ExperienceSystem",
+      async (eid) => {
         if (!Agent.active[eid]) {
           logger.debug(`Agent ${Agent.name[eid]} is not active, skipping`);
-          continue;
+          return;
         }
 
         // Get current perception state
@@ -64,7 +66,7 @@ export const ExperienceSystem = createSystem<SystemConfig>(
 
         // Skip if no stimuli to process
         if (currentStimuli.length === 0) {
-          continue;
+          return;
         }
 
         // Prepare state for experience extraction
@@ -77,12 +79,7 @@ export const ExperienceSystem = createSystem<SystemConfig>(
           timestamp: Date.now(),
           perceptionSummary: Perception.summary[eid] || "",
           perceptionContext: Perception.context[eid] || [],
-          stimulus: currentStimuli.map((s) => ({
-            type: s.type,
-            source: s.sourceEntity,
-            data: s.content,
-            timestamp: s.timestamp,
-          })),
+          stimulus: currentStimuli,
         };
 
         logger.debug(`Processing experiences for ${Agent.name[eid]}`, {
@@ -93,6 +90,13 @@ export const ExperienceSystem = createSystem<SystemConfig>(
         // Extract new experiences
         const experiences = await extractExperiences(agentState);
         const validExperiences = experiences.filter(validateExperience);
+
+        logger.agent(
+          eid,
+          `Extracted ${validExperiences.length} experiences: ${JSON.stringify(
+            validExperiences
+          )}`
+        );
 
         if (validExperiences.length > 0) {
           // Deduplicate and update experiences
@@ -120,11 +124,18 @@ export const ExperienceSystem = createSystem<SystemConfig>(
           logger.debug(
             `Updated experiences for ${Agent.name[eid]}: ${validExperiences.length} new, ${newExperiences.length} total`
           );
+
+          return {
+            newExperiencesCount: validExperiences.length,
+            totalExperiencesCount: newExperiences.length,
+          };
         }
-      } catch (error) {
-        logger.error(`Error in ExperienceSystem for agent ${eid}:`, error);
+        return {
+          newExperiencesCount: 0,
+          totalExperiencesCount: currentExperiences.length,
+        };
       }
-    }
+    );
 
     return world;
   }

@@ -1,11 +1,7 @@
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 import { createWorld } from "bitecs";
-import { ThinkingSystem } from "../systems/ThinkingSystem";
-import { StimulusCleanupSystem } from "../systems/StimulusCleanupSystem";
-import { ActionSystem } from "../systems/ActionSystem";
 import { actions } from "../actions";
 import { createAgent } from "../utils/agent-factory";
-import { RoomSystem } from "../systems/RoomSystem";
 
 export function setupSingleAgent() {
   // Create world and runtime with configuration

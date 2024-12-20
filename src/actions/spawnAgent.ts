@@ -1,11 +1,10 @@
 import { z } from "zod";
-import { World } from "../types/bitecs";
 import { logger } from "../utils/logger";
 import { EventBus } from "../runtime/EventBus";
 import { createAgent as createAgentFactory } from "../utils/agent-factory";
 import { getAgentRoom } from "../utils/queries";
 import { ActionResult } from "../types/actions";
-import { ActionContent } from "../types";
+import { ActionContent, World } from "../types";
 import { Agent } from "../components";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 

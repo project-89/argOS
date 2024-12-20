@@ -1,14 +1,12 @@
 import { z } from "zod";
-import { World } from "../types/bitecs";
 import { Memory, Room, Agent } from "../components";
 import { getAgentRoom } from "../utils/queries";
 import { logger } from "../utils/logger";
-import {
-  createCognitiveStimulus,
-  createVisualStimulus,
-} from "../utils/stimulus-utils";
+import { createVisualStimulus } from "../factories/stimulusFactory";
 import { EventBus } from "../runtime/EventBus";
 import { ActionResult } from "../types/actions";
+import { StimulusType, StimulusSource } from "../types/stimulus";
+import { World } from "bitecs";
 
 export const schema = z.object({
   reason: z.string(),
@@ -64,23 +62,26 @@ export async function execute(
   );
 
   // Create visual stimulus for the action
-  createVisualStimulus(world, {
-    sourceEntity: eid,
-    roomId: Room.id[roomId],
-    appearance: true,
-    data: {
-      action: isThinking ? "thinking" : "waiting",
-      reason,
-      cognitiveState: {
-        isThinking,
-        focus: isThinking ? "processing information" : "listening",
+  createVisualStimulus(
+    world,
+    eid,
+    `${agentName} is ${isThinking ? "thinking" : "waiting"}: ${reason}`,
+    {
+      source: StimulusSource.AGENT,
+      metadata: {
+        roomId: Room.id[roomId],
+        type: isThinking ? "thinking" : "waiting",
+        cognitiveState: {
+          isThinking,
+          focus: isThinking ? "processing information" : "listening",
+        },
+        agentId: eid,
+        agentName,
+        actionType: "WAIT",
       },
-      agentId: eid,
-      agentName,
-      actionType: "WAIT",
-    },
-    decay: isThinking ? 2 : 1,
-  });
+      decay: isThinking ? 2000 : 1000,
+    }
+  );
 
   return {
     success: true,

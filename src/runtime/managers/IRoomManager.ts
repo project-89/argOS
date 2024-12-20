@@ -16,4 +16,5 @@ export interface IRoomManager {
   // Room-specific operations
   getRoomStimuli(roomId: number): number[];
   updateRoomState(roomId: number, updates: Partial<RoomData>): void;
+  addStimulusToRoom(stimulusId: number, roomId: number): void;
 }

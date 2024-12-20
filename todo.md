@@ -1,33 +1,52 @@
-To do
+# Agent Simulation Todo List
 
-INTENRAL STIMULI ar e the main way an agent perceives things going on inside them
-These are emotions, thoughts, changes in goals, accomplihsments, etc. These get turns into perceptions, and experiences. This way the agent, based on their goals, etc, can extract the perceptions and experiences most relevant to them.
+## Unorganzied
 
-[] - Simplify all messages to the client to a single type. Make it simply, since it's all the same thing from the UI standpoint. Maybe a type, and a content field. Content is the actual message.
-[] - Process internal stimulu alongisd external stimuli
-[] - ensure actions generate internal cognitive stimuli
+[] - Seperate out systems into 2 loops
+[] - Spawn subagents to handle tasks
+[] - Options as to whether an agent can update its own goals
 
-[x] - reactor out perception, experience systems
-[] - Colocate component sync stuff with components
-[] - Prompt Manager
-[] -
-[x] - Clean up action system
-[] - Figure out agenta across multiple rooms
-[x] - Handle appearabnce and other things with relationships
-[x] - get realtime appearance data showin gup
-[x] - Handle alternation between different agents better
-[] - Agents can take physical actions with their bodies, perceived by other agents
-[] - Add goals and planning to agents
-[] - Agents work together to achieve goals
-[] - Agents have perceptions of the world (sight, sound, smell, etc)
-[] - Global simulation time
-[] - Time control
+## Internal Stimuli & Perception System
 
-[] - Initial world generation from text prompt
-[] - World is a set of relationships between entities
-[] - Narrative agent that can modify the world?
-[] - Add core memories to agents (childhood, etc)
-[] - Add in tools for modifying and querying the world
-[] - Tools for agents to add channels
-[] - Tools for agents to create new agents
-[] - Long term DB persistence somehow?
+Internal stimuli are how agents perceive their internal state (emotions, thoughts, goals, etc). These get processed into perceptions and experiences that agents can use based on relevance to their goals.
+
+- [ ] Process internal stimuli alongside external stimuli
+- [ ] Ensure actions generate internal cognitive stimuli
+
+## Core Systems
+
+- [ ] Clean up stimulus system, types, etc.
+- [ ] Clean up LLM code and refactor into folder
+- [ ] Create scalable relationship handling system
+- [ ] Colocate component sync functionality with components
+- [ ] Implement Prompt Manager
+- [ ] Simplify client messages to single type (type + content fields)
+- [x] Refactor perception/experience systems
+- [x] Clean up action system
+
+## Agent Capabilities
+
+- [ ] Support agents across multiple rooms
+- [ ] Enable physical actions perceived by other agents
+- [ ] Add goals and planning
+- [ ] Enable agent collaboration toward goals
+- [ ] Add world perception (sight, sound, smell, etc)
+- [x] Handle appearance with relationships
+- [x] Show realtime appearance data
+- [x] Improve agent alternation handling
+
+## World & Time
+
+- [ ] Implement global simulation time
+- [ ] Add time control system
+- [ ] Generate initial world from text prompt
+- [ ] Model world as entity relationships
+- [ ] Create narrative agent for world modification
+
+## Memory & Tools
+
+- [ ] Add core agent memories (childhood, etc)
+- [ ] Create world modification/query tools
+- [ ] Add tools for agents to create channels
+- [ ] Add tools for agents to create new agents
+- [ ] Implement long-term DB persistence

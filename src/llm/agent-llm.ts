@@ -5,6 +5,7 @@ import {
   geminiProModel,
 } from "../config/ai-config";
 import { EXTRACT_EXPERIENCES, PROCESS_STIMULUS } from "../templates";
+import { GENERATE_PLAN } from "../templates/generate-plan";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { llmLogger } from "../utils/llm-logger";
 import { logger } from "../utils/logger";
@@ -12,7 +13,7 @@ import { parseJSON } from "../utils/json";
 import { GENERATE_THOUGHT_SIMPLE } from "../templates/generate-thought";
 import { ActionResult } from "../types/actions";
 import { World } from "bitecs";
-import { Agent, Memory, Perception } from "../components";
+import { Agent, Memory, Perception, SinglePlanType } from "../components";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 import { GENERATE_GOALS } from "../templates/generate-goals";
 import {
@@ -20,6 +21,7 @@ import {
   GoalEvaluation,
 } from "../templates/evaluate-goal-progress";
 import { DETECT_SIGNIFICANT_CHANGES } from "../templates/detect-significant-changes";
+import { StimulusData } from "../types/stimulus";
 
 export interface ThoughtResponse {
   thought: string;
@@ -43,11 +45,7 @@ export interface AgentState {
   thoughtHistory: string[];
   perceptions: {
     narrative: string;
-    raw: Array<{
-      type: string;
-      source: number;
-      data: any;
-    }>;
+    raw: StimulusData[];
   };
   lastAction: ActionResult | undefined;
   timeSinceLastAction: number | undefined;
@@ -121,8 +119,8 @@ async function callLLM(
     const startTime = Date.now();
 
     const { text } = await generateText({
-      // model: gemini2FlashModel,
-      model: geminiProModel,
+      model: gemini2FlashModel,
+      // model: geminiProModel,
       // model: geminiFlashModel,
       prompt,
       system: systemPrompt,
@@ -252,12 +250,7 @@ export interface ProcessStimulusState {
   timeSinceLastPerception: number;
   currentTimestamp: number;
   lastAction?: ActionResult;
-  stimulus: Array<{
-    type: string;
-    source: number;
-    data: any;
-    timestamp: number;
-  }>;
+  stimulus: StimulusData[];
   context?: {
     salientEntities: Array<{ id: number; type: string; relevance: number }>;
     roomContext: Record<string, any>;
@@ -308,12 +301,7 @@ export interface ExtractExperiencesState {
   timestamp: number;
   perceptionSummary: string;
   perceptionContext: any[];
-  stimulus: Array<{
-    type: string;
-    source: string | number;
-    data: any;
-    timestamp: number;
-  }>;
+  stimulus: StimulusData[];
 }
 
 function validateExperiences(experiences: any[]): experiences is Experience[] {
@@ -528,5 +516,67 @@ export async function detectSignificantChanges(state: DetectChangesState) {
       recommendation: "maintain_goals",
       reasoning: ["Error in change detection"],
     };
+  }
+}
+
+export interface GeneratePlanState {
+  name: string;
+  role: string;
+  systemPrompt: string;
+  agentId: string;
+  goal: {
+    id: string;
+    description: string;
+    type: string;
+    priority: number;
+    success_criteria: string[];
+    progress_indicators: string[];
+  };
+  currentPlans: any[];
+  recentExperiences: any[];
+  availableTools: Array<{
+    name: string;
+    description: string;
+    parameters: string[];
+  }>;
+}
+
+export async function generatePlan(
+  state: GeneratePlanState
+): Promise<SinglePlanType> {
+  try {
+    logger.debug("Generating plan for goal:", {
+      agentName: state.name,
+      goalId: state.goal.id,
+      goalType: state.goal.type,
+    });
+
+    const prompt = composeFromTemplate(GENERATE_PLAN, {
+      ...state,
+      goal: JSON.stringify(state.goal, null, 2),
+      availableTools: state.availableTools
+        .map((t) => `${t.name}: ${t.description}`)
+        .join("\n"),
+      recentExperiences: JSON.stringify(state.recentExperiences, null, 2),
+    });
+
+    const text = await callLLM(prompt, state.systemPrompt, state.agentId);
+    const parsed = parseJSON<{ plan: SinglePlanType }>(text);
+
+    logger.debug("Generated plan:", {
+      planId: parsed.plan.id,
+      stepCount: parsed.plan.steps.length,
+    });
+
+    // Ensure required fields are present
+    return {
+      ...parsed.plan,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      status: "active" as const,
+    };
+  } catch (error) {
+    logger.error(`Failed to generate plan:`, error);
+    throw error;
   }
 }

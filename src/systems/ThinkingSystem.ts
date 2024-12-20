@@ -13,8 +13,10 @@ import { generateThought } from "../llm/agent-llm";
 import { AgentState } from "../types/state";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
-import { createVisualStimulus } from "../utils/stimulus-utils";
+import { createVisualStimulus } from "../factories/stimulusFactory";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
+import { processConcurrentAgents } from "../utils/system-utils";
+import { StimulusSource } from "../types/stimulus";
 
 interface ThoughtResult {
   thought: string;
@@ -145,18 +147,22 @@ function updateAgentAppearance(
   });
 
   // Create visual stimulus for appearance change
-  createVisualStimulus(world, {
-    sourceEntity: eid,
-    roomId: Room.id[roomId],
-    appearance: true,
-    data: {
-      ...appearance,
-      location: {
+  createVisualStimulus(
+    world,
+    roomId,
+    appearance.description || Appearance.description[eid],
+    {
+      metadata: {
         roomId: Room.id[roomId],
-        roomName: Room.name[roomId],
+        appearance,
+        location: {
+          roomId: Room.id[roomId],
+          roomName: Room.name[roomId],
+        },
       },
-    },
-  });
+      source: StimulusSource.ROOM,
+    }
+  );
 
   // Emit appearance event
   runtime.eventBus.emitAgentEvent(eid, "appearance", "appearance", {
@@ -173,21 +179,22 @@ function updateAgentAppearance(
 export const ThinkingSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
     const agents = query(world, [Agent, Memory]);
-    logger.debug(`ThinkingSystem processing ${agents.length} agents`);
 
-    for (const eid of agents) {
-      try {
-        // Skip inactive agents
+    await processConcurrentAgents(
+      world,
+      agents,
+      "ThinkingSystem",
+      async (eid) => {
         if (!Agent.active[eid]) {
           logger.debug(`Agent ${Agent.name[eid]} is not active, skipping`);
-          continue;
+          return;
         }
 
         // Find agent's room
         const agentRoom = findAgentRoom(world, eid);
         if (!agentRoom) {
           logger.debug(`No room found for ${Agent.name[eid]}`);
-          continue;
+          return;
         }
 
         // Stage 1: Generate thought based on current state
@@ -209,11 +216,14 @@ export const ThinkingSystem = createSystem<SystemConfig>(
             runtime
           );
         }
-      } catch (error) {
-        logger.error(`Error in ThinkingSystem for agent ${eid}}`, error);
-        // Continue with next agent
+
+        return {
+          thought: thought.thought,
+          hasAction: !!thought.action,
+          hasAppearanceChange: !!thought.appearance,
+        };
       }
-    }
+    );
 
     return world;
   }
