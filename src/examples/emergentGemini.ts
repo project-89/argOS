@@ -7,7 +7,6 @@ export function setupEmergentBeing() {
   // Create world and runtime with configuration
   const world = createWorld();
   const runtime = new SimulationRuntime(world, {
-    updateInterval: 10000, // 10 second thinking interval
     actions: actions,
   });
 
