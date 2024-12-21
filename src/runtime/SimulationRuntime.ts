@@ -60,13 +60,13 @@ export interface RuntimeConfig {
 const defaultConsciousSystems = [
   RoomSystem.create,
   PerceptionSystem.create,
+  ExperienceSystem.create,
   ThinkingSystem.create,
   ActionSystem.create,
   CleanupSystem.create,
 ];
 
 const defaultSubconsciousSystems = [
-  ExperienceSystem.create,
   GoalPlanningSystem.create,
   PlanningSystem.create,
 ];

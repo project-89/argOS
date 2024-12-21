@@ -12,8 +12,17 @@ import { logger } from "../utils/logger";
 import { parseJSON } from "../utils/json";
 import { GENERATE_THOUGHT_SIMPLE } from "../templates/generate-thought";
 import { ActionResult } from "../types/actions";
-import { World } from "bitecs";
-import { Agent, Memory, Perception, SinglePlanType } from "../components";
+import { World, addComponent, query, hasComponent } from "bitecs";
+import {
+  Agent,
+  GoalType,
+  Memory,
+  Perception,
+  SinglePlanType,
+  WorkingMemory,
+  ProcessingState,
+  ProcessingMode,
+} from "../components";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 import { GENERATE_GOALS } from "../templates/generate-goals";
 import {
@@ -171,7 +180,6 @@ export async function generateThought(
     // Compose the prompt with formatted data
     const prompt = composeFromTemplate(GENERATE_THOUGHT_SIMPLE, {
       ...state,
-      thoughtHistory: state.thoughtHistory.join("\n"),
       perceptions: {
         narrative: state.perceptions.narrative,
         raw: JSON.stringify(state.perceptions.raw, null, 2),
@@ -261,7 +269,14 @@ export interface ProcessStimulusState {
     }>;
     agentRole: string;
     agentPrompt: string;
+    processingMode: ProcessingMode;
+    stableStateCycles: number;
   };
+  processingModeInstructions?: string;
+  outputGuidelines?: string;
+  modeSpecificAntiPatterns?: string;
+  modeFocusReminder?: string;
+  perceptionHistory?: string;
 }
 
 export async function processStimulus(
@@ -302,6 +317,7 @@ export interface ExtractExperiencesState {
   perceptionSummary: string;
   perceptionContext: any[];
   stimulus: StimulusData[];
+  goals: GoalType[];
 }
 
 function validateExperiences(experiences: any[]): experiences is Experience[] {

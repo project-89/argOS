@@ -37,6 +37,7 @@ export function gatherStimuliForAgent(
   eid: number
 ): StimulusData[] {
   const allStimuli: StimulusData[] = [];
+  const processedStimuli = new Set<number>();
 
   // Get agent's current room
   const rooms = query(world, [Room]).filter((roomId) =>
@@ -63,6 +64,10 @@ export function gatherStimuliForAgent(
 
   for (const stimulusId of stimuliSet) {
     try {
+      // Skip if already processed
+      if (processedStimuli.has(stimulusId)) continue;
+      processedStimuli.add(stimulusId);
+
       // Check if stimulus component exists and has required data
       if (!Stimulus.type[stimulusId] || !Stimulus.source[stimulusId]) {
         // Mark for cleanup instead of removing directly
@@ -126,8 +131,10 @@ export function gatherStimuliForAgent(
         metadata: combinedMetadata,
       };
 
-      // Mark stimulus for cleanup after processing
-      addComponent(world, stimulusId, Cleanup);
+      // Only mark for cleanup if not a permanent stimulus
+      if (!combinedMetadata.permanent) {
+        addComponent(world, stimulusId, Cleanup);
+      }
 
       allStimuli.push(stimulusData);
     } catch (error) {

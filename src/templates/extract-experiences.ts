@@ -38,6 +38,7 @@ Recent Experiences: {recentExperiences}
 Perception Summary: {perceptionSummary}
 Context: {perceptionContext}
 New Stimuli: {stimulus}
+Goals: {goals}
 
 EXTRACTION RULES:
 
@@ -46,47 +47,58 @@ EXTRACTION RULES:
    ✓ Must add new information or context
    ✓ Must be relevant to current situation
    ❌ No repeating or rephrasing old experiences
+   ❌ No experiences that can be inferred from existing ones
 
 2. SIGNIFICANCE TEST
    ✓ Changes current understanding
    ✓ Affects future decisions
    ✓ Provides new context
    ❌ No trivial or redundant details
+   ❌ No experiences that don't add new information
 
 3. CLARITY REQUIREMENTS
    ✓ First-person perspective
    ✓ Concrete, specific details
    ✓ Clear cause-effect if relevant
    ✓ Temporal context if important
+   ❌ No vague or ambiguous descriptions
 
 4. COMPRESSION GUIDELINES
-   ✓ Combine related experiences
+   ✓ Combine related experiences into single comprehensive experience
    ✓ Omit unnecessary details
    ✓ Focus on key elements
    ✓ Maintain essential context
+   ✓ Merge similar observations into one
+   ❌ No separate experiences for related observations
+   ❌ No redundant state descriptions
 
 EXPERIENCE VALIDATION:
 
 Before recording, each experience must pass these gates:
-1. Is it new? (Not in recent experiences)
+1. Is it new? (Not semantically similar to recent experiences)
 2. Is it significant? (Changes understanding)
 3. Is it clear? (Well-defined and specific)
 4. Is it relevant? (Matters to current context)
 5. Is it properly categorized? (Fits experience type)
+6. Can it be merged? (Check if it can be combined with other experiences)
 
 FORMATTING RULES:
 
 1. OBSERVATIONS
    "I observed/noticed/perceived [specific detail] in/about [context]"
+   Combine multiple related observations into one comprehensive observation.
 
 2. SPEECH
    "I heard/said/exchanged [specific communication] with [entity]"
+   Include context and response in the same experience when related.
 
 3. ACTIONS
    "I/[entity] performed/executed [specific action] which [effect]"
+   Combine sequential related actions into one experience.
 
 4. THOUGHTS
    "I realized/understood/recognized [specific insight] about [subject]"
+   Merge related insights into a single comprehensive thought.
 
 ANTI-PATTERNS:
 ❌ No philosophical musings
@@ -94,6 +106,9 @@ ANTI-PATTERNS:
 ❌ No redundant experiences
 ❌ No vague descriptions
 ❌ No complex interpretations
+❌ No separate experiences for related observations
+❌ No repetitive thoughts about the same topic
+❌ No multiple experiences that could be combined
 
 OUTPUT FORMAT:
 {
@@ -107,4 +122,6 @@ OUTPUT FORMAT:
   ]
 }
 
-Remember: Quality over quantity. An empty array is better than redundant experiences.`;
+Remember: Quality over quantity. An empty array is better than redundant experiences.
+Focus on combining related experiences and eliminating redundancy.
+Each experience should provide unique, meaningful information.`;
