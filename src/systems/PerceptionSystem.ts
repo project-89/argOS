@@ -1,170 +1,205 @@
-import { World, query, setComponent } from "bitecs";
-import { Agent, Memory, Perception } from "../components";
-import { logger } from "../utils/logger";
+import { World, addComponent, query, hasComponent } from "bitecs";
+import {
+  Agent,
+  Perception,
+  WorkingMemory,
+  ProcessingState,
+  ProcessingMode,
+} from "../components";
 import { createSystem } from "./System";
+import { logger } from "../utils/logger";
+import { processStimulus } from "../llm/agent-llm";
 import {
   gatherStimuliForAgent,
   filterAndPrioritizeStimuli,
   extractSalientEntities,
   buildRoomContext,
 } from "../factories/perceptionFactory";
-import { processStimulus } from "../llm/agent-llm";
-import { PerceptionContext } from "../types/perception";
 import { processConcurrentAgents } from "../utils/system-utils";
-import {
-  MAX_STIMULI_PER_TICK,
-  STIMULUS_BATCH_SIZE,
-} from "../constants/stimulus";
+import { createHash } from "crypto";
+import { MODE_CONTENT } from "../templates/process-stimulus";
+
+// Helper to generate a hash of stimuli state
+function generateStimuliHash(stimuli: any[]): string {
+  const hash = createHash("sha256");
+  // Sort and stringify stimuli to ensure consistent hashing, excluding timestamp
+  const sortedStimuli = stimuli
+    .map((s) => ({
+      type: s.type,
+      content: s.content,
+      source: s.source,
+    }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  hash.update(JSON.stringify(sortedStimuli));
+  return hash.digest("hex");
+}
+
+// Helper to check if stimuli change is significant
+function isSignificantChange(
+  currentHash: string,
+  lastHash: string,
+  stableStateCycles: number
+): boolean {
+  if (currentHash !== lastHash) {
+    // Always consider it significant if hashes don't match and we've been stable
+    if (stableStateCycles > 0) return true;
+    // Otherwise, we might add more complex logic here later
+    return true;
+  }
+  return false;
+}
 
 export const PerceptionSystem = createSystem(
   (runtime) => async (world: World) => {
-    const agents = query(world, [Agent, Memory, Perception]);
+    const agents = query(world, [Agent, Perception]);
 
     await processConcurrentAgents(
       world,
       agents,
       "PerceptionSystem",
       async (eid) => {
-        if (!Agent.active[eid]) {
-          logger.debug(`Agent ${Agent.name[eid]} is not active, skipping`);
-          return;
+        if (!Agent.active[eid]) return;
+
+        // Initialize WorkingMemory if needed
+        if (!hasComponent(world, eid, WorkingMemory)) {
+          addComponent(world, eid, WorkingMemory, {
+            lastStimuliHash: "",
+            lastSignificantChange: Date.now(),
+            stableStateCycles: 0,
+          });
         }
 
-        const agentName = Agent.name[eid];
-
-        // Stage 1: Gather all relevant stimuli for the agent
-        const rawStimuli = gatherStimuliForAgent(world, eid);
-        logger.agent(
-          eid,
-          `Gathered ${rawStimuli.length} raw stimuli`,
-          agentName
-        );
-
-        // Skip if no new stimuli and last process was recent
-        const lastProcessTime = Perception.lastProcessedTime[eid] || 0;
-        if (
-          rawStimuli.length === 0 &&
-          Date.now() - lastProcessTime < 1000 // Only process if more than 1 second has passed
-        ) {
-          return;
+        // Initialize ProcessingState if needed
+        if (!hasComponent(world, eid, ProcessingState)) {
+          addComponent(world, eid, ProcessingState, {
+            mode: ProcessingMode.ACTIVE,
+            duration: 0,
+            lastModeChange: Date.now(),
+          });
         }
 
-        // Stage 2: Filter and prioritize stimuli
-        const prioritizedStimuli = filterAndPrioritizeStimuli(
+        // Gather and process stimuli
+        const currentStimuli = gatherStimuliForAgent(world, eid);
+        const filteredStimuli = filterAndPrioritizeStimuli(
           world,
-          rawStimuli,
+          currentStimuli,
           0,
           eid
-        ).slice(0, MAX_STIMULI_PER_TICK); // Limit number of stimuli processed per tick
-
-        logger.agent(
-          eid,
-          `Prioritized ${prioritizedStimuli.length} stimuli for processing`,
-          agentName
         );
 
-        // Process stimuli in batches if there are too many
-        const stimuliBatches = [];
-        for (
-          let i = 0;
-          i < prioritizedStimuli.length;
-          i += STIMULUS_BATCH_SIZE
-        ) {
-          stimuliBatches.push(
-            prioritizedStimuli.slice(i, i + STIMULUS_BATCH_SIZE)
-          );
+        // Generate hash of current state
+        const currentHash = generateStimuliHash(filteredStimuli);
+        const lastHash = WorkingMemory.lastStimuliHash[eid];
+        const stableStateCycles = WorkingMemory.stableStateCycles[eid];
+
+        // Check for significant changes
+        const hasSignificantChange = isSignificantChange(
+          currentHash,
+          lastHash,
+          stableStateCycles
+        );
+
+        // Update working memory
+        if (hasSignificantChange) {
+          WorkingMemory.lastStimuliHash[eid] = currentHash;
+          WorkingMemory.lastSignificantChange[eid] = Date.now();
+          WorkingMemory.stableStateCycles[eid] = 0;
+
+          // Update processing mode
+          ProcessingState.mode[eid] = ProcessingMode.ACTIVE;
+          ProcessingState.lastModeChange[eid] = Date.now();
+          ProcessingState.duration[eid] = 0;
+        } else {
+          WorkingMemory.stableStateCycles[eid]++;
+          ProcessingState.duration[eid] =
+            Date.now() - ProcessingState.lastModeChange[eid];
+
+          // Update processing mode based on stability
+          if (stableStateCycles > 5) {
+            // Threshold for REFLECTIVE mode
+            if (ProcessingState.mode[eid] === ProcessingMode.ACTIVE) {
+              ProcessingState.mode[eid] = ProcessingMode.REFLECTIVE;
+              ProcessingState.lastModeChange[eid] = Date.now();
+            }
+          }
+          if (stableStateCycles > 10) {
+            // Threshold for WAITING mode
+            if (ProcessingState.mode[eid] === ProcessingMode.REFLECTIVE) {
+              ProcessingState.mode[eid] = ProcessingMode.WAITING;
+              ProcessingState.lastModeChange[eid] = Date.now();
+            }
+          }
         }
 
-        let narratives = [];
-        for (const batch of stimuliBatches) {
-          // Stage 3: Build perception context for batch
-          const context: PerceptionContext = {
-            salientEntities: extractSalientEntities(world, batch),
-            roomContext: buildRoomContext(batch),
-            recentEvents: [], // Will be populated from Memory if needed
-            agentRole: Agent.role[eid],
-            agentPrompt: Agent.systemPrompt[eid],
-            stats: {
-              totalStimuli: batch.length,
-              processedTimestamp: Date.now(),
-            },
-          };
-
-          logger.agent(
-            eid,
-            `Processing batch of ${batch.length} stimuli with ${context.salientEntities.length} salient entities`,
-            agentName
+        // Only process stimuli if we have any or if there's been a significant change
+        if (filteredStimuli.length > 0 || hasSignificantChange) {
+          const salientEntities = extractSalientEntities(
+            world,
+            filteredStimuli
           );
+          const roomContext = buildRoomContext(filteredStimuli);
 
-          // Stage 4: Generate narrative perception for batch
-          const perceptionState = {
-            name: agentName,
-            role: Agent.role[eid],
-            systemPrompt: Agent.systemPrompt[eid],
-            recentPerceptions: Memory.perceptions[eid] || "",
-            timeSinceLastPerception: Date.now() - lastProcessTime,
-            currentTimestamp: Date.now(),
-            lastAction: undefined, // Can be added if needed
-            stimulus: batch,
-            context,
-          };
+          try {
+            // Process stimuli with current mode context
+            const mode = ProcessingState.mode[eid] as ProcessingMode;
+            const modeContent = MODE_CONTENT[mode];
 
-          const batchNarrative = await processStimulus(perceptionState);
-          narratives.push(batchNarrative);
+            const summary = await processStimulus({
+              name: Agent.name[eid],
+              role: Agent.role[eid],
+              systemPrompt: Agent.systemPrompt[eid],
+              recentPerceptions: Perception.summary[eid] || "",
+              timeSinceLastPerception:
+                Date.now() - (Perception.lastUpdate[eid] || Date.now()),
+              currentTimestamp: Date.now(),
+              stimulus: filteredStimuli,
+              context: {
+                salientEntities,
+                roomContext,
+                recentEvents: [],
+                agentRole: Agent.role[eid],
+                agentPrompt: Agent.systemPrompt[eid],
+                processingMode: mode,
+                stableStateCycles: WorkingMemory.stableStateCycles[eid],
+              },
+              ...modeContent,
+            });
+
+            // Update perception state
+            Perception.currentStimuli[eid] = filteredStimuli;
+            Perception.summary[eid] = summary;
+            Perception.context[eid] = {
+              salientEntities,
+              roomContext,
+            };
+            Perception.lastUpdate[eid] = Date.now();
+
+            // Emit perception update event
+            runtime.eventBus.emitAgentEvent(eid, "perception", "perception", {
+              summary,
+              stimuli: filteredStimuli,
+              context: {
+                salientEntities,
+                roomContext,
+              },
+            });
+
+            logger.debug(
+              `Updated perception for agent ${Agent.name[eid]}: ${filteredStimuli.length} stimuli`
+            );
+          } catch (error) {
+            logger.error(
+              `Error processing stimuli for agent ${Agent.name[eid]}:`,
+              error
+            );
+          }
         }
-
-        const combinedNarrative = narratives.join(" ");
-        logger.agent(
-          eid,
-          `Generated combined perception narrative: ${combinedNarrative.substring(
-            0,
-            100
-          )}...`,
-          agentName
-        );
-
-        // Stage 5: Update agent's perception component
-        setComponent(world, eid, Perception, {
-          currentStimuli: prioritizedStimuli,
-          context: {
-            salientEntities: extractSalientEntities(world, prioritizedStimuli),
-            roomContext: buildRoomContext(prioritizedStimuli),
-            recentEvents: [],
-            agentRole: Agent.role[eid],
-            agentPrompt: Agent.systemPrompt[eid],
-            stats: {
-              totalStimuli: prioritizedStimuli.length,
-              processedTimestamp: Date.now(),
-            },
-          },
-          summary: combinedNarrative,
-          lastProcessedTime: Date.now(),
-          lastUpdate: Date.now(),
-        });
-
-        // Stage 6: Update Memory with new perception
-        setComponent(world, eid, Memory, {
-          perceptions: [...Memory.perceptions[eid], combinedNarrative],
-        });
-
-        // Emit perception event
-        runtime.eventBus.emitAgentEvent(eid, "perception", "perception", {
-          stimuliCount: prioritizedStimuli.length,
-          salientEntities: extractSalientEntities(world, prioritizedStimuli),
-          roomContext: buildRoomContext(prioritizedStimuli),
-          narrative: combinedNarrative,
-          timestamp: Date.now(),
-        });
-
-        logger.agent(
-          eid,
-          `Completed perception cycle: ${prioritizedStimuli.length} stimuli processed`,
-          agentName
-        );
 
         return {
-          stimuliCount: prioritizedStimuli.length,
-          narrative: combinedNarrative,
+          stimuliCount: filteredStimuli.length,
+          hasSignificantChange,
+          processingMode: ProcessingState.mode[eid],
+          stableStateCycles: WorkingMemory.stableStateCycles[eid],
         };
       }
     );

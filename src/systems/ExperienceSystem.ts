@@ -1,5 +1,5 @@
 import { World, query, setComponent } from "bitecs";
-import { Agent, Memory, Perception } from "../components";
+import { Agent, Goal, Memory, Perception } from "../components";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import {
@@ -44,6 +44,9 @@ interface ExperienceState {
   };
 }
 
+// Time window for considering experiences as potentially duplicate (30 seconds)
+const EXPERIENCE_TIME_WINDOW = 30000;
+
 export const ExperienceSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
     const agents = query(world, [Agent, Memory, Perception]);
@@ -69,17 +72,24 @@ export const ExperienceSystem = createSystem<SystemConfig>(
           return;
         }
 
+        // Filter to recent experiences only (last 5 minutes)
+        const recentTimeWindow = 5 * 60 * 1000;
+        const recentExperiences = currentExperiences.filter(
+          (exp: Experience) => Date.now() - exp.timestamp < recentTimeWindow
+        );
+
         // Prepare state for experience extraction
         const agentState: ExtractExperiencesState = {
           name: Agent.name[eid],
           agentId: Agent.id[eid],
           role: Agent.role[eid],
           systemPrompt: Agent.systemPrompt[eid],
-          recentExperiences: currentExperiences.filter(validateExperience),
+          recentExperiences: recentExperiences.filter(validateExperience),
           timestamp: Date.now(),
           perceptionSummary: Perception.summary[eid] || "",
           perceptionContext: Perception.context[eid] || [],
           stimulus: currentStimuli,
+          goals: Goal.current[eid] || [],
         };
 
         logger.debug(`Processing experiences for ${Agent.name[eid]}`, {
@@ -164,14 +174,48 @@ function validateExperience(exp: Experience): boolean {
   return isValid;
 }
 
+function areSimilarExperiences(exp1: Experience, exp2: Experience): boolean {
+  // Different thresholds based on type
+  const similarityThreshold = exp1.type === "speech" ? 0.9 : 0.7;
+
+  // Simple similarity check based on common words
+  const words1 = new Set(exp1.content.toLowerCase().split(/\s+/));
+  const words2 = new Set(exp2.content.toLowerCase().split(/\s+/));
+
+  const intersection = new Set([...words1].filter((x) => words2.has(x)));
+  const union = new Set([...words1, ...words2]);
+
+  return intersection.size / union.size > similarityThreshold;
+}
+
 function deduplicateExperiences(experiences: Experience[]): Experience[] {
-  const seen = new Set<string>();
-  return experiences.filter((exp) => {
+  const seen = new Map<string, Experience>();
+
+  // Sort by timestamp to keep most recent
+  const sortedExperiences = [...experiences].sort(
+    (a, b) => b.timestamp - a.timestamp
+  );
+
+  return sortedExperiences.filter((exp) => {
     if (!validateExperience(exp)) return false;
 
-    const key = `${exp.type}:${exp.content}:${exp.timestamp}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
+    // Check for exact duplicates first
+    const exactKey = `${exp.type}:${exp.content}`;
+    if (seen.has(exactKey)) return false;
+
+    // Check for semantic duplicates within time window
+    for (const [_, existingExp] of seen.entries()) {
+      if (
+        exp.type === existingExp.type &&
+        Math.abs(exp.timestamp - existingExp.timestamp) <
+          EXPERIENCE_TIME_WINDOW &&
+        areSimilarExperiences(exp, existingExp)
+      ) {
+        return false;
+      }
+    }
+
+    seen.set(exactKey, exp);
     return true;
   });
 }
