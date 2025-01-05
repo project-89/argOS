@@ -17,11 +17,11 @@ export class EventBus {
     Set<(data: RoomEvent | AgentEvent) => void>
   >();
   private roomOccupants = new Map<number, Set<number>>();
-  private simulationLogger: SimulationLogger;
+  // private simulationLogger: SimulationLogger;
 
   constructor(world: World) {
     this.world = world;
-    this.simulationLogger = new SimulationLogger();
+    // this.simulationLogger = new SimulationLogger();
   }
 
   // Get room an agent is in
@@ -122,11 +122,11 @@ export class EventBus {
     // First broadcast to subscribers
     this.broadcast(`room:${stringRoomId}`, event);
 
-    // Then log event
-    if (type === "state" && content.room) {
-      this.simulationLogger.updateRoomState(stringRoomId, content.room);
-    }
-    this.simulationLogger.logRoomEvent(event);
+    // // Then log event
+    // if (type === "state" && content.room) {
+    //   this.simulationLogger.updateRoomState(stringRoomId, content.room);
+    // }
+    // this.simulationLogger.logRoomEvent(event);
   }
 
   // Emit event to an agent channel
@@ -156,7 +156,7 @@ export class EventBus {
       // Emit to room channel
       this.emitRoomEvent(roomId, type, content, stringAgentId);
       // Log agent event
-      this.simulationLogger.logAgentEvent(event, stringRoomId);
+      // this.simulationLogger.logAgentEvent(event, stringRoomId);
     }
   }
 
