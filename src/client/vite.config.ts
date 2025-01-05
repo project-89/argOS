@@ -12,6 +12,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/ws": {
+        // Proxy WebSocket connections to the development server running on localhost:3000
         target: "ws://localhost:3000",
         ws: true,
       },
