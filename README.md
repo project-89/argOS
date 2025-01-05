@@ -55,6 +55,42 @@ npm run start
 
 This will start a simulation with two agents in a room, demonstrating basic interaction capabilities.
 
+Some features may require the project to be built before running. Use the following command to compile TypeScript (if applicable):
+
+```bash
+npm run build
+```
+
+## Cloning the Repository
+
+```bash
+
+git clone https://githib.com/project-89/argOS.git
+```
+Navigate to the project directory:
+
+```bash
+
+cd argOS
+```
+
+## Configuring the Environment
+
+Environment Variables:
+
+1. Check if the repository includes a .env.example file. If so, rename it to .env:
+
+```bash
+cp .env.example .env
+```
+
+2. Populate the .env file with the required values. For example:
+
+```bash
+
+GOOGLE_GENERATIVE_AI_API_KEY=your-api-key-here
+```
+
 ## Architecture
 
 The system is built on several core components:
