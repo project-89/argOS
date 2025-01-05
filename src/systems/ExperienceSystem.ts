@@ -84,7 +84,7 @@ export const ExperienceSystem = createSystem<SystemConfig>(
           agentId: Agent.id[eid],
           role: Agent.role[eid],
           systemPrompt: Agent.systemPrompt[eid],
-          recentExperiences: recentExperiences.filter(validateExperience),
+          recentExperiences: recentExperiences,
           timestamp: Date.now(),
           perceptionSummary: Perception.summary[eid] || "",
           perceptionContext: Perception.context[eid] || [],

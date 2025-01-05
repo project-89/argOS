@@ -3,6 +3,7 @@ import { ComponentWithSchema } from "../components/createComponent";
 import { RelationWithSchema } from "../components/createRelation";
 import { ActionResult } from "./actions";
 import { StimulusData, StimulusSource, StimulusType } from "./stimulus";
+import { SinglePlanType } from "../components/Plans";
 
 // Agent summary type for global state
 export interface AgentSummary {
@@ -57,11 +58,19 @@ export interface RuntimeState {
   engine: EngineState;
 }
 
+export type RoomType =
+  | "physical"
+  | "discord"
+  | "twitter"
+  | "private"
+  | "astral"
+  | "system";
+
 export interface Room {
   id: string;
   name: string;
   description: string;
-  type: "physical" | "discord" | "twitter" | "private" | "astral";
+  type: RoomType;
 }
 
 export interface RoomState extends Room {
@@ -131,5 +140,18 @@ export interface AgentState {
     success_criteria: string[];
     progress_indicators: string[];
     created_at: number;
+  }>;
+  activePlans?: Array<{
+    id: string;
+    goalId: string;
+    steps: Array<{
+      id: string;
+      description: string;
+      status: "pending" | "in_progress" | "completed" | "failed";
+      requiredTools?: string[];
+      expectedOutcome: string;
+    }>;
+    currentStepId?: string;
+    status: "active";
   }>;
 }

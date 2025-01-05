@@ -1,10 +1,13 @@
-import { World, addComponent, query, hasComponent } from "bitecs";
+import { World, addComponent, query, hasComponent, setComponent } from "bitecs";
 import {
   Agent,
   Perception,
   WorkingMemory,
   ProcessingState,
   ProcessingMode,
+  Plan,
+  Goal,
+  Memory,
 } from "../components";
 import { createSystem } from "./System";
 import { logger } from "../utils/logger";
@@ -18,6 +21,7 @@ import {
 import { processConcurrentAgents } from "../utils/system-utils";
 import { createHash } from "crypto";
 import { MODE_CONTENT } from "../templates/process-stimulus";
+import { getActivePlans } from "../components/Plans";
 
 // Helper to generate a hash of stimuli state
 function generateStimuliHash(stimuli: any[]): string {
@@ -51,7 +55,7 @@ function isSignificantChange(
 
 export const PerceptionSystem = createSystem(
   (runtime) => async (world: World) => {
-    const agents = query(world, [Agent, Perception]);
+    const agents = query(world, [Agent, Perception, Plan]);
 
     await processConcurrentAgents(
       world,
@@ -62,7 +66,7 @@ export const PerceptionSystem = createSystem(
 
         // Initialize WorkingMemory if needed
         if (!hasComponent(world, eid, WorkingMemory)) {
-          addComponent(world, eid, WorkingMemory, {
+          setComponent(world, eid, WorkingMemory, {
             lastStimuliHash: "",
             lastSignificantChange: Date.now(),
             stableStateCycles: 0,
@@ -71,7 +75,7 @@ export const PerceptionSystem = createSystem(
 
         // Initialize ProcessingState if needed
         if (!hasComponent(world, eid, ProcessingState)) {
-          addComponent(world, eid, ProcessingState, {
+          setComponent(world, eid, ProcessingState, {
             mode: ProcessingMode.ACTIVE,
             duration: 0,
             lastModeChange: Date.now(),
@@ -138,6 +142,8 @@ export const PerceptionSystem = createSystem(
             filteredStimuli
           );
           const roomContext = buildRoomContext(filteredStimuli);
+          const currentPlans = Plan.plans[eid] || [];
+          const activePlans = getActivePlans(currentPlans);
 
           try {
             // Process stimuli with current mode context
@@ -149,9 +155,13 @@ export const PerceptionSystem = createSystem(
               role: Agent.role[eid],
               systemPrompt: Agent.systemPrompt[eid],
               recentPerceptions: Perception.summary[eid] || "",
+              perceptionHistory: Perception.history[eid] || "",
               timeSinceLastPerception:
                 Date.now() - (Perception.lastUpdate[eid] || Date.now()),
               currentTimestamp: Date.now(),
+              currentGoals: Goal.current[eid],
+              activePlans,
+              recentExperiences: Memory.experiences[eid],
               stimulus: filteredStimuli,
               context: {
                 salientEntities,
@@ -173,6 +183,13 @@ export const PerceptionSystem = createSystem(
               roomContext,
             };
             Perception.lastUpdate[eid] = Date.now();
+
+            // Add the summary to the history
+            // Handle if history doesn't exist
+            if (!Perception.history[eid]) {
+              Perception.history[eid] = [];
+            }
+            Perception.history[eid].push(summary);
 
             // Emit perception update event
             runtime.eventBus.emitAgentEvent(eid, "perception", "perception", {

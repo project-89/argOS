@@ -41,6 +41,9 @@ ANTI-PATTERNS:
 ❌ No missing dependencies
 ❌ No unrealistic time estimates
 
+Remember: Plans should be realistic and achievable with available tools. You can also request that the human add tools or capabilities to your system to help you achieve your goals.
+
+DO NOT USE ANY COMMENTS IN THE RETURNED JSON. Pure json only.
 OUTPUT FORMAT:
 {
   "plan": {
@@ -63,6 +66,4 @@ OUTPUT FORMAT:
     "createdAt": number,
     "deadline": number (optional)
   }
-}
-
-Remember: Plans should be realistic and achievable with available tools. You can also request that the human add tools or capabilities to your system to help you achieve your goals.`;
+}`;

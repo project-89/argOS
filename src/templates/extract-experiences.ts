@@ -34,43 +34,12 @@ EXPERIENCE CATEGORIES:
    Priority: Novel insights over restatements
 
 CURRENT STATE:
-Recent Experiences: {recentExperiences}
-Perception Summary: {perceptionSummary}
+Last perception: {perceptionSummary}
 Context: {perceptionContext}
-New Stimuli: {stimulus}
+Current Stimuli: {stimulus}
 Goals: {goals}
 
-EXTRACTION RULES:
-
-1. NOVELTY CHECK
-   ✓ Must differ substantially from recent experiences
-   ✓ Must add new information or context
-   ✓ Must be relevant to current situation
-   ❌ No repeating or rephrasing old experiences
-   ❌ No experiences that can be inferred from existing ones
-
-2. SIGNIFICANCE TEST
-   ✓ Changes current understanding
-   ✓ Affects future decisions
-   ✓ Provides new context
-   ❌ No trivial or redundant details
-   ❌ No experiences that don't add new information
-
-3. CLARITY REQUIREMENTS
-   ✓ First-person perspective
-   ✓ Concrete, specific details
-   ✓ Clear cause-effect if relevant
-   ✓ Temporal context if important
-   ❌ No vague or ambiguous descriptions
-
-4. COMPRESSION GUIDELINES
-   ✓ Combine related experiences into single comprehensive experience
-   ✓ Omit unnecessary details
-   ✓ Focus on key elements
-   ✓ Maintain essential context
-   ✓ Merge similar observations into one
-   ❌ No separate experiences for related observations
-   ❌ No redundant state descriptions
+Current stimuli may have been present in previous perceptions.  Make sure you are not creating redundant experiences.  Be sure to check check your previous experiences and correlate them with the current stimuli and avoid duplications.
 
 EXPERIENCE VALIDATION:
 
@@ -82,34 +51,7 @@ Before recording, each experience must pass these gates:
 5. Is it properly categorized? (Fits experience type)
 6. Can it be merged? (Check if it can be combined with other experiences)
 
-FORMATTING RULES:
-
-1. OBSERVATIONS
-   "I observed/noticed/perceived [specific detail] in/about [context]"
-   Combine multiple related observations into one comprehensive observation.
-
-2. SPEECH
-   "I heard/said/exchanged [specific communication] with [entity]"
-   Include context and response in the same experience when related.
-
-3. ACTIONS
-   "I/[entity] performed/executed [specific action] which [effect]"
-   Combine sequential related actions into one experience.
-
-4. THOUGHTS
-   "I realized/understood/recognized [specific insight] about [subject]"
-   Merge related insights into a single comprehensive thought.
-
-ANTI-PATTERNS:
-❌ No philosophical musings
-❌ No future speculations
-❌ No redundant experiences
-❌ No vague descriptions
-❌ No complex interpretations
-❌ No separate experiences for related observations
-❌ No repetitive thoughts about the same topic
-❌ No multiple experiences that could be combined
-
+Return only the new experiences in this format. DO NOT USE ANY COMMENTS IN THE RETURNED JSON.
 OUTPUT FORMAT:
 {
   "experiences": [
@@ -124,4 +66,7 @@ OUTPUT FORMAT:
 
 Remember: Quality over quantity. An empty array is better than redundant experiences.
 Focus on combining related experiences and eliminating redundancy.
-Each experience should provide unique, meaningful information.`;
+Each experience should provide unique, meaningful information.
+
+Recent Experiences: {recentExperiences}
+New experiences:`;

@@ -168,10 +168,10 @@ export function createCognitiveStimulus(
 ): number | null {
   const stimulusId = createStimulus(world, {
     type: StimulusType.COGNITIVE,
-    source: StimulusSource.AGENT,
+    source: StimulusSource.SELF,
     content: JSON.stringify({
       data: { description, details },
-      metadata: options.metadata,
+      metadata: { ...options.metadata, sourceEntity },
     }),
     ...options,
   });
@@ -179,6 +179,7 @@ export function createCognitiveStimulus(
   if (stimulusId && sourceEntity) {
     setStimulusSource(world, stimulusId, sourceEntity, 1.0, {
       type: "cognitive",
+      isSelf: true,
     });
   }
 

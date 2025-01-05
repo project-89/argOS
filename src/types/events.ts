@@ -2,7 +2,7 @@ import { AgentSchema } from "../components/Agent";
 import { RoomSchema } from "../components/Room";
 import { NetworkLink } from "./network";
 import { z } from "zod";
-import { AgentState } from "./state";
+import { AgentState, RoomState } from "./state";
 
 type AgentType = z.infer<typeof AgentSchema>;
 type RoomType = z.infer<typeof RoomSchema>;
@@ -40,21 +40,13 @@ export interface BaseEvent<T = string> {
 }
 
 // Room Event
-export interface RoomEvent<T extends EventType = EventType>
-  extends BaseEvent<
-    T extends "state"
-      ? RoomEventContent
-      : T extends "action"
-      ? ActionContent
-      : T extends "experience"
-      ? ExperienceContent
-      : T extends "speech"
-      ? SpeechContent
-      : string
-  > {
+export interface RoomEvent<T extends EventType = EventType> {
+  type: T;
   roomId: string;
-  agentId?: string;
+  content: any;
+  timestamp: number;
   agentName?: string;
+  agentId?: string;
 }
 
 // Agent Event
@@ -137,3 +129,13 @@ export type EventPayload<T extends keyof EventTypes> = {
 };
 
 export type AnyEventPayload = EventPayload<keyof EventTypes>;
+
+// If you have a specific room update event type, update it:
+export interface RoomUpdateEvent {
+  type: "state";
+  roomId: string;
+  content: {
+    room: RoomState; // This should now accept the "system" type
+  };
+  timestamp: number;
+}

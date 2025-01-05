@@ -13,6 +13,7 @@ export enum StimulusSource {
   ROOM = "room",
   USER = "user",
   SYSTEM = "system",
+  SELF = "self",
 }
 
 export interface StimulusMetadata {

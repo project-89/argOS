@@ -1,7 +1,12 @@
 import { World, query, hasComponent, addComponent } from "bitecs";
 import { Room, Stimulus, OccupiesRoom, Cleanup } from "../components";
 import { logger } from "../utils/logger";
-import { StimulusType, StimulusData, StimulusContent } from "../types/stimulus";
+import {
+  StimulusType,
+  StimulusData,
+  StimulusContent,
+  StimulusSource,
+} from "../types/stimulus";
 import { STIMULUS_PRIORITIES } from "../constants/stimulus";
 import {
   getStimuliInRoom,
@@ -131,10 +136,7 @@ export function gatherStimuliForAgent(
         metadata: combinedMetadata,
       };
 
-      // Only mark for cleanup if not a permanent stimulus
-      if (!combinedMetadata.permanent) {
-        addComponent(world, stimulusId, Cleanup);
-      }
+      addComponent(world, stimulusId, Cleanup);
 
       allStimuli.push(stimulusData);
     } catch (error) {
@@ -159,6 +161,11 @@ export function filterAndPrioritizeStimuli(
 ): StimulusData[] {
   return stimuli
     .filter((stimulus) => {
+      // Always include self-generated cognitive stimuli
+      if (stimulus.source === StimulusSource.SELF) {
+        return true;
+      }
+
       // Filter out self-generated visual stimuli using relationships
       if (
         agentId &&
@@ -171,7 +178,16 @@ export function filterAndPrioritizeStimuli(
       // Keep stimuli above priority threshold
       return (stimulus.priority || 0) > threshold;
     })
-    .sort((a, b) => (b.priority || 0) - (a.priority || 0));
+    .sort((a, b) => {
+      // Prioritize self-generated stimuli first
+      if (a.source === StimulusSource.SELF && b.source !== StimulusSource.SELF)
+        return -1;
+      if (b.source === StimulusSource.SELF && a.source !== StimulusSource.SELF)
+        return 1;
+
+      // Then sort by priority
+      return (b.priority || 0) - (a.priority || 0);
+    });
 }
 
 /**

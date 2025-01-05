@@ -6,6 +6,7 @@ export const PerceptionSchema = z.object({
   currentStimuli: z.array(z.any()).optional(),
   lastProcessedTime: z.number().optional(),
   lastUpdate: z.number().optional(),
+  history: z.array(z.any()).optional(),
   summary: z.string().optional(),
   context: z.any().optional(),
 });
@@ -20,6 +21,7 @@ export const PerceptionComponent = createComponent(
     currentStimuli: [] as any[][],
     lastProcessedTime: [] as number[],
     lastUpdate: [] as number[],
+    history: [] as any[][],
     summary: [] as string[],
     context: [] as Record<string, any>[],
   }

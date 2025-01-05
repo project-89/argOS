@@ -356,3 +356,27 @@ graph TB
 - Relationship quality
 - Spawn success rate
 - Action effectiveness
+
+````mermaid
+graph TD
+    subgraph "Meta-Engine Layer"
+        Dev[Developer Agents] --> Engine[Engine Evolution]
+        Dev --> Components[Component Creation]
+        Dev --> Actions[Action Development]
+        Dev --> Systems[System Enhancement]
+    end
+
+    subgraph "Production Studio"
+        Director[Director Agents] --> Story[Story Development]
+        Writer[Writer Agents] --> Content[Content Creation]
+        Designer[Designer Agents] --> Assets[Asset Generation]
+        Tech[Technical Agents] --> Platform[Platform Integration]
+    end
+
+    subgraph "Reality Layer"
+        Actor[Actor Agents] --> Social[Social Media]
+        NPC[NPC Agents] --> World[World Interaction]
+        Support[Support Agents] --> Engagement[User Engagement]
+    end
+    ```
+````

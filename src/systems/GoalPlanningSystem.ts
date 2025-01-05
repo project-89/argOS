@@ -1,6 +1,13 @@
 import { World, query } from "bitecs";
 import { createSystem } from "./System";
-import { Agent, Goal, Memory, Perception } from "../components";
+import {
+  Agent,
+  Goal,
+  Memory,
+  Perception,
+  Plan,
+  SinglePlanType,
+} from "../components";
 import {
   generateGoals,
   evaluateGoalProgress,
@@ -36,7 +43,7 @@ interface AgentGoal {
 
 export const GoalPlanningSystem = createSystem(
   (runtime) => async (world: World) => {
-    const agents = query(world, [Agent, Goal, Memory, Perception]);
+    const agents = query(world, [Agent, Goal, Plan, Memory, Perception]);
 
     await processConcurrentAgents(
       world,
@@ -230,6 +237,37 @@ export const GoalPlanningSystem = createSystem(
             agentName
           );
 
+          // When updating goal status, also update related plan status
+          const updateGoalStatus = (
+            goal: AgentGoal,
+            status: "completed" | "failed"
+          ) => {
+            goal.status = status;
+
+            // Update related active plans
+            const currentPlans = Plan.plans[eid] || [];
+            const relatedPlans = currentPlans.filter(
+              (plan: SinglePlanType) =>
+                plan.goalId === goal.id && plan.status === "active"
+            );
+
+            relatedPlans.forEach((plan: SinglePlanType) => {
+              plan.status = status;
+              plan.updatedAt = Date.now();
+              createCognitiveStimulus(
+                world,
+                eid,
+                `Plan ${status}: ${plan.description}`,
+                { plan },
+                {
+                  subtype: `plan_${status}`,
+                  intensity: 0.7,
+                  private: true,
+                }
+              );
+            });
+          };
+
           for (const goal of inProgressGoals) {
             logger.agent(
               eid,
@@ -254,31 +292,41 @@ export const GoalPlanningSystem = createSystem(
             });
 
             if (evaluation.complete) {
-              logger.agent(
+              updateGoalStatus(goal, "completed");
+              // Emit goal completion stimulus
+              createCognitiveStimulus(
+                world,
                 eid,
-                `Goal completed: ${JSON.stringify({ goalId: goal.id })}`,
-                agentName
+                `Goal completed: ${goal.description}`,
+                { goal, evaluation },
+                {
+                  subtype: "goal_completed",
+                  intensity: 0.9,
+                  private: true,
+                }
               );
-              goal.status = "completed";
-              emitGoalStimulus(world, eid, goal, "goal_complete");
-            } else if (evaluation.progress !== goal.progress) {
-              logger.agent(
+            } else if (evaluation.blockers.length > 0 && goal.progress < 10) {
+              updateGoalStatus(goal, "failed");
+              // Emit goal failure stimulus
+              createCognitiveStimulus(
+                world,
                 eid,
-                `Goal progress updated: ${JSON.stringify({
-                  goalId: goal.id,
-                  progress: evaluation.progress,
-                })}`,
-                agentName
+                `Goal failed: ${goal.description}`,
+                { goal, evaluation },
+                {
+                  subtype: "goal_failed",
+                  intensity: 0.8,
+                  private: true,
+                }
               );
+            } else {
+              // Update progress
               goal.progress = evaluation.progress;
-              emitGoalStimulus(world, eid, goal, "goal_progress");
+              goal.criteria_met = evaluation.criteria_met;
+              goal.criteria_partial = evaluation.criteria_partial;
+              goal.criteria_blocked = evaluation.criteria_blocked;
+              goal.next_steps = evaluation.next_steps;
             }
-
-            // Update goal details based on evaluation
-            goal.criteria_met = evaluation.criteria_met;
-            goal.criteria_partial = evaluation.criteria_partial;
-            goal.criteria_blocked = evaluation.criteria_blocked;
-            goal.next_steps = evaluation.next_steps;
           }
 
           // Update last evaluation time

@@ -46,29 +46,55 @@ export class SimulationLogger {
   }
 
   async logRoomEvent(event: RoomEvent) {
-    const roomId = event.roomId;
+    try {
+      const roomId = event.roomId;
 
-    // Initialize room if needed
-    if (!this.currentLog.rooms[roomId]) {
-      this.currentLog.rooms[roomId] = {
-        events: [],
-        agents: {},
-      };
+      // Initialize room if needed
+      if (!this.currentLog.rooms[roomId]) {
+        this.currentLog.rooms[roomId] = {
+          events: [],
+          agents: {},
+        };
+      }
+
+      // Truncate large content to prevent JSON parsing issues
+      let safeContent = event.content;
+      try {
+        if (typeof safeContent === "string" && safeContent.length > 10000) {
+          safeContent = safeContent.substring(0, 10000) + "... [truncated]";
+        } else if (typeof safeContent === "object") {
+          safeContent = JSON.parse(
+            JSON.stringify(safeContent, (key, value) => {
+              if (typeof value === "string" && value.length > 10000) {
+                return value.substring(0, 10000) + "... [truncated]";
+              }
+              return value;
+            })
+          );
+        }
+      } catch (e) {
+        // If content processing fails, store a safe fallback
+        safeContent = "[Content processing error]";
+      }
+
+      // Add event
+      this.currentLog.rooms[roomId].events.push({
+        type: event.type,
+        content: safeContent,
+        timestamp: event.timestamp,
+        agentId: event.agentId,
+      });
+
+      // Update metadata
+      this.currentLog.metadata.eventCount++;
+      this.currentLog.metadata.duration =
+        Date.now() - this.currentLog.timestamp;
+
+      await this.checkFlush();
+    } catch (e) {
+      // Fail silently
+      console.error("Logging error (non-fatal):", e);
     }
-
-    // Add event
-    this.currentLog.rooms[roomId].events.push({
-      type: event.type,
-      content: event.content,
-      timestamp: event.timestamp,
-      agentId: event.agentId,
-    });
-
-    // Update metadata
-    this.currentLog.metadata.eventCount++;
-    this.currentLog.metadata.duration = Date.now() - this.currentLog.timestamp;
-
-    await this.checkFlush();
   }
 
   async logAgentEvent(event: AgentEvent, roomId: string) {
@@ -134,46 +160,62 @@ export class SimulationLogger {
   }
 
   async flush() {
-    const fileName = `${this.currentLog.id}.json`;
-    const filePath = path.join(this.logDir, fileName);
+    try {
+      const fileName = `${this.currentLog.id}.json`;
+      const filePath = path.join(this.logDir, fileName);
 
-    await fs.mkdir(this.logDir, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(this.currentLog, null, 2));
+      await fs.mkdir(this.logDir, { recursive: true });
+      await fs.writeFile(filePath, JSON.stringify(this.currentLog, null, 2));
 
-    // Also generate an index.html that lists all simulation logs
-    await this.generateIndex();
+      // Also generate an index.html that lists all simulation logs
+      await this.generateIndex();
+    } catch (e) {
+      // Fail silently
+      console.error("Flush error (non-fatal):", e);
+    }
   }
 
   private async generateIndex() {
-    const files = await fs.readdir(this.logDir);
-    const logs = await Promise.all(
-      files
-        .filter((f) => f.endsWith(".json"))
-        .map(async (f) => {
-          const content = await fs.readFile(path.join(this.logDir, f), "utf-8");
-          return JSON.parse(content);
-        })
-    );
-
-    // Copy template.html to each simulation directory
-    for (const log of logs) {
-      const simDir = path.join(this.logDir, "sims", log.id);
-      await fs.mkdir(simDir, { recursive: true });
-
-      // Copy template
-      const templatePath = path.join(this.logDir, "sims", "template.html");
-      const templateContent = await fs.readFile(templatePath, "utf-8");
-      await fs.writeFile(path.join(simDir, "index.html"), templateContent);
-
-      // Write data file
-      await fs.writeFile(
-        path.join(simDir, "data.json"),
-        JSON.stringify(log, null, 2)
+    try {
+      const files = await fs.readdir(this.logDir);
+      const logs = await Promise.all(
+        files
+          .filter((f) => f.endsWith(".json"))
+          .map(async (f) => {
+            try {
+              const content = await fs.readFile(
+                path.join(this.logDir, f),
+                "utf-8"
+              );
+              return JSON.parse(content);
+            } catch (e) {
+              // Skip problematic files
+              console.error(`Error reading log file ${f} (skipping):`, e);
+              return null;
+            }
+          })
+          .filter(Boolean) // Remove nulls from failed reads
       );
-    }
 
-    // Generate main index.html
-    const mainHtml = `<!DOCTYPE html>
+      // Copy template.html to each simulation directory
+      for (const log of logs) {
+        const simDir = path.join(this.logDir, "sims", log.id);
+        await fs.mkdir(simDir, { recursive: true });
+
+        // Copy template
+        const templatePath = path.join(this.logDir, "sims", "template.html");
+        const templateContent = await fs.readFile(templatePath, "utf-8");
+        await fs.writeFile(path.join(simDir, "index.html"), templateContent);
+
+        // Write data file
+        await fs.writeFile(
+          path.join(simDir, "data.json"),
+          JSON.stringify(log, null, 2)
+        );
+      }
+
+      // Generate main index.html
+      const mainHtml = `<!DOCTYPE html>
 <html>
   <head>
     <title>Oneirocom Simulation Logs</title>
@@ -250,6 +292,10 @@ export class SimulationLogger {
   </body>
 </html>`;
 
-    await fs.writeFile(path.join(this.logDir, "index.html"), mainHtml);
+      await fs.writeFile(path.join(this.logDir, "index.html"), mainHtml);
+    } catch (e) {
+      // Fail silently
+      console.error("Index generation error (non-fatal):", e);
+    }
   }
 }

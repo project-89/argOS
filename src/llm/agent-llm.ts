@@ -259,6 +259,9 @@ export interface ProcessStimulusState {
   currentTimestamp: number;
   lastAction?: ActionResult;
   stimulus: StimulusData[];
+  currentGoals: GoalType[];
+  activePlans: SinglePlanType[];
+  recentExperiences: Experience[];
   context?: {
     salientEntities: Array<{ id: number; type: string; relevance: number }>;
     roomContext: Record<string, any>;

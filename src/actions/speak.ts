@@ -33,7 +33,8 @@ export const schema = z.object({
 
 export const action = {
   name: "speak",
-  description: "Say something to others in the room",
+  description:
+    "Use this to communicate to others.  Speak your mind and be as detailed or brief as you like.",
   parameters: ["message", "tone", "target", "reason"],
   schema,
 };

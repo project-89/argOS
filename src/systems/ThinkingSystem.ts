@@ -8,6 +8,7 @@ import {
   OccupiesRoom,
   Perception,
   Goal,
+  Plan,
 } from "../components";
 import { generateThought } from "../llm/agent-llm";
 import { AgentState } from "../types/state";
@@ -17,6 +18,7 @@ import { createVisualStimulus } from "../factories/stimulusFactory";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 import { processConcurrentAgents } from "../utils/system-utils";
 import { StimulusSource } from "../types/stimulus";
+import { getActivePlans } from "../components/Plans";
 
 interface ThoughtResult {
   thought: string;
@@ -43,6 +45,21 @@ async function generateAgentThought(
 ): Promise<ThoughtResult> {
   logger.debug(`Generating thought for ${Agent.name[eid]}`);
 
+  const currentPlans = Plan.plans[eid] || [];
+  const activePlans = getActivePlans(currentPlans).map((plan) => ({
+    id: plan.id,
+    goalId: plan.goalId,
+    steps: plan.steps.map((step) => ({
+      id: step.id,
+      description: step.description,
+      status: step.status,
+      requiredTools: [],
+      expectedOutcome: step.expectedOutcome || "Complete the step successfully",
+    })),
+    currentStepId: plan.currentStepId,
+    status: "active" as const,
+  }));
+
   const state: AgentState = {
     id: String(eid),
     name: Agent.name[eid],
@@ -64,6 +81,7 @@ async function generateAgentThought(
     availableTools: runtime.getActionManager().getEntityTools(eid),
     goals: Goal.current[eid] || [],
     completedGoals: Goal.completed[eid] || [],
+    activePlans,
     appearance: {
       description: Appearance.baseDescription[eid],
       facialExpression: Appearance.facialExpression[eid],
@@ -178,7 +196,15 @@ function updateAgentAppearance(
 
 export const ThinkingSystem = createSystem<SystemConfig>(
   (runtime) => async (world: World) => {
-    const agents = query(world, [Agent, Memory]);
+    // Make sure we have all the components we need
+    const agents = query(world, [
+      Agent,
+      Memory,
+      Action,
+      Appearance,
+      Perception,
+      Goal,
+    ]);
 
     await processConcurrentAgents(
       world,

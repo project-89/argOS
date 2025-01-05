@@ -1,8 +1,13 @@
 # Agent Simulation Todo List
 
+## Current
+
+[] - Fixing experiences, simtuli, perceptions
+[] - Actions emit conitive events
+
 ## Unorganzied
 
-[] - Seperate out systems into 2 loops
+[x] - Seperate out systems into 2 loops
 [] - Spawn subagents to handle tasks
 [] - Options as to whether an agent can update its own goals
 

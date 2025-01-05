@@ -29,10 +29,10 @@ export const PlanSchema = z.object({
       createdAt: z.number(),
       updatedAt: z.number(),
       deadline: z.number().optional(),
+      progress: z.number().optional(),
       metadata: z.record(z.string(), z.any()).optional(),
     })
   ),
-  activePlanIds: z.array(z.string()),
   lastUpdate: z.number(),
 });
 
@@ -40,21 +40,44 @@ export type SinglePlanType = z.infer<typeof PlanSchema.shape.plans>[number];
 export type PlanType = z.infer<typeof PlanSchema>;
 
 export const PlanComponent = createComponent("Plan", PlanSchema, {
-  plans: [] as Array<{
-    id: string;
-    description: string;
-    goalId: string;
-    steps: PlanStepType[];
-    currentStepId?: string;
-    status: "active" | "completed" | "failed" | "suspended";
-    priority: number;
-    createdAt: number;
-    updatedAt: number;
-    deadline?: number;
-    metadata?: Record<string, any>;
-  }>[],
-  activePlanIds: [] as string[][],
+  plans: [] as SinglePlanType[],
   lastUpdate: [] as number[],
 });
 
 export const Plan = PlanComponent.component;
+
+// Helper functions for plan management
+export function getActivePlans(plans: SinglePlanType[]): SinglePlanType[] {
+  return plans.filter((plan) => plan.status === "active");
+}
+
+export function getPlansForGoal(
+  plans: SinglePlanType[],
+  goalId: string
+): SinglePlanType[] {
+  return plans.filter((plan) => plan.goalId === goalId);
+}
+
+export function updatePlanStatus(
+  plans: SinglePlanType[],
+  planId: string,
+  status: "active" | "completed" | "failed" | "suspended",
+  progress: number = 0
+): void {
+  const plan = plans.find((p) => p.id === planId);
+  if (plan) {
+    plan.status = status;
+    plan.progress = progress;
+    plan.updatedAt = Date.now();
+  }
+}
+
+// Helper to get active plans for a goal
+export function getActivePlansForGoal(
+  plans: SinglePlanType[],
+  goalId: string
+): SinglePlanType[] {
+  return plans.filter(
+    (plan) => plan.goalId === goalId && plan.status === "active"
+  );
+}

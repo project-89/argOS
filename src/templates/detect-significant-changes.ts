@@ -67,6 +67,8 @@ ANTI-PATTERNS:
 ❌ No assumption of permanence
 ❌ No disregard of subtle shifts
 
+Remember: Focus on changes that meaningfully impact goal pursuit or achievement.
+
 OUTPUT FORMAT:
 {
   "analysis": {
@@ -84,6 +86,4 @@ OUTPUT FORMAT:
     "recommendation": "maintain_goals" | "adjust_goals" | "new_goals",
     "reasoning": string[]
   }
-}
-
-Remember: Focus on changes that meaningfully impact goal pursuit or achievement.`;
+}`;

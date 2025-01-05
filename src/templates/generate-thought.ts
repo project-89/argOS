@@ -6,6 +6,12 @@ Recent Thoughts: {thoughtHistory}
 Current Perception: {perceptions.narrative}
 Sensory Details: {perceptions.raw}
 
+MY GOALS:
+{goals}
+
+MY PLANS:
+{activePlans}
+
 THOUGHT GENERATION FRAMEWORK:
 
 1. SITUATIONAL AWARENESS

@@ -101,16 +101,20 @@ export class EventManager implements IEventManager {
 
     // Send initial room state
     const roomState = this.runtime.getStateManager().getRoomState(roomId);
-    handler({
-      type: "ROOM_UPDATE",
-      data: {
-        type: "state",
-        roomId: stringRoomId,
-        content: { room: roomState },
+
+    // Ensure the room state is properly typed
+    if (roomState) {
+      handler({
+        type: "ROOM_UPDATE",
+        data: {
+          type: "state",
+          roomId: stringRoomId,
+          content: { room: roomState }, // This should now accept system type
+          timestamp: Date.now(),
+        },
         timestamp: Date.now(),
-      },
-      timestamp: Date.now(),
-    });
+      });
+    }
 
     // Send initial state for all agents in the room
     const occupants = this.runtime.getRoomManager().getRoomOccupants(roomId);

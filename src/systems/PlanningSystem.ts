@@ -30,7 +30,8 @@ export const PlanningSystem = createSystem(
             (goal: SingleGoalType) =>
               goal.status === "in_progress" &&
               !currentPlans.some(
-                (plan: SinglePlanType) => plan.goalId === goal.id
+                (plan: SinglePlanType) =>
+                  plan.goalId === goal.id && plan.status === "active"
               )
           );
 
@@ -57,10 +58,6 @@ export const PlanningSystem = createSystem(
                 });
 
                 Plan.plans[eid] = [...currentPlans, plan];
-                Plan.activePlanIds[eid] = [
-                  ...(Plan.activePlanIds[eid] || []),
-                  plan.id,
-                ];
                 Plan.lastUpdate[eid] = Date.now();
 
                 emitPlanStimulus(world, eid, plan, "plan_created");
@@ -78,6 +75,26 @@ export const PlanningSystem = createSystem(
               }
             })
           );
+
+          currentGoals.forEach((goal: SingleGoalType) => {
+            if (goal.status === "completed" || goal.status === "failed") {
+              const relatedPlans = currentPlans.filter(
+                (plan: SinglePlanType) =>
+                  plan.goalId === goal.id && plan.status === "active"
+              );
+              relatedPlans.forEach((plan: SinglePlanType) => {
+                plan.status =
+                  goal.status === "completed" ? "completed" : "failed";
+                plan.updatedAt = Date.now();
+                emitPlanStimulus(
+                  world,
+                  eid,
+                  plan,
+                  goal.status === "completed" ? "plan_completed" : "plan_failed"
+                );
+              });
+            }
+          });
 
           logger.agent(eid, "Completed planning cycle", agentName);
         } catch (error) {
