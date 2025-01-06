@@ -97,6 +97,14 @@ export const PlanningSystem = createSystem(
           });
 
           logger.agent(eid, "Completed planning cycle", agentName);
+
+          return {
+            eid,
+            agentName,
+            goalsNeedingPlans,
+            currentPlans,
+            memories,
+          };
         } catch (error) {
           logger.error(
             `Error in PlanningSystem for agent ${agentName}:`,

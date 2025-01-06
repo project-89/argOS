@@ -196,8 +196,7 @@ export function createAgent(
     world,
     eid,
     set(Plan, {
-      current: [], // Active plans
-      completed: [], // Completed plans history
+      plans: [], // All plans
       lastUpdate: Date.now(),
     })
   );

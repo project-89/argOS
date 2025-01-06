@@ -403,20 +403,18 @@ export class ComponentSync {
     // Plan sync
     this.observers.push(
       observe(this.world, onSet(Plan), (eid, params) => {
-        if (params.plans) Plan.plans[eid] = params.plans;
-        if (params.activePlanIds)
-          Plan.activePlanIds[eid] = params.activePlanIds;
-        if (params.lastUpdate) Plan.lastUpdate[eid] = params.lastUpdate;
+        if (params.plans !== undefined) {
+          Plan.plans[eid] = params.plans;
+        }
+        Plan.lastUpdate[eid] = Date.now();
         return params;
       }),
       observe(this.world, onGet(Plan), (eid) => ({
         plans: Plan.plans[eid] || [],
-        activePlanIds: Plan.activePlanIds[eid] || [],
         lastUpdate: Plan.lastUpdate[eid] || Date.now(),
       })),
       observe(this.world, onRemove(Plan), (eid) => {
         delete Plan.plans[eid];
-        delete Plan.activePlanIds[eid];
         delete Plan.lastUpdate[eid];
       })
     );
