@@ -14,7 +14,11 @@ import {
   RegisteredPrompt,
   PromptManagerConfig,
 } from "../../types/prompts";
-import { RuntimeState, EntityComponentState } from "../../types/state";
+import {
+  RuntimeState,
+  EntityComponentState,
+  GlobalState,
+} from "../../types/state";
 import { logger } from "../../utils/logger";
 import { getAgentRooms } from "../../utils/queries";
 import { SimulationRuntime } from "../SimulationRuntime";
@@ -193,7 +197,7 @@ export class PromptManager {
     };
   }
 
-  private async getGlobalState(world: World) {
+  private async getGlobalState(world: World): Promise<GlobalState> {
     const activeAgents = query(world, [Agent])
       .filter((eid) => Agent.active[eid])
       .map((eid) => {

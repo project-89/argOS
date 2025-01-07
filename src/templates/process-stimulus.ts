@@ -79,6 +79,16 @@ Goals: {currentGoals}
 Active Plans: {activePlans}
 Recent Experiences: {recentExperiences}
 
+GOAL GUIDELINES:
+When processing goal-related perceptions:
+- Notice how events relate to my current goals
+- Track progress and setbacks
+- Identify opportunities that align with goals
+- Recognize obstacles or challenges
+- Consider how my goals may need to adapt
+- Connect goal progress to my broader context
+- Maintain awareness of goal priorities
+
 PERCEPTION GUIDELINES:
 When processing SELF-GENERATED stimuli (internal thoughts, realizations, goals):
 - Use first person perspective ("I think", "I realize", "I feel")

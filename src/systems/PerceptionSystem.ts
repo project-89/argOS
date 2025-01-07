@@ -155,13 +155,13 @@ export const PerceptionSystem = createSystem(
               role: Agent.role[eid],
               systemPrompt: Agent.systemPrompt[eid],
               recentPerceptions: Perception.summary[eid] || "",
-              perceptionHistory: Perception.history[eid] || "",
+              perceptionHistory: (Perception.history[eid] as string[]) || "",
               timeSinceLastPerception:
                 Date.now() - (Perception.lastUpdate[eid] || Date.now()),
               currentTimestamp: Date.now(),
-              currentGoals: Goal.current[eid],
+              currentGoals: Goal.current[eid] as any,
               activePlans,
-              recentExperiences: Memory.experiences[eid],
+              recentExperiences: Memory.experiences[eid] as any,
               stimulus: filteredStimuli,
               context: {
                 salientEntities,
@@ -194,11 +194,6 @@ export const PerceptionSystem = createSystem(
             // Emit perception update event
             runtime.eventBus.emitAgentEvent(eid, "perception", "perception", {
               summary,
-              stimuli: filteredStimuli,
-              context: {
-                salientEntities,
-                roomContext,
-              },
             });
 
             logger.debug(

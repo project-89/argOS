@@ -67,6 +67,12 @@ export const PlanningSystem = createSystem(
                   `Created plan ${plan.id} with ${plan.steps.length} steps`,
                   agentName
                 );
+
+                logger.agent(
+                  eid,
+                  `Created plan ${plan.id} is: ${JSON.stringify(plan)}`,
+                  agentName
+                );
               } catch (error) {
                 logger.error(
                   `Error generating plan for goal ${goal.id}:`,

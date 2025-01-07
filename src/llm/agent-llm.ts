@@ -31,6 +31,7 @@ import {
 } from "../templates/evaluate-goal-progress";
 import { DETECT_SIGNIFICANT_CHANGES } from "../templates/detect-significant-changes";
 import { StimulusData } from "../types/stimulus";
+import { AgentState } from "../types";
 
 export interface ThoughtResponse {
   thought: string;
@@ -45,74 +46,6 @@ export interface ThoughtResponse {
     currentAction?: string;
     socialCues?: string;
   };
-}
-
-export interface AgentState {
-  systemPrompt: string;
-  name: string;
-  role: string;
-  thoughtHistory: string[];
-  perceptions: {
-    narrative: string;
-    raw: StimulusData[];
-  };
-  lastAction: ActionResult | undefined;
-  timeSinceLastAction: number | undefined;
-  experiences: Array<{
-    type: string;
-    content: string;
-    timestamp: number;
-  }>;
-  availableTools: Array<{
-    name: string;
-    description: string;
-    parameters: string[];
-    schema: any;
-  }>;
-  goals?: Array<{
-    id: string;
-    description: string;
-    priority: number;
-    type: "long_term" | "short_term" | "immediate";
-    status: "active" | "completed" | "failed" | "suspended";
-    progress: number;
-    deadline?: number;
-    parentGoalId?: string;
-  }>;
-  activeGoals?: Array<{
-    id: string;
-    description: string;
-    priority: number;
-    type: "long_term" | "short_term" | "immediate";
-    status: "active";
-    progress: number;
-    deadline?: number;
-    parentGoalId?: string;
-  }>;
-  activePlans?: Array<{
-    id: string;
-    goalId: string;
-    steps: Array<{
-      id: string;
-      description: string;
-      status: "pending" | "in_progress" | "completed" | "failed";
-      requiredTools?: string[];
-      expectedOutcome: string;
-    }>;
-    currentStepId?: string;
-    status: "active";
-  }>;
-  currentPlanSteps?: Array<{
-    planId: string;
-    goalId: string;
-    step: {
-      id: string;
-      description: string;
-      status: "pending" | "in_progress" | "completed" | "failed";
-      requiredTools?: string[];
-      expectedOutcome: string;
-    };
-  }>;
 }
 
 /**
@@ -279,7 +212,7 @@ export interface ProcessStimulusState {
   outputGuidelines?: string;
   modeSpecificAntiPatterns?: string;
   modeFocusReminder?: string;
-  perceptionHistory?: string;
+  perceptionHistory?: string[];
 }
 
 export async function processStimulus(
@@ -308,6 +241,8 @@ export interface Experience {
   content: string;
   timestamp: number;
   category?: string;
+  queries?: string[];
+  data?: Record<string, any>;
 }
 
 export interface ExtractExperiencesState {

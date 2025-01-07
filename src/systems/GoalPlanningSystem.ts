@@ -13,8 +13,7 @@ import {
   evaluateGoalProgress,
   detectSignificantChanges,
 } from "../llm/agent-llm";
-import { StimulusType, StimulusSource } from "../types/stimulus";
-import { EventBus } from "../runtime/EventBus";
+
 import { logger } from "../utils/logger";
 import { ChangeAnalysis } from "../types/cognitive";
 import { createCognitiveStimulus } from "../factories/stimulusFactory";
@@ -31,6 +30,7 @@ interface AgentGoal {
   description: string;
   type: "immediate" | "short_term" | "medium_term" | "long_term";
   status: "pending" | "in_progress" | "completed" | "failed";
+  priority: number;
   progress: number;
   success_criteria: string[];
   progress_indicators: string[];
@@ -38,7 +38,7 @@ interface AgentGoal {
   criteria_partial?: string[];
   criteria_blocked?: string[];
   next_steps?: string[];
-  created_at?: number;
+  created_at: number;
 }
 
 export const GoalPlanningSystem = createSystem(
@@ -71,7 +71,7 @@ export const GoalPlanningSystem = createSystem(
 
         const currentGoals = (Goal.current[eid] || []) as AgentGoal[];
         const memories = Memory.experiences[eid] || [];
-        const perceptions = Perception.currentStimuli[eid] || [];
+        const perceptions = Perception.history[eid] || [];
 
         try {
           let significantChangesDetected = false;

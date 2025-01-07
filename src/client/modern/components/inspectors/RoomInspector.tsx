@@ -133,7 +133,7 @@ export function RoomInspector({ room, agents, logs }: RoomInspectorProps) {
               <div>
                 <div className="text-xs text-gray-500">Current State</div>
                 <div className="text-sm text-cyan-400">
-                  {selectedAgentDetails.currentAction || "Idle"}
+                  {selectedAgentDetails.appearance.currentAction || "Idle"}
                 </div>
               </div>
               <div>
@@ -142,22 +142,79 @@ export function RoomInspector({ room, agents, logs }: RoomInspectorProps) {
                   {selectedAgentDetails.appearance.description}
                 </div>
               </div>
-              {selectedAgentDetails.facialExpression && (
+              {selectedAgentDetails.appearance.facialExpression && (
                 <div>
                   <div className="text-xs text-gray-500">Expression</div>
                   <div className="text-sm text-cyan-400">
-                    {selectedAgentDetails.facialExpression}
+                    {selectedAgentDetails.appearance.facialExpression}
                   </div>
                 </div>
               )}
-              {selectedAgentDetails.bodyLanguage && (
+              {selectedAgentDetails.appearance.bodyLanguage && (
                 <div>
                   <div className="text-xs text-gray-500">Body Language</div>
                   <div className="text-sm text-cyan-400">
-                    {selectedAgentDetails.bodyLanguage}
+                    {selectedAgentDetails.appearance.bodyLanguage}
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Goals & Plans for Selected Agent */}
+        {selectedAgentDetails && selectedAgentDetails.goals && (
+          <div className="p-2 border-b border-cyan-900/30">
+            <div className="text-xs text-gray-500 mb-1">Goals & Plans</div>
+            <div className="space-y-2">
+              {selectedAgentDetails.goals.map((goal) => (
+                <div key={goal.id} className="mb-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-emerald-400">{goal.description}</span>
+                    <span
+                      className={`text-xs ${
+                        goal.status === "completed"
+                          ? "text-green-400"
+                          : goal.status === "failed"
+                          ? "text-red-400"
+                          : goal.status === "in_progress"
+                          ? "text-yellow-400"
+                          : "text-gray-400"
+                      }`}
+                    >
+                      {goal.status} ({Math.round(goal.progress)}%)
+                    </span>
+                  </div>
+                  {selectedAgentDetails.activePlans
+                    ?.filter((plan) => plan.goalId === goal.id)
+                    .map((plan) => (
+                      <div key={plan.id} className="ml-4 mt-1">
+                        <div className="text-xs text-cyan-400">
+                          Plan: {plan.steps[0]?.description || "No description"}
+                        </div>
+                        <div className="space-y-1 ml-2">
+                          {plan.steps.map((step) => (
+                            <div key={step.id} className="text-xs">
+                              <span
+                                className={`${
+                                  step.status === "completed"
+                                    ? "text-green-400"
+                                    : step.status === "failed"
+                                    ? "text-red-400"
+                                    : step.status === "in_progress"
+                                    ? "text-yellow-400"
+                                    : "text-gray-400"
+                                }`}
+                              >
+                                • {step.description}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              ))}
             </div>
           </div>
         )}

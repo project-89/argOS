@@ -9,6 +9,7 @@ import {
   Perception,
   Action,
   Goal,
+  Plan,
   ALL_COMPONENTS,
 } from "../../components";
 import { IStateManager } from "./IStateManager";
@@ -17,6 +18,7 @@ import { SimulationRuntime } from "../SimulationRuntime";
 import { z } from "zod";
 import { ComponentWithSchema } from "../../components/createComponent";
 import { RelationWithSchema } from "../../components/createRelation";
+import { SinglePlanType } from "../../components/Plans";
 
 export class StateManager implements IStateManager {
   private templates: Map<string, string>;
@@ -105,7 +107,7 @@ export class StateManager implements IStateManager {
         facialExpression: Appearance.facialExpression[eid] || "",
         bodyLanguage: Appearance.bodyLanguage[eid] || "",
         currentAction: Appearance.currentAction[eid] || "",
-        socialCues: Appearance.socialCues[eid] || [],
+        socialCues: Appearance.socialCues[eid] || "",
       },
       attention: Agent.attention[eid],
       roomId: roomId ? Room.id[roomId] : null,
@@ -120,9 +122,23 @@ export class StateManager implements IStateManager {
         ? Date.now() - Action.lastActionTime[eid]
         : 0,
       experiences: Memory.experiences[eid] || [],
-      availableTools: Action.availableTools[eid] || [],
+      availableTools: this.runtime.getActionManager().getEntityTools(eid) || [],
       goals: Goal.current[eid] || [],
       completedGoals: Goal.completed[eid] || [],
+      activePlans: (Plan.plans[eid] || [])
+        .filter((plan) => plan.status === "active")
+        .map((plan) => ({
+          id: plan.id,
+          goalId: plan.goalId,
+          steps: plan.steps.map((step) => ({
+            id: step.id,
+            description: step.description,
+            status: step.status,
+            expectedOutcome: step.expectedOutcome || "",
+          })),
+          currentStepId: plan.currentStepId,
+          status: "active" as const,
+        })),
     };
   }
 

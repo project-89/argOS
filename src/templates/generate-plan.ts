@@ -18,7 +18,7 @@ PLAN CREATION RULES:
    ✓ Consider dependencies between steps
 
 2. TOOL UTILIZATION
-   ✓ Identify required tools for each step
+   ✓ Suggest required tools for each step
    ✓ Ensure tool availability
    ✓ Consider tool limitations
    ✓ Plan for tool failures

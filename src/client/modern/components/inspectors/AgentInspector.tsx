@@ -101,6 +101,61 @@ export function AgentInspector({ agent, logs }: AgentInspectorProps) {
           </div>
         </div>
 
+        {/* Goals and Plans */}
+        <div className="p-2 border-b border-cyan-900/30">
+          <div className="text-xs text-gray-500 mb-1">Goals & Plans</div>
+          <div className="space-y-2">
+            {agent.goals?.map((goal) => (
+              <div key={goal.id} className="mb-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-emerald-400">{goal.description}</span>
+                  <span
+                    className={`text-xs ${
+                      goal.status === "completed"
+                        ? "text-green-400"
+                        : goal.status === "failed"
+                        ? "text-red-400"
+                        : goal.status === "in_progress"
+                        ? "text-yellow-400"
+                        : "text-gray-400"
+                    }`}
+                  >
+                    {goal.status} ({Math.round(goal.progress)}%)
+                  </span>
+                </div>
+                {agent.activePlans
+                  ?.filter((plan) => plan.goalId === goal.id)
+                  .map((plan) => (
+                    <div key={plan.id} className="ml-4 mt-1">
+                      <div className="text-xs text-cyan-400">
+                        Plan: {plan.id}
+                      </div>
+                      <div className="space-y-1 ml-2">
+                        {plan.steps.map((step) => (
+                          <div key={step.id} className="text-xs">
+                            <span
+                              className={`${
+                                step.status === "completed"
+                                  ? "text-green-400"
+                                  : step.status === "failed"
+                                  ? "text-red-400"
+                                  : step.status === "in_progress"
+                                  ? "text-yellow-400"
+                                  : "text-gray-400"
+                              }`}
+                            >
+                              • {step.description}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* Recent Activity */}
         <div className="p-2">
           <div className="text-xs text-gray-500 mb-1">Recent Activity</div>

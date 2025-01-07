@@ -18,14 +18,7 @@ export const ActionSchema = z.object({
       timestamp: z.number(),
     })
     .nullable(),
-  availableTools: z.array(
-    z.object({
-      name: z.string(),
-      description: z.string(),
-      parameters: z.array(z.string()),
-      schema: z.any(),
-    })
-  ),
+  availableTools: z.array(z.string()),
 });
 
 export type ActionType = z.infer<typeof ActionSchema>;
@@ -43,12 +36,7 @@ export const ActionComponent = createComponent("Action", ActionSchema, {
     timestamp: number;
     data: Record<string, any>;
   } | null)[],
-  availableTools: [] as Array<{
-    name: string;
-    description: string;
-    parameters: string[];
-    schema: any;
-  }>[],
+  availableTools: [] as string[],
 });
 
 export const Action = ActionComponent.component;

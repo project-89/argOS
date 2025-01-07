@@ -2,11 +2,7 @@ import { World, query, setComponent } from "bitecs";
 import { Agent, Goal, Memory, Perception } from "../components";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
-import {
-  extractExperiences,
-  Experience,
-  ExtractExperiencesState,
-} from "../llm/agent-llm";
+import { extractExperiences, ExtractExperiencesState } from "../llm/agent-llm";
 import { EventCategory } from "../types";
 import { StimulusData } from "../types/stimulus";
 import { processConcurrentAgents } from "../utils/system-utils";
@@ -19,6 +15,17 @@ const VALID_EXPERIENCE_TYPES = [
   "observation",
 ] as const;
 type ExperienceType = (typeof VALID_EXPERIENCE_TYPES)[number];
+
+interface Experience {
+  type: ExperienceType;
+  timestamp: number;
+  content: string;
+  context?: {
+    category: string;
+    relatedExperiences: number[];
+    conversationState?: any;
+  };
+}
 
 interface ExperienceState {
   name: string;
@@ -75,8 +82,8 @@ export const ExperienceSystem = createSystem<SystemConfig>(
         // Filter to recent experiences only (last 5 minutes)
         const recentTimeWindow = 5 * 60 * 1000;
         const recentExperiences = currentExperiences.filter(
-          (exp: Experience) => Date.now() - exp.timestamp < recentTimeWindow
-        );
+          (exp) => Date.now() - (exp as Experience).timestamp < recentTimeWindow
+        ) as Experience[];
 
         // Prepare state for experience extraction
         const agentState: ExtractExperiencesState = {
@@ -89,7 +96,8 @@ export const ExperienceSystem = createSystem<SystemConfig>(
           perceptionSummary: Perception.summary[eid] || "",
           perceptionContext: Perception.context[eid] || [],
           stimulus: currentStimuli,
-          goals: Goal.current[eid] || [],
+          // todo: fix this typing
+          goals: (Goal.current[eid] as any) || [],
         };
 
         logger.debug(`Processing experiences for ${Agent.name[eid]}`, {
@@ -99,7 +107,9 @@ export const ExperienceSystem = createSystem<SystemConfig>(
 
         // Extract new experiences
         const experiences = await extractExperiences(agentState);
-        const validExperiences = experiences.filter(validateExperience);
+        const validExperiences = experiences.filter(
+          validateExperience
+        ) as Experience[];
 
         logger.agent(
           eid,
@@ -111,7 +121,7 @@ export const ExperienceSystem = createSystem<SystemConfig>(
         if (validExperiences.length > 0) {
           // Deduplicate and update experiences
           const newExperiences = deduplicateExperiences([
-            ...currentExperiences,
+            ...(currentExperiences as Experience[]),
             ...validExperiences,
           ]);
 

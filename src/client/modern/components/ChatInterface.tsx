@@ -25,7 +25,8 @@ export type EventType =
   | "thought"
   | "perception"
   | "action"
-  | "experience";
+  | "experience"
+  | "appearance";
 
 const EVENT_TYPES: Record<EventType, { label: string; color: string }> = {
   speech: { label: "Speech", color: "text-green-400" },
@@ -33,6 +34,7 @@ const EVENT_TYPES: Record<EventType, { label: string; color: string }> = {
   thought: { label: "Thoughts", color: "text-purple-400" },
   perception: { label: "Perceptions", color: "text-gray-400" },
   experience: { label: "Experiences", color: "text-emerald-400" },
+  appearance: { label: "Appearance", color: "text-blue-400" },
 };
 
 export function ChatInterface({
@@ -134,14 +136,49 @@ export function ChatInterface({
       }
       // Handle AGENT_UPDATE content
       const content = log.data.content;
+
+      // Handle appearance updates
+      if (log.data.category === "appearance" && typeof content === "object") {
+        const appearance = content as any;
+        const changes: string[] = [];
+
+        if (appearance.currentAction)
+          changes.push(`${appearance.currentAction}`);
+        if (appearance.facialExpression)
+          changes.push(`expression: ${appearance.facialExpression}`);
+        if (appearance.bodyLanguage)
+          changes.push(`body language: ${appearance.bodyLanguage}`);
+        if (appearance.socialCues)
+          changes.push(`social cues: ${appearance.socialCues}`);
+
+        return changes.join(" | ");
+      }
+
+      // Handle perception data - just show summary
       if (
         typeof content === "object" &&
         content !== null &&
-        "narrative" in content &&
-        typeof content.narrative === "string"
+        "summary" in content
       ) {
-        return content.narrative;
+        const summary = content.summary;
+        return typeof summary === "string" ? summary : String(summary);
       }
+
+      // Handle other content types
+      if (typeof content === "string") {
+        return content;
+      }
+
+      try {
+        const parsed =
+          typeof content === "string" ? JSON.parse(content) : content;
+        if (parsed && typeof parsed === "object" && "summary" in parsed) {
+          return String(parsed.summary);
+        }
+      } catch (e) {
+        // If JSON parsing fails, fall back to string conversion
+      }
+
       return typeof content === "object"
         ? JSON.stringify(content)
         : String(content);

@@ -5,6 +5,7 @@ import { createSystem, SystemConfig } from "./System";
 import { getAgentRoom } from "../utils/queries";
 import { ActionResult } from "../types/actions";
 import { Experience } from "../llm/agent-llm";
+import { createCognitiveStimulus } from "../factories/stimulusFactory";
 
 // Helper to get or create private room for agent
 async function getOrCreatePrivateRoom(world: World, eid: number, runtime: any) {
@@ -50,7 +51,7 @@ export const ActionSystem = createSystem<SystemConfig>(
       if (!Action.availableTools[eid]) {
         logger.agent(eid, "Initializing available tools", agentName);
         setComponent(world, eid, Action, {
-          availableTools: runtime.getActionManager().getAvailableTools(),
+          availableTools: Action.availableTools[eid],
           pendingAction: Action.pendingAction[eid],
           lastActionTime: Action.lastActionTime[eid],
         });
@@ -77,20 +78,6 @@ export const ActionSystem = createSystem<SystemConfig>(
           pendingAction.parameters
         )}`,
         agentName
-      );
-
-      // Emit action event to appropriate room context
-      runtime.eventBus.emitRoomEvent(
-        roomEid,
-        "action",
-        {
-          action: pendingAction.tool,
-          reason: pendingAction.parameters.reason || "Taking action",
-          parameters: pendingAction.parameters,
-          agentName,
-          context: "room",
-        },
-        String(eid)
       );
 
       // Execute the action
@@ -137,22 +124,27 @@ export const ActionSystem = createSystem<SystemConfig>(
         availableTools: Action.availableTools[eid],
       });
 
+      // Instead of directly creating an experience, emit a cognitive stimulus
       const experienceMessage = `${pendingAction.tool}: ${result.message}`;
-      const experience: Experience = {
-        type: "action",
-        content: experienceMessage,
-        timestamp: result.timestamp,
-      };
+      createCognitiveStimulus(
+        world,
+        eid,
+        experienceMessage,
+        {
+          action: pendingAction.tool,
+          result: result,
+          timestamp: result.timestamp,
+        },
+        {
+          intensity: 1.0,
+          priority: 0.8,
+          metadata: {
+            type: "action_result",
+            category: "action",
+          },
+        }
+      );
 
-      const oldExperiences = Memory.experiences[eid] || [];
-      const newExperiences = [...oldExperiences, experience];
-
-      setComponent(world, eid, Memory, {
-        experiences: newExperiences,
-      });
-
-      // Emit action experience event
-      runtime.eventBus.emitAgentEvent(eid, "experience", "action", experience);
       logger.agent(eid, "Action cycle completed", agentName);
     }
 

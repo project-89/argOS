@@ -26,6 +26,8 @@ export const MemorySchema = z.object({
       type: z.string(),
       content: z.string(),
       timestamp: z.number(),
+      queries: z.array(z.string()).optional(),
+      data: z.record(z.any()).optional(),
       context: z
         .object({
           category: z.string(),
@@ -52,6 +54,8 @@ export const MemoryComponent = createComponent("Memory", MemorySchema, {
     content: string;
     timestamp: number;
     context: any;
+    queries?: string[];
+    data?: Record<string, any>;
   }>[],
 });
 

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createComponent } from "./createComponent";
 
 // Define the goal item schema
-const GoalItemSchema = z.object({
+export const GoalItemSchema = z.object({
   id: z.string(),
   description: z.string(),
   priority: z.number(),

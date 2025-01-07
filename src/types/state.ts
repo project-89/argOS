@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { ComponentWithSchema } from "../components/createComponent";
 import { RelationWithSchema } from "../components/createRelation";
-import { ActionResult } from "./actions";
+import { ActionResult, FullToolType } from "./actions";
 import { StimulusData, StimulusSource, StimulusType } from "./stimulus";
 import { SinglePlanType } from "../components/Plans";
+import { ActionType, SingleGoalType } from "../components";
 
 // Agent summary type for global state
 export interface AgentSummary {
-  id: number;
+  id: string;
   name: string;
   role: string;
 }
@@ -92,55 +93,26 @@ export interface AgentState {
     facialExpression: string;
     bodyLanguage: string;
     currentAction: string;
-    socialCues: string[];
+    socialCues: string;
   };
   attention: number;
   roomId?: string | null;
-  facialExpression?: string;
-  bodyLanguage?: string;
-  currentAction?: string;
-  socialCues?: string[];
   lastUpdate?: number;
   thoughtHistory: string[];
   perceptions: {
-    narrative: string;
-    raw: StimulusData[];
+    narrative?: string;
+    raw?: StimulusData[];
   };
-  lastAction: ActionResult;
+  lastAction: ActionType["lastActionResult"] | null;
   timeSinceLastAction: number;
   experiences: Array<{
     type: string;
     content: string;
     timestamp: number;
   }>;
-  availableTools: Array<{
-    name: string;
-    description: string;
-    parameters: string[];
-    schema: any;
-  }>;
-  goals?: Array<{
-    id: string;
-    description: string;
-    priority: number;
-    type: "long_term" | "short_term" | "immediate";
-    status: "active" | "completed" | "failed" | "suspended";
-    progress: number;
-    success_criteria: string[];
-    progress_indicators: string[];
-    created_at: number;
-  }>;
-  completedGoals?: Array<{
-    id: string;
-    description: string;
-    priority: number;
-    type: "long_term" | "short_term" | "immediate";
-    status: "active" | "completed" | "failed" | "suspended";
-    progress: number;
-    success_criteria: string[];
-    progress_indicators: string[];
-    created_at: number;
-  }>;
+  availableTools: FullToolType[];
+  goals?: SingleGoalType[];
+  completedGoals?: SingleGoalType[];
   activePlans?: Array<{
     id: string;
     goalId: string;

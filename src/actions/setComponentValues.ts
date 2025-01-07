@@ -62,7 +62,7 @@ export async function execute(
       // Set each property value
       for (const { propertyName, propertyValue } of propertyValues) {
         if (propertyName in component) {
-          component[propertyName][entityId] = propertyValue;
+          (component as any)[propertyName][entityId] = propertyValue;
         } else {
           logger.warn(
             `Unknown property ${propertyName} on component ${componentName}`

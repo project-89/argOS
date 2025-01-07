@@ -21,7 +21,6 @@ import { CleanupSystem } from "../systems/CleanupSystem";
 import { PerceptionSystem } from "../systems/PerceptionSystem";
 import { ExperienceSystem } from "../systems/ExperienceSystem";
 import { PromptManager } from "./managers/promptManager";
-import { perceptionPrompt } from "../prompts/perception";
 import { GoalPlanningSystem } from "../systems/GoalPlanningSystem";
 import { PlanningSystem } from "../systems/PlanningSystem";
 
@@ -164,7 +163,7 @@ export class SimulationRuntime extends EventEmitter {
     );
 
     // Initialize managers and other components
-    this.eventBus = new EventBus(this.world);
+    this.eventBus = new EventBus(this.world, this);
     this.componentSync = new ComponentSync(this.world);
     this.stateManager = new StateManager(this.world, this);
     this.roomManager = new RoomManager(this.world, this);
@@ -172,7 +171,7 @@ export class SimulationRuntime extends EventEmitter {
     this.actionManager = new ActionManager(this.world, this, this.eventBus);
     this.promptManager = new PromptManager(
       {
-        templates: [perceptionPrompt],
+        templates: [],
         defaultState: {},
       },
       this

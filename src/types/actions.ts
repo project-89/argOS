@@ -34,13 +34,15 @@ export const toolSchemas = {
   }),
 };
 
+export type FullToolType = {
+  name: string;
+  description: string;
+  parameters: string[];
+  schema: any;
+};
+
 export interface ActionModule {
-  action: {
-    name: string;
-    description: string;
-    parameters: string[];
-    schema: any;
-  };
+  action: FullToolType;
   execute: (
     world: World,
     eid: number,

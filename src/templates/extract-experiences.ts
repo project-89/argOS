@@ -58,6 +58,10 @@ OUTPUT FORMAT:
     {
       "type": "observation" | "speech" | "action" | "thought",
       "content": "Clear, first-person, specific experience description",
+      "queries: ["Strings of queries you might use to access this experience in the future."]
+      "data": {
+        // technical data you might need from this experience for later usage.  Usernamaes, channel information, any other technical information you might need to access this experience in the future.
+      }
       "timestamp": {timestamp},
       "category": "sensory" | "interactive" | "behavioral" | "cognitive"
     }

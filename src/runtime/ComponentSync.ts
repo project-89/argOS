@@ -110,8 +110,6 @@ export class ComponentSync {
         if (params.lastUpdate) Memory.lastUpdate[eid] = params.lastUpdate;
         if (params.perceptions) Memory.perceptions[eid] = params.perceptions;
         if (params.experiences) Memory.experiences[eid] = params.experiences;
-        if (params.conversationState)
-          Memory.conversationState[eid] = params.conversationState;
         return params;
       }),
       observe(this.world, onGet(Memory), (eid) => ({
@@ -126,7 +124,6 @@ export class ComponentSync {
         delete Memory.lastUpdate[eid];
         delete Memory.perceptions[eid];
         delete Memory.experiences[eid];
-        delete Memory.conversationState[eid];
       })
     );
 
@@ -157,7 +154,7 @@ export class ComponentSync {
           // Validate action against available tools
           const tools = Action.availableTools[eid] || [];
           const isValidTool = tools.some(
-            (toolName: string) => toolName === params.pendingAction.tool
+            (tool) => tool === params.pendingAction.tool
           );
           if (!isValidTool) {
             logger.warn(

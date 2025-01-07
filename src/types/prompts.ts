@@ -1,5 +1,4 @@
 import { World } from "bitecs";
-import { AgentState } from "../llm/agent-llm";
 
 export interface PromptTemplate {
   id: string;

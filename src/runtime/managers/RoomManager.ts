@@ -20,6 +20,7 @@ import { IRoomManager } from "./IRoomManager";
 import { logger } from "../../utils/logger";
 import { SimulationRuntime } from "../SimulationRuntime";
 import { addStimulusToRoom as addStimulusToRoomRelation } from "../../components/relationships/stimulus";
+import { getStimuliInRoom } from "../../components/relationships/stimulus";
 
 export class RoomManager implements IRoomManager {
   constructor(private world: World, private runtime: SimulationRuntime) {}
@@ -138,10 +139,7 @@ export class RoomManager implements IRoomManager {
 
   // Room-specific operations
   getRoomStimuli(roomId: number): number[] {
-    const roomStringId = Room.id[roomId] || String(roomId);
-    return Object.keys(Stimulus.roomId)
-      .map(Number)
-      .filter((eid) => Stimulus.roomId[eid] === roomStringId);
+    return getStimuliInRoom(this.world, roomId);
   }
 
   updateRoomState(roomId: number, updates: Partial<RoomData>): void {
