@@ -20,20 +20,34 @@ export const GoalItemSchema = z.object({
 
 // Goals schema and component
 export const GoalSchema = z.object({
-  current: z.array(GoalItemSchema),
-  completed: z.array(GoalItemSchema),
-  lastUpdate: z.number(),
-  lastEvaluationTime: z.number(),
+  id: z.string(),
+  description: z.string(),
+  type: z.enum(["immediate", "short_term", "medium_term", "long_term"]),
+  priority: z.number(),
+  progress: z.number(),
+  status: z.enum(["pending", "in_progress", "completed", "failed"]),
+  success_criteria: z.array(z.string()),
+  progress_indicators: z.array(z.string()),
+  created_at: z.number(),
 });
 
 export type GoalType = z.infer<typeof GoalSchema>;
 export type SingleGoalType = z.infer<typeof GoalItemSchema>;
 
-export const GoalComponent = createComponent("Goal", GoalSchema, {
-  current: [],
-  completed: [],
-  lastUpdate: [],
-  lastEvaluationTime: [],
-});
+export const GoalComponent = createComponent(
+  "Goal",
+  z.object({
+    current: z.array(GoalSchema),
+    completed: z.array(GoalSchema),
+    lastUpdate: z.number(),
+    lastEvaluationTime: z.number(),
+  }),
+  {
+    current: [] as GoalType[][],
+    completed: [] as GoalType[][],
+    lastUpdate: [] as number[],
+    lastEvaluationTime: [] as number[],
+  }
+);
 
 export const Goal = GoalComponent.component;

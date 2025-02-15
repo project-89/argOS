@@ -116,3 +116,23 @@ export function getAgentsByRoleInRoom(
       hasComponent(world, eid, OccupiesRoom(roomEid))
   );
 }
+
+export function getRoomInfo(world: World, agentId: number) {
+  const rooms = query(world, [Room]);
+  for (const roomId of rooms) {
+    if (hasComponent(world, agentId, OccupiesRoom(roomId))) {
+      return {
+        id: Room.id[roomId],
+        name: Room.name[roomId],
+        description: Room.description[roomId],
+      };
+    }
+  }
+
+  // Return default room info if agent isn't in any room
+  return {
+    id: "void",
+    name: "The Void",
+    description: "A formless space between rooms",
+  };
+}

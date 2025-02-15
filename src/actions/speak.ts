@@ -3,11 +3,10 @@ import { Memory, Room, Agent } from "../components";
 import { logger } from "../utils/logger";
 import { getAgentRoom } from "../utils/queries";
 import { EventBus } from "../runtime/EventBus";
-import { Experience } from "../llm/agent-llm";
-import { ActionResult } from "../types/actions";
 import { createAuditoryStimulus } from "../factories/stimulusFactory";
 import { StimulusSource } from "../types/stimulus";
 import { World } from "bitecs";
+import { ActionResultType } from "../components";
 
 export const schema = z.object({
   message: z.string(),
@@ -33,8 +32,7 @@ export const schema = z.object({
 
 export const action = {
   name: "speak",
-  description:
-    "Use this to communicate to others.  Speak your mind and be as detailed or brief as you like.",
+  description: "Use this to communicate with others.",
   parameters: ["message", "tone", "target", "reason"],
   schema,
 };
@@ -44,15 +42,14 @@ export async function execute(
   eid: number,
   parameters: z.infer<typeof schema>,
   eventBus: EventBus
-): Promise<ActionResult> {
+): Promise<ActionResultType> {
   const roomId = getAgentRoom(world, eid);
   if (!roomId) {
     return {
       success: false,
-      message: "Cannot speak - agent not in a room",
+      action: "speak",
+      result: "Cannot speak - agent not in a room",
       timestamp: Date.now(),
-      actionName: "speak",
-      parameters,
       data: {
         content: parameters.message,
         metadata: { error: "No room found" },
@@ -113,10 +110,9 @@ export async function execute(
 
   return {
     success: true,
-    message: experience,
+    action: "speak",
+    result: experience,
     timestamp: Date.now(),
-    actionName: "speak",
-    parameters,
     data: {
       content: parameters.message,
       metadata: {

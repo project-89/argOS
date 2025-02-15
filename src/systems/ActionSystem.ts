@@ -1,11 +1,24 @@
-import { query, setComponent, addEntity, addComponent, World } from "bitecs";
-import { Agent, Action, Room, OccupiesRoom, Memory } from "../components";
+import {
+  query,
+  setComponent,
+  addEntity,
+  addComponent,
+  World,
+  hasComponent,
+} from "bitecs";
+import {
+  Agent,
+  Action,
+  Room,
+  OccupiesRoom,
+  Memory,
+  ActionResultType,
+  Thought,
+} from "../components";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { getAgentRoom } from "../utils/queries";
-import { ActionResult } from "../types/actions";
 import { Experience } from "../llm/agent-llm";
-import { createCognitiveStimulus } from "../factories/stimulusFactory";
 
 // Helper to get or create private room for agent
 async function getOrCreatePrivateRoom(world: World, eid: number, runtime: any) {
@@ -96,7 +109,7 @@ export const ActionSystem = createSystem<SystemConfig>(
           pendingAction.parameters,
           null,
           2
-        )}\nResult: ${result.message}`,
+        )}\nResult: ${result?.result}`,
         agentName
       );
 
@@ -107,8 +120,8 @@ export const ActionSystem = createSystem<SystemConfig>(
         {
           action: pendingAction.tool,
           parameters: pendingAction.parameters,
-          result: result.message,
-          success: result.success,
+          result: result?.result,
+          success: result?.success,
           agentName,
           context: "room",
           timestamp: Date.now(),
@@ -124,26 +137,30 @@ export const ActionSystem = createSystem<SystemConfig>(
         availableTools: Action.availableTools[eid],
       });
 
-      // Instead of directly creating an experience, emit a cognitive stimulus
-      const experienceMessage = `${pendingAction.tool}: ${result.message}`;
-      createCognitiveStimulus(
-        world,
-        eid,
-        experienceMessage,
-        {
-          action: pendingAction.tool,
-          result: result,
-          timestamp: result.timestamp,
-        },
-        {
-          intensity: 1.0,
-          priority: 0.8,
-          metadata: {
-            type: "action_result",
-            category: "action",
+      // Add action result to thought chain
+      if (hasComponent(world, eid, Thought)) {
+        const currentEntries = Thought.entries[eid] || [];
+        const newEntry = {
+          id: Thought.lastEntryId[eid] + 1,
+          timestamp: Date.now(),
+          type: "result",
+          content: result?.result || "Action completed with no result",
+          context: {
+            roomId: Room.id[roomEid],
+            metadata: {
+              action: pendingAction.tool,
+              parameters: pendingAction.parameters,
+              success: result?.success,
+            },
           },
-        }
-      );
+        };
+
+        setComponent(world, eid, Thought, {
+          entries: [...currentEntries, newEntry],
+          lastEntryId: newEntry.id,
+          lastUpdate: Date.now(),
+        });
+      }
 
       logger.agent(eid, "Action cycle completed", agentName);
     }

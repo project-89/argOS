@@ -11,6 +11,7 @@ export function parseJSON<T>(text: string): T {
       .replace(/```json\n?/g, "")
       .replace(/```\n?/g, "")
       .trim();
+
     try {
       return JSON.parse(cleanText) as T;
     } catch (initialError) {
@@ -20,43 +21,66 @@ export function parseJSON<T>(text: string): T {
         .map((line) => line.replace(/^\[\d+\]\s+/, "")) // Remove line numbers
         .join("\n");
 
-      // Extract JSON content
-      const jsonRegex = /{[\s\S]*}/;
-      const match = cleanText.match(jsonRegex);
+      // Extract JSON content - look for the largest valid JSON object
+      const jsonMatches = cleanText.match(/{[\s\S]*?}/g) || [];
+      let largestValidJson = null;
+      let maxLength = 0;
 
-      if (!match) {
-        throw new Error("No JSON object found");
+      for (const match of jsonMatches) {
+        try {
+          // Try to fix common JSON issues
+          const fixedJson = match
+            .replace(/,(\s*[}\]])/g, "$1") // Fix trailing commas
+            .replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3') // Fix missing quotes
+            .replace(/'/g, '"') // Fix single quotes
+            .replace(/[\x00-\x1F\x7F-\x9F]/g, ""); // Remove control chars
+
+          // Try to parse
+          const parsed = JSON.parse(fixedJson);
+          if (match.length > maxLength) {
+            maxLength = match.length;
+            largestValidJson = parsed;
+          }
+        } catch (e) {
+          // Skip invalid JSON
+          continue;
+        }
       }
 
-      let jsonText = match[0];
+      if (largestValidJson) {
+        return largestValidJson as T;
+      }
 
-      // Fix common JSON issues
-      jsonText = jsonText
-        .replace(/,(\s*[}\]])/g, "$1") // Fix trailing commas
-        .replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3') // Fix missing quotes
-        .replace(/'/g, '"') // Fix single quotes
-        .replace(/[\x00-\x1F\x7F-\x9F]/g, ""); // Remove control chars
+      // If no valid JSON found, try to repair truncated JSON
+      const lastBrace = cleanText.lastIndexOf("}");
+      if (lastBrace !== -1) {
+        const truncatedJson = cleanText.substring(0, lastBrace + 1);
+        try {
+          const fixedJson = truncatedJson
+            .replace(/,(\s*[}\]])/g, "$1")
+            .replace(/([{,]\s*)(\w+)(\s*:)/g, '$1"$2"$3')
+            .replace(/'/g, '"')
+            .replace(/[\x00-\x1F\x7F-\x9F]/g, "");
+          return JSON.parse(fixedJson) as T;
+        } catch (e) {
+          // Fall through to default
+        }
+      }
 
-      return JSON.parse(jsonText) as T;
+      throw new Error("No valid JSON object found");
     }
   } catch (error) {
     // Log the problematic text for debugging
     console.error("FAILED TO PARSE:", text.slice(0, 1000) + "...");
     console.error("Parse error:", error);
 
-    // Return a safe default object
+    // Return a safe default object based on the expected type
     return {
-      plan: {
-        id: `fallback-${Date.now()}`,
-        steps: [
-          {
-            id: "fallback-step",
-            description: "Fallback plan due to parsing error",
-            status: "pending",
-            expectedOutcome: "Recover from error state",
-          },
-        ],
-        status: "active",
+      analysis: {
+        significant_change: false,
+        changes: [],
+        recommendation: "maintain_goals",
+        reasoning: ["Error in parsing response"],
       },
     } as T;
   }

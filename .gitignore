@@ -5,3 +5,4 @@ dist
 logs
 devLogs
 ./devLogs/**/* */
+feedback

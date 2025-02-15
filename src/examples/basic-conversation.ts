@@ -3,11 +3,13 @@ import { createAgent } from "../utils/agent-factory";
 import { logger } from "../utils/logger";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
 import { Room, OccupiesRoom } from "../components";
+import { actions } from "../actions";
 
-export async function setupBasicConversation(runtime: SimulationRuntime) {
-  logger.system("Setting up basic conversation scenario...");
-
-  const world = runtime.world;
+export function setupBasicConversation() {
+  const world = createWorld();
+  const runtime = new SimulationRuntime(world, {
+    actions: actions,
+  });
 
   // Create a room
   const gardenRoom = addEntity(world);
@@ -49,4 +51,6 @@ export async function setupBasicConversation(runtime: SimulationRuntime) {
   addComponent(world, agent2, OccupiesRoom(gardenRoom));
 
   logger.system("Basic conversation scenario setup complete");
+
+  return { runtime };
 }

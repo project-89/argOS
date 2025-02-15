@@ -21,9 +21,8 @@ import { processConcurrentAgents } from "../utils/system-utils";
 
 // Constants for throttling goal planning
 const GOAL_EVALUATION_INTERVAL = 10000; // 10 seconds
-const MAX_ACTIVE_GOALS = 3; // Reduced from 10 to 3 for better focus
-const MIN_CHANGE_IMPACT = 4; // Increased from 3 to 4 for higher threshold
-const MAX_GOALS_PER_CATEGORY = 1; // Maximum goals per category (immediate, short_term, etc.)
+const MAX_ACTIVE_GOALS = 1; // Keep focused on one goal at a time
+const MIN_CHANGE_IMPACT = 4; // Only consider significant changes
 
 interface AgentGoal {
   id: string;
@@ -59,7 +58,7 @@ export const GoalPlanningSystem = createSystem(
         // Initialize lastEvaluationTime if not set
         if (!Goal.lastEvaluationTime[eid]) {
           Goal.lastEvaluationTime[eid] = currentTime;
-          return; // Skip first run to avoid immediate evaluation
+          return;
         }
 
         // Skip if evaluated too recently
@@ -67,282 +66,132 @@ export const GoalPlanningSystem = createSystem(
           return;
         }
 
-        logger.agent(eid, "Starting goal planning process", agentName);
-
         const currentGoals = (Goal.current[eid] || []) as AgentGoal[];
         const memories = Memory.experiences[eid] || [];
-        const perceptions = Perception.history[eid] || [];
+        const perceptions = Perception.summary[eid] || "";
 
         try {
-          let significantChangesDetected = false;
-
-          // Only detect changes if we have room for new goals
-          if (
-            currentGoals.filter((g) => g.status === "in_progress").length <
-            MAX_ACTIVE_GOALS
-          ) {
-            logger.agent(eid, "Detecting significant changes", agentName);
+          // Only check for new goals if we don't have any active ones
+          const activeGoals = currentGoals.filter(
+            (g) => g.status === "in_progress"
+          );
+          if (activeGoals.length === 0) {
             const changeAnalysis = await detectSignificantChanges({
               name: agentName,
               role: Agent.role[eid],
               systemPrompt: Agent.systemPrompt[eid],
               agentId: Agent.id[eid],
               currentGoals,
-              recentExperiences: memories,
-              perceptionSummary: JSON.stringify(perceptions),
+              recentExperiences: memories.slice(-10),
+              perceptionSummary: perceptions,
               perceptionContext: getContextSummary(eid, runtime),
             });
 
-            // Only consider changes with high enough impact
             const significantChanges = (changeAnalysis.changes || []).filter(
               (change: ChangeAnalysis["changes"][0]) =>
                 change.impact_level >= MIN_CHANGE_IMPACT
             );
 
-            significantChangesDetected = significantChanges.length > 0;
+            if (
+              significantChanges.length > 0 &&
+              changeAnalysis.recommendation !== "maintain_goals"
+            ) {
+              const newGoals = await generateGoals({
+                name: agentName,
+                role: Agent.role[eid],
+                systemPrompt: Agent.systemPrompt[eid],
+                agentId: Agent.id[eid],
+                currentGoals,
+                recentExperiences: memories,
+                perceptionSummary: perceptions,
+                perceptionContext: getContextSummary(eid, runtime),
+              });
 
-            if (significantChanges.length > 0) {
-              logger.agent(
-                eid,
-                `Significant changes detected: ${JSON.stringify({
-                  changes: significantChanges.length,
-                  recommendation: changeAnalysis.recommendation,
-                })}`,
-                agentName
-              );
+              if (newGoals.length > 0) {
+                const goalToAdd = newGoals[0]; // Take only the first goal
+                goalToAdd.status = "in_progress";
+                goalToAdd.progress = 0;
+                goalToAdd.created_at = Date.now();
 
-              // Create cognitive stimuli for significant changes
-              significantChanges.forEach(
-                (change: ChangeAnalysis["changes"][0]) => {
-                  createCognitiveStimulus(
-                    world,
-                    eid,
-                    change.description,
-                    { change },
-                    {
-                      subtype: "realization",
-                      intensity: change.impact_level / 5,
-                      private: true,
-                    }
-                  );
-                }
-              );
-
-              // Generate new goals only if recommended and we have room
-              if (
-                (changeAnalysis.recommendation === "new_goals" ||
-                  changeAnalysis.recommendation === "adjust_goals") &&
-                currentGoals.length < MAX_ACTIVE_GOALS
-              ) {
-                logger.agent(
+                // Emit cognitive stimulus only when creating a new goal
+                createCognitiveStimulus(
+                  world,
                   eid,
-                  `${
-                    changeAnalysis.recommendation === "new_goals"
-                      ? "Generating new goals"
-                      : "Adjusting goals"
-                  }`,
-                  agentName
-                );
-                const newGoals = await generateGoals({
-                  name: agentName,
-                  role: Agent.role[eid],
-                  systemPrompt: Agent.systemPrompt[eid],
-                  agentId: Agent.id[eid],
-                  currentGoals,
-                  recentExperiences: memories,
-                  perceptionSummary: JSON.stringify(perceptions),
-                  perceptionContext: getContextSummary(eid, runtime),
-                });
-
-                // Filter goals by category limits
-                const goalsByCategory = new Map<string, AgentGoal[]>();
-                for (const goal of newGoals) {
-                  const category = goal.type;
-                  if (!goalsByCategory.has(category)) {
-                    goalsByCategory.set(category, []);
+                  `New goal: ${goalToAdd.description}`,
+                  { goal: goalToAdd },
+                  {
+                    subtype: "goal_created",
+                    intensity: 0.8,
+                    private: true,
                   }
-                  goalsByCategory.get(category)?.push(goal);
-                }
-
-                // Take only the top goal from each category
-                const goalsToAdd: AgentGoal[] = [];
-                for (const [category, goals] of goalsByCategory) {
-                  const existingCount = currentGoals.filter(
-                    (g) => g.type === category && g.status === "in_progress"
-                  ).length;
-                  if (existingCount < MAX_GOALS_PER_CATEGORY) {
-                    goalsToAdd.push(goals[0]);
-                  }
-                }
-
-                // Limit total goals
-                const finalGoals = goalsToAdd.slice(
-                  0,
-                  MAX_ACTIVE_GOALS - currentGoals.length
                 );
 
-                if (finalGoals.length > 0) {
-                  logger.agent(
-                    eid,
-                    `Generated ${finalGoals.length} new goals`,
-                    agentName
-                  );
-
-                  // Create cognitive stimuli for new goals
-                  finalGoals.forEach((goal) => {
-                    logger.agent(
-                      eid,
-                      `Processing new goal: ${goal.description}`,
-                      agentName
-                    );
-
-                    // Set initial status to in_progress
-                    goal.status = "in_progress";
-                    goal.progress = 0;
-                    goal.created_at = Date.now();
-
-                    createCognitiveStimulus(
-                      world,
-                      eid,
-                      `Created new goal: ${goal.description}`,
-                      { goal },
-                      {
-                        subtype: "goal_created",
-                        intensity: 0.8,
-                        private: true,
-                      }
-                    );
-                  });
-
-                  // Update agent's goals
-                  Goal.current[eid] = [...currentGoals, ...finalGoals];
-                } else {
-                  logger.agent(
-                    eid,
-                    "No new goals added due to category limits",
-                    agentName
-                  );
-                }
+                Goal.current[eid] = [...currentGoals, goalToAdd];
               }
             }
           }
 
-          // Only evaluate in-progress goals
-          const inProgressGoals = currentGoals.filter(
-            (g: AgentGoal) => g.status === "in_progress"
-          );
-          logger.agent(
-            eid,
-            `Evaluating progress on ${inProgressGoals.length} in-progress goals`,
-            agentName
-          );
-
-          // When updating goal status, also update related plan status
-          const updateGoalStatus = (
-            goal: AgentGoal,
-            status: "completed" | "failed"
-          ) => {
-            goal.status = status;
-
-            // Update related active plans
-            const currentPlans = Plan.plans[eid] || [];
-            const relatedPlans = currentPlans.filter(
-              (plan: SinglePlanType) =>
-                plan.goalId === goal.id && plan.status === "active"
-            );
-
-            relatedPlans.forEach((plan: SinglePlanType) => {
-              plan.status = status;
-              plan.updatedAt = Date.now();
-              createCognitiveStimulus(
-                world,
-                eid,
-                `Plan ${status}: ${plan.description}`,
-                { plan },
-                {
-                  subtype: `plan_${status}`,
-                  intensity: 0.7,
-                  private: true,
-                }
-              );
-            });
-          };
-
-          for (const goal of inProgressGoals) {
-            logger.agent(
-              eid,
-              `Evaluating goal progress: ${JSON.stringify({
-                goalId: goal.id,
-              })}`,
-              agentName
-            );
-
+          // Evaluate progress of the active goal
+          const activeGoal = activeGoals[0];
+          if (activeGoal) {
             const evaluation = await evaluateGoalProgress({
               name: agentName,
               systemPrompt: Agent.systemPrompt[eid],
               agentId: Agent.id[eid],
-              goalDescription: goal.description,
-              goalType: goal.type,
-              successCriteria: goal.success_criteria,
-              progressIndicators: goal.progress_indicators,
-              currentProgress: goal.progress,
+              goalDescription: activeGoal.description,
+              goalType: activeGoal.type,
+              successCriteria: activeGoal.success_criteria,
+              progressIndicators: activeGoal.progress_indicators,
+              currentProgress: activeGoal.progress,
               recentExperiences: memories,
-              perceptionSummary: JSON.stringify(perceptions),
+              perceptionSummary: perceptions,
               perceptionContext: getContextSummary(eid, runtime),
             });
 
-            if (evaluation.complete) {
-              updateGoalStatus(goal, "completed");
-              // Emit goal completion stimulus
+            if (
+              evaluation.complete ||
+              (evaluation.blockers.length > 0 && activeGoal.progress < 10)
+            ) {
+              const status = evaluation.complete ? "completed" : "failed";
+              activeGoal.status = status;
+
+              // Emit cognitive stimulus only for goal completion/failure
               createCognitiveStimulus(
                 world,
                 eid,
-                `Goal completed: ${goal.description}`,
-                { goal, evaluation },
+                `Goal ${status}: ${activeGoal.description}`,
+                { goal: activeGoal, evaluation },
                 {
-                  subtype: "goal_completed",
-                  intensity: 0.9,
+                  subtype: `goal_${status}`,
+                  intensity: status === "completed" ? 0.9 : 0.8,
                   private: true,
                 }
               );
-            } else if (evaluation.blockers.length > 0 && goal.progress < 10) {
-              updateGoalStatus(goal, "failed");
-              // Emit goal failure stimulus
-              createCognitiveStimulus(
-                world,
-                eid,
-                `Goal failed: ${goal.description}`,
-                { goal, evaluation },
-                {
-                  subtype: "goal_failed",
-                  intensity: 0.8,
-                  private: true,
-                }
+
+              // Move completed/failed goals to history
+              Goal.completed[eid] = [
+                ...(Goal.completed[eid] || []),
+                activeGoal,
+              ];
+              Goal.current[eid] = currentGoals.filter(
+                (g) => g.id !== activeGoal.id
               );
             } else {
-              // Update progress
-              goal.progress = evaluation.progress;
-              goal.criteria_met = evaluation.criteria_met;
-              goal.criteria_partial = evaluation.criteria_partial;
-              goal.criteria_blocked = evaluation.criteria_blocked;
-              goal.next_steps = evaluation.next_steps;
+              // Update progress without emitting stimulus
+              activeGoal.progress = evaluation.progress;
+              activeGoal.criteria_met = evaluation.criteria_met;
+              activeGoal.criteria_partial = evaluation.criteria_partial;
+              activeGoal.criteria_blocked = evaluation.criteria_blocked;
+              activeGoal.next_steps = evaluation.next_steps;
             }
           }
 
-          // Update last evaluation time
           Goal.lastEvaluationTime[eid] = currentTime;
-
-          logger.agent(eid, "Completed goal planning cycle", agentName);
-          return {
-            changesDetected: significantChangesDetected,
-            goalsEvaluated: inProgressGoals.length,
-          };
         } catch (error) {
           logger.error(
             `Error in GoalPlanningSystem for agent ${agentName}:`,
             error
           );
-          return { error: true };
         }
       }
     );
@@ -360,23 +209,4 @@ function getContextSummary(eid: number, runtime: any): string {
     currentTime: new Date().toISOString(),
     activeAgents: runtime.getStateManager().getWorldState().agents.length,
   });
-}
-
-function emitGoalStimulus(
-  world: World,
-  eid: number,
-  goal: AgentGoal,
-  subtype: string
-) {
-  createCognitiveStimulus(
-    world,
-    eid,
-    `Goal ${subtype}: ${goal.description}`,
-    { goal },
-    {
-      subtype,
-      intensity: 0.7,
-      private: true,
-    }
-  );
 }

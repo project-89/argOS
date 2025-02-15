@@ -25,6 +25,7 @@ import {
   Interaction,
   Goal,
   Plan,
+  Thought,
 } from "../components";
 import { logger } from "../utils/logger";
 import { AgentState } from "../types/state";
@@ -483,6 +484,30 @@ export class ComponentSync {
         lastProcessedTime: Perception.lastProcessedTime[eid] || 0,
         lastUpdate: Perception.lastUpdate[eid] || 0,
       }))
+    );
+
+    // Add Thought sync
+    this.observers.push(
+      observe(this.world, onSet(Thought), (eid, params) => {
+        if (params.entries !== undefined) {
+          Thought.entries[eid] = params.entries;
+        }
+        if (params.lastEntryId !== undefined) {
+          Thought.lastEntryId[eid] = params.lastEntryId;
+        }
+        Thought.lastUpdate[eid] = Date.now();
+        return params;
+      }),
+      observe(this.world, onGet(Thought), (eid) => ({
+        entries: Thought.entries[eid] || [],
+        lastEntryId: Thought.lastEntryId[eid] || 0,
+        lastUpdate: Thought.lastUpdate[eid] || Date.now(),
+      })),
+      observe(this.world, onRemove(Thought), (eid) => {
+        delete Thought.entries[eid];
+        delete Thought.lastEntryId[eid];
+        delete Thought.lastUpdate[eid];
+      })
     );
   }
 

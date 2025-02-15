@@ -11,6 +11,7 @@ import {
   Goal,
   Plan,
   ALL_COMPONENTS,
+  Thought,
 } from "../../components";
 import { IStateManager } from "./IStateManager";
 import { logger } from "../../utils/logger";
@@ -33,7 +34,7 @@ export class StateManager implements IStateManager {
     this.relations = new Map();
 
     ALL_COMPONENTS.forEach((component) => {
-      this.registerComponent(component);
+      this.registerComponent(component as any);
     });
   }
 
@@ -100,7 +101,7 @@ export class StateManager implements IStateManager {
       name: Agent.name[eid],
       role: Agent.role[eid],
       systemPrompt: Agent.systemPrompt[eid],
-      active: Agent.active[eid],
+      active: Boolean(Agent.active[eid]),
       platform: Agent.platform[eid],
       appearance: {
         description: Appearance.description[eid] || "",
@@ -110,18 +111,15 @@ export class StateManager implements IStateManager {
         socialCues: Appearance.socialCues[eid] || "",
       },
       attention: Agent.attention[eid],
-      roomId: roomId ? Room.id[roomId] : null,
-      lastUpdate: Appearance.lastUpdate[eid] || Date.now(),
-      thoughtHistory: Memory.thoughts[eid] || [],
       perceptions: {
         narrative: Perception.summary[eid] || "",
         raw: Perception.currentStimuli[eid] || [],
       },
-      lastAction: Action.lastActionResult[eid],
+      lastAction: Action.lastActionResult[eid] || undefined,
       timeSinceLastAction: Action.lastActionTime[eid]
         ? Date.now() - Action.lastActionTime[eid]
         : 0,
-      experiences: Memory.experiences[eid] || [],
+      thoughtChain: Thought.entries[eid] || [],
       availableTools: this.runtime.getActionManager().getEntityTools(eid) || [],
       goals: Goal.current[eid] || [],
       completedGoals: Goal.completed[eid] || [],
@@ -130,14 +128,21 @@ export class StateManager implements IStateManager {
         .map((plan) => ({
           id: plan.id,
           goalId: plan.goalId,
+          description: plan.steps[0]?.description || "Execute plan steps",
+          priority: 1,
+          status: "active" as const,
           steps: plan.steps.map((step) => ({
             id: step.id,
             description: step.description,
             status: step.status,
             expectedOutcome: step.expectedOutcome || "",
+            order: 0,
+            estimatedDuration: 0,
+            startTime: Date.now(),
           })),
-          currentStepId: plan.currentStepId,
-          status: "active" as const,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          metadata: {},
         })),
     };
   }

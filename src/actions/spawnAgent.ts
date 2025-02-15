@@ -3,10 +3,10 @@ import { logger } from "../utils/logger";
 import { EventBus } from "../runtime/EventBus";
 import { createAgent as createAgentFactory } from "../utils/agent-factory";
 import { getAgentRoom } from "../utils/queries";
-import { ActionResult } from "../types/actions";
 import { ActionContent, World } from "../types";
-import { Agent } from "../components";
+import { ActionResultType, Agent } from "../components";
 import { SimulationRuntime } from "../runtime/SimulationRuntime";
+import { actions } from ".";
 
 export const schema = z
   .object({
@@ -72,15 +72,14 @@ export async function execute(
   parameters: z.infer<typeof schema>,
   eventBus: EventBus,
   runtime: SimulationRuntime
-): Promise<ActionResult> {
+): Promise<ActionResultType> {
   const roomId = getAgentRoom(world, creatorEid);
   if (!roomId) {
     return {
       success: false,
-      message: "Cannot create agent - creator not in a room",
+      result: "Cannot create agent - creator not in a room",
       timestamp: Date.now(),
-      actionName: "spawnAgent",
-      parameters,
+      action: "spawnAgent",
       data: {
         entityId: -1,
         metadata: {
@@ -94,6 +93,7 @@ export async function execute(
 
   const newAgentEid = createAgentFactory(world, {
     ...parameters,
+    tools: parameters.tools as Array<keyof typeof actions>,
     active: 1,
   });
 
@@ -116,10 +116,9 @@ export async function execute(
 
   return {
     success: true,
-    actionName: "spawnAgent",
-    message: result,
+    action: "spawnAgent",
+    result,
     timestamp: Date.now(),
-    parameters,
     data: {
       entityId: newAgentEid,
       metadata: {

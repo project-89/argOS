@@ -175,6 +175,15 @@ export const PerceptionSystem = createSystem(
               ...modeContent,
             });
 
+            if (summary === "NONE") {
+              logger.agent(
+                eid,
+                "PerceptionSystem",
+                "No significant perceptions detected."
+              );
+              return;
+            }
+
             // Update perception state
             Perception.currentStimuli[eid] = filteredStimuli;
             Perception.summary[eid] = summary;

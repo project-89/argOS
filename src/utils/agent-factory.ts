@@ -20,6 +20,7 @@ import {
   Perception,
   Goal,
   Plan,
+  Thought,
 } from "../components";
 import { AgentConfig } from "../types/agent";
 import { logger } from "../utils/logger";
@@ -27,7 +28,7 @@ import { findRoomByStringId, getAgentRoom } from "../utils/queries";
 import { actions } from "../actions";
 
 const USER_APPEARANCE =
-  "A presence in the system, representing direct human interaction. Their words carry the weight of reality itself.";
+  "A presence in the system, representing direct human interaction.";
 
 export interface UserConfig {
   name?: string;
@@ -109,7 +110,10 @@ export function moveUserToRoom(
 
 export function createAgent(
   world: World,
-  config: AgentConfig & { tools?: string[]; initialGoals?: string[] }
+  config: AgentConfig & {
+    tools?: Array<keyof typeof actions>;
+    initialGoals?: string[];
+  }
 ) {
   const {
     name,
@@ -118,7 +122,7 @@ export function createAgent(
     platform = "default",
     appearance = "A nondescript figure",
     active = 1,
-    tools = ["speak", "wait"], // Default tools
+    tools = ["speak", "wait"] as Array<keyof typeof actions>, // Default tools
     initialGoals = [], // Default to empty goals
   } = config;
 
@@ -201,9 +205,20 @@ export function createAgent(
     })
   );
 
+  // Add thought chain component
+  addComponent(
+    world,
+    eid,
+    set(Thought, {
+      entries: [], // Thought chain entries
+      lastEntryId: 0,
+      lastUpdate: Date.now(),
+    })
+  );
+
   // make sure tools are valid
   const agentTools = Object.keys(actions).filter((tool) =>
-    tools.includes(tool)
+    tools.includes(tool as keyof typeof actions)
   );
 
   addComponent(

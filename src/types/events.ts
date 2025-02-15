@@ -74,7 +74,8 @@ export interface RoomEventContent {
 
 export interface ActionContent {
   action: string;
-  result: string;
+  result?: string;
+  reason?: string;
   parameters?: Record<string, any>;
   agentName: string;
   context?: "room" | "private";

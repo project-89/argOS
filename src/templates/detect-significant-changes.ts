@@ -11,61 +11,16 @@ Recent Perceptions: {perceptionSummary}
 Current Context: {perceptionContext}
 
 CHANGE CATEGORIES:
-
-1. ENVIRONMENTAL CHANGES
-   - Location changes
-   - Resource availability
-   - Time constraints
-   - Physical conditions
-   Priority: Direct impact on capabilities
-
-2. SOCIAL CHANGES
-   - Relationship dynamics
-   - New interactions
-   - Social expectations
-   - Group dynamics
-   Priority: Impact on social goals
-
-3. KNOWLEDGE CHANGES
-   - New information
-   - Skill development
-   - Understanding shifts
-   - Realizations
-   Priority: Impact on decision-making
-
-4. EMOTIONAL CHANGES
-   - Mood shifts
-   - Motivation changes
-   - Attitude adjustments
-   - Emotional responses
-   Priority: Impact on goal commitment
+1. ENVIRONMENTAL - Location, resources, conditions
+2. SOCIAL - Relationships, interactions, dynamics
+3. KNOWLEDGE - Information, skills, understanding
+4. EMOTIONAL - Mood, motivation, attitude
 
 SIGNIFICANCE CRITERIA:
-
-1. IMPACT ASSESSMENT
-   ✓ Direct effects on current goals
-   ✓ Indirect consequences
-   ✓ Long-term implications
-   ✓ Resource implications
-
-2. URGENCY EVALUATION
-   ✓ Time sensitivity
-   ✓ Response requirements
-   ✓ Opportunity costs
-   ✓ Risk factors
-
-3. PERSISTENCE CHECK
-   ✓ Temporary vs permanent
-   ✓ Pattern recognition
-   ✓ Trend analysis
-   ✓ Stability assessment
-
-ANTI-PATTERNS:
-❌ No overreaction to temporary changes
-❌ No ignoring persistent patterns
-❌ No focus on irrelevant details
-❌ No assumption of permanence
-❌ No disregard of subtle shifts
+- Direct effects on current goals
+- Time sensitivity
+- Persistence (temporary vs permanent)
+- Resource implications
 
 Remember: Focus on changes that meaningfully impact goal pursuit or achievement.
 
@@ -78,12 +33,9 @@ OUTPUT FORMAT:
         "category": "environmental" | "social" | "knowledge" | "emotional",
         "description": string,
         "impact_level": number (1-5),
-        "persistence": "temporary" | "persistent" | "unknown",
-        "affected_goals": string[],
         "requires_action": boolean
       }
     ],
-    "recommendation": "maintain_goals" | "adjust_goals" | "new_goals",
-    "reasoning": string[]
+    "recommendation": "maintain_goals" | "adjust_goals" | "new_goals"
   }
 }`;

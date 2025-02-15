@@ -1,5 +1,6 @@
+import { ActionResultType } from "../../components";
 import { ActionModule } from "../../types";
-import { ActionResult, FullToolType } from "../../types/actions";
+import { FullToolType } from "../../types/actions";
 import { SimulationRuntime } from "../SimulationRuntime";
 
 export interface IActionManager {
@@ -13,7 +14,7 @@ export interface IActionManager {
     eid: number,
     parameters: any,
     runtime: SimulationRuntime
-  ): Promise<ActionResult>;
+  ): Promise<ActionResultType>;
 
   // Action Registration
   registerAction(name: string, action: ActionModule): void;

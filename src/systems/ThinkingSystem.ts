@@ -68,7 +68,7 @@ async function generateAgentThought(
     active: Agent.active[eid],
     platform: Agent.platform[eid],
     attention: Agent.attention[eid],
-    thoughtHistory: Memory.thoughts[eid] || [],
+    thoughtHistory: (Memory.thoughts[eid] || []).slice(-30),
     perceptions: {
       narrative: Perception.summary[eid] || "",
       raw: Perception.currentStimuli[eid] || [],
@@ -77,7 +77,7 @@ async function generateAgentThought(
     timeSinceLastAction: Action.lastActionTime[eid]
       ? Date.now() - Action.lastActionTime[eid]
       : 0,
-    experiences: Memory.experiences[eid] || [],
+    experiences: (Memory.experiences[eid] || []).slice(-20),
     availableTools: runtime.getActionManager().getEntityTools(eid),
     goals: Goal.current[eid] || [],
     completedGoals: Goal.completed[eid] || [],

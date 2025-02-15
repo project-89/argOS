@@ -16,6 +16,7 @@ import { createUser, moveUserToRoom } from "../utils/agent-factory";
 import { findRoomByStringId } from "../utils/queries";
 import { createAuditoryStimulus } from "../factories/stimulusFactory";
 import { StimulusSource, StimulusType } from "../types/stimulus";
+// import { setupBasicConversation } from "../examples/basic-conversation";
 // import { setupEmergentBeing } from "../examples/emergentGemini";
 
 // Track user connections with Map
@@ -29,6 +30,13 @@ const connectionUsers = new Map<
 
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
 const HEARTBEAT_TIMEOUT = 45000; // 45 seconds
+
+const getRuntime = () => {
+  let { runtime } = setupSingleAgent();
+  // let { runtime } = setupBasicConversation();
+  // let { runtime } = setupEmergentBeing();
+  return runtime;
+};
 
 // Helper to send message to a WebSocket client
 const sendMessage = (ws: WS, message: ServerMessage) => {
@@ -82,7 +90,8 @@ async function cleanupInactiveUsers() {
 setInterval(cleanupInactiveUsers, HEARTBEAT_INTERVAL);
 
 // Set up initial runtime and event emitter
-let { runtime } = setupSingleAgent();
+// let { runtime } = setupSingleAgent();
+let runtime = getRuntime();
 const eventEmitter = new EventEmitter();
 
 // Track active user entities
@@ -375,8 +384,7 @@ wss.on("connection", (ws: WS) => {
         // Clean up old runtime
         runtime.cleanup();
         // Create fresh runtime
-        const setup = setupSingleAgent();
-        runtime = setup.runtime;
+        runtime = getRuntime();
         // Set up event handlers for new runtime
         setupRuntimeEventHandlers(runtime);
         // Send fresh world state

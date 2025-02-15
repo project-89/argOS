@@ -16,12 +16,14 @@ export const ActionSchema = z.object({
       success: z.boolean(),
       result: z.string(),
       timestamp: z.number(),
+      data: z.any(),
     })
     .nullable(),
   availableTools: z.array(z.string()),
 });
 
 export type ActionType = z.infer<typeof ActionSchema>;
+export type ActionResultType = ActionType["lastActionResult"];
 
 export const ActionComponent = createComponent("Action", ActionSchema, {
   pendingAction: [] as ({

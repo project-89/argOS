@@ -11,6 +11,7 @@ import { Room, RoomComponent } from "./Room";
 import { Stimulus, StimulusComponent } from "./Stimulus";
 import { WorkingMemory, WorkingMemoryComponent } from "./WorkingMemory";
 import { ProcessingState, ProcessingStateComponent } from "./ProcessingState";
+import { Thought, ThoughtComponent } from "./Thought";
 
 // Export all components
 export * from "./Action";
@@ -26,6 +27,7 @@ export * from "./Stimulus";
 export * from "./Cleanup";
 export * from "./WorkingMemory";
 export * from "./ProcessingState";
+export * from "./Thought";
 // Central array of all component definitions
 export const ALL_COMPONENTS = [
   ActionComponent,
@@ -40,6 +42,7 @@ export const ALL_COMPONENTS = [
   CleanupComponent,
   WorkingMemoryComponent,
   ProcessingStateComponent,
+  Thought,
 ] as const;
 
 // Export the actual component instances for direct use
@@ -57,4 +60,5 @@ export {
   Cleanup,
   WorkingMemory,
   ProcessingState,
+  Thought,
 };

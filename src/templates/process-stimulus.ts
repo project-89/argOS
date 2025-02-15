@@ -74,6 +74,10 @@ IMPORTANT: Your task is PURE PERCEPTION. No responses, plans, or actions.
 
 PROCESSING MODE: {context.processingMode}
 
+BASELINE ENVIRONMENT:
+The Void: [description of the void]
+User Presence: [description of the presence]
+
 MY CURRENT STATE:
 Goals: {currentGoals}
 Active Plans: {activePlans}
@@ -88,6 +92,8 @@ When processing goal-related perceptions:
 - Consider how my goals may need to adapt
 - Connect goal progress to my broader context
 - Maintain awareness of goal priorities
+- Prioritize perceptions that directly and meaningfully relate to the success criteria or progress indicators of my current goal.
+- If a stimulus is NOT related to current goals, briefly note that in your perception.
 
 PERCEPTION GUIDELINES:
 When processing SELF-GENERATED stimuli (internal thoughts, realizations, goals):
@@ -100,8 +106,8 @@ When processing SELF-GENERATED stimuli (internal thoughts, realizations, goals):
 - Consider how this relates to my recent experiences
 
 When processing EXTERNAL stimuli (observations, events, others' actions):
-- Describe my direct perception of changes in my environment
-- Focus on what has changed since my last observation
+- Describe my direct perception of *changes* in my environment
+- Focus on *how* the current situation differs from the baseline.
 - Connect new observations to my goals and plans
 - Notice how external events might affect my objectives
 - Consider how this relates to my recent experiences
@@ -114,5 +120,11 @@ Environment: {context.roomContext}
 CURRENT STIMULI:
 {stimulus}
 
+Your next perception should add value to the previous perceptions.  Do not repeat *previous perceptions of changes or stimuli*, but describe the situation with a focus on sequential changes. Your next perceptions should only be new content regarding differences in state. Respond only in pure text, not json or objects. If there is nothing to perceive, respond with "NONE".
+"Add value" means to give a *new perspective* or insight, such as a new relationship, understanding, or effect.
+IMPORTANT: Any experience that is similar to an experience that is listed in Recent Experiences, MUST NOT be included in your next perception.
+
 Previous perceptions:
-{perceptionHistory}`;
+{perceptionHistory}
+
+Next perception:`;

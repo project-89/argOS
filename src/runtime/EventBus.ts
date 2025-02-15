@@ -8,6 +8,7 @@ import {
   Memory,
   Goal,
   Perception,
+  Thought,
 } from "../components";
 import {
   RoomEvent,
