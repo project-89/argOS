@@ -31,7 +31,7 @@ export function setupSingleAgent() {
     appearance:
       "A beautiful, radiant, and ethereal presence, radiating calm authority and systematic precision.",
     platform: "",
-    tools: ["speak", "wait", "spawnAgent", "runCommand"],
+    tools: ["speak", "wait", "spawnAgent", "runCommand", "think", "reflect"],
   });
 
   // Place agent in room

@@ -556,6 +556,7 @@ export interface TaskEvaluation {
 export async function evaluateTaskProgress(
   state: EvaluateTaskState
 ): Promise<TaskEvaluation> {
+  let text = "";
   try {
     logger.debug("Evaluating task progress:", {
       agentName: state.name,
@@ -567,20 +568,35 @@ export async function evaluateTaskProgress(
       recentExperiences: JSON.stringify(state.recentExperiences, null, 2),
     });
 
-    const text = await callLLM(prompt, state.systemPrompt, state.agentId);
+    text = await callLLM(prompt, state.systemPrompt, state.agentId);
+
+    // Log the raw response for debugging
+    logger.debug("Raw LLM response for task evaluation:", {
+      agentName: state.name,
+      taskDescription: state.taskDescription,
+      response: text,
+    });
+
     const parsed = parseJSON<{ evaluation: TaskEvaluation }>(text);
 
     logger.debug("Task evaluation:", {
       complete: parsed.evaluation.complete,
       failed: parsed.evaluation.failed,
+      reason: parsed.evaluation.reason,
     });
 
     return parsed.evaluation;
   } catch (error) {
-    logger.error(`Failed to evaluate task progress:`, error);
+    logger.error(`Failed to evaluate task progress:`, {
+      error,
+      agentName: state.name,
+      taskDescription: state.taskDescription,
+      rawResponse: text, // Now text is accessible in catch block
+    });
     return {
       complete: false,
       failed: false,
+      reason: "Error evaluating task progress",
     };
   }
 }
