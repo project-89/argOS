@@ -22,6 +22,8 @@ import { PerceptionSystem2 } from "../systems/PerceptionSystem2";
 import { PromptManager } from "./managers/promptManager";
 import { GoalPlanningSystem } from "../systems/GoalPlanningSystem";
 import { PlanningSystem } from "../systems/PlanningSystem";
+import { createReportingSystem } from "../systems/reporting";
+import { createDiscordReportSystem } from '../systems/discordReportSystem';
 
 // Validate required environment variables
 if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
@@ -61,6 +63,8 @@ const defaultConsciousSystems = [
   ThinkingSystem2.create,
   ActionSystem.create,
   CleanupSystem.create,
+  createReportingSystem,
+  createDiscordReportSystem,
 ];
 
 const defaultSubconsciousSystems = [

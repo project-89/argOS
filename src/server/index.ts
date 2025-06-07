@@ -16,6 +16,7 @@ import { createUser, moveUserToRoom } from "../utils/agent-factory";
 import { findRoomByStringId } from "../utils/queries";
 import { createAuditoryStimulus } from "../factories/stimulusFactory";
 import { StimulusSource, StimulusType } from "../types/stimulus";
+import { initializeDiscord } from "../discord";
 // import { setupBasicConversation } from "../examples/basic-conversation";
 // import { setupEmergentBeing } from "../examples/emergentGemini";
 
@@ -173,6 +174,9 @@ function setupRuntimeEventHandlers(runtime: SimulationRuntime) {
 
 // Set up initial event handlers
 setupRuntimeEventHandlers(runtime);
+
+// Initialize Discord client
+initializeDiscord(runtime);
 
 const wss = new WebSocketServer({ port: 3000 });
 
