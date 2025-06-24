@@ -1,0 +1,123 @@
+{
+  "metadata": {
+    "name": "Small Village",
+    "description": "A simple village with trading",
+    "created": "2025-06-20T05:39:22.485Z",
+    "godAgent": "The Autonomous Creator v2.0",
+    "version": "1.0"
+  },
+  "components": {
+    "Position": {
+      "schema": {
+        "description": "A component that stores the 2D position (x, y) of an entity.",
+        "properties": [
+          {
+            "name": "x",
+            "type": "number",
+            "description": "The x-coordinate of the entity."
+          },
+          {
+            "name": "y",
+            "type": "number",
+            "description": "The y-coordinate of the entity."
+          }
+        ]
+      },
+      "code": "// Generated component: Position",
+      "description": "A component that stores the 2D position (x, y) of an entity."
+    },
+    "VillagerNeeds": {
+      "schema": {
+        "description": "Represents the fundamental physiological needs of a villager, such as hunger and thirst.",
+        "properties": [
+          {
+            "name": "hunger",
+            "type": "number",
+            "description": "The current hunger level of the entity. Typically a value from 0 (starving) to 100 (full)."
+          },
+          {
+            "name": "thirst",
+            "type": "number",
+            "description": "The current thirst level of the entity. Typically a value from 0 (dehydrated) to 100 (quenched)."
+          }
+        ]
+      },
+      "code": "// Generated component: VillagerNeeds",
+      "description": "Represents the fundamental physiological needs of a villager, such as hunger and thirst."
+    },
+    "ResourceSource": {
+      "schema": {
+        "description": "Represents a source of a specific resource, such as a mine, well, or berry bush. It tracks the type, amount, and regeneration of the resource.",
+        "properties": [
+          {
+            "name": "resourceType",
+            "type": "number",
+            "description": "A numerical hash representing the type of resource (e.g., hash of 'water', 'wood', 'berries')."
+          },
+          {
+            "name": "amount",
+            "type": "number",
+            "description": "The current amount of the resource available at this source."
+          },
+          {
+            "name": "capacity",
+            "type": "number",
+            "description": "The maximum amount of the resource this source can hold."
+          },
+          {
+            "name": "regenRate",
+            "type": "number",
+            "description": "The rate at which the resource replenishes per unit of time (e.g., per second or per game tick)."
+          }
+        ]
+      },
+      "code": "// Generated component: ResourceSource",
+      "description": "Represents a source of a specific resource, such as a mine, well, or berry bush. It tracks the type, amount, and regeneration of the resource."
+    }
+  },
+  "relationships": {},
+  "systems": {
+    "MetabolismSystem": {
+      "description": "Simulates the metabolic processes of villagers, causing their hunger and thirst to increase over time.",
+      "requiredComponents": [
+        "VillagerNeeds"
+      ],
+      "code": "function MetabolismSystem(world) {\n  // Query for all entities that have the VillagerNeeds component.\n  // These are the entities whose metabolic state we need to update.\n  const entities = query(world, [VillagerNeeds]);\n  \n  // Define the rate at which hunger and thirst increase per tick.\n  // These values represent a slow, constant drain on the villager's resources.\n  const hungerIncreaseRate = 0.05;\n  const thirstIncreaseRate = 0.07;\n\n  // Process each entity found by the query.\n  for (const eid of entities) {\n    // Decrease the entity's hunger value, simulating the passage of time.\n    // We use Math.max to clamp the value at 0, preventing it from going negative.\n    // A lower hunger value means the villager is more hungry.\n    VillagerNeeds.hunger[eid] = Math.max(0, VillagerNeeds.hunger[eid] - hungerIncreaseRate);\n\n    // Decrease the entity's thirst value.\n    // A lower thirst value means the villager is more thirsty.\n    VillagerNeeds.thirst[eid] = Math.max(0, VillagerNeeds.thirst[eid] - thirstIncreaseRate);\n  }\n}"
+    },
+    "ResourceRegenerationSystem": {
+      "description": "Regenerates resources over time.",
+      "requiredComponents": [
+        "ResourceSource"
+      ],
+      "code": "function ResourceRegenerationSystem(world) {\n  // Query for entities that have a ResourceSource component.\n  const entities = query(world, [ResourceSource]);\n  \n  // Process each resource source entity.\n  for (const eid of entities) {\n    // Only regenerate if the current amount is less than the capacity.\n    if (ResourceSource.amount[eid] < ResourceSource.capacity[eid]) {\n      // Calculate the new resource amount by adding the regeneration rate.\n      const newAmount = ResourceSource.amount[eid] + ResourceSource.regenRate[eid];\n      \n      // Update the resource amount, clamping it to the maximum capacity.\n      ResourceSource.amount[eid] = Math.min(newAmount, ResourceSource.capacity[eid]);\n    }\n  }\n}"
+    },
+    "HarvestingSystem": {
+      "description": "Allows villagers to harvest resources from resource sources.",
+      "requiredComponents": [
+        "Position",
+        "VillagerNeeds"
+      ],
+      "code": "function HarvestingSystem(world) {\n  // Define constants for the system's behavior.\n  // This makes the system easier to tune.\n  const HARVEST_AMOUNT = 10;\n  const FOOD_RESOURCE_TYPE = 0; // Example: 0 represents food\n  const WOOD_RESOURCE_TYPE = 1; // Example: 1 represents wood\n\n  // Query for entities that can act (villagers) and entities that can be acted upon (resources).\n  // A villager is defined by having Position, VillagerNeeds, and an Inventory.\n  // A resource is defined by having a Position and a ResourceSource component.\n  const villagerQuery = query(world, [Position, VillagerNeeds, Inventory]);\n  const resourceQuery = query(world, [Position, ResourceSource]);\n\n  // Process each villager entity.\n  for (const vid of villagerQuery) {\n    // For each villager, check against all available resource sources.\n    // Note: For very large worlds, this nested loop could be optimized with a spatial hash grid.\n    for (const rid of resourceQuery) {\n      // Check if the villager and the resource are at the exact same coordinates.\n      if (Position.x[vid] === Position.x[rid] && Position.y[vid] === Position.y[rid]) {\n        \n        const resourceAmount = ResourceSource.amount[rid];\n        const resourceType = ResourceSource.type[rid];\n\n        // Proceed only if the resource has a positive amount to give.\n        if (resourceAmount > 0) {\n          // Determine the actual amount to transfer: either the standard harvest amount\n          // or the remaining amount of the resource, whichever is smaller.\n          const amountToTransfer = Math.min(resourceAmount, HARVEST_AMOUNT);\n\n          // Decrease the amount in the resource source.\n          ResourceSource.amount[rid] -= amountToTransfer;\n\n          // Update the villager's inventory and needs based on the type of resource harvested.\n          // This assumes the VillagerNeeds component tracks how much of a resource is desired,\n          // and the Inventory component tracks how much is currently held.\n          switch (resourceType) {\n            case FOOD_RESOURCE_TYPE:\n              if (VillagerNeeds.food[vid] > 0) {\n                Inventory.food[vid] += amountToTransfer;\n                // Reduce the villager's \"need\" for this resource, ensuring it doesn't go below zero.\n                VillagerNeeds.food[vid] = Math.max(0, VillagerNeeds.food[vid] - amountToTransfer);\n              }\n              break;\n            case WOOD_RESOURCE_TYPE:\n              if (VillagerNeeds.wood[vid] > 0) {\n                Inventory.wood[vid] += amountToTransfer;\n                VillagerNeeds.wood[vid] = Math.max(0, VillagerNeeds.wood[vid] - amountToTransfer);\n              }\n              break;\n          }\n\n          // The villager has successfully harvested from one source this tick.\n          // We break the inner loop to prevent harvesting from multiple sources in the same spot\n          // and to move on to the next villager.\n          break;\n        }\n      }\n    }\n  }\n}"
+    }
+  },
+  "entities": [
+    {
+      "id": 1,
+      "components": {
+        "Position": {},
+        "VillagerNeeds": {},
+        "ResourceSource": {}
+      }
+    }
+  ],
+  "relationshipInstances": [],
+  "runtime": {
+    "defaultSystems": [
+      "MetabolismSystem",
+      "ResourceRegenerationSystem",
+      "HarvestingSystem"
+    ],
+    "tickRate": 60,
+    "maxEntities": 10000
+  }
+}

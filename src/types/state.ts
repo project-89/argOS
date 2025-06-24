@@ -96,7 +96,7 @@ export interface AgentState {
   lastAction?: ActionResultType;
   timeSinceLastAction: number;
   thoughtChain: Array<{
-    type: "perception" | "thought" | "action" | "result";
+    type: "perception" | "thought" | "action" | "result" | "reflection";
     content: string;
     timestamp: number;
   }>;

@@ -16,12 +16,18 @@ import { IActionManager } from "./managers/IActionManager";
 import { ActionManager } from "./managers/ActionManager";
 import { RoomSystem } from "../systems/RoomSystem";
 import { ThinkingSystem2 } from "../systems/ThinkingSystem2";
+import { ThinkingSystem3 } from "../systems/ThinkingSystem3";
+import { ReasoningSystem } from "../systems/ReasoningSystem";
 import { ActionSystem } from "../systems/ActionSystem";
 import { CleanupSystem } from "../systems/CleanupSystem";
 import { PerceptionSystem2 } from "../systems/PerceptionSystem2";
+import { PerceptionSystem3 } from "../systems/PerceptionSystem3";
 import { PromptManager } from "./managers/promptManager";
 import { GoalPlanningSystem } from "../systems/GoalPlanningSystem";
 import { PlanningSystem } from "../systems/PlanningSystem";
+import { ActionSequenceSystem } from "../systems/ActionSequenceSystem";
+import { MetaCognitionSystem } from "../systems/MetaCognitionSystem";
+import { AttentionSystem } from "../systems/AttentionSystem";
 
 // Validate required environment variables
 if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
@@ -57,8 +63,10 @@ export interface RuntimeConfig {
 // Define default system configurations
 const defaultConsciousSystems = [
   RoomSystem.create,
-  PerceptionSystem2.create,
-  ThinkingSystem2.create,
+  PerceptionSystem3.create,  // Enhanced perception with pattern detection
+  AttentionSystem.create,   // Filter perception based on salience
+  ReasoningSystem.create,   // Deep reasoning when needed
+  ThinkingSystem3.create,   // Enhanced thinking with working memory
   ActionSystem.create,
   CleanupSystem.create,
 ];
@@ -66,6 +74,8 @@ const defaultConsciousSystems = [
 const defaultSubconsciousSystems = [
   GoalPlanningSystem.create,
   PlanningSystem.create,
+  ActionSequenceSystem.create,
+  MetaCognitionSystem.create,
 ];
 
 const defaultUnconsciousSystems: SystemFactory[] = [];
@@ -219,6 +229,10 @@ export class SimulationRuntime extends EventEmitter {
 
   getActionManager(): IActionManager {
     return this.actionManager;
+  }
+
+  getPromptManager(): PromptManager {
+    return this.promptManager;
   }
 
   // Runtime control methods

@@ -4,7 +4,7 @@ import { createComponent } from "./createComponent";
 export const ThoughtEntrySchema = z.object({
   id: z.number(),
   timestamp: z.number(),
-  type: z.enum(["perception", "thought", "action", "result"]),
+  type: z.enum(["perception", "thought", "action", "result", "reflection"]),
   content: z.string(),
   context: z
     .object({

@@ -4,6 +4,7 @@ import * as spawnAgent from "./spawnAgent";
 import * as runCommand from "./runCommand";
 import * as think from "./think";
 import * as reflect from "./reflect";
+import * as observe from "./observe";
 
 export const actions = {
   speak,
@@ -12,6 +13,7 @@ export const actions = {
   runCommand,
   think,
   reflect,
+  observe,
 };
 
 export const actionStrings = Object.keys(actions);
@@ -24,4 +26,5 @@ export const availableTools = [
   runCommand.action,
   think.action,
   reflect.action,
+  observe.action,
 ];

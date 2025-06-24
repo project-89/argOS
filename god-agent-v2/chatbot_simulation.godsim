@@ -1,0 +1,319 @@
+{
+  "metadata": {
+    "description": "Chatbot simulation with 3 NPCs that talk to each other.",
+    "created": "2025-06-24T20:16:06.904Z",
+    "godAgent": "The Autonomous Creator v2.0",
+    "version": "1.0"
+  },
+  "components": {
+    "Name": {
+      "schema": {
+        "description": "Stores the name of an entity.",
+        "properties": [
+          {
+            "name": "value",
+            "type": "number",
+            "description": "Hash of the entity's name string."
+          }
+        ]
+      },
+      "code": "// Generated component: Name",
+      "description": "Stores the name of an entity."
+    },
+    "OutgoingMessage": {
+      "schema": {
+        "description": "Stores the current message an entity wants to send.",
+        "properties": [
+          {
+            "name": "text",
+            "type": "number",
+            "description": "Hash of the message string."
+          },
+          {
+            "name": "target",
+            "type": "eid",
+            "description": "Entity ID of the intended recipient."
+          }
+        ]
+      },
+      "code": "// Generated component: OutgoingMessage",
+      "description": "Stores the current message an entity wants to send."
+    },
+    "ChatHistory": {
+      "schema": {
+        "description": "Stores the chat history of a chat room.",
+        "properties": [
+          {
+            "name": "messages",
+            "type": "array",
+            "description": "Entity IDs of chat messages, ordered from oldest to newest.",
+            "arrayType": "eid"
+          }
+        ]
+      },
+      "code": "// Generated component: ChatHistory",
+      "description": "Stores the chat history of a chat room."
+    },
+    "ChatRoom": {
+      "schema": {
+        "description": "Stores the entity ID of the chat room an entity is currently in.",
+        "properties": [
+          {
+            "name": "roomId",
+            "type": "eid",
+            "description": "Entity ID of the chat room."
+          }
+        ]
+      },
+      "code": "// Generated component: ChatRoom",
+      "description": "Stores the entity ID of the chat room an entity is currently in."
+    },
+    "ChatBot": {
+      "schema": {
+        "description": "Component for ChatBot entities, storing the current message and speaking status.",
+        "properties": [
+          {
+            "name": "message",
+            "type": "number",
+            "description": "Hash of the current message being spoken."
+          },
+          {
+            "name": "speaking",
+            "type": "boolean",
+            "description": "Flag indicating if the chatbot is currently speaking."
+          }
+        ]
+      },
+      "code": "// Generated component: ChatBot",
+      "description": "Component for ChatBot entities, storing the current message and speaking status."
+    },
+    "ChatMessage": {
+      "schema": {
+        "description": "Links a chatbot entity to a message entity it sent.",
+        "properties": [
+          {
+            "name": "chatbot",
+            "type": "eid",
+            "description": "Entity ID of the chatbot that sent the message."
+          },
+          {
+            "name": "message",
+            "type": "eid",
+            "description": "Entity ID of the message that was sent."
+          }
+        ]
+      },
+      "code": "// Generated component: ChatMessage",
+      "description": "Links a chatbot entity to a message entity it sent."
+    }
+  },
+  "relationships": {
+    "ChatbotToMessage": {
+      "schema": {
+        "properties": [
+          {
+            "name": "strength",
+            "type": "number",
+            "description": "A value (0-100) representing the confidence or attribution score of the message to the chatbot. Higher values indicate a stronger certainty that the chatbot sent the message."
+          }
+        ]
+      },
+      "cardinality": "one-to-many",
+      "code": "// Generated relationship: ChatbotToMessage",
+      "description": "Represents the relationship between a chatbot entity and a message entity it sent."
+    }
+  },
+  "systems": {
+    "NPCMessageGenerationSystem": {
+      "description": "Generates messages for NPCs to send to a chat room using LLM.",
+      "requiredComponents": [
+        "Name",
+        "ChatRoom",
+        "ChatHistory",
+        "OutgoingMessage"
+      ],
+      "code": "async function NPCMessageGenerationSystem(world) {\n  const entities = query(world, [Name, ChatRoom, ChatHistory]);\n\n  for (const eid of entities) {\n    // Check if the entity has an outgoing message already. If so, skip this turn.\n    if (hasComponent(world, eid, OutgoingMessage)) {\n      continue;\n    }\n\n    // 1. Gather context from components\n    const name = Name.value[eid];\n    const chatRoomId = ChatRoom.roomId[eid];\n    const chatHistory = ChatHistory.messages[eid];\n\n    // Build chat history string\n    let chatHistoryString = '';\n    if (chatHistory && chatHistory.length > 0) {\n      for (const messageHash of chatHistory) {\n        chatHistoryString += getString(messageHash) + '\\n';\n      }\n    }\n\n    // 2. Build prompt\n    const prompt = `You are an NPC in a chat room. Your name is ${getString(name)}. The current chat history is:\\n${chatHistoryString}\\nGenerate a short message (no more than 20 words) that is relevant to the conversation and contributes to the discussion. Be creative and engaging. Do not include your name in the message.`;\n\n    // 3. Call LLM\n    try {\n      const response = await miniLLM(prompt);\n\n      // Basic response validation - check if response is not empty or undefined\n      if (response && response.trim() !== '') {\n        // Convert the LLM response to a string hash\n        const messageHash = setString(response);\n\n        // Create a new OutgoingMessage component\n        const outgoingMessageEid = addEntity(world);\n        addComponent(world, outgoingMessageEid, OutgoingMessage);\n        OutgoingMessage.text[outgoingMessageEid] = messageHash;\n        OutgoingMessage.target[outgoingMessageEid] = chatRoomId;\n      }\n    } catch (e) {\n      console.error('LLM call failed or response parsing error:', e);\n    }\n  }\n}\n"
+    },
+    "ChatSystem": {
+      "description": "Delivers messages from NPCs to the chat room and updates the chat history.",
+      "requiredComponents": [
+        "OutgoingMessage",
+        "ChatHistory"
+      ],
+      "code": "function ChatSystem(world) {\n  // Query entities with an OutgoingMessage component\n  const entitiesWithMessages = query(world, [OutgoingMessage]);\n\n  // Iterate through each entity with a message\n  for (const eid of entitiesWithMessages) {\n    // Get the message text and target chat room ID\n    const messageText = OutgoingMessage.text[eid];\n    const targetChatRoomId = OutgoingMessage.target[eid];\n\n    // Validate that the target chat room exists\n    if (entityExists(world, targetChatRoomId)) {\n      // Check if the target chat room has a ChatHistory component\n      if (hasComponent(world, targetChatRoomId, ChatHistory)) {\n        // Add the message to the chat history of the target chat room\n        if (ChatHistory.messages[targetChatRoomId] === undefined) {\n          ChatHistory.messages[targetChatRoomId] = []; // Initialize if needed\n        }\n        ChatHistory.messages[targetChatRoomId].push(messageText);\n      } else {\n        console.warn(`Chat room ${targetChatRoomId} does not have a ChatHistory component.`);\n      }\n    } else {\n      console.warn(`Chat room ${targetChatRoomId} does not exist.`);\n    }\n\n    // Remove the OutgoingMessage component from the entity\n    removeComponent(world, eid, OutgoingMessage);\n  }\n}"
+    },
+    "ChatBotSystem": {
+      "description": "This system allows chatbots to send messages to each other.",
+      "requiredComponents": [
+        "ChatBot",
+        "Name",
+        "ChatMessage",
+        "OutgoingMessage"
+      ],
+      "code": "function ChatBotSystem(world) {\n  // Get all chatbots\n  const chatBots = query(world, [ChatBot, Name, ChatMessage, OutgoingMessage]);\n\n  // Iterate through each chatbot\n  for (const eid of chatBots) {\n    // Check if the chatbot is currently speaking\n    if (!ChatBot.speaking[eid]) {\n      // Find a random target chatbot (excluding the current bot)\n      let targetEid;\n      let attempts = 0;\n      do {\n        const allChatBots = query(world, [ChatBot, Name, ChatMessage, OutgoingMessage]);\n        if (allChatBots.length <= 1) {\n          // Only one bot, no target possible\n          targetEid = undefined;\n          break;\n        }\n\n        targetEid = allChatBots[Math.floor(Math.random() * allChatBots.length)];\n        attempts++;\n\n        // Prevent infinite loops if something goes wrong\n        if (attempts > 100) {\n          targetEid = undefined;\n          break;\n        }\n      } while (targetEid === eid);\n\n      // If a target bot was found, send a message\n      if (targetEid !== undefined) {\n        // Generate a simple message (using the target's name as the message content)\n        const messageContent = Name.value[targetEid]; // Simple message\n\n        // Create a new entity for the message\n        const messageEntity = addEntity(world);\n        addComponent(world, messageEntity, OutgoingMessage);\n\n        // Set the properties of the OutgoingMessage component\n        OutgoingMessage.text[messageEntity] = messageContent;\n        OutgoingMessage.target[messageEntity] = targetEid;\n\n        // Create a relationship between the sender and the message\n        addComponent(world, eid, ChatMessage);\n        ChatMessage.chatbot[eid] = eid;\n        ChatMessage.message[eid] = messageEntity\n\n        // Set speaking to true so the bot doesn't spam messages every frame\n        ChatBot.speaking[eid] = true;\n      }\n    }\n  }\n}"
+    },
+    "DisplayOutgoingMessageSystem": {
+      "description": "This system displays the messages sent by the chatbots.",
+      "requiredComponents": [
+        "ChatMessage",
+        "Name",
+        "OutgoingMessage"
+      ],
+      "code": "function DisplayOutgoingMessageSystem(world) {\n  // Query entities that have the ChatMessage component\n  const chatMessageEntities = query(world, [ChatMessage, Name, OutgoingMessage]);\n\n  // Iterate through the entities and display their messages\n  for (const eid of chatMessageEntities) {\n    const senderEid = ChatMessage.chatbot[eid];\n    // Check if the message exists before attempting to display it\n    if (OutgoingMessage.text[senderEid] !== undefined) {\n      // Display the message (replace with your actual display logic)\n      console.log(`${getString(Name.value[senderEid])} says: ${getString(OutgoingMessage.text[senderEid])}`);\n\n      // You might want to remove the OutgoingMessage component after displaying it,\n      // depending on your game logic.  For example:\n      // removeComponent(world, eid, OutgoingMessage);\n    } else {\n      console.warn(`Entity ${eid} has an ChatMessage component but the message text is undefined.`);\n    }\n  }\n}\n"
+    },
+    "ChatBotMessagingSystem": {
+      "description": "This system allows chatbots to send messages to each other.",
+      "requiredComponents": [
+        "ChatBot",
+        "Name",
+        "ChatMessage",
+        "OutgoingMessage"
+      ],
+      "code": "function ChatBotMessagingSystem(world) {\n  // Query for chatbots that are not currently speaking and have a name\n  const idleBots = query(world, [ChatBot, Name]);\n\n  for (const senderEid of idleBots) {\n    // Check if the bot is not speaking\n    if (!ChatBot.speaking[senderEid]) {\n      // Find other chatbots to send a message to\n      const allBots = query(world, [ChatBot, Name]);\n\n      // Exclude the sender from the list of potential recipients\n      const recipientBots = allBots.filter(eid => eid !== senderEid);\n\n      // If there are other bots to send messages to\n      if (recipientBots.length > 0) {\n        // Pick a random recipient\n        const recipientEid = recipientBots[Math.floor(Math.random() * recipientBots.length)];\n\n        // Generate a simple message hash (replace with actual message generation logic if needed)\n        const messageHash = Math.floor(Math.random() * 1000);\n\n        // Create a new message entity\n        const messageEid = addEntity(world);\n\n        // Add ChatMessage component to link sender and message\n        addComponent(world, messageEid, ChatMessage);\n        ChatMessage.chatbot[messageEid] = senderEid;\n        ChatMessage.message[messageEid] = messageHash;\n\n\n        // Add OutgoingMessage component to the sender (removed, message is a new entity)\n        addComponent(world, senderEid, OutgoingMessage);\n        OutgoingMessage.text[senderEid] = messageHash;\n        OutgoingMessage.target[senderEid] = recipientEid;\n\n\n        // Set the sender as speaking\n        ChatBot.speaking[senderEid] = true;\n        ChatBot.message[senderEid] = messageHash;  // Store the message hash for later use if needed\n\n        // Optionally, set a timer to stop speaking after a delay (not implemented here)\n      }\n    } else {\n      // If the bot is speaking, do nothing for now.\n      // Could potentially add logic to handle message completion or timeouts here.\n    }\n  }\n}"
+    }
+  },
+  "entities": [
+    {
+      "id": 1,
+      "components": {
+        "Name": {},
+        "OutgoingMessage": {},
+        "ChatHistory": {},
+        "ChatRoom": {},
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    },
+    {
+      "id": 2,
+      "components": {
+        "Name": {},
+        "OutgoingMessage": {},
+        "ChatHistory": {},
+        "ChatRoom": {},
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    },
+    {
+      "id": 3,
+      "components": {
+        "Name": {},
+        "OutgoingMessage": {},
+        "ChatHistory": {},
+        "ChatRoom": {},
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    },
+    {
+      "id": 4,
+      "components": {
+        "Name": {},
+        "OutgoingMessage": {},
+        "ChatHistory": {},
+        "ChatRoom": {},
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    },
+    {
+      "id": 5,
+      "components": {
+        "Name": {},
+        "OutgoingMessage": {},
+        "ChatHistory": {},
+        "ChatRoom": {},
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    },
+    {
+      "id": 6,
+      "components": {
+        "Name": {},
+        "OutgoingMessage": {},
+        "ChatHistory": {},
+        "ChatRoom": {},
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    },
+    {
+      "id": 7,
+      "components": {
+        "Name": {
+          "value": 200
+        },
+        "OutgoingMessage": {},
+        "ChatHistory": {},
+        "ChatRoom": {
+          "roomId": 8
+        },
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    },
+    {
+      "id": 8,
+      "components": {
+        "Name": {
+          "value": 400
+        },
+        "OutgoingMessage": {},
+        "ChatHistory": {},
+        "ChatRoom": {},
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    },
+    {
+      "id": 9,
+      "components": {
+        "Name": {
+          "value": 300
+        },
+        "OutgoingMessage": {
+          "text": 2,
+          "target": 0
+        },
+        "ChatHistory": {},
+        "ChatRoom": {
+          "roomId": 8
+        },
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    },
+    {
+      "id": 10,
+      "components": {
+        "Name": {
+          "value": 100
+        },
+        "OutgoingMessage": {
+          "text": 0,
+          "target": 0
+        },
+        "ChatHistory": {},
+        "ChatRoom": {
+          "roomId": 8
+        },
+        "ChatBot": {},
+        "ChatMessage": {}
+      }
+    }
+  ],
+  "relationshipInstances": [],
+  "runtime": {
+    "defaultSystems": [
+      "NPCMessageGenerationSystem",
+      "ChatSystem",
+      "ChatBotSystem",
+      "DisplayOutgoingMessageSystem",
+      "ChatBotMessagingSystem"
+    ],
+    "tickRate": 60,
+    "maxEntities": 10000
+  }
+}

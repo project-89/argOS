@@ -21,6 +21,10 @@ import {
   Goal,
   Plan,
   Thought,
+  ActionMemory,
+  WorkingMemory,
+  Attention,
+  ReasoningContext,
 } from "../components";
 import { AgentConfig } from "../types/agent";
 import { logger } from "../utils/logger";
@@ -213,6 +217,75 @@ export function createAgent(
       entries: [], // Thought chain entries
       lastEntryId: 0,
       lastUpdate: Date.now(),
+    })
+  );
+
+  // Add action memory component
+  addComponent(
+    world,
+    eid,
+    set(ActionMemory, {
+      sequences: [], // Completed action sequences
+      currentSequence: undefined, // Currently executing sequence
+      lastUpdate: Date.now(),
+    })
+  );
+
+  // Add cognitive components for enhanced reasoning
+  addComponent(
+    world,
+    eid,
+    set(WorkingMemory, {
+      items: [],
+      capacity: 20,
+      lastStimuliHash: undefined,
+      lastSignificantChange: undefined,
+      stableStateCycles: undefined,
+    })
+  );
+
+  addComponent(
+    world,
+    eid,
+    set(Attention, {
+      focus_stack: [],
+      capacity: 5,
+      filters: {
+        include_types: [],
+        exclude_types: [],
+        min_relevance: 0.3,
+        min_urgency: 0.2,
+      },
+      mode: "scanning",
+      history: [],
+      salience_thresholds: {
+        novelty: 0.5,
+        relevance: 0.6,
+        social: 0.7,
+        threat: 0.8,
+      },
+      metrics: {
+        focus_switches: 0,
+        average_focus_duration: 0,
+        missed_important: 0,
+        distraction_count: 0,
+      },
+      last_update: Date.now(),
+    })
+  );
+
+  addComponent(
+    world,
+    eid,
+    set(ReasoningContext, {
+      current_chain: [],
+      reasoning_threads: [],
+      quality_history: [],
+      meta_observations: [],
+      mode: "reactive",
+      min_stages_required: 3,
+      time_spent_reasoning: 0,
+      last_deep_reasoning: Date.now(),
     })
   );
 

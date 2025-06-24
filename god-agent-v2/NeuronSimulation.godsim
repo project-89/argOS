@@ -1,0 +1,105 @@
+{
+  "metadata": {
+    "description": "A simple simulation of two connected neurons",
+    "created": "2025-06-23T17:06:31.562Z",
+    "godAgent": "The Autonomous Creator v2.0",
+    "version": "1.0"
+  },
+  "components": {
+    "Neuron": {
+      "schema": {
+        "description": "Represents a neuron with its electrical properties.",
+        "properties": [
+          {
+            "name": "potential",
+            "type": "number",
+            "description": "Membrane potential of the neuron (mV)."
+          },
+          {
+            "name": "threshold",
+            "type": "number",
+            "description": "Threshold potential for firing (mV)."
+          },
+          {
+            "name": "restingPotential",
+            "type": "number",
+            "description": "Resting membrane potential (mV)."
+          },
+          {
+            "name": "sodiumConductance",
+            "type": "number",
+            "description": "Conductance of sodium channels."
+          },
+          {
+            "name": "potassiumConductance",
+            "type": "number",
+            "description": "Conductance of potassium channels."
+          },
+          {
+            "name": "leakConductance",
+            "type": "number",
+            "description": "Leak conductance."
+          },
+          {
+            "name": "isFiring",
+            "type": "boolean",
+            "description": "Whether the neuron is currently firing."
+          },
+          {
+            "name": "lastFired",
+            "type": "number",
+            "description": "Time since last firing (ms)."
+          }
+        ]
+      },
+      "code": "// Generated component: Neuron",
+      "description": "Represents a neuron with its electrical properties."
+    }
+  },
+  "relationships": {
+    "SynapticConnection": {
+      "schema": {
+        "properties": [
+          {
+            "name": "target",
+            "type": "number",
+            "description": "Entity ID of the post-synaptic neuron this connection points to."
+          },
+          {
+            "name": "strength",
+            "type": "number",
+            "description": "Strength of the synaptic connection, ranging from 0 (weak) to 100 (strong)."
+          }
+        ]
+      },
+      "cardinality": "one-to-many",
+      "code": "// Generated relationship: SynapticConnection",
+      "description": "Represents a synaptic connection between a pre-synaptic neuron and a post-synaptic neuron, with a connection strength."
+    }
+  },
+  "systems": {
+    "NeuronSimulationSystem": {
+      "description": "Simulates the electrical activity of a neuron, updating its membrane potential and checking for firing events.",
+      "requiredComponents": [
+        "Neuron"
+      ],
+      "code": "async function NeuronSimulationSystem(world) {\n  // Query for entities with the Neuron component\n  const entities = query(world, [Neuron]);\n\n  // Process each entity\n  for (const eid of entities) {\n    // Get the neuron's properties\n    let potential = Neuron.potential[eid];\n    const threshold = Neuron.threshold[eid];\n\n    // Simulate synaptic input\n    let synapticCurrent = 0.0;\n\n    // Iterate through incoming synaptic connections\n    if (world.relationships && world.relationships[eid]) {\n      const incomingSynapses = world.relationships[eid];\n      if (incomingSynapses) {\n        for (let i = 0; i < incomingSynapses.length; i++) {\n          const synapse = incomingSynapses[i];\n          if (synapse.type === \"SynapticConnection\") {\n            const sourceNeuronId = synapse.source;\n            // Check if sourceNeuronId exists and is a valid index\n            if (Neuron.isFiring[sourceNeuronId] !== undefined) { // Changed to check if sourceNeuronId is a valid index in Neuron.isFiring array\n              if (Neuron.isFiring[sourceNeuronId]) {\n                synapticCurrent += synapse.properties.strength;\n              }\n            }\n          }\n        }\n      }\n    }\n\n    // Simulate external input (replace with actual input later)\n    const externalInput = eid === 4 ? 20.0 : 1.0; // Increased input to Neuron1\n    const inputCurrent = synapticCurrent + externalInput;\n\n    // Update membrane potential (simplified leaky integrate-and-fire model)\n    const restingPotential = Neuron.restingPotential[eid];\n    const sodiumConductance = Neuron.sodiumConductance[eid];\n    const potassiumConductance = Neuron.potassiumConductance[eid];\n    const leakConductance = Neuron.leakConductance[eid];\n\n    const capacitance = 1.0; // Membrane capacitance\n    const dt = 0.1; // Time step\n\n    // Calculate the change in membrane potential\n    const dV = (inputCurrent - leakConductance * (potential - restingPotential) - sodiumConductance * (potential - restingPotential) - potassiumConductance * (potential - restingPotential)) / capacitance;\n\n    potential += dV * dt;\n\n    // Check for firing\n    let isFiring = false;\n    if (potential >= threshold) {\n      isFiring = true;\n      potential = restingPotential; // Reset potential after firing\n      Neuron.lastFired[eid] = 0.0;\n    } else {\n      Neuron.lastFired[eid] += dt;\n    }\n\n    // Update the neuron's properties\n    Neuron.potential[eid] = potential;\n    Neuron.isFiring[eid] = isFiring;\n  }\n}"
+    }
+  },
+  "entities": [
+    {
+      "id": 1,
+      "components": {
+        "Neuron": {}
+      }
+    }
+  ],
+  "relationshipInstances": [],
+  "runtime": {
+    "defaultSystems": [
+      "NeuronSimulationSystem"
+    ],
+    "tickRate": 60,
+    "maxEntities": 10000
+  }
+}

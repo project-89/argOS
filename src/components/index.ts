@@ -1,4 +1,5 @@
 import { Action, ActionComponent } from "./Action";
+import { ActionMemory, ActionMemoryComponent } from "./ActionMemory";
 import { Cleanup, CleanupComponent } from "./Cleanup";
 import { Agent, AgentComponent } from "./Agent";
 import { Appearance, AppearanceComponent } from "./Appearance";
@@ -12,9 +13,15 @@ import { Stimulus, StimulusComponent } from "./Stimulus";
 import { WorkingMemory, WorkingMemoryComponent } from "./WorkingMemory";
 import { ProcessingState, ProcessingStateComponent } from "./ProcessingState";
 import { Thought, ThoughtComponent } from "./Thought";
+import { ReasoningContext, ReasoningContextComponent } from "./ReasoningContext";
+import { Attention, AttentionComponent } from "./Attention";
+
+// Export createComponent function
+export { createComponent } from "./createComponent";
 
 // Export all components
 export * from "./Action";
+export * from "./ActionMemory";
 export * from "./Agent";
 export * from "./Appearance";
 export * from "./Goals";
@@ -28,9 +35,12 @@ export * from "./Cleanup";
 export * from "./WorkingMemory";
 export * from "./ProcessingState";
 export * from "./Thought";
+export * from "./ReasoningContext";
+export * from "./Attention";
 // Central array of all component definitions
 export const ALL_COMPONENTS = [
   ActionComponent,
+  ActionMemoryComponent,
   AgentComponent,
   AppearanceComponent,
   GoalComponent,
@@ -42,12 +52,15 @@ export const ALL_COMPONENTS = [
   CleanupComponent,
   WorkingMemoryComponent,
   ProcessingStateComponent,
-  Thought,
+  ThoughtComponent,
+  ReasoningContextComponent,
+  AttentionComponent,
 ] as const;
 
 // Export the actual component instances for direct use
 export {
   Action,
+  ActionMemory,
   Agent,
   Appearance,
   Goal,
@@ -61,4 +74,6 @@ export {
   WorkingMemory,
   ProcessingState,
   Thought,
+  ReasoningContext,
+  Attention,
 };

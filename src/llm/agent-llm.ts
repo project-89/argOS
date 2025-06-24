@@ -4,6 +4,8 @@ import {
   gemini2FlashModel,
   geminiProModel,
   haikuModel,
+  gemini25Pro,
+  gemini25Flash,
   // claude35SonnetModel,
 } from "../config/ai-config";
 import { EXTRACT_EXPERIENCES, PROCESS_STIMULUS } from "../templates";
@@ -12,7 +14,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { llmLogger } from "../utils/llm-logger";
 import { logger } from "../utils/logger";
 import { parseJSON } from "../utils/json";
-import { GENERATE_THOUGHT_SIMPLE } from "../templates/generate-thought";
+import { GENERATE_THOUGHT, GENERATE_THOUGHT_SIMPLE } from "../templates/generate-thought";
 import { World, addComponent, query, hasComponent } from "bitecs";
 import {
   Agent,
@@ -38,12 +40,26 @@ import { EVALUATE_TASK_PROGRESS } from "../templates/evaluate-task-progress";
 import { EVALUATE_PLAN_MODIFICATIONS } from "../templates/evaluate-plan-modifications";
 import { EXTRACT_EXPERIENCES_SIMPLE } from "../templates/extract-experiences";
 import PROCESS_PERCEPTIONS from "../templates/process-perceptions";
+import { GENERATE_REFLECTION } from "../templates/generate-reflection";
+import { ActionSequence } from "../components/ActionMemory";
 
 export interface ThoughtResponse {
+  reasoning_process?: {
+    connecting_thought: string;
+    current_analysis: string;
+    key_insights: string[];
+    uncertainties: string[];
+    goal_relevance: string;
+  };
   thought: string;
+  action_decision?: {
+    should_act: boolean;
+    reasoning: string;
+  };
   action?: {
     tool: string;
     parameters: Record<string, any>;
+    expected_outcome?: string;
     reasoning: string;
   };
   appearance?: {
@@ -52,6 +68,13 @@ export interface ThoughtResponse {
     bodyLanguage?: string;
     currentAction?: string;
     socialCues?: string;
+    emotionalState?: string;
+  };
+  confidence?: number;
+  reasoning_quality?: {
+    depth: number;
+    coherence: number;
+    goal_alignment: number;
   };
 }
 
@@ -70,9 +93,11 @@ async function callLLM(
     const { text } = await generateText({
       // model: haikuModel,
       // model: claude35SonnetModel,
-      model: gemini2FlashModel,
+      // model: gemini2FlashModel,
+      // model: gemini25Pro,
       // model: geminiProModel,
       // model: geminiFlashModel,
+      model: gemini25Flash,
       temperature: 0.7,
       prompt,
       system: systemPrompt,
@@ -106,12 +131,19 @@ export function composeFromTemplate(
 }
 
 export async function generateThought(
-  state: AgentState
+  state: AgentState & {
+    reasoningMode?: string;
+    reasoningChain?: any[];
+    workingMemory?: any[];
+    previousInsights?: any[];
+  }
 ): Promise<ThoughtResponse> {
   const agentId = state.name;
 
   try {
-    const prompt = composeFromTemplate(GENERATE_THOUGHT_SIMPLE, {
+    // Use enhanced prompt if we have reasoning context, otherwise use simple
+    const template = state.reasoningMode ? GENERATE_THOUGHT : GENERATE_THOUGHT_SIMPLE;
+    const prompt = composeFromTemplate(template, {
       ...state,
       perceptions: {
         narrative: state.perceptions.narrative,
@@ -160,10 +192,14 @@ export async function generateThought(
       }
 
       return {
+        reasoning_process: response.reasoning_process,
         thought:
           response.thought || "I have nothing to think about at the moment.",
+        action_decision: response.action_decision,
         action: response.action,
         appearance: response.appearance,
+        confidence: (response as any).confidence,
+        reasoning_quality: (response as any).reasoning_quality,
       };
     } catch (parseError) {
       llmLogger.logError(
@@ -679,7 +715,7 @@ export interface ProcessPerceptionsState {
     metadata?: Record<string, any>;
   }>;
   recentThoughtChain: Array<{
-    type: "perception" | "thought" | "action" | "result";
+    type: "perception" | "thought" | "action" | "result" | "reflection";
     content: string;
     timestamp: number;
   }>;
@@ -757,6 +793,84 @@ export async function processPerceptions(
         keyObservations: [],
         potentialImplications: [],
       },
+    };
+  }
+}
+
+export interface ReflectionResponse {
+  reflection: string;
+  success: boolean;
+  effectiveness?: number;
+  tags?: string[];
+  keyInsights?: string[];
+}
+
+export interface GenerateReflectionState {
+  agentId: string;
+  agentName: string;
+  sequence: ActionSequence;
+  goals: GoalType[];
+  plans: SinglePlanType[];
+}
+
+/**
+ * Generates a reflection on a completed action sequence
+ */
+export async function generateReflection(
+  state: GenerateReflectionState
+): Promise<ReflectionResponse> {
+  const { agentId, agentName, sequence, goals, plans } = state;
+
+  try {
+    const prompt = composeFromTemplate(GENERATE_REFLECTION, {
+      agentName,
+      sequence: JSON.stringify(sequence, null, 2),
+      goals: JSON.stringify(goals, null, 2),
+      plans: JSON.stringify(plans, null, 2),
+    });
+
+    // Get LLM response
+    const text = await callLLM(
+      prompt,
+      "You are a reflective analysis system for an autonomous agent.",
+      agentId
+    );
+
+    try {
+      // Parse and validate response
+      const cleanText = text.replace(/```json\n|\n```/g, "").trim();
+      const response = JSON.parse(cleanText) as ReflectionResponse;
+
+      return {
+        reflection: response.reflection || "No reflection generated.",
+        success:
+          typeof response.success === "boolean" ? response.success : false,
+        effectiveness: response.effectiveness,
+        tags: response.tags || [],
+        keyInsights: response.keyInsights || [],
+      };
+    } catch (parseError) {
+      llmLogger.logError(
+        agentId,
+        parseError,
+        "Failed to parse reflection response"
+      );
+
+      // Return a basic reflection if parsing fails
+      return {
+        reflection:
+          text ||
+          "I completed a sequence of actions but couldn't properly reflect on them.",
+        success: false,
+      };
+    }
+  } catch (error) {
+    console.error("Error in reflection generation", error);
+    llmLogger.logError(agentId, error, "Error in reflection generation");
+
+    return {
+      reflection: "I'm unable to reflect on my actions at this time.",
+      success: false,
     };
   }
 }

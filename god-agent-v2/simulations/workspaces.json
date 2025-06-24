@@ -1,0 +1,16 @@
+[
+  {
+    "id": "sim_mc4as0c8bbt41qhncje",
+    "name": "Small Village",
+    "description": "A simple village with trading",
+    "created": "2025-06-20T04:16:05.816Z",
+    "modified": "2025-06-20T05:39:22.487Z",
+    "filePath": "simulations/sim_mc4as0c8bbt41qhncje.godsim",
+    "status": "working",
+    "stats": {
+      "components": 3,
+      "systems": 3,
+      "entities": 0
+    }
+  }
+]

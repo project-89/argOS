@@ -16,7 +16,7 @@ import { createUser, moveUserToRoom } from "../utils/agent-factory";
 import { findRoomByStringId } from "../utils/queries";
 import { createAuditoryStimulus } from "../factories/stimulusFactory";
 import { StimulusSource, StimulusType } from "../types/stimulus";
-// import { setupBasicConversation } from "../examples/basic-conversation";
+import { setupBasicConversation } from "../examples/basic-conversation";
 // import { setupEmergentBeing } from "../examples/emergentGemini";
 
 // Track user connections with Map

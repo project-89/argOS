@@ -1,0 +1,506 @@
+{
+  "metadata": {
+    "name": "work-room-chat",
+    "description": "User-created simulation",
+    "created": "2025-06-24T05:42:53.224Z",
+    "godAgent": "The Autonomous Creator v2.0",
+    "version": "1.0"
+  },
+  "components": {
+    "Name": {
+      "schema": {
+        "description": "Stores the name of an entity as a string hash.",
+        "properties": [
+          {
+            "name": "value",
+            "type": "number",
+            "description": "Hash of the entity's name."
+          }
+        ]
+      },
+      "code": "// Generated component: Name",
+      "description": "Stores the name of an entity as a string hash."
+    },
+    "NextMessageTime": {
+      "schema": {
+        "description": "Stores the timestamp when an entity is allowed to send the next message.",
+        "properties": [
+          {
+            "name": "time",
+            "type": "number",
+            "description": "Timestamp (in milliseconds) when the entity can send the next message."
+          }
+        ]
+      },
+      "code": "// Generated component: NextMessageTime",
+      "description": "Stores the timestamp when an entity is allowed to send the next message."
+    },
+    "InChatRoom": {
+      "schema": {
+        "description": "Indicates that an entity is currently in a chat room.",
+        "properties": [
+          {
+            "name": "roomId",
+            "type": "eid",
+            "description": "The ID of the chat room the entity is currently in."
+          },
+          {
+            "name": "joinedAt",
+            "type": "number",
+            "description": "Timestamp when the entity joined the chat room."
+          }
+        ]
+      },
+      "code": "// Generated component: InChatRoom",
+      "description": "Indicates that an entity is currently in a chat room."
+    },
+    "ChatMessageHistory": {
+      "schema": {
+        "description": "Stores chat message history for an entity. Uses parallel arrays for message hashes and timestamps.",
+        "properties": [
+          {
+            "name": "messages",
+            "type": "array",
+            "description": "Array of message hashes (string IDs).",
+            "arrayType": "number"
+          },
+          {
+            "name": "timestamps",
+            "type": "array",
+            "description": "Array of timestamps for each message.",
+            "arrayType": "number"
+          }
+        ]
+      },
+      "code": "// Generated component: ChatMessageHistory",
+      "description": "Stores chat message history for an entity. Uses parallel arrays for message hashes and timestamps."
+    },
+    "ChatMessage": {
+      "schema": {
+        "description": "Component for storing chat messages associated with entities.",
+        "properties": [
+          {
+            "name": "text",
+            "type": "number",
+            "description": "Hash of the message text."
+          },
+          {
+            "name": "timestamp",
+            "type": "number",
+            "description": "Timestamp of the message."
+          }
+        ]
+      },
+      "code": "// Generated component: ChatMessage",
+      "description": "Component for storing chat messages associated with entities."
+    },
+    "ChatLog": {
+      "schema": {
+        "description": "Component for storing chat log messages. Uses parallel arrays for message hashes and timestamps.",
+        "properties": [
+          {
+            "name": "messages",
+            "type": "array",
+            "description": "Array of message hashes (strings).",
+            "arrayType": "number"
+          },
+          {
+            "name": "timestamps",
+            "type": "array",
+            "description": "Array of timestamps for each message.",
+            "arrayType": "number"
+          },
+          {
+            "name": "senders",
+            "type": "array",
+            "description": "Array of entity IDs of the senders for each message.",
+            "arrayType": "eid"
+          }
+        ]
+      },
+      "code": "// Generated component: ChatLog",
+      "description": "Component for storing chat log messages. Uses parallel arrays for message hashes and timestamps."
+    },
+    "ChatHistory": {
+      "schema": {
+        "description": "Stores the history of chat messages for a chat room entity.",
+        "properties": [
+          {
+            "name": "messages",
+            "type": "array",
+            "description": "Array of message hashes (string IDs).",
+            "arrayType": "number"
+          }
+        ]
+      },
+      "code": "// Generated component: ChatHistory",
+      "description": "Stores the history of chat messages for a chat room entity."
+    },
+    "MessageContent": {
+      "schema": {
+        "description": "Stores the content hash of a message.",
+        "properties": [
+          {
+            "name": "content",
+            "type": "number",
+            "description": "Hash of the message content string."
+          }
+        ]
+      },
+      "code": "// Generated component: MessageContent",
+      "description": "Stores the content hash of a message."
+    },
+    "WantsToSpeak": {
+      "schema": {
+        "description": "Component to mark an entity as wanting to speak and store the message hash.",
+        "properties": [
+          {
+            "name": "message",
+            "type": "number",
+            "description": "Hash of the message to speak."
+          }
+        ]
+      },
+      "code": "// Generated component: WantsToSpeak",
+      "description": "Component to mark an entity as wanting to speak and store the message hash."
+    }
+  },
+  "relationships": {},
+  "systems": {
+    "NPCMessageSystem": {
+      "description": "Generates chat messages for NPCs using an LLM, considering chat history and NPC personality.",
+      "requiredComponents": [
+        "Name",
+        "ChatMessageHistory",
+        "NextMessageTime",
+        "InChatRoom",
+        "ChatLog",
+        "ChatMessage"
+      ],
+      "code": "async function NPCMessageSystem(world) {\n  const entities = query(world, [Name, ChatMessageHistory, NextMessageTime, InChatRoom, ChatMessage]);\n  const chatLogEntities = query(world, [ChatLog]);\n  const now = Date.now();\n\n  if (chatLogEntities.length === 0) {\n    console.warn(\"No ChatLog entity found!\");\n    return;\n  }\n\n  const chatLogEid = chatLogEntities[0];\n\n  for (const eid of entities) {\n    if (NextMessageTime.time[eid] > now) {\n      continue; // Not time to send a message yet\n    }\n\n    // 1. Gather context from components\n    const name = getString(Name.value[eid]);\n    const chatHistory = ChatMessageHistory.messages[eid] ? ChatMessageHistory.messages[eid].map(getString).join('\\n') : '';\n\n    // 2. Build prompt\n    const llmPrompt = `You are an NPC in a chat room. Your name is ${name}. The current chat history is:\\n${chatHistory}\\nGenerate a new chat message that is relevant to the conversation and reflects your personality. Keep your messages short and engaging. Only respond with the message content.`;\n\n    // 3. Call LLM\n    try {\n      const message = await miniLLM(llmPrompt);\n\n      // 4. Parse and apply response\n      if (message && message.trim() !== '') {\n        const messageHash = setString(message);\n        ChatMessage.text[eid] = messageHash;\n\n        if (!ChatMessageHistory.messages[eid]) {\n          ChatMessageHistory.messages[eid] = [];\n          ChatMessageHistory.timestamps = ChatMessageHistory.timestamps || {};\n          ChatMessageHistory.timestamps[eid] = [];\n        }\n        ChatMessageHistory.messages[eid].push(messageHash);\n        ChatMessageHistory.timestamps[eid].push(now);\n\n        // Limit chat history to prevent excessive prompt size\n        if (ChatMessageHistory.messages[eid].length > 10) {\n          ChatMessageHistory.messages[eid].shift();\n          ChatMessageHistory.timestamps[eid].shift();\n        }\n\n        // Add the message to the ChatLog component\n        if (!ChatLog.messages) {\n            ChatLog.messages = {};\n        }\n        if (!ChatLog.messages[chatLogEid]) {\n          ChatLog.messages[chatLogEid] = [];\n        }\n        if (!ChatLog.senders) {\n            ChatLog.senders = {};\n        }\n        if (!ChatLog.senders[chatLogEid]) {\n            ChatLog.senders[chatLogEid] = [];\n        }\n        if (!ChatLog.timestamps) {\n            ChatLog.timestamps = {};\n        }\n        if (!ChatLog.timestamps[chatLogEid]) {\n            ChatLog.timestamps[chatLogEid] = [];\n        }\n\n        ChatLog.messages[chatLogEid].push(messageHash);\n        ChatLog.senders[chatLogEid].push(eid);\n        ChatLog.timestamps[chatLogEid].push(now);\n\n        // Set next message time (random delay)\n        NextMessageTime.time[eid] = now + 5000 + Math.random() * 10000; // 5-15 second delay\n      } else {\n        console.warn(`NPC ${name} generated an empty message.`);\n        NextMessageTime.time[eid] = now + 3000; // Retry quickly if empty message\n      }\n    } catch (e) {\n      console.error(`LLM error for NPC ${name}:`, e);\n      NextMessageTime.time[eid] = now + 10000; // Retry after 10 seconds on error\n    }\n  }\n}"
+    },
+    "ChatLogDisplaySystem": {
+      "description": "Display the chat log in the console.",
+      "requiredComponents": [
+        "ChatLog",
+        "Name"
+      ],
+      "code": "function ChatLogDisplaySystem(world) {\n  // Query entities that have both ChatLog and Name components\n  const chatLogEntities = query(world, [ChatLog, Name]);\n\n  for (const chatLogEid of chatLogEntities) {\n    // Check if the entity has any messages in the chat log\n    if (ChatLog.messages[chatLogEid]) {\n      // Iterate over each message in the chat log\n      for (let i = 0; i < ChatLog.messages[chatLogEid].length; i++) {\n        // Retrieve the message hash, sender entity ID, and timestamp\n        const messageHash = ChatLog.messages[chatLogEid][i];\n        const senderEid = ChatLog.senders[chatLogEid][i];\n        const timestamp = ChatLog.timestamps[chatLogEid][i];\n\n        // Ensure senderEid is valid before accessing Name.value\n        if (entityExists(world, senderEid) && hasComponent(world, senderEid, Name)) {\n          // Retrieve the message and sender name from their hashes\n          const message = getString(messageHash);\n          const senderName = getString(Name.value[senderEid]);\n\n          // Log the message to the console\n          console.log(`${senderName} (${timestamp}): ${message}`);\n        } else {\n          console.warn(`Invalid senderEid: ${senderEid} or missing Name component for entity ${senderEid}`);\n        }\n      }\n    }\n  }\n}"
+    },
+    "DisplayChatSystem": {
+      "description": "Displays the chat log, retrieving sender names from the Name component.",
+      "requiredComponents": [
+        "ChatLog",
+        "Name"
+      ],
+      "code": "function DisplayChatSystem(world) {\n  // Query entities that have the ChatLog component.\n  const chatLogEntities = query(world, [ChatLog]);\n\n  // Iterate through each entity with the ChatLog component.\n  for (const chatLogEid of chatLogEntities) {\n    // Check if there are any messages in the chat log for this entity.\n    if (ChatLog.messages[chatLogEid]) {\n      // Iterate through each message in the chat log.\n      for (let i = 0; i < ChatLog.messages[chatLogEid].length; i++) {\n        // Get the message hash, sender entity ID, and timestamp for the current message.\n        const messageHash = ChatLog.messages[chatLogEid][i];\n        const senderEid = ChatLog.senders[chatLogEid][i];\n        const timestamp = ChatLog.timestamps[chatLogEid][i];\n\n        // Check if the sender entity exists and has the Name component.\n        if (entityExists(world, senderEid) && hasComponent(world, senderEid, Name)) {\n          // Get the message string from the hash.\n          const message = getString(messageHash);\n          // Get the sender's name string from the Name component.\n          const senderName = getString(Name.value[senderEid]);\n\n          // Log the message to the console.\n          console.log(`${senderName} (${timestamp}): ${message}`);\n        } else {\n          // Log a warning if the sender entity is invalid or missing the Name component.\n          console.warn(`Invalid senderEid: ${senderEid} or missing Name component for entity ${senderEid}`);\n        }\n      }\n    }\n  }\n}"
+    },
+    "ChatSystem": {
+      "description": "Simulates chat interactions between entities in the chat room.",
+      "requiredComponents": [
+        "Name",
+        "InChatRoom"
+      ],
+      "code": "function ChatSystem(world) {\n  // Array of predefined chat messages\n  const messages = [\"Hello, everyone!\", \"How's everyone doing today?\", \"Anyone have any exciting plans?\", \"What are you up to?\", \"Nice to chat with you all!\"];\n\n  /**\n   * Hashes a string to a 32-bit integer.\n   * @param {string} str The string to hash.\n   * @returns {number} The hash of the string.\n   */\n  function hashString(str) {\n    let hash = 0;\n    for (let i = 0; i < str.length; i++) {\n      hash = (hash << 5) - hash + str.charCodeAt(i);\n      hash |= 0; // Convert to 32bit integer\n    }\n    return hash;\n  }\n\n  let iteration = 0;\n\n  return function execute() {\n    iteration++;\n\n    // Query entities that have Name and InChatRoom components\n    query(world, [Name, InChatRoom]).forEach(eid => {\n      // Simulate chat every 5 iterations\n      if (iteration % 5 === 0) {\n        // Pick a random message from the message array\n        const messageIndex = Math.floor(Math.random() * messages.length);\n        const message = messages[messageIndex];\n        // Hash the message for storage in the component\n        const messageHash = hashString(message);\n\n        // Log the chat message to the console (for demonstration purposes)\n        console.log(Name.value[eid] + \" says: \" + message);\n\n        // Add a Text component to the entity with the message and timestamp\n        addComponent(world, eid, { text: messageHash, timestamp: Date.now() });\n      }\n    });\n  }\n}"
+    }
+  },
+  "entities": [
+    {
+      "id": 1,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 2,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 3,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 4,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 5,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 6,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 7,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 8,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 9,
+      "components": {
+        "Name": {
+          "value": 938475628
+        },
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {
+          "messages": [],
+          "timestamps": [],
+          "senders": []
+        },
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 10,
+      "components": {
+        "Name": {
+          "value": 179394782
+        },
+        "NextMessageTime": {
+          "time": 0
+        },
+        "InChatRoom": {
+          "roomId": 1,
+          "joinedAt": {}
+        },
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 11,
+      "components": {
+        "Name": {
+          "value": 287896543
+        },
+        "NextMessageTime": {
+          "time": 0
+        },
+        "InChatRoom": {
+          "roomId": 123,
+          "joinedAt": {}
+        },
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 12,
+      "components": {
+        "Name": {
+          "value": 972348567
+        },
+        "NextMessageTime": {
+          "time": 0
+        },
+        "InChatRoom": {
+          "roomId": 12345,
+          "joinedAt": {}
+        },
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 13,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 14,
+      "components": {
+        "Name": {},
+        "NextMessageTime": {},
+        "InChatRoom": {},
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 15,
+      "components": {
+        "Name": {
+          "value": 5381
+        },
+        "NextMessageTime": {
+          "time": 0
+        },
+        "InChatRoom": {
+          "roomId": 1,
+          "joinedAt": {}
+        },
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 16,
+      "components": {
+        "Name": {
+          "value": 1658861368
+        },
+        "NextMessageTime": {
+          "time": 0
+        },
+        "InChatRoom": {
+          "roomId": 12345,
+          "joinedAt": {}
+        },
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    },
+    {
+      "id": 17,
+      "components": {
+        "Name": {
+          "value": 1234567890
+        },
+        "NextMessageTime": {
+          "time": 0
+        },
+        "InChatRoom": {
+          "roomId": 123,
+          "joinedAt": {}
+        },
+        "ChatMessageHistory": {},
+        "ChatMessage": {},
+        "ChatLog": {},
+        "ChatHistory": {},
+        "MessageContent": {},
+        "WantsToSpeak": {}
+      }
+    }
+  ],
+  "relationshipInstances": [],
+  "runtime": {
+    "defaultSystems": [
+      "NPCMessageSystem",
+      "ChatLogDisplaySystem",
+      "DisplayChatSystem",
+      "ChatSystem"
+    ],
+    "tickRate": 60,
+    "maxEntities": 10000
+  }
+}

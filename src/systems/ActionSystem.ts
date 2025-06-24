@@ -14,11 +14,14 @@ import {
   Memory,
   ActionResultType,
   Thought,
+  Goal,
+  Plan,
 } from "../components";
 import { logger } from "../utils/logger";
 import { createSystem, SystemConfig } from "./System";
 import { getAgentRoom } from "../utils/queries";
 import { Experience } from "../llm/agent-llm";
+import { getActivePlans } from "../components/Plans";
 
 // Helper to get or create private room for agent
 async function getOrCreatePrivateRoom(world: World, eid: number, runtime: any) {
@@ -113,6 +116,79 @@ export const ActionSystem = createSystem<SystemConfig>(
         agentName
       );
 
+      // Check for goal completions after action
+      const completedGoals: any[] = [];
+      if (hasComponent(world, eid, Goal)) {
+        const currentGoals = Goal.current[eid] || [];
+        const newCurrentGoals = [...currentGoals];
+
+        // Check each goal to see if it's been completed
+        for (let i = currentGoals.length - 1; i >= 0; i--) {
+          const goal = currentGoals[i];
+          if (goal.status === "completed") {
+            completedGoals.push(goal);
+            newCurrentGoals.splice(i, 1);
+          }
+        }
+
+        // If any goals were completed, update the Goal component
+        if (completedGoals.length > 0) {
+          setComponent(world, eid, Goal, {
+            current: newCurrentGoals,
+            completed: [...(Goal.completed[eid] || []), ...completedGoals],
+            lastUpdate: Date.now(),
+            lastEvaluationTime: Goal.lastEvaluationTime[eid] || Date.now(),
+          });
+
+          logger.agent(
+            eid,
+            `Completed ${completedGoals.length} goals after action: ${pendingAction.tool}`,
+            agentName
+          );
+        }
+      }
+
+      // Check for plan completions after action
+      const completedPlans: any[] = [];
+      if (hasComponent(world, eid, Plan)) {
+        const plans = Plan.plans[eid] || [];
+        const activePlans = getActivePlans(plans);
+
+        // Check each active plan to see if it's been completed
+        for (const plan of activePlans) {
+          const allStepsCompleted = plan.steps.every(
+            (step) => step.status === "completed"
+          );
+          if (allStepsCompleted && plan.status === "active") {
+            plan.status = "completed";
+            completedPlans.push(plan);
+          }
+        }
+
+        // If any plans were completed, update the Plan component
+        if (completedPlans.length > 0) {
+          setComponent(world, eid, Plan, {
+            plans: plans,
+            lastUpdate: Date.now(),
+          });
+
+          logger.agent(
+            eid,
+            `Completed ${completedPlans.length} plans after action: ${pendingAction.tool}`,
+            agentName
+          );
+        }
+      }
+
+      // Add completion data to the result
+      if (result) {
+        result.data = {
+          ...(result.data || {}),
+          completedGoals,
+          completedPlans,
+        };
+      }
+
       // Broadcast action result to room
       runtime.eventBus.emitRoomEvent(
         roomEid,
@@ -151,6 +227,8 @@ export const ActionSystem = createSystem<SystemConfig>(
               action: pendingAction.tool,
               parameters: pendingAction.parameters,
               success: result?.success,
+              completedGoals,
+              completedPlans,
             },
           },
         };

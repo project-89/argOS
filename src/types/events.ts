@@ -18,7 +18,12 @@ export type EventType =
   | "appearance" // Appearance changes
   | "state" // State changes
   | "experience" // Memories/experiences
-  | "agent"; // Agent-specific events
+  | "sequence" // Action sequences
+  | "agent" // Agent-specific events
+  | "observation" // Observation events
+  | "reasoning" // Reasoning events
+  | "attention" // Attention events
+  | "meta_cognition"; // Meta-cognition events
 
 // Event Categories
 export type EventCategory =
@@ -30,7 +35,14 @@ export type EventCategory =
   | "experience"
   | "cognitive"
   | "speech"
-  | "state";
+  | "state"
+  | "sequence"
+  | "completed" // For completed sequences
+  | "enhanced" // Enhanced thought
+  | "analyzed" // Analyzed perception
+  | "requested" // Requested reasoning
+  | "updated" // Updated attention
+  | "complete"; // Complete meta-cognition
 
 // Base Event Structure
 export interface BaseEvent<T = string> {
