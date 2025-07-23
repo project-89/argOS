@@ -87,7 +87,11 @@ export const StringStore: Record<number, string> = {};
 
 // Helper to store and retrieve strings
 export function storeString(value: string): number {
-  const hash = hashString(value);
+  // Handle null/undefined strings
+  if (value === null || value === undefined) {
+    return 0; // Use 0 as the hash for empty/null strings
+  }
+  const hash = hashString(String(value)); // Ensure it's a string
   StringStore[hash] = value;
   return hash;
 }
@@ -98,6 +102,10 @@ export function getString(hash: number): string {
 
 // Simple string hashing function
 export function hashString(str: string): number {
+  // Handle null/undefined/empty strings
+  if (!str || str.length === 0) {
+    return 0;
+  }
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
@@ -105,4 +113,12 @@ export function hashString(str: string): number {
     hash = hash & hash; // Convert to 32-bit integer
   }
   return Math.abs(hash);
+}
+
+// Helper to record creation activity for god entities
+export function recordCreation(world: any, godEid: number): void {
+  if (GodMode.enabled[godEid]) {
+    GodMode.createdCount[godEid] = (GodMode.createdCount[godEid] || 0) + 1;
+    GodMode.lastCreation[godEid] = Date.now();
+  }
 }

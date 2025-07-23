@@ -60,132 +60,92 @@ export async function ecsGenerateSystem(
   }
 
   try {
-    // Get list of all available components
-    const availableComponents = globalRegistry.listComponents();
-    const componentDescriptions = availableComponents.map(name => {
+    // Create a markdown-formatted list of all available components for the prompt
+    const componentManifest = globalRegistry.listComponents().map(name => {
       const comp = globalRegistry.getComponent(name);
-      const props = comp?.schema?.properties?.map(p => `${p.name}: ${p.type}`).join(', ') || 'No properties';
-      return `  - ${name} (${props})`;
+      if (!comp) return `- ${name} (error: not found)`;
+      const props = comp.schema?.properties?.map(p => `${p.name}: ${p.type}`).join(', ') || 'No properties';
+      return `- **${name}**: { ${props} } // *${comp.schema?.description || 'No description'}*`;
     }).join('\n');
 
-    // Create prompt for system generation
-    const prompt = `Generate a BitECS system function based on this description:
+    // Create prompt for system generation using structured approach
+    const prompt = `You are an expert ECS programmer. Your task is to generate a system by filling out the following JSON structure.
 
-Description: ${params.description}
-Required Components: ${params.requiredComponents.join(', ')}
-Behavior: ${params.behavior}
+## AVAILABLE COMPONENTS
+You have access to the following components. You can use any of them in your system's code.
+${componentManifest}
 
-${params.constraints ? `Constraints:\n${params.constraints.join('\n')}` : ''}
+## TASK
+**Description:** ${params.description}
+**Behavior:** ${params.behavior}
+${params.constraints ? `**Constraints:**\n${params.constraints.map(c => `- ${c}`).join('\n')}` : ''}
+${params.examples ? `**Example use cases:**\n${params.examples.map(e => `- ${e}`).join('\n')}` : ''}
 
-${params.examples ? `Example use cases:\n${params.examples.join('\n')}` : ''}
+## BITECS API QUICK REFERENCE
+**CRITICAL: There is NO 'ecs' object! Use functions directly.**
+- ✅ CORRECT: query(world, [Component])
+- ❌ WRONG: ecs.query(world, [Component])
 
-## AVAILABLE COMPONENTS IN THE SYSTEM:
-${componentDescriptions}
+- query(world, [ComponentA, ComponentB]) - Get entities with ALL components
+- query(world, [Or(A, B)]) - Get entities with ANY component
+- query(world, [Not(A)]) - Get entities WITHOUT component
+- addEntity(world), removeEntity(world, eid)
+- addComponent(world, eid, Component), removeComponent(world, eid, Component)
+- hasComponent(world, eid, Component), entityExists(world, eid)
+- Component.property[eid] - Access/modify component data (SoA format)
 
-## IMPORTANT: You MUST use the exact component names from the available list above!
+## YOUR RESPONSE
+Fill out this JSON object. Do not add any extra text or explanations.
 
-## CRITICAL REQUIREMENT FOR requiredComponents:
-The requiredComponents array MUST include EVERY component that your system code references.
-If your system uses query(world, [A, B]) or accesses A.x[eid] or hasComponent(world, eid, C), 
-then A, B, and C MUST ALL be in requiredComponents: ["A", "B", "C"]
-
-Example: If your system code contains:
-- query(world, [Position, Velocity])
-- Neuron.charge[eid] 
-- hasComponent(world, eid, Synapse)
-Then requiredComponents MUST be: ["Position", "Velocity", "Neuron", "Synapse"]
-
-REMEMBER: Any component not in requiredComponents will be undefined and cause a ReferenceError!
-
-## BitECS API REFERENCE
-
-### Available Functions:
-- query(world, [Component1, Component2]) - Returns array of entity IDs that have ALL listed components
-- addEntity(world) - Creates a new entity, returns its ID
-- removeEntity(world, eid) - Removes an entity from the world
-- addComponent(world, eid, Component) - Adds a component to an entity
-- removeComponent(world, eid, Component) - Removes a component from an entity
-- hasComponent(world, eid, Component) - Returns true if entity has component
-- entityExists(world, eid) - Returns true if entity exists
-
-### Query Operators:
-- And(Component1, Component2) or All(...) - Entity must have ALL components (default behavior)
-- Or(Component1, Component2) or Any(...) - Entity must have ANY of the components
-- Not(Component1, Component2) or None(...) - Entity must have NONE of the components
-
-### Component Access:
-Components use Structure of Arrays (SoA) format. Access properties via:
-- ComponentName.propertyName[eid] - Read/write component data
-- Example: Position.x[eid] = 10; Position.y[eid] = 20;
-
-### Relations (if needed):
-- addComponent(world, eid, RelationName(targetEid)) - Create a relationship
-- hasComponent(world, eid, RelationName(targetEid)) - Check if relationship exists
-- removeComponent(world, eid, RelationName(targetEid)) - Remove relationship
-- getRelationTargets(world, eid, RelationName) - Get all targets of a relation
-- query(world, [RelationName(targetEid)]) - Query entities with specific relation
-- query(world, [RelationName(Wildcard)]) - Query all entities with any relation of this type
-
-### System Rules:
-- Be named with PascalCase ending in "System" (e.g., MovementSystem)
-- Take (world: World) as its only parameter
-- Process entities efficiently using queries
-- Be a pure function with no side effects except component mutations
-- Include comments explaining the logic
-- NEVER access global variables or external state
-- ONLY use the components listed in requiredComponents: ${params.requiredComponents.join(', ')}
-- CRITICAL: Regular systems CANNOT use getString/setString - those are ONLY for async/LLM systems
-- For string components in regular systems: strings are stored as number hashes automatically
-- For arrays, initialize them properly: Component.arrayProp[eid] = Component.arrayProp[eid] || []
-
-### Example System:
-function MovementSystem(world) {
-  // Query entities that have Position AND Velocity
-  const movingEntities = query(world, [Position, Velocity]);
-  
-  // Update positions based on velocity
-  for (const eid of movingEntities) {
-    Position.x[eid] += Velocity.x[eid];
-    Position.y[eid] += Velocity.y[eid];
-  }
-  
-  // Query entities with Position but NOT Velocity (stationary)
-  const stationaryEntities = query(world, [Position, Not(Velocity)]);
-  
-  // Example of complex query: Has Position and either Health or Shield
-  const protectedEntities = query(world, [Position, Or(Health, Shield)]);
+{
+  "name": "YourSystemNameSystem",
+  "description": "A concise description of what this system does.",
+  "requiredComponents": [
+    "ComponentA", "ComponentB" // IMPORTANT: List EVERY component your code below touches!
+  ],
+  "code": "function YourSystemNameSystem(world) {\\n  // Your JavaScript code here...\\n  // Example: const entities = query(world, [ComponentA, ComponentB]);\\n  // for (const eid of entities) { ... }\\n}"
 }
 
-### IMPORTANT: What you CANNOT use in regular systems:
-- getString/setString - These are ONLY available in async/LLM systems
-- miniLLM - This is ONLY available in async/LLM systems
-- async/await - Regular systems must be synchronous
-- Any LLM-specific functions
+REMEMBER:
+- List ALL components used in queries, property access, or hasComponent checks in requiredComponents
+- Regular systems CANNOT use getString/setString (only for async/LLM systems)
+- System name must end with "System"
+- Code must be a complete function`;
 
-Generate ONLY the system function code. Do not include imports, exports, or any other code outside the function.`;
+    // Use generateStructured to get a guaranteed JSON response
+    const { generateStructured } = await import('../llm/interface.js');
+    const design = await generateStructured(
+      prompt,
+      z.object({
+        name: z.string().regex(/^[A-Z][a-zA-Z0-9]*System$/, 'System names must end with "System"'),
+        description: z.string(),
+        requiredComponents: z.array(z.string()),
+        code: z.string(),
+      })
+    );
 
-    // Generate system code
-    const generatedCode = await callLLM(prompt);
-    
-    // Extract function code
-    const functionMatch = generatedCode.match(/function\s+(\w+System)\s*\([^)]*\)\s*{[\s\S]*?^}/m);
-    if (!functionMatch) {
-      return {
-        success: false,
-        error: 'Failed to extract system function from generated code',
-        code: generatedCode,
-      };
+    // The LLM has now given us the name, dependencies, and code in a structured way
+    const { name: systemName, description, requiredComponents, code: functionCode } = design;
+
+    // Validate that the listed requiredComponents actually exist
+    for (const compName of requiredComponents) {
+      if (!globalRegistry.getComponent(compName)) {
+        return {
+          success: false,
+          error: `System '${systemName}' requires a non-existent component: '${compName}'. Please create it first.`,
+        };
+      }
     }
 
-    const functionCode = functionMatch[0];
-    const systemName = functionMatch[1];
+    // Ensure the function code is properly formatted
+    const finalCode = functionCode.includes('function') ? functionCode : `function ${systemName}(world) {\n${functionCode}\n}`;
 
     // Validate the generated code
-    if (!validateGeneratedCode(functionCode)) {
+    if (!validateGeneratedCode(finalCode)) {
       return {
         success: false,
         error: 'Generated system code failed validation',
-        code: functionCode,
+        code: finalCode,
       };
     }
 
@@ -199,16 +159,16 @@ Generate ONLY the system function code. Do not include imports, exports, or any 
     }
 
     // Create a wrapper that provides component references
-    const systemFunction = createSystemFunction(functionCode, params.requiredComponents);
+    const systemFunction = createSystemFunction(finalCode, requiredComponents);
 
     // Register the system
     const registered = globalRegistry.registerSystem(systemName, {
       name: systemName,
-      description: params.description,
-      requiredComponents: params.requiredComponents,
+      description: description, // Use the description from the structured output
+      requiredComponents: requiredComponents, // Use the dependencies from the structured output
       behavior: params.behavior,
       systemFn: systemFunction,
-      code: functionCode,
+      code: finalCode,
       creator: godEid,
       timestamp: Date.now(),
     });
@@ -234,14 +194,14 @@ Generate ONLY the system function code. Do not include imports, exports, or any 
     recordCreation(world, godEid);
 
     console.log(`✨ Created system: ${systemName}`);
-    console.log(`   Description: ${params.description}`);
-    console.log(`   Required: ${params.requiredComponents.join(', ')}`);
+    console.log(`   Description: ${description}`);
+    console.log(`   Required: ${requiredComponents.join(', ')}`);
 
     return {
       success: true,
       systemName,
       systemFn: systemFunction,
-      code: functionCode,
+      code: finalCode,
     };
 
   } catch (error) {

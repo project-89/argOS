@@ -4,6 +4,7 @@
  */
 
 import { World } from 'bitecs';
+import { z } from 'zod';
 import { callLLM } from '../llm/interface.js';
 import { globalRegistry } from '../components/registry.js';
 import { validateGeneratedCode } from '../llm/interface.js';
@@ -36,24 +37,27 @@ export async function ecsGenerateLLMSystem(
   console.log(chalk.gray(`   LLM Behavior: ${params.llmBehavior}`));
   
   try {
-    // Get list of all available components
-    const availableComponents = globalRegistry.listComponents();
-    const componentDescriptions = availableComponents.map(name => {
+    // Create a markdown-formatted list of all available components for the prompt
+    const componentManifest = globalRegistry.listComponents().map(name => {
       const comp = globalRegistry.getComponent(name);
-      const props = comp?.schema?.properties?.map(p => `${p.name}: ${p.type}`).join(', ') || 'No properties';
-      return `  - ${name} (${props})`;
+      if (!comp) return `- ${name} (error: not found)`;
+      const props = comp.schema?.properties?.map(p => `${p.name}: ${p.type}`).join(', ') || 'No properties';
+      return `- **${name}**: { ${props} } // *${comp.schema?.description || 'No description'}*`;
     }).join('\n');
 
-    // Generate system design
-    const prompt = `Create an ECS system that uses LLM for: ${params.description}
+    // Generate system design using structured approach
+    const prompt = `You are an expert ECS programmer. Create an async system that uses AI/LLM for decision making.
+
+## TASK
+**Description:** ${params.description}
+**LLM Behavior:** ${params.llmBehavior}
+${params.examples ? `**Example behaviors:**\n${params.examples.map(e => `- ${e}`).join('\n')}` : ''}
 
 The system should:
 ${params.llmBehavior}
 
-Required components: ${params.requiredComponents.join(', ')}
-
-## AVAILABLE COMPONENTS IN THE SYSTEM:
-${componentDescriptions}
+## AVAILABLE COMPONENTS
+${componentManifest}
 
 ## IMPORTANT: You MUST use the exact component names from the available list above!
 
@@ -71,6 +75,10 @@ Then requiredComponents MUST be: ["NPC", "Thought", "Name", "Message"]
 REMEMBER: Any component not in requiredComponents will be undefined and cause a ReferenceError!
 
 ## BitECS API REFERENCE
+
+### CRITICAL: There is NO 'ecs' object!
+- ✅ CORRECT: query(world, [Component])
+- ❌ WRONG: ecs.query(world, [Component])
 
 ### Core Functions:
 - query(world, [Component1, Component2]) - Returns array of entity IDs with ALL components
@@ -90,15 +98,33 @@ REMEMBER: Any component not in requiredComponents will be undefined and cause a 
 - Component.property[eid] - Read/write data
 - Example: Position.x[eid] = 10;
 
-### LLM Integration:
-- miniLLM(prompt: string) - Async function that calls AI
-- Always use try/catch for JSON parsing
-- Handle errors gracefully
+### LLM Integration (CRITICAL):
+- miniLLM(prompt: string) - Returns Promise<string> with RAW TEXT (not JSON!)
+- To get JSON responses:
+  1. Ask for JSON explicitly in your prompt
+  2. ALWAYS wrap JSON.parse() in try/catch
+  3. Have a fallback for non-JSON responses
+- Example:
+  ```
+  const response = await miniLLM("Respond with JSON: {action: 'speak', message: '...'}");
+  let action = 'speak', message = 'Hello';
+  try {
+    const data = JSON.parse(response);
+    action = data.action || 'speak';
+    message = data.message || 'Hello';
+  } catch (e) {
+    // Fallback: treat entire response as message
+    message = response;
+  }
+  ```
 
-### String Handling (if using string components):
-- getString(hash: number) - Convert hash to string
-- setString(text: string) - Convert string to hash
-- Example: const name = getString(NPCMind.name[eid]);
+### String Handling (CRITICAL - MUST USE CORRECTLY):
+- getString(Component.prop, eid) - Get string value from component
+- setString(Component.prop, eid, value) - Set string value in component
+- CORRECT: const name = getString(NPCMind.name, eid);
+- CORRECT: setString(NPCMind.thought, eid, "I am thinking...");
+- WRONG: getString(NPCMind.name[eid]) - This will fail!
+- WRONG: setString(NPCMind.thought[eid], "text") - This will fail!
 
 The system should include:
 1. Context gathering from components
@@ -133,25 +159,56 @@ async function ExampleLLMSystem(world) {
   }
 }
 
-Return a JSON object with:
-{
-  "name": "SystemNameSystem",
-  "description": "What it does",
-  "code": "complete async function code"
-}`;
+## YOUR RESPONSE
+Fill out this JSON object. Do not add any extra text or explanations.
 
-    const response = await callLLM(prompt);
-    const result = parseSystemResponse(response);
+{
+  "name": "YourSystemNameSystem",
+  "description": "A concise description of what this AI-powered system does.",
+  "requiredComponents": [
+    "ComponentA", "ComponentB" // IMPORTANT: List EVERY component your code below touches!
+  ],
+  "code": "async function YourSystemNameSystem(world) {\\n  // Your async JavaScript code here...\\n  // Must use miniLLM for AI decisions\\n  // Example: const response = await miniLLM(prompt);\\n}"
+}
+
+REMEMBER:
+- List ALL components used in queries, property access, or hasComponent checks in requiredComponents
+- This is an ASYNC system - use async/await
+- You MUST use miniLLM for AI functionality
+- getString/setString ARE available in async systems
+- System name must end with "System"
+- Include error handling for LLM responses`;
+
+    // Use generateStructured to get a guaranteed JSON response
+    const { generateStructured } = await import('../llm/interface.js');
+    const design = await generateStructured(
+      prompt,
+      z.object({
+        name: z.string().regex(/^[A-Z][a-zA-Z0-9]*System$/, 'System names must end with "System"'),
+        description: z.string(),
+        requiredComponents: z.array(z.string()),
+        code: z.string(),
+      })
+    );
     
-    if (!result) {
-      return {
-        success: false,
-        error: 'Failed to parse LLM response'
-      };
+    // The LLM has now given us the name, dependencies, and code in a structured way
+    const { name: systemName, description, requiredComponents, code: functionCode } = design;
+    
+    // Validate that the listed requiredComponents actually exist
+    for (const compName of requiredComponents) {
+      if (!globalRegistry.getComponent(compName)) {
+        return {
+          success: false,
+          error: `System '${systemName}' requires a non-existent component: '${compName}'. Please create it first.`,
+        };
+      }
     }
     
+    // Ensure the function code is properly formatted
+    const finalCode = functionCode.includes('async function') ? functionCode : `async function ${systemName}(world) {\n${functionCode}\n}`;
+    
     // Validate the generated code
-    if (!validateGeneratedCode(result.code)) {
+    if (!validateGeneratedCode(finalCode)) {
       return {
         success: false,
         error: 'Generated code failed validation'
@@ -159,11 +216,11 @@ Return a JSON object with:
     }
     
     // Register the system with async flag
-    globalRegistry.registerSystem(result.name, {
-      name: result.name,
-      description: result.description,
-      requiredComponents: params.requiredComponents,
-      code: result.code,
+    globalRegistry.registerSystem(systemName, {
+      name: systemName,
+      description: description,
+      requiredComponents: requiredComponents, // Use the dependencies from structured output
+      code: finalCode,
       isAsync: true,
       usesLLM: true,
       llmModel: params.llmModel || 'flash',
@@ -174,14 +231,15 @@ Return a JSON object with:
     GodMode.lastCreation[godEid] = Date.now();
     GodMode.createdCount[godEid]++;
     
-    console.log(chalk.green(`✨ Created LLM-powered system: ${result.name}`));
+    console.log(chalk.green(`✨ Created LLM-powered system: ${systemName}`));
     console.log(chalk.gray(`   Uses AI for: ${params.llmBehavior}`));
+    console.log(chalk.gray(`   Required: ${requiredComponents.join(', ')}`));
     
     return {
       success: true,
-      systemName: result.name,
-      description: result.description,
-      code: result.code
+      systemName: systemName,
+      description: description,
+      code: finalCode
     };
     
   } catch (error) {
@@ -193,32 +251,7 @@ Return a JSON object with:
   }
 }
 
-function parseSystemResponse(response: string): any {
-  try {
-    // Try to extract JSON from the response
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    
-    // Fallback: try to extract code blocks
-    const codeMatch = response.match(/```(?:javascript|typescript|js|ts)?\n([\s\S]+?)\n```/);
-    const nameMatch = response.match(/(?:name|system):\s*["']?(\w+System)["']?/i);
-    
-    if (codeMatch && nameMatch) {
-      return {
-        name: nameMatch[1],
-        description: 'LLM-powered system',
-        code: codeMatch[1]
-      };
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('Failed to parse system response:', error);
-    return null;
-  }
-}
+// Removed parseSystemResponse - no longer needed with structured output
 
 // Example template for NPC consciousness system using proper BitECS API
 export const NPC_CONSCIOUSNESS_TEMPLATE = `

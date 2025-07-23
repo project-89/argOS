@@ -189,7 +189,7 @@ export function validateGeneratedCode(code: string): boolean {
     const dangerous = [
       /\beval\s*\(/,
       /\brequire\s*\(/,
-      /\bprocess\b/,
+      /\bprocess\.[a-zA-Z]/,  // Only match process.something, not the word 'process'
       /\bchild_process\b/,
       /\b__dirname\b/,
       /\b__filename\b/,

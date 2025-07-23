@@ -20,6 +20,9 @@ import {
   None
 } from 'bitecs';
 import { globalRegistry } from '../components/registry.js';
+import { logSystemExecution, logSystemError, logEntityThought, logEntityAction } from './execution-logger.js';
+import * as readline from 'readline';
+import chalk from 'chalk';
 
 // Create a sandbox context for system execution
 async function createSystemContext(world: World, requiredComponents: string[], isAsync: boolean = false): Promise<any> {
@@ -46,9 +49,15 @@ async function createSystemContext(world: World, requiredComponents: string[], i
     console: {
       log: (...args: any[]) => console.log('[System]', ...args),
       error: (...args: any[]) => console.error('[System Error]', ...args),
+      warn: (...args: any[]) => console.warn('[System Warning]', ...args),
+      info: (...args: any[]) => console.info('[System Info]', ...args),
+      debug: (...args: any[]) => console.debug('[System Debug]', ...args),
     },
     Math,
     Date,
+    // CLI tools for I/O systems
+    readline,
+    chalk,
   };
 
   // Add component references to context
@@ -97,11 +106,23 @@ async function createSystemContext(world: World, requiredComponents: string[], i
         // Add to terminal visualization
         addThoughtToTerminalViz(entityId, response.substring(0, 100));
         
+        // Log the thought
+        logEntityThought(entityId, response.substring(0, 200));
+        
       } catch (error) {
         // Visualization not available, continue silently
       }
       
       return response;
+    };
+    
+    // Add entity logging functions
+    context.logAction = (eid: number, action: string) => {
+      logEntityAction(eid, action);
+    };
+    
+    context.logThought = (eid: number, thought: string) => {
+      logEntityThought(eid, thought);
     };
     
     // Import string utilities from god-components
@@ -116,10 +137,27 @@ async function createSystemContext(world: World, requiredComponents: string[], i
     
     context.setString = (componentProp: any, eid: number, value: string): void => {
       if (!componentProp) {
-        console.error('[setString] Component property is undefined');
+        console.error('[setString] Component property is undefined. Usage: setString(Component.property, entityId, "value")');
         return;
       }
-      const hash = storeString(value);
+      
+      // Check if componentProp is actually a component property array
+      if (!Array.isArray(componentProp)) {
+        console.error('[setString] First argument must be a component property array (e.g., Message.content), not a value');
+        console.error('[setString] Got:', typeof componentProp, componentProp);
+        console.error('[setString] Usage: setString(Component.property, entityId, "value")');
+        return;
+      }
+      
+      // Validate entity ID
+      if (typeof eid !== 'number' || isNaN(eid)) {
+        console.error('[setString] Entity ID must be a valid number. Got:', eid);
+        return;
+      }
+      
+      // Ensure value is a string and handle null/undefined
+      const stringValue = value === null || value === undefined ? '' : String(value);
+      const hash = storeString(stringValue);
       componentProp[eid] = hash;
     };
     
@@ -136,6 +174,30 @@ async function createSystemContext(world: World, requiredComponents: string[], i
     // Add async utilities
     context.Promise = Promise;
     context.JSON = JSON;
+    
+    // Add safe JSON parsing helper
+    context.parseJSON = (text: string, fallback: any = null) => {
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        console.log('[parseJSON] Failed to parse, returning fallback:', fallback);
+        return fallback;
+      }
+    };
+    
+    // Add JSON extraction helper
+    context.extractJSON = (text: string) => {
+      // Try to find JSON object in the text
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          return JSON.parse(jsonMatch[0]);
+        } catch (e) {
+          return null;
+        }
+      }
+      return null;
+    };
   }
 
   return context;
@@ -200,6 +262,9 @@ export async function executeSystem(world: World, systemName: string): Promise<b
     console.error(`System ${systemName} not found or has no code`);
     return false;
   }
+  
+  // Log system execution start
+  logSystemExecution(systemName, 'Starting execution');
 
   // Check if we have a cached executable function
   if (systemDef.systemFn && typeof systemDef.systemFn === 'function') {
@@ -209,9 +274,11 @@ export async function executeSystem(world: World, systemName: string): Promise<b
       if (result && typeof result === 'object' && 'then' in result) {
         await result;
       }
+      logSystemExecution(systemName, 'Completed successfully');
       return true;
     } catch (error: any) {
       console.error(`Error executing cached system ${systemName}:`, error);
+      logSystemError(systemName, error);
       
       // Store error for God to fix
       systemDef.lastError = {

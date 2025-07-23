@@ -14,11 +14,13 @@ import { ecsGenerateLLMSystem } from '../actions/generate-llm-system.js';
 import { ecsModifySystem } from '../actions/modify-system.js';
 import { ecsComposeEntity } from '../actions/compose-entity.js';
 import { ecsInspect } from '../actions/inspect.js';
+import { ecsGenerateIOSystem } from '../actions/generate-io-system.js';
 import { createRelationship } from '../actions/generate-relationship.js';
 import { executeSystem } from '../runtime/system-executor.js';
 import { createGodAgent } from './god-factory.js';
 import { captureSimulationState, captureQuickSnapshot, generateSimulationReport, analyzeBehaviorChange } from '../testing/simulation-tester.js';
 import { selectModelForTask, prompts } from '../llm/model-selector.js';
+import { executionLogger } from '../runtime/execution-logger.js';
 import chalk from 'chalk';
 
 export interface AutonomousGodState {
@@ -28,7 +30,7 @@ export interface AutonomousGodState {
   entityMap: Map<string, number>;
   mode: 'building' | 'simulating';
   liveMode: boolean;
-  gameLoop?: NodeJS.Timer;
+  gameLoop?: NodeJS.Timeout;
   tickRate: number;
 }
 
@@ -72,9 +74,23 @@ function getSystemPrompt(): string {
 - If a system execution fails with **ReferenceError: getString is not defined** or **setString is not defined**:
   - This means the system is NOT an async/LLM system
   - Regular systems CANNOT use getString/setString
-  - **TO FIX THIS:** Call modifySystem and remove all getString/setString usage
+  - **TO FIX THIS:** Either:
+    a) Call modifySystem to remove getString/setString usage (if you don't need to read strings)
+    b) Delete the system and recreate it with generateLLMSystem (if you DO need to read strings)
 
 ## BitECS API AVAILABLE IN SYSTEMS:
+
+### CRITICAL: There is NO 'ecs' object!
+- Use 'world' parameter passed to your system function
+- Use 'query(world, [...])' NOT 'ecs.query(...)'
+- All functions are available directly, NOT through an ecs object
+
+### Debugging/Console:
+- console.log(...) - General logging [System]
+- console.error(...) - Error logging [System Error]
+- console.warn(...) - Warning logging [System Warning]
+- console.info(...) - Info logging [System Info]
+- console.debug(...) - Debug logging [System Debug]
 
 ### Core Functions:
 - query(world, [Component1, Component2]) - Get entities with ALL components
@@ -102,14 +118,39 @@ function getSystemPrompt(): string {
 - query(world, [Relation("*")]) - Find all entities with this relation
 
 ### ONLY Available in Async/LLM Systems:
-- miniLLM(prompt) - Async AI call, returns Promise<string>
+- miniLLM(prompt) - Async AI call, returns Promise<string> (RAW TEXT, not JSON!)
+- parseJSON(text, fallback) - Safe JSON parsing with fallback value
+- extractJSON(text) - Extract JSON object from mixed text
+  Example in async system:
+  \`\`\`
+  async function MyLLMSystem(world) {
+    // Safe parsing with fallback
+    const response = await miniLLM("Return JSON: {action: 'speak', text: '...'}");
+    const data = parseJSON(response, {action: 'idle', text: 'Hello'});
+    
+    // Or extract JSON from text
+    const jsonData = extractJSON(response); // returns null if no JSON found
+  }
+  \`\`\`
 - setString(Component.prop, eid, value) - Store string safely
+  Example: setString(Message.content, eid, "Hello world")
+  NOT: setString(Message.content[eid], "Hello") - WRONG!
 - getString(Component.prop, eid) - Retrieve stored string
+  Example: const text = getString(Message.content, eid)
+  NOT: const text = getString(Message.content[eid]) - WRONG!
 
 ### NOT Available in Regular Systems:
 - getString/setString are ONLY for async/LLM systems
 - Regular systems store strings as number hashes automatically
 - If you get "getString is not defined" error, the system is NOT async
+- For regular systems, string components store hashes as numbers (you cannot read the actual string)
+
+### IMPORTANT: Choose the Right System Type:
+- Use generateSystem for logic that doesn't need string reading or AI
+- Use generateLLMSystem ONLY when you need to:
+  - Read actual string values with getString
+  - Make AI decisions with miniLLM
+  - Process natural language
 
 ### CRITICAL: Component properties must be accessed as arrays!
 - CORRECT: Position.x[eid] = 10
@@ -127,6 +168,7 @@ Your capabilities:
 - Check for system errors and fix them
 - Execute systems to run simulations
 - Generate custom UI (use ONLY these values: interactionType: "view-only"/"interactive"/"game", style: "minimal"/"rich"/"game-like"/"artistic")
+- Generate I/O systems for CLI interaction (input commands, output displays, interactive experiences)
 
 ## Important Component Type Rules:
 - Available types: number, boolean, string, eid, number[], eid[]
@@ -160,13 +202,16 @@ export async function processAutonomousInput(
   options: {
     maxSteps?: number;
     allowContinuous?: boolean;
+    reducedTools?: boolean;
   } = {}
 ): Promise<string> {
   console.log(chalk.cyan('\n🤖 Processing:', input));
   
   god.messages.push({ role: 'user', content: input });
 
-  const tools = createAutonomousTools(god);
+  const tools = options.reducedTools 
+    ? createReducedAutonomousTools(god) 
+    : createAutonomousTools(god);
   
   try {
     // Select appropriate model based on input
@@ -230,6 +275,30 @@ export async function processAutonomousInput(
         }
         if (error.responseBody.includes('503') || error.responseBody.includes('Service Unavailable')) {
           console.error(chalk.red('\n⚠️  Service temporarily unavailable. The API might be overloaded.'));
+        }
+        if (error.responseBody.includes('MALFORMED_FUNCTION_CALL')) {
+          console.error(chalk.red('\n⚠️  Malformed function call detected!'));
+          console.error(chalk.yellow('This usually means:'));
+          console.error('  - The AI is confused about tool parameters');
+          console.error('  - The prompt is too complex or ambiguous');
+          console.error('  - Too many tools are available (try reducing tools)');
+          console.error(chalk.cyan('\n💡 Retrying with simplified approach...'));
+          
+          // Simplify the request and retry
+          god.messages.push({ 
+            role: 'assistant', 
+            content: 'I encountered a malformed function call error. Let me try a simpler approach, focusing on one action at a time.' 
+          });
+          
+          // Retry with reduced complexity
+          return processAutonomousInput(god, 
+            'Please complete the task step by step, focusing on one action at a time.',
+            { 
+              ...options,
+              maxSteps: Math.min((options.maxSteps || 50) - 5, 10), // Reduce steps and cap at 10
+              reducedTools: true // Use simplified tool set
+            }
+          );
         }
       }
     }
@@ -317,13 +386,30 @@ function createAutonomousTools(god: AutonomousGodState) {
       }
     }),
 
+    // I/O system generation for CLI interaction
+    generateIOSystem: tool({
+      description: 'Generate an input/output system for CLI interaction (user commands, entity displays, interactive experiences)',
+      parameters: z.object({
+        description: z.string().describe('What the I/O system should do'),
+        ioType: z.enum(['input', 'output', 'interactive']).describe('Type: "input" (user commands), "output" (display), or "interactive" (both)'),
+        trigger: z.string().describe('What triggers this I/O (e.g., "user command", "entity state change", "every frame")'),
+        requiredComponents: z.array(z.string()).describe('Components needed for the I/O system'),
+        examples: z.array(z.string()).optional().describe('Example inputs/outputs')
+      }),
+      execute: async (params) => {
+        console.log(chalk.cyan('\\n🎮 Generating I/O system...'));
+        const result = await ecsGenerateIOSystem(god.world, params, god.godEid);
+        return result;
+      }
+    }),
+
     // LLM-powered system generation
     generateLLMSystem: tool({
-      description: 'Generate a system that uses AI/LLM to make decisions (for creating NPCs with consciousness, adaptive behaviors, etc)',
+      description: 'Generate a system that uses AI/LLM to make decisions OR needs to read string values. Use this ONLY when you need getString/setString or miniLLM.',
       parameters: z.object({
         description: z.string().describe('What the AI-powered system should do'),
         requiredComponents: z.array(z.string()).describe('ALL components the system needs (queries, accesses, modifies). Missing components = ReferenceError!'),
-        llmBehavior: z.string().describe('How the AI should think and make decisions'),
+        llmBehavior: z.string().describe('How the AI should think and make decisions (or why it needs string access)'),
         llmModel: z.enum(['flash', 'flash25', 'pro']).optional().default('flash').describe('Which AI model to use'),
         examples: z.array(z.string()).optional().describe('Example behaviors or responses')
       }),
@@ -372,10 +458,10 @@ function createAutonomousTools(god: AutonomousGodState) {
     createEntity: tool({
       description: 'Create an entity with components and data',
       parameters: z.object({
-        description: z.string(),
-        purpose: z.string(),
-        traits: z.array(z.string()).optional(),
-        name: z.string().optional()
+        description: z.string().describe('What this entity is (e.g., "A friendly NPC", "A bouncing ball")'),
+        purpose: z.string().describe('Its role in the simulation (e.g., "to chat with players", "to demonstrate physics")'),
+        traits: z.array(z.string()).optional().describe('Additional characteristics (e.g., ["witty", "curious"])'),
+        name: z.string().optional().describe('Optional name (e.g., "Alice", "Bob")')
       }),
       execute: async (params) => {
         console.log(chalk.cyan('\n🎯 Creating entity...'));
@@ -827,16 +913,28 @@ function startLiveMode(god: AutonomousGodState, tickRate: number = 60) {
   god.liveMode = true;
   god.tickRate = tickRate;
   
-  console.log(chalk.yellow(`🔄 Live mode started - systems running at ${tickRate} FPS`));
+  // Enable execution logging
+  executionLogger.setLiveMode(true);
   
+  console.log(chalk.yellow(`🔄 Live mode started - systems running at ${tickRate} FPS`));
+  console.log(chalk.gray('   Execution logs will appear in real-time...'));
+  
+  let frameCount = 0;
   god.gameLoop = setInterval(async () => {
-    // Run all registered systems silently
+    frameCount++;
+    
+    // Run all registered systems
     for (const systemName of globalRegistry.listSystems()) {
       try {
         await executeSystem(god.world, systemName);
       } catch (error) {
-        // Silent fail - don't interrupt God's building
+        // Errors are logged by executeSystem
       }
+    }
+    
+    // Print summary every 5 seconds
+    if (frameCount % (tickRate * 5) === 0) {
+      executionLogger.printSummary();
     }
   }, 1000 / tickRate);
 }
@@ -847,5 +945,38 @@ function stopLiveMode(god: AutonomousGodState) {
     god.gameLoop = undefined;
   }
   god.liveMode = false;
+  executionLogger.setLiveMode(false);
   console.log(chalk.yellow('⏹️  Live mode stopped'));
+  
+  // Print final summary
+  executionLogger.printSummary();
+}
+
+// Create a reduced set of tools for when the AI is struggling
+function createReducedAutonomousTools(god: AutonomousGodState) {
+  const fullTools = createAutonomousTools(god);
+  
+  // Only include the most essential tools
+  const essentialTools = [
+    'narrate',
+    'generateComponent', 
+    'generateSystem',
+    'generateLLMSystem',  // Added - needed for AI-powered systems
+    'modifySystem',
+    'createEntity',
+    'inspectWorld',
+    'runSystem',
+    'checkSystemErrors'
+  ];
+  
+  const reducedTools: any = {};
+  for (const toolName of essentialTools) {
+    if ((fullTools as any)[toolName]) {
+      reducedTools[toolName] = (fullTools as any)[toolName];
+    }
+  }
+  
+  console.log(chalk.gray(`Using reduced tool set (${Object.keys(reducedTools).length} tools) for simpler processing`));
+  
+  return reducedTools;
 }

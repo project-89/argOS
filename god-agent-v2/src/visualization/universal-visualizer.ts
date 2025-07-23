@@ -555,6 +555,7 @@ export class UniversalVisualizer {
                 <div class="tab" onclick="showTab('systems')">Systems</div>
                 <div class="tab" onclick="showTab('narrative')">Narrative</div>
                 <div class="tab" onclick="showTab('data')">Raw Data</div>
+                <div id="custom-ui-toggle" class="tab" onclick="showCustomUI()" style="display:none;background:#00ff88;color:#000;">Custom UI</div>
             </div>
             
             <div class="tab-content" id="tab-entities">
@@ -589,6 +590,13 @@ export class UniversalVisualizer {
             document.getElementById('tab-' + tabName).style.display = 'block';
         }
         
+        function showCustomUI() {
+            const customContainer = document.getElementById('custom-ui-container');
+            if (customContainer) {
+                customContainer.style.display = 'block';
+            }
+        }
+        
         socket.on('simulation-update', (data) => {
             currentData = data;
             updateVisualization();
@@ -597,6 +605,58 @@ export class UniversalVisualizer {
         
         socket.on('narrative-event', (event) => {
             addNarrativeEntry(event);
+        });
+        
+        socket.on('custom-ui-update', (ui) => {
+            if (ui && ui.html) {
+                // Create a custom UI container if it doesn't exist
+                let customContainer = document.getElementById('custom-ui-container');
+                if (!customContainer) {
+                    customContainer = document.createElement('div');
+                    customContainer.id = 'custom-ui-container';
+                    customContainer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:1000;background:#0a0a0a;';
+                    document.body.appendChild(customContainer);
+                    
+                    // Add a close button
+                    const closeBtn = document.createElement('button');
+                    closeBtn.textContent = '✕ Back to Default View';
+                    closeBtn.style.cssText = 'position:fixed;top:10px;right:10px;z-index:1001;padding:10px 20px;background:#333;color:#fff;border:1px solid #666;cursor:pointer;';
+                    closeBtn.onclick = () => {
+                        customContainer.style.display = 'none';
+                    };
+                    customContainer.appendChild(closeBtn);
+                }
+                
+                // Update the custom UI content
+                const contentDiv = document.getElementById('custom-ui-content') || document.createElement('div');
+                contentDiv.id = 'custom-ui-content';
+                contentDiv.innerHTML = ui.html;
+                
+                // Add custom CSS
+                const styleElement = document.getElementById('custom-ui-style') || document.createElement('style');
+                styleElement.id = 'custom-ui-style';
+                styleElement.textContent = ui.css;
+                if (!document.getElementById('custom-ui-style')) {
+                    document.head.appendChild(styleElement);
+                }
+                
+                // Add custom JS
+                if (ui.js) {
+                    const scriptElement = document.createElement('script');
+                    scriptElement.textContent = ui.js;
+                    contentDiv.appendChild(scriptElement);
+                }
+                
+                if (!contentDiv.parentNode) {
+                    customContainer.appendChild(contentDiv);
+                }
+                
+                customContainer.style.display = 'block';
+                console.log('Custom UI loaded!');
+                
+                // Show the custom UI toggle button
+                document.getElementById('custom-ui-toggle').style.display = 'block';
+            }
         });
         
         function updateVisualization() {
