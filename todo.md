@@ -50,3 +50,10 @@ Internal stimuli are how agents perceive their internal state (emotions, thought
 - [ ] Add tools for agents to create channels
 - [ ] Add tools for agents to create new agents
 - [ ] Implement long-term DB persistence
+
+## Discord Integration
+- [x] Add discord.js library
+- [x] Create Discord service to connect to Discord
+- [x] Implement !report command to trigger a report
+- [x] Create a reporting system to gather data and send reports
+- [x] Integrate reporting system into the simulation

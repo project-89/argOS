@@ -17,6 +17,8 @@ import { findRoomByStringId } from "../utils/queries";
 import { createAuditoryStimulus } from "../factories/stimulusFactory";
 import { StimulusSource, StimulusType } from "../types/stimulus";
 import { setupBasicConversation } from "../examples/basic-conversation";
+import { initializeDiscord } from "../discord";
+// import { setupBasicConversation } from "../examples/basic-conversation";
 // import { setupEmergentBeing } from "../examples/emergentGemini";
 
 // Track user connections with Map
@@ -173,6 +175,9 @@ function setupRuntimeEventHandlers(runtime: SimulationRuntime) {
 
 // Set up initial event handlers
 setupRuntimeEventHandlers(runtime);
+
+// Initialize Discord client
+initializeDiscord(runtime);
 
 const wss = new WebSocketServer({ port: 3000 });
 

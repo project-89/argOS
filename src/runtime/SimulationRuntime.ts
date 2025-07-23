@@ -28,6 +28,8 @@ import { PlanningSystem } from "../systems/PlanningSystem";
 import { ActionSequenceSystem } from "../systems/ActionSequenceSystem";
 import { MetaCognitionSystem } from "../systems/MetaCognitionSystem";
 import { AttentionSystem } from "../systems/AttentionSystem";
+import { createReportingSystem } from "../systems/reporting";
+import { createDiscordReportSystem } from "../systems/discordReportSystem";
 
 // Validate required environment variables
 if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
@@ -63,12 +65,14 @@ export interface RuntimeConfig {
 // Define default system configurations
 const defaultConsciousSystems = [
   RoomSystem.create,
-  PerceptionSystem3.create,  // Enhanced perception with pattern detection
-  AttentionSystem.create,   // Filter perception based on salience
-  ReasoningSystem.create,   // Deep reasoning when needed
-  ThinkingSystem3.create,   // Enhanced thinking with working memory
+  PerceptionSystem3.create, // Enhanced perception with pattern detection
+  AttentionSystem.create, // Filter perception based on salience
+  ReasoningSystem.create, // Deep reasoning when needed
+  ThinkingSystem3.create, // Enhanced thinking with working memory
   ActionSystem.create,
   CleanupSystem.create,
+  createReportingSystem,
+  createDiscordReportSystem,
 ];
 
 const defaultSubconsciousSystems = [
