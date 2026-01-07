@@ -1,0 +1,372 @@
+import { generateText } from "ai";
+import { google } from "@ai-sdk/google";
+import type { World } from "../ecs/world";
+import { addEntity, addComponent, removeEntity, query, getRelationTargets, hasComponent } from "bitecs";
+import { Name, Description, Agent, Mind, Room, Thought, Perception, ConversationTurn } from "../ecs/components";
+import { OccupiesRoom, HasThought, HasPerception, HasConversation } from "../ecs/relations";
+import { 
+  getKnowledgeSummary, 
+  getRelevantMemories, 
+  getImpressionOf,
+  getAgentMemories
+} from "./knowledge-graph";
+import { Memory } from "../ecs/components";
+
+const model = google("gemini-2.5-flash");
+
+export interface AgentAction {
+  type: "speak" | "observe" | "move" | "interact" | "think" | "wait";
+  target?: string;
+  content?: string;
+}
+
+export function getAgentThoughts(world: World, agentEid: number): number[] {
+  const thoughtEids = getRelationTargets(world, agentEid, HasThought);
+  return thoughtEids.filter(eid => hasComponent(world, eid, Thought));
+}
+
+export function getAgentPerceptions(world: World, agentEid: number): number[] {
+  const perceptionEids = getRelationTargets(world, agentEid, HasPerception);
+  return perceptionEids.filter(eid => hasComponent(world, eid, Perception));
+}
+
+export function getAgentConversation(world: World, agentEid: number): number[] {
+  const turnEids = getRelationTargets(world, agentEid, HasConversation);
+  return turnEids
+    .filter(eid => hasComponent(world, eid, ConversationTurn))
+    .sort((a, b) => (ConversationTurn.timestamp[a] || 0) - (ConversationTurn.timestamp[b] || 0));
+}
+
+export function clearAllAgentMemory(world: World): void {
+  const agents = Array.from(query(world, [Agent]));
+  for (const agentEid of agents) {
+    const thoughts = getAgentThoughts(world, agentEid);
+    const perceptions = getAgentPerceptions(world, agentEid);
+    const conversation = getAgentConversation(world, agentEid);
+    
+    for (const eid of [...thoughts, ...perceptions, ...conversation]) {
+      removeEntity(world, eid);
+    }
+  }
+}
+
+export function addPerception(
+  world: World,
+  agentEid: number,
+  data: { type: string; content: string; source: string; intensity?: number }
+): number {
+  const perceptionEid = addEntity(world);
+  addComponent(world, perceptionEid, Perception);
+  addComponent(world, agentEid, HasPerception(perceptionEid));
+
+  Perception.type[perceptionEid] = data.type;
+  Perception.content[perceptionEid] = data.content;
+  Perception.source[perceptionEid] = data.source;
+  Perception.intensity[perceptionEid] = data.intensity ?? 1;
+  Perception.timestamp[perceptionEid] = Date.now();
+
+  prunePerceptions(world, agentEid, 20);
+
+  return perceptionEid;
+}
+
+function prunePerceptions(world: World, agentEid: number, maxPerceptions: number): void {
+  const perceptionEids = getAgentPerceptions(world, agentEid);
+  if (perceptionEids.length <= maxPerceptions) return;
+
+  const sorted = perceptionEids.sort((a, b) => 
+    (Perception.timestamp[a] || 0) - (Perception.timestamp[b] || 0)
+  );
+
+  const toRemove = sorted.slice(0, sorted.length - maxPerceptions);
+  for (const eid of toRemove) {
+    removeEntity(world, eid);
+  }
+}
+
+export function addThought(
+  world: World,
+  agentEid: number,
+  data: { content: string; type?: string; salience?: number }
+): number {
+  const thoughtEid = addEntity(world);
+  addComponent(world, thoughtEid, Thought);
+  addComponent(world, agentEid, HasThought(thoughtEid));
+
+  Thought.content[thoughtEid] = data.content;
+  Thought.type[thoughtEid] = data.type || "reflection";
+  Thought.salience[thoughtEid] = data.salience ?? 0.5;
+  Thought.timestamp[thoughtEid] = Date.now();
+
+  pruneThoughts(world, agentEid, 10);
+
+  return thoughtEid;
+}
+
+function pruneThoughts(world: World, agentEid: number, maxThoughts: number): void {
+  const thoughtEids = getAgentThoughts(world, agentEid);
+  if (thoughtEids.length <= maxThoughts) return;
+
+  const sorted = thoughtEids.sort((a, b) => 
+    (Thought.timestamp[a] || 0) - (Thought.timestamp[b] || 0)
+  );
+
+  const toRemove = sorted.slice(0, sorted.length - maxThoughts);
+  for (const eid of toRemove) {
+    removeEntity(world, eid);
+  }
+}
+
+export function addConversationTurn(
+  world: World,
+  agentEid: number,
+  role: "user" | "assistant",
+  content: string
+): number {
+  const turnEid = addEntity(world);
+  addComponent(world, turnEid, ConversationTurn);
+  addComponent(world, agentEid, HasConversation(turnEid));
+
+  ConversationTurn.role[turnEid] = role;
+  ConversationTurn.content[turnEid] = content;
+  ConversationTurn.timestamp[turnEid] = Date.now();
+
+  pruneConversation(world, agentEid, 20);
+
+  return turnEid;
+}
+
+function pruneConversation(world: World, agentEid: number, maxTurns: number): void {
+  const turnEids = getAgentConversation(world, agentEid);
+  if (turnEids.length <= maxTurns) return;
+
+  const toRemove = turnEids.slice(0, turnEids.length - maxTurns);
+  for (const eid of toRemove) {
+    removeEntity(world, eid);
+  }
+}
+
+function buildKnowledgeContext(world: World, eid: number, othersInRoom: string[]): string {
+  const lines: string[] = [];
+  
+  const knowledgeSummary = getKnowledgeSummary(world, eid);
+  if (knowledgeSummary) {
+    lines.push("LONG-TERM KNOWLEDGE:");
+    lines.push(knowledgeSummary);
+  }
+  
+  if (othersInRoom.length > 0) {
+    lines.push("\nIMPRESSIONS OF THOSE PRESENT:");
+    for (const otherName of othersInRoom) {
+      const impression = getImpressionOf(world, eid, otherName);
+      if (impression) {
+        const sentiment = impression.overallSentiment > 0.2 ? "positive" : 
+                         impression.overallSentiment < -0.2 ? "negative" : "neutral";
+        const traits = impression.traits.map(t => t.trait).join(", ");
+        lines.push(`  ${otherName}: ${sentiment} (${traits})`);
+      } else {
+        lines.push(`  ${otherName}: no prior impression`);
+      }
+    }
+  }
+  
+  return lines.join("\n");
+}
+
+function buildAgentContext(world: World, eid: number): string {
+  const name = Name.value[eid];
+  const description = Description.value[eid];
+  const role = Agent.role[eid];
+  const systemPrompt = Agent.systemPrompt[eid];
+  const mode = Mind.mode[eid];
+  const arousal = Mind.arousal[eid];
+  const focus = Mind.focus[eid];
+
+  const roomTargets = getRelationTargets(world, eid, OccupiesRoom);
+  let roomContext = "nowhere in particular";
+  let roomAmbience = "";
+  let othersInRoom: string[] = [];
+
+  if (roomTargets.length > 0) {
+    const roomEid = roomTargets[0];
+    roomContext = Name.value[roomEid] || "an unknown room";
+    roomAmbience = Room.ambience[roomEid] || "";
+
+    const agents = Array.from(query(world, [Agent]));
+    for (const otherEid of agents) {
+      if (otherEid === eid) continue;
+      const otherRooms = getRelationTargets(world, otherEid, OccupiesRoom);
+      if (otherRooms.includes(roomEid)) {
+        othersInRoom.push(Name.value[otherEid]);
+      }
+    }
+  }
+
+  const perceptionEids = getAgentPerceptions(world, eid);
+  const recentPerceptions = perceptionEids
+    .sort((a, b) => (Perception.timestamp[b] || 0) - (Perception.timestamp[a] || 0))
+    .slice(0, 5);
+
+  const thoughtEids = getAgentThoughts(world, eid);
+  const recentThoughts = thoughtEids
+    .sort((a, b) => (Thought.timestamp[b] || 0) - (Thought.timestamp[a] || 0))
+    .slice(0, 3);
+
+  return `You are ${name}.
+
+IDENTITY:
+${description}
+
+ROLE: ${role}
+
+BEHAVIORAL GUIDELINES:
+${systemPrompt}
+
+CURRENT STATE:
+- Location: ${roomContext}
+- Ambience: ${roomAmbience}
+- Mental Mode: ${mode}
+- Arousal Level: ${(arousal * 100).toFixed(0)}%
+- Current Focus: ${focus || "nothing specific"}
+- Others Present: ${othersInRoom.length > 0 ? othersInRoom.join(", ") : "no one else"}
+
+RECENT PERCEPTIONS:
+${recentPerceptions.length > 0 
+  ? recentPerceptions.map(eid => `[${Perception.type[eid]}] ${Perception.content[eid]} (from: ${Perception.source[eid]})`).join("\n")
+  : "Nothing notable recently."}
+
+RECENT THOUGHTS:
+${recentThoughts.length > 0
+  ? recentThoughts.map(eid => `- ${Thought.content[eid]}`).join("\n")
+  : "Mind is clear."}
+
+${buildKnowledgeContext(world, eid, othersInRoom)}`;
+}
+
+export async function agentThink(world: World, eid: number): Promise<AgentAction> {
+  const context = buildAgentContext(world, eid);
+  const name = Name.value[eid];
+
+  const conversationEids = getAgentConversation(world, eid);
+  const conversationHistory = conversationEids.slice(-6).map(turnEid => ({
+    role: ConversationTurn.role[turnEid] as "user" | "assistant",
+    content: ConversationTurn.content[turnEid],
+  }));
+
+  const prompt = `Based on your current situation, perceptions, and character, decide what to do next.
+
+You can:
+- speak: Say something out loud (provide content)
+- observe: Pay attention to someone/something specific (provide target)
+- think: Have an internal thought (provide content)
+- interact: Physically interact with something (provide target and content describing the action)
+- wait: Do nothing, just exist in the moment
+
+Respond with JSON only:
+{
+  "innerThought": "Your internal reasoning about what to do",
+  "action": {
+    "type": "speak|observe|think|interact|wait",
+    "target": "optional - who/what",
+    "content": "optional - what you say/think/do"
+  }
+}
+
+Stay in character. Be concise. React naturally to your perceptions and surroundings.`;
+
+  try {
+    const { text } = await generateText({
+      model,
+      system: context,
+      messages: [
+        ...conversationHistory,
+        {
+          role: "user" as const,
+          content: prompt,
+        },
+      ],
+    });
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return { type: "wait" };
+    }
+
+    const result = JSON.parse(jsonMatch[0]);
+    
+    if (result.innerThought) {
+      addThought(world, eid, { content: result.innerThought, type: "reasoning" });
+    }
+
+    const action: AgentAction = {
+      type: result.action?.type || "wait",
+      target: result.action?.target,
+      content: result.action?.content,
+    };
+
+    addConversationTurn(world, eid, "user", prompt);
+    addConversationTurn(world, eid, "assistant", text);
+
+    console.log(`[${name}] thinks: "${result.innerThought?.slice(0, 80)}..."`);
+    console.log(`[${name}] action: ${action.type}${action.content ? ` - "${action.content.slice(0, 50)}..."` : ""}`);
+
+    return action;
+  } catch (error) {
+    console.error(`[${name}] cognition error:`, error);
+    return { type: "wait" };
+  }
+}
+
+export async function processAgentCognition(
+  world: World,
+  eid: number,
+  stimuli: Array<{ type: string; content: string; source: string }>
+): Promise<AgentAction> {
+  for (const stimulus of stimuli) {
+    addPerception(world, eid, {
+      type: stimulus.type,
+      content: stimulus.content,
+      source: stimulus.source,
+    });
+  }
+
+  if (stimuli.length > 0) {
+    Mind.arousal[eid] = Math.min(1, Mind.arousal[eid] + 0.1 * stimuli.length);
+  }
+
+  return agentThink(world, eid);
+}
+
+export function getAgentMemory(world: World, eid: number): {
+  perceptions: Array<{ type: string; content: string; source: string; timestamp: number }>;
+  thoughts: Array<{ content: string; timestamp: number }>;
+  recentActions: AgentAction[];
+  conversationHistory: Array<{ role: "user" | "assistant"; content: string }>;
+} {
+  const perceptionEids = getAgentPerceptions(world, eid);
+  const perceptions = perceptionEids.map(peid => ({
+    type: Perception.type[peid],
+    content: Perception.content[peid],
+    source: Perception.source[peid],
+    timestamp: Perception.timestamp[peid],
+  }));
+
+  const thoughtEids = getAgentThoughts(world, eid);
+  const thoughts = thoughtEids.map(teid => ({
+    content: Thought.content[teid],
+    timestamp: Thought.timestamp[teid],
+  }));
+
+  const conversationEids = getAgentConversation(world, eid);
+  const conversationHistory = conversationEids.map(ceid => ({
+    role: ConversationTurn.role[ceid] as "user" | "assistant",
+    content: ConversationTurn.content[ceid],
+  }));
+
+  return {
+    perceptions,
+    thoughts,
+    recentActions: [],
+    conversationHistory,
+  };
+}

@@ -1,0 +1,8 @@
+{
+  "name": "Energy",
+  "description": "Represents the energy level of an agent",
+  "properties": {
+    "level": "number",
+    "maxLevel": "number"
+  }
+}

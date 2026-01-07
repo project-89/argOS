@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArgOS v2 - Pixi.js Rendering Demo</title>
+  <script src="https://pixijs.download/v8.0.0/pixi.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    :root {
+      --bg-dark: #0a0a0f;
+      --bg-card: #12121a;
+      --border: #2a2a3a;
+      --text: #e0e0e8;
+      --text-dim: #8888a0;
+      --accent: #6366f1;
+    }
+    
+    body {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      background: var(--bg-dark);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .header {
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .logo {
+      font-size: 1.25rem;
+      font-weight: bold;
+      background: linear-gradient(135deg, var(--accent) 0%, #a855f7 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .status {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      font-size: 0.85rem;
+    }
+    
+    .status-item {
+      padding: 0.4rem 0.75rem;
+      background: var(--bg-dark);
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+    }
+    
+    .main {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+    
+    .canvas-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    #pixi-canvas {
+      display: block;
+    }
+    
+    .sidebar {
+      width: 320px;
+      background: var(--bg-card);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    
+    .panel {
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .panel.flex { flex: 1; min-height: 0; }
+    
+    .panel-header {
+      padding: 0.75rem 1rem;
+      background: var(--bg-dark);
+      font-weight: bold;
+      font-size: 0.85rem;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .panel-content {
+      padding: 0.75rem;
+      overflow-y: auto;
+      font-size: 0.85rem;
+    }
+    
+    .entity-card {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.5rem;
+      margin-bottom: 0.5rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .entity-card:hover {
+      border-color: var(--accent);
+    }
+    
+    .entity-card.selected {
+      border-color: var(--accent);
+      background: rgba(99, 102, 241, 0.1);
+    }
+    
+    .entity-name { font-weight: bold; }
+    .entity-info { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.25rem; }
+    
+    .controls {
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    
+    .control-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+    
+    .btn {
+      flex: 1;
+      padding: 0.5rem;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 0.25rem;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: all 0.2s;
+    }
+    
+    .btn:hover { border-color: var(--accent); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    .log {
+      font-family: monospace;
+      font-size: 0.75rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    
+    .log-entry {
+      padding: 0.25rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .log-time { color: var(--text-dim); }
+    .log-success { color: #22c55e; }
+    .log-error { color: #ef4444; }
+    .log-info { color: #60a5fa; }
+    
+    .sprite-preview {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    
+    .sprite-item {
+      width: 48px;
+      height: 48px;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      image-rendering: pixelated;
+    }
+    
+    .sprite-item:hover { border-color: var(--accent); }
+    .sprite-item img { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+    
+    .god-input-container {
+      padding: 0.75rem;
+      background: var(--bg-dark);
+      border-top: 1px solid var(--border);
+    }
+    
+    .god-input {
+      width: 100%;
+      padding: 0.6rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 0.5rem;
+      font-family: inherit;
+      font-size: 0.85rem;
+      resize: none;
+    }
+    
+    .god-input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="logo">ArgOS v2 - Pixi.js Renderer</div>
+    <div class="status">
+      <div class="status-item" id="status-connection">Connecting...</div>
+      <div class="status-item">Entities: <span id="entity-count">0</span></div>
+      <div class="status-item">FPS: <span id="fps-counter">0</span></div>
+    </div>
+  </header>
+  
+  <main class="main">
+    <div class="canvas-container">
+      <canvas id="pixi-canvas"></canvas>
+    </div>
+    
+    <aside class="sidebar">
+      <div class="panel">
+        <div class="panel-header">Controls</div>
+        <div class="controls">
+          <div class="control-row">
+            <button class="btn primary" onclick="createFarmScene()">Create Farm Scene</button>
+          </div>
+          <div class="control-row">
+            <button class="btn" onclick="addFarmer()">Add Farmer</button>
+            <button class="btn" onclick="addAnimal()">Add Animal</button>
+          </div>
+          <div class="control-row">
+            <button class="btn" onclick="triggerWalk()">Walk</button>
+            <button class="btn" onclick="triggerIdle()">Idle</button>
+            <button class="btn" onclick="triggerAction()">Action</button>
+          </div>
+          <div class="control-row">
+            <button class="btn" onclick="resetScene()">Reset</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="panel">
+        <div class="panel-header">Entities</div>
+        <div class="panel-content" id="entities-list">
+          <p style="color: var(--text-dim)">No entities yet</p>
+        </div>
+      </div>
+      
+      <div class="panel flex">
+        <div class="panel-header">Log</div>
+        <div class="panel-content log" id="log-output"></div>
+      </div>
+      
+      <div class="god-input-container">
+        <textarea 
+          class="god-input" 
+          id="god-input" 
+          rows="2"
+          placeholder="God command (e.g., 'create a chicken at 5,5')"
+          onkeydown="if(event.key==='Enter' && !event.shiftKey) { event.preventDefault(); sendGodCommand(); }"
+        ></textarea>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    let ws;
+    let app;
+    let state = { entities: [], spriteMap: new Map(), textures: new Map() };
+    let selectedEntityId = null;
+    let lastFrameTime = performance.now();
+    let frameCount = 0;
+    
+    const TILE_SIZE = 32;
+    const SCALE = 2;
+    
+    function log(message, type = 'info') {
+      const container = document.getElementById('log-output');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      const time = new Date().toLocaleTimeString();
+      entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-${type}">${message}</span>`;
+      container.insertBefore(entry, container.firstChild);
+      while (container.children.length > 100) {
+        container.removeChild(container.lastChild);
+      }
+    }
+    
+    async function initPixi() {
+      log('Initializing Pixi.js...');
+      
+      const canvas = document.getElementById('pixi-canvas');
+      const container = canvas.parentElement;
+      
+      app = new PIXI.Application();
+      await app.init({
+        canvas: canvas,
+        width: container.clientWidth,
+        height: container.clientHeight,
+        backgroundColor: 0x1a1a2e,
+        antialias: false,
+        resolution: window.devicePixelRatio || 1,
+        autoDensity: true,
+      });
+      
+      app.stage.scale.set(SCALE);
+      
+      window.addEventListener('resize', () => {
+        app.renderer.resize(container.clientWidth, container.clientHeight);
+      });
+      
+      app.ticker.add(gameLoop);
+      log('Pixi.js initialized', 'success');
+    }
+    
+    function gameLoop(ticker) {
+      frameCount++;
+      const now = performance.now();
+      if (now - lastFrameTime >= 1000) {
+        document.getElementById('fps-counter').textContent = frameCount;
+        frameCount = 0;
+        lastFrameTime = now;
+      }
+      
+      updateAnimations(ticker.deltaMS);
+    }
+    
+    function updateAnimations(deltaMs) {
+      for (const [eid, spriteData] of state.spriteMap) {
+        if (!spriteData.animation || !spriteData.playing) continue;
+        
+        spriteData.frameTime += deltaMs;
+        const frameInterval = 1000 / spriteData.animation.frameRate;
+        
+        if (spriteData.frameTime >= frameInterval) {
+          spriteData.frameTime = 0;
+          spriteData.frameIndex++;
+          
+          if (spriteData.frameIndex >= spriteData.animation.frames.length) {
+            if (spriteData.animation.loop) {
+              spriteData.frameIndex = 0;
+            } else {
+              spriteData.playing = false;
+              spriteData.frameIndex = spriteData.animation.frames.length - 1;
+            }
+          }
+          
+          updateSpriteFrame(eid, spriteData);
+        }
+      }
+    }
+    
+    function updateSpriteFrame(eid, spriteData) {
+      const frame = spriteData.animation.frames[spriteData.frameIndex];
+      const texture = getFrameTexture(spriteData.atlasId, frame);
+      if (texture && spriteData.sprite) {
+        spriteData.sprite.texture = texture;
+      }
+    }
+    
+    async function loadTexture(path) {
+      if (state.textures.has(path)) {
+        return state.textures.get(path);
+      }
+
+      try {
+        const texture = await PIXI.Assets.load(path);
+        texture.source.scaleMode = 'nearest';
+        state.textures.set(path, texture);
+        log(`Loaded texture: ${path}`, 'success');
+        // Update any sprites waiting for this texture
+        updateSpriteTextures();
+        return texture;
+      } catch (e) {
+        log(`Failed to load texture: ${path}`, 'error');
+        return null;
+      }
+    }
+    
+    function getFrameTexture(atlasId, frameId) {
+      const atlas = state.atlases?.get(atlasId);
+      if (!atlas) return null;
+      
+      const baseTexture = state.textures.get(atlas.imagePath);
+      if (!baseTexture) return null;
+      
+      const frame = atlas.frames.get(frameId);
+      if (!frame) return null;
+      
+      const cacheKey = `${atlasId}:${frameId}`;
+      if (state.textures.has(cacheKey)) {
+        return state.textures.get(cacheKey);
+      }
+      
+      const texture = new PIXI.Texture({
+        source: baseTexture.source,
+        frame: new PIXI.Rectangle(frame.x, frame.y, frame.width, frame.height),
+      });
+      
+      state.textures.set(cacheKey, texture);
+      return texture;
+    }
+    
+    function createSprite(entity) {
+      if (!entity.pixiSprite) return null;
+
+      const { atlasId, frameId } = entity.pixiSprite;
+      const texture = getFrameTexture(atlasId, frameId);
+
+      let sprite;
+      if (!texture) {
+        // Placeholder sprite - will be updated when texture loads
+        const graphics = new PIXI.Graphics();
+        graphics.rect(0, 0, TILE_SIZE, TILE_SIZE);
+        graphics.fill(0xff00ff);
+        sprite = new PIXI.Sprite(app.renderer.generateTexture(graphics));
+      } else {
+        sprite = new PIXI.Sprite(texture);
+      }
+
+      // Always set anchor at bottom-center for character sprites
+      sprite.anchor.set(0.5, 1);
+      return sprite;
+    }
+
+    // Update sprite texture when atlas textures become available
+    function updateSpriteTextures() {
+      for (const [eid, spriteData] of state.spriteMap) {
+        if (!spriteData.sprite) continue;
+
+        const texture = getFrameTexture(spriteData.atlasId, spriteData.frameId);
+        if (texture && spriteData.sprite.texture !== texture) {
+          spriteData.sprite.texture = texture;
+          spriteData.sprite.anchor.set(0.5, 1);
+        }
+      }
+    }
+    
+    function syncEntities(entities) {
+      const existingIds = new Set(entities.map(e => e.id));
+      
+      for (const [eid, spriteData] of state.spriteMap) {
+        if (!existingIds.has(eid)) {
+          if (spriteData.sprite) {
+            app.stage.removeChild(spriteData.sprite);
+            spriteData.sprite.destroy();
+          }
+          state.spriteMap.delete(eid);
+        }
+      }
+      
+      for (const entity of entities) {
+        if (!entity.gridPosition) continue;
+
+        let spriteData = state.spriteMap.get(entity.id);
+
+        // Get sprite info from pixiSprite or characterRig
+        let atlasId = entity.pixiSprite?.atlasId || entity.characterRig?.baseAtlas;
+        let frameId = entity.pixiSprite?.frameId;
+
+        // If we have a character rig, get the frame from animation
+        if (entity.characterRig?.baseAtlas) {
+          atlasId = entity.characterRig.baseAtlas;
+          const rig = entity.characterRig;
+
+          // Try to get animation from server data, otherwise look up in atlas
+          let animation = rig.currentAnimation;
+          if (!animation && rig.currentAction && rig.currentDirection) {
+            const animId = `${rig.currentAction}_${rig.currentDirection}`;
+            animation = state.atlases?.get(atlasId)?.animations?.get(animId);
+          }
+
+          if (animation?.frames?.length > 0) {
+            frameId = animation.frames[0];
+          }
+        }
+
+        if (!spriteData && atlasId && frameId) {
+          const spriteEntity = { ...entity, pixiSprite: { atlasId, frameId } };
+          const sprite = createSprite(spriteEntity);
+          if (sprite) {
+            app.stage.addChild(sprite);
+            spriteData = {
+              sprite,
+              atlasId: atlasId,
+              frameId: frameId,
+              animation: null,
+              frameIndex: 0,
+              frameTime: 0,
+              playing: false,
+            };
+            state.spriteMap.set(entity.id, spriteData);
+          }
+        }
+        
+        if (spriteData && spriteData.sprite) {
+          spriteData.sprite.x = entity.gridPosition.x * TILE_SIZE + TILE_SIZE / 2;
+          spriteData.sprite.y = entity.gridPosition.y * TILE_SIZE + TILE_SIZE;
+          spriteData.sprite.zIndex = entity.gridPosition.y;
+          
+          if (entity.characterRig) {
+            const rig = entity.characterRig;
+            if (rig.currentAnimation) {
+              spriteData.atlasId = rig.baseAtlas;
+              spriteData.animation = rig.currentAnimation;
+              spriteData.playing = true;
+            }
+          }
+        }
+      }
+      
+      app.stage.sortableChildren = true;
+      
+      document.getElementById('entity-count').textContent = state.spriteMap.size;
+      renderEntityList(entities);
+    }
+    
+    function renderEntityList(entities) {
+      const container = document.getElementById('entities-list');
+      
+      if (entities.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-dim)">No entities yet</p>';
+        return;
+      }
+      
+      container.innerHTML = '';
+      
+      for (const entity of entities) {
+        if (!entity.gridPosition) continue;
+        
+        const card = document.createElement('div');
+        card.className = 'entity-card' + (entity.id === selectedEntityId ? ' selected' : '');
+        card.onclick = () => selectEntity(entity.id);
+        
+        card.innerHTML = `
+          <div class="entity-name">${entity.name || 'Entity ' + entity.id}</div>
+          <div class="entity-info">
+            Position: (${entity.gridPosition.x}, ${entity.gridPosition.y})
+            ${entity.characterRig ? ` | Action: ${entity.characterRig.currentAction || 'idle'}` : ''}
+          </div>
+        `;
+        
+        container.appendChild(card);
+      }
+    }
+    
+    function selectEntity(id) {
+      selectedEntityId = id;
+      const entities = state.entities || [];
+      renderEntityList(entities);
+      
+      const spriteData = state.spriteMap.get(id);
+      if (spriteData && spriteData.sprite) {
+        centerCameraOn(spriteData.sprite.x, spriteData.sprite.y);
+      }
+    }
+    
+    function centerCameraOn(x, y) {
+      const centerX = app.screen.width / 2 / SCALE;
+      const centerY = app.screen.height / 2 / SCALE;
+      app.stage.pivot.set(x - centerX, y - centerY);
+    }
+    
+    function connect() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}`);
+      
+      ws.onopen = () => {
+        document.getElementById('status-connection').textContent = 'Connected';
+        document.getElementById('status-connection').style.borderColor = '#22c55e';
+        log('Connected to server', 'success');
+        ws.send(JSON.stringify({ type: 'getState' }));
+      };
+      
+      ws.onclose = () => {
+        document.getElementById('status-connection').textContent = 'Disconnected';
+        document.getElementById('status-connection').style.borderColor = '#ef4444';
+        log('Disconnected from server', 'error');
+        setTimeout(connect, 2000);
+      };
+      
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleMessage(msg);
+      };
+    }
+    
+    function convertAtlases(atlasesObj) {
+      if (!atlasesObj) return new Map();
+      const result = new Map();
+      for (const [id, atlas] of Object.entries(atlasesObj)) {
+        result.set(id, {
+          ...atlas,
+          frames: new Map(Object.entries(atlas.frames || {})),
+          animations: new Map(Object.entries(atlas.animations || {})),
+        });
+      }
+      return result;
+    }
+
+    // Load all atlas textures that aren't already loaded
+    function loadAtlasTextures() {
+      if (!state.atlases) return;
+      for (const [id, atlas] of state.atlases) {
+        if (atlas.imagePath && !state.textures.has(atlas.imagePath)) {
+          loadTexture(atlas.imagePath);
+        }
+      }
+    }
+
+    function handleMessage(msg) {
+      switch (msg.type) {
+        case 'state':
+          if (msg.payload) {
+            state.entities = msg.payload.entities || [];
+            state.atlases = msg.payload.atlases ? convertAtlases(msg.payload.atlases) : state.atlases;
+            // Auto-load atlas textures
+            loadAtlasTextures();
+            syncEntities(state.entities);
+          }
+          break;
+        case 'godResponse':
+          handleGodResponse(msg.payload);
+          break;
+        case 'error':
+          log(msg.payload, 'error');
+          break;
+      }
+    }
+    
+    function handleGodResponse(payload) {
+      if (payload.thinking) {
+        log(`God: ${payload.thinking}`, 'info');
+      }
+      if (payload.results) {
+        for (const result of payload.results) {
+          if (result.success) {
+            log(`Action: ${JSON.stringify(result.result).slice(0, 80)}...`, 'success');
+          } else {
+            log(`Error: ${result.error}`, 'error');
+          }
+        }
+      }
+      if (payload.worldState) {
+        state.entities = payload.worldState.entities || [];
+        state.atlases = payload.worldState.atlases ? convertAtlases(payload.worldState.atlases) : state.atlases;
+        syncEntities(state.entities);
+      }
+    }
+    
+    function sendGodCommand(cmd) {
+      const input = document.getElementById('god-input');
+      const command = cmd || input.value.trim();
+      
+      if (!command || !ws || ws.readyState !== WebSocket.OPEN) return;
+      
+      log(`> ${command}`, 'info');
+      ws.send(JSON.stringify({ type: 'godCommand', payload: { command } }));
+      input.value = '';
+    }
+    
+    async function createFarmScene() {
+      log('Creating farm scene...', 'info');
+      
+      await loadTexture('/32x32/Characters_32x32/Farmer_1_32x32.png');
+      
+      sendGodCommand(`Create a farm scene with:
+1. A 20x15 grass tilemap 
+2. A farmer named "Old MacDonald" at position (10, 7) using farmer_1 character sprites
+3. Set the farmer to idle animation facing down
+Show me the world map and all entities after creation.`);
+    }
+    
+    function addFarmer() {
+      const x = Math.floor(Math.random() * 15) + 2;
+      const y = Math.floor(Math.random() * 10) + 2;
+      sendGodCommand(`Create a new farmer NPC at position (${x}, ${y}) with a character rig using farmer_1 sprites. Set them to idle animation.`);
+    }
+    
+    function addAnimal() {
+      const animals = ['chicken', 'cow', 'pig', 'sheep', 'duck'];
+      const animal = animals[Math.floor(Math.random() * animals.length)];
+      const x = Math.floor(Math.random() * 15) + 2;
+      const y = Math.floor(Math.random() * 10) + 2;
+      sendGodCommand(`Create a ${animal} at position (${x}, ${y}) with appropriate sprites.`);
+    }
+    
+    function triggerWalk() {
+      if (selectedEntityId) {
+        const directions = ['up', 'down', 'left', 'right'];
+        const dir = directions[Math.floor(Math.random() * directions.length)];
+        sendGodCommand(`Make entity ${selectedEntityId} walk ${dir} for a few tiles with walk animation.`);
+      } else {
+        sendGodCommand('Make all characters walk in random directions with walk animations.');
+      }
+    }
+    
+    function triggerIdle() {
+      if (selectedEntityId) {
+        sendGodCommand(`Set entity ${selectedEntityId} to idle animation.`);
+      } else {
+        sendGodCommand('Set all characters to idle animation.');
+      }
+    }
+    
+    function triggerAction() {
+      if (selectedEntityId) {
+        sendGodCommand(`Make entity ${selectedEntityId} perform a random action like digging or harvesting.`);
+      } else {
+        sendGodCommand('Make all farmers perform random farm work actions.');
+      }
+    }
+    
+    function resetScene() {
+      if (confirm('Reset the scene?')) {
+        ws.send(JSON.stringify({ type: 'reset' }));
+        state.spriteMap.clear();
+        while (app.stage.children.length > 0) {
+          app.stage.removeChildAt(0);
+        }
+        log('Scene reset', 'info');
+      }
+    }
+    
+    async function init() {
+      await initPixi();
+      connect();
+    }
+    
+    init();
+  </script>
+</body>
+</html>

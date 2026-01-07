@@ -1,0 +1,1380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArgOS v2 - Simulation Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    :root {
+      --bg-dark: #0a0a0f;
+      --bg-card: #12121a;
+      --bg-card-hover: #1a1a25;
+      --border: #2a2a3a;
+      --text: #e0e0e8;
+      --text-dim: #8888a0;
+      --accent: #6366f1;
+      --accent-glow: rgba(99, 102, 241, 0.3);
+      --success: #22c55e;
+      --warning: #eab308;
+      --danger: #ef4444;
+    }
+    
+    body {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      background: var(--bg-dark);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-dark) 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .logo {
+      font-size: 1.25rem;
+      font-weight: bold;
+      background: linear-gradient(135deg, var(--accent) 0%, #a855f7 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    
+    .status {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.75rem;
+      background: var(--bg-card);
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      animation: pulse 2s infinite;
+    }
+    
+    .status-dot.paused { background: var(--warning); animation: none; }
+    .status-dot.disconnected { background: var(--danger); animation: none; }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    .tab-bar {
+      display: flex;
+      gap: 0.25rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .tab {
+      padding: 0.5rem 1rem;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      border-radius: 0.25rem;
+      font-family: inherit;
+      font-size: 0.85rem;
+    }
+    
+    .tab:hover { background: var(--bg-card-hover); color: var(--text); }
+    .tab.active { background: var(--accent); color: white; }
+    
+    .view { display: none; height: calc(100vh - 130px); overflow: hidden; }
+    .view.active { display: block; width: 100%; }
+    
+    .main {
+      display: grid;
+      grid-template-columns: 240px 1fr 280px;
+      gap: 1rem;
+      padding: 1rem;
+      padding-bottom: 60px;
+      height: 100%;
+      min-height: 0;
+      width: 100%;
+    }
+    
+    .entities-panel { min-width: 0; }
+    .details-panel { min-width: 0; }
+    
+    .panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .panel-header {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      font-weight: bold;
+      font-size: 0.9rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .panel-content {
+      padding: 0.5rem;
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
+    }
+    
+    .entity-card {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.4rem;
+      padding: 0.5rem 0.6rem;
+      margin-bottom: 0.4rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .entity-card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+    
+    .entity-card.selected {
+      border-color: var(--accent);
+      background: rgba(99, 102, 241, 0.1);
+    }
+    
+    .entity-name { font-weight: bold; font-size: 0.8rem; }
+    .entity-type {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+    }
+    
+    .entity-room { color: #22c55e; }
+    .entity-agent { color: #6366f1; }
+    .entity-stimulus_source { color: #eab308; }
+    
+    .arousal-bar {
+      height: 3px;
+      background: var(--bg-card);
+      border-radius: 2px;
+      margin-top: 0.4rem;
+      overflow: hidden;
+    }
+    
+    .arousal-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);
+      transition: width 0.3s;
+    }
+    
+    .center-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      min-height: 0;
+    }
+    
+    .narrative-box { flex: 2; min-height: 0; }
+    .event-log { flex: 1; min-height: 150px; }
+    
+    .event-item {
+      padding: 0.35rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.75rem;
+      line-height: 1.3;
+    }
+    
+    .event-time { color: var(--text-dim); font-size: 0.7rem; }
+    .event-speech { color: #60a5fa; }
+    .event-action { color: #a855f7; }
+    .event-thought { color: #6b7280; font-style: italic; }
+    .event-system { color: var(--text-dim); }
+    
+    .system-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.6rem;
+      background: var(--bg-dark);
+      border-radius: 0.5rem;
+      margin-bottom: 0.4rem;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .system-item:hover { border-color: var(--accent); }
+    .system-item.selected { border-color: var(--accent); background: rgba(99, 102, 241, 0.1); }
+    
+    .system-name { font-weight: bold; font-size: 0.85rem; }
+    .system-freq { font-size: 0.7rem; color: var(--text-dim); }
+    
+    .system-active {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+    }
+    
+    .system-active.inactive { background: var(--text-dim); }
+    
+    .detail-section { margin-bottom: 0.75rem; }
+    .detail-title {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 0.4rem;
+    }
+    .detail-value { font-size: 0.8rem; word-wrap: break-word; }
+    
+    .thought-bubble {
+      background: rgba(99, 102, 241, 0.1);
+      border-left: 2px solid var(--accent);
+      padding: 0.4rem 0.5rem;
+      margin-bottom: 0.3rem;
+      border-radius: 0 0.4rem 0.4rem 0;
+      font-size: 0.75rem;
+      font-style: italic;
+    }
+    
+    .knowledge-stat {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.2rem;
+      padding: 0.2rem 0.4rem;
+      background: var(--bg-dark);
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      margin-right: 0.4rem;
+    }
+    
+    .code-block {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      font-size: 0.75rem;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    .god-console {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      padding: 0.5rem 1rem;
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      z-index: 1000;
+      height: 50px;
+    }
+    
+    .god-console-input {
+      flex: 1;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.6rem 1rem;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.85rem;
+    }
+    
+    .god-console-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+    
+    .god-console-btn {
+      background: var(--accent);
+      border: none;
+      border-radius: 0.5rem;
+      padding: 0.6rem 1.25rem;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.85rem;
+    }
+    
+    .god-console-btn:hover { background: #4f46e5; }
+    .god-console-btn:disabled { background: var(--text-dim); cursor: not-allowed; }
+    
+    .god-console-btn.secondary {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+    }
+    
+    .god-console-btn.secondary:hover { border-color: var(--accent); }
+    
+    .god-response {
+      position: fixed;
+      bottom: 52px;
+      left: 1rem;
+      right: 1rem;
+      max-height: 300px;
+      overflow-y: auto;
+      background: var(--bg-card);
+      border: 1px solid var(--accent);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      font-size: 0.85rem;
+      display: none;
+      z-index: 1001;
+    }
+    
+    .god-response.visible { display: block; }
+    
+    .god-response-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.5rem;
+      color: var(--accent);
+      font-weight: bold;
+    }
+    
+    .god-response-close { cursor: pointer; color: var(--text-dim); }
+    
+    /* 2D Canvas View */
+    .canvas-view {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      gap: 0.75rem;
+      padding: 0.75rem;
+    }
+    
+    .canvas-container {
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      overflow: hidden;
+      position: relative;
+    }
+    
+    #world-canvas {
+      width: 100%;
+      height: 100%;
+    }
+    
+    .canvas-sidebar {
+      width: 280px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    
+    .canvas-info {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 0.75rem;
+    }
+    
+    .canvas-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.75rem;
+    }
+    
+    .legend-color {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+    }
+    
+    /* ASCII World View */
+    .ascii-view {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      gap: 0.75rem;
+      padding: 0.75rem;
+    }
+    
+    .ascii-container {
+      flex: 1;
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      overflow: auto;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    #ascii-display {
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      line-height: 1.1;
+      white-space: pre;
+      padding: 1rem;
+    }
+    
+    .ascii-sidebar {
+      width: 280px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    
+    .ascii-legend {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.25rem 0.5rem;
+      font-size: 0.8rem;
+    }
+    
+    .ascii-legend-char {
+      font-family: monospace;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="logo">ArgOS v2</div>
+    <div class="status">
+      <div class="status-indicator">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="connection-status">Connecting...</span>
+      </div>
+      <div class="status-indicator">
+        <span>Tick:</span>
+        <span id="tick-counter">0</span>
+      </div>
+      <div class="status-indicator">
+        <span id="entity-count">0</span> entities
+      </div>
+    </div>
+  </header>
+  
+  <nav class="tab-bar">
+    <button class="tab active" onclick="switchView('dashboard')">Dashboard</button>
+    <button class="tab" onclick="switchView('ascii')">ASCII World</button>
+    <button class="tab" onclick="switchView('canvas')">2D World</button>
+    <button class="tab" onclick="switchView('systems')">Systems</button>
+  </nav>
+  
+  <div class="god-response" id="god-response">
+    <div class="god-response-header">
+      <span>God Response</span>
+      <span class="god-response-close" onclick="hideGodResponse()">✕</span>
+    </div>
+    <div id="god-response-content"></div>
+  </div>
+  
+  <!-- Dashboard View -->
+  <div class="view active" id="view-dashboard">
+    <main class="main">
+      <aside class="panel entities-panel">
+        <div class="panel-header">
+          <span>Entities</span>
+        </div>
+        <div class="panel-content" id="entities-list"></div>
+      </aside>
+      
+      <section class="center-panel">
+        <div class="panel narrative-box">
+          <div class="panel-header">Narrative Feed</div>
+          <div class="panel-content" id="narrative-feed"></div>
+        </div>
+        
+        <div class="panel event-log">
+          <div class="panel-header">System Events</div>
+          <div class="panel-content" id="event-log"></div>
+        </div>
+      </section>
+      
+      <aside class="panel details-panel">
+        <div class="panel-header">Details</div>
+        <div class="panel-content" id="detail-panel">
+          <p style="color: var(--text-dim)">Select an entity or system</p>
+        </div>
+      </aside>
+    </main>
+  </div>
+  
+  <!-- ASCII World View -->
+  <div class="view" id="view-ascii">
+    <div class="ascii-view">
+      <div class="ascii-container">
+        <div id="ascii-display">No world map created yet. Use the God Console to create one!</div>
+      </div>
+      <div class="ascii-sidebar">
+        <div class="canvas-info">
+          <div class="panel-header" style="padding: 0; border: none; margin-bottom: 0.5rem;">ASCII World</div>
+          <p style="font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.5rem;">
+            A grid-based world where agents can move around.
+          </p>
+          <div class="ascii-legend">
+            <span class="ascii-legend-char" style="color: #444;">.</span><span>Floor (walkable)</span>
+            <span class="ascii-legend-char" style="color: #666;">#</span><span>Wall (solid)</span>
+            <span class="ascii-legend-char" style="color: #4488ff;">~</span><span>Water</span>
+            <span class="ascii-legend-char" style="color: #228822;">,</span><span>Grass</span>
+            <span class="ascii-legend-char" style="color: #886644;">+</span><span>Door</span>
+            <span class="ascii-legend-char" style="color: #ff6666;">@</span><span>Agent</span>
+          </div>
+        </div>
+        <div class="panel" style="flex: 1;">
+          <div class="panel-header">Entities in World</div>
+          <div class="panel-content" id="ascii-entities">
+            <p style="color: var(--text-dim)">No entities placed</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 2D World View -->
+  <div class="view" id="view-canvas">
+    <div class="canvas-view">
+      <div class="canvas-container">
+        <canvas id="world-canvas"></canvas>
+      </div>
+      <div class="canvas-sidebar">
+        <div class="canvas-info">
+          <div class="panel-header" style="padding: 0; border: none; margin-bottom: 0.5rem;">World View</div>
+          <p style="font-size: 0.8rem; color: var(--text-dim);">
+            Entities are positioned based on their Position component. 
+            Entities without positions are auto-arranged.
+          </p>
+          <div class="canvas-legend">
+            <div class="legend-item">
+              <div class="legend-color" style="background: #22c55e;"></div>
+              <span>Room</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background: #6366f1;"></div>
+              <span>Agent</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background: #eab308;"></div>
+              <span>Source</span>
+            </div>
+          </div>
+        </div>
+        <div class="panel" style="flex: 1;">
+          <div class="panel-header">Selected</div>
+          <div class="panel-content" id="canvas-detail">
+            <p style="color: var(--text-dim)">Click an entity</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Systems View -->
+  <div class="view" id="view-systems">
+    <main class="main" style="grid-template-columns: 320px 1fr;">
+      <aside class="panel">
+        <div class="panel-header">Active Systems</div>
+        <div class="panel-content" id="systems-list-full"></div>
+      </aside>
+      
+      <div class="panel">
+        <div class="panel-header">System Details</div>
+        <div class="panel-content" id="system-detail-panel">
+          <p style="color: var(--text-dim)">Select a system to view its code and configuration</p>
+        </div>
+      </div>
+    </main>
+  </div>
+  
+  <footer class="god-console">
+    <span style="color: var(--accent); font-weight: bold;">⚡ GOD:</span>
+    <input 
+      type="text" 
+      class="god-console-input" 
+      id="god-input" 
+      placeholder="Create worlds, agents, systems... (e.g., 'Create a living cell with organelles')" 
+      onkeypress="if(event.key==='Enter') sendGodCommand()"
+    >
+    <button class="god-console-btn" onclick="sendGodCommand()" id="god-send-btn">Send</button>
+    <button class="god-console-btn secondary" onclick="togglePause()" id="pause-btn">⏸ Pause</button>
+    <button class="god-console-btn secondary" onclick="saveWorld()">💾 Save</button>
+    <button class="god-console-btn secondary" onclick="resetWorld()" style="background: var(--danger);">🔄 Reset</button>
+  </footer>
+  
+  <script>
+    let ws;
+    let state = null;
+    let selectedEntityId = null;
+    let selectedSystemName = null;
+    let currentView = 'dashboard';
+    
+    const COLORS = {
+      room: '#22c55e',
+      agent: '#6366f1',
+      stimulus_source: '#eab308',
+      object: '#ef4444',
+      entity: '#06b6d4',
+    };
+    
+    function connect() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}`);
+      
+      ws.onopen = () => {
+        document.getElementById('status-dot').className = 'status-dot';
+        document.getElementById('connection-status').textContent = 'Connected';
+        ws.send(JSON.stringify({ type: 'getState' }));
+      };
+      
+      ws.onclose = () => {
+        document.getElementById('status-dot').className = 'status-dot disconnected';
+        document.getElementById('connection-status').textContent = 'Disconnected';
+        setTimeout(connect, 2000);
+      };
+      
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleMessage(msg);
+      };
+    }
+    
+    function handleMessage(msg) {
+      switch (msg.type) {
+        case 'state':
+          state = msg.payload;
+          if (state) updateUI();
+          break;
+        case 'event':
+          addEvent(msg.payload);
+          break;
+        case 'agentAction':
+          addNarrativeItem(msg.payload);
+          break;
+        case 'log':
+          addSystemLog(msg.payload);
+          break;
+        case 'godResponse':
+          handleGodResponse(msg.payload);
+          break;
+        case 'saveComplete':
+          alert(`Saved to: ${msg.payload.path}`);
+          break;
+        case 'error':
+          alert(`Error: ${msg.payload}`);
+          document.getElementById('god-send-btn').disabled = false;
+          document.getElementById('god-send-btn').textContent = 'Send';
+          break;
+      }
+    }
+    
+    function switchView(view) {
+      currentView = view;
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.querySelector(`.tab[onclick*="${view}"]`).classList.add('active');
+      document.getElementById(`view-${view}`).classList.add('active');
+      
+      if (view === 'ascii') renderAsciiWorld();
+      if (view === 'canvas') renderCanvas();
+      if (view === 'systems') renderSystemsFull();
+    }
+    
+    function updateUI() {
+      if (!state) return;
+      
+      document.getElementById('tick-counter').textContent = state.tick;
+      document.getElementById('entity-count').textContent = state.entities?.length || 0;
+      
+      if (state.isPaused) {
+        document.getElementById('status-dot').className = 'status-dot paused';
+        document.getElementById('connection-status').textContent = 'Paused';
+      }
+      
+      renderEntities();
+      if (currentView === 'ascii') renderAsciiWorld();
+      if (currentView === 'canvas') renderCanvas();
+      if (currentView === 'systems') renderSystemsFull();
+      
+      if (selectedEntityId) renderDetails(selectedEntityId);
+      if (selectedSystemName) renderSystemDetails(selectedSystemName);
+    }
+    
+    function renderEntities() {
+      const container = document.getElementById('entities-list');
+      container.innerHTML = '';
+      
+      if (!state?.entities) return;
+      
+      const rooms = state.entities.filter(e => e.type === 'room');
+      const agents = state.entities.filter(e => e.type === 'agent');
+      const sources = state.entities.filter(e => e.type === 'stimulus_source');
+      
+      for (const room of rooms) {
+        const card = createEntityCard(room);
+        container.appendChild(card);
+        
+        const roomAgents = agents.filter(a => a.room === room.name);
+        for (const agent of roomAgents) {
+          const agentCard = createEntityCard(agent);
+          agentCard.style.marginLeft = '0.75rem';
+          container.appendChild(agentCard);
+        }
+        
+        const roomSources = sources.filter(s => s.room === room.name);
+        for (const source of roomSources) {
+          const sourceCard = createEntityCard(source);
+          sourceCard.style.marginLeft = '0.75rem';
+          container.appendChild(sourceCard);
+        }
+      }
+      
+      // Orphan entities
+      const orphanAgents = agents.filter(a => !a.room);
+      for (const agent of orphanAgents) {
+        container.appendChild(createEntityCard(agent));
+      }
+    }
+    
+    function createEntityCard(entity) {
+      const card = document.createElement('div');
+      card.className = 'entity-card' + (entity.id === selectedEntityId ? ' selected' : '');
+      card.onclick = () => selectEntity(entity.id);
+      
+      let html = `
+        <div class="entity-type entity-${entity.type}">${entity.type.replace('_', ' ')}</div>
+        <div class="entity-name">${entity.name}</div>
+      `;
+      
+      if (entity.type === 'agent') {
+        const arousal = (entity.mind?.arousal || 0) * 100;
+        html += `
+          <div style="font-size: 0.75rem; color: var(--text-dim)">${entity.role || ''}</div>
+          <div class="arousal-bar">
+            <div class="arousal-fill" style="width: ${arousal}%"></div>
+          </div>
+        `;
+      } else if (entity.type === 'room') {
+        html += `<div style="font-size: 0.75rem; color: var(--text-dim)">${(entity.ambience || '').slice(0, 40)}...</div>`;
+      } else if (entity.type === 'stimulus_source') {
+        html += `<div style="font-size: 0.75rem; color: var(--text-dim)">${entity.stimulusType || ''}</div>`;
+      }
+      
+      card.innerHTML = html;
+      return card;
+    }
+    
+    function selectEntity(id) {
+      selectedEntityId = id;
+      selectedSystemName = null;
+      renderEntities();
+      renderDetails(id);
+    }
+    
+    function renderDetails(id) {
+      const entity = state.entities.find(e => e.id === id);
+      if (!entity) return;
+      
+      const container = document.getElementById('detail-panel');
+      
+      let html = `
+        <div class="detail-section">
+          <div class="detail-title">Name</div>
+          <div class="detail-value">${entity.name}</div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-title">Type</div>
+          <div class="detail-value" style="color: ${COLORS[entity.type]}">${entity.type}</div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-title">Description</div>
+          <div class="detail-value">${entity.description || 'No description'}</div>
+        </div>
+      `;
+      
+      if (entity.type === 'agent') {
+        html += `
+          <div class="detail-section">
+            <div class="detail-title">Role</div>
+            <div class="detail-value">${entity.role}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-title">Mental State</div>
+            <div class="detail-value">
+              Mode: ${entity.mind?.mode || 'unknown'}<br>
+              Arousal: ${((entity.mind?.arousal || 0) * 100).toFixed(0)}%<br>
+              Focus: ${entity.mind?.focus || 'none'}
+            </div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-title">Knowledge</div>
+            <div>
+              <span class="knowledge-stat">📝 ${entity.knowledge?.memories || 0}</span>
+              <span class="knowledge-stat">💭 ${entity.knowledge?.beliefs || 0}</span>
+              <span class="knowledge-stat">👤 ${entity.knowledge?.impressions || 0}</span>
+            </div>
+          </div>
+        `;
+        
+        if (entity.recentThoughts?.length > 0) {
+          html += `<div class="detail-section"><div class="detail-title">Recent Thoughts</div>`;
+          for (const thought of entity.recentThoughts) {
+            html += `<div class="thought-bubble">${thought.slice(0, 80)}...</div>`;
+          }
+          html += '</div>';
+        }
+      } else if (entity.type === 'room') {
+        html += `
+          <div class="detail-section">
+            <div class="detail-title">Ambience</div>
+            <div class="detail-value">${entity.ambience}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-title">Capacity</div>
+            <div class="detail-value">${entity.capacity}</div>
+          </div>
+        `;
+      } else if (entity.type === 'stimulus_source') {
+        html += `
+          <div class="detail-section">
+            <div class="detail-title">Stimulus Type</div>
+            <div class="detail-value">${entity.stimulusType}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-title">Template</div>
+            <div class="detail-value">${entity.template}</div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-title">Interval</div>
+            <div class="detail-value">${entity.interval}ms</div>
+          </div>
+        `;
+      }
+      
+      container.innerHTML = html;
+    }
+    
+    function renderSystemsFull() {
+      const container = document.getElementById('systems-list-full');
+      container.innerHTML = '';
+      
+      for (const system of state?.systems || []) {
+        const item = document.createElement('div');
+        item.className = 'system-item' + (system.name === selectedSystemName ? ' selected' : '');
+        item.onclick = () => selectSystem(system.name);
+        item.innerHTML = `
+          <div>
+            <div class="system-name">${system.name}</div>
+            <div class="system-freq">${system.frequency}ms · ${system.description?.slice(0, 40) || ''}...</div>
+          </div>
+          <div class="system-active ${system.active ? '' : 'inactive'}"></div>
+        `;
+        container.appendChild(item);
+      }
+    }
+    
+    function selectSystem(name) {
+      selectedSystemName = name;
+      selectedEntityId = null;
+      renderSystemsFull();
+      renderSystemDetails(name);
+    }
+    
+    function renderSystemDetails(name) {
+      const system = state?.systems?.find(s => s.name === name);
+      if (!system) return;
+      
+      const container = document.getElementById('system-detail-panel');
+      
+      let html = `
+        <div class="detail-section">
+          <div class="detail-title">Name</div>
+          <div class="detail-value">${system.name}</div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-title">Status</div>
+          <div class="detail-value" style="color: ${system.active ? 'var(--success)' : 'var(--text-dim)'}">
+            ${system.active ? '● Active' : '○ Inactive'}
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-title">Description</div>
+          <div class="detail-value">${system.description || 'No description'}</div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-title">Frequency</div>
+          <div class="detail-value">${system.frequency}ms (${(1000/system.frequency).toFixed(1)} Hz)</div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-title">Last Run</div>
+          <div class="detail-value">${system.lastRun ? new Date(system.lastRun).toLocaleTimeString() : 'Never'}</div>
+        </div>
+      `;
+      
+      if (system.pseudocode) {
+        html += `
+          <div class="detail-section">
+            <div class="detail-title">Pseudocode</div>
+            <div class="code-block">${system.pseudocode}</div>
+          </div>
+        `;
+      }
+      
+      if (system.code) {
+        html += `
+          <div class="detail-section">
+            <div class="detail-title">Generated Code</div>
+            <div class="code-block">${escapeHtml(system.code)}</div>
+          </div>
+        `;
+      }
+      
+      container.innerHTML = html;
+    }
+    
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    // ASCII World rendering
+    const TILE_COLORS = {
+      '.': '#444',
+      '#': '#666',
+      '~': '#4488ff',
+      ',': '#228822',
+      '+': '#886644',
+      ' ': '#222',
+    };
+    
+    function renderAsciiWorld() {
+      const display = document.getElementById('ascii-display');
+      const entitiesList = document.getElementById('ascii-entities');
+      
+      if (!state?.asciiWorld) {
+        display.innerHTML = '<span style="color: #666;">No world map created yet.\n\nUse the God Console to create one:\n"Create a 40x20 dungeon with rooms and corridors"</span>';
+        entitiesList.innerHTML = '<p style="color: var(--text-dim)">No entities placed</p>';
+        return;
+      }
+      
+      const world = state.asciiWorld;
+      let html = '';
+      
+      for (let y = 0; y < world.height; y++) {
+        for (let x = 0; x < world.width; x++) {
+          const cell = world.cells[y][x];
+          const color = cell.entityId ? (cell.color || '#ff6666') : (TILE_COLORS[cell.char] || '#444');
+          const bgColor = cell.bgColor || '#000';
+          html += `<span style="color: ${color}; background: ${bgColor};">${cell.char}</span>`;
+        }
+        html += '\n';
+      }
+      
+      display.innerHTML = html;
+      
+      // Render entity list
+      if (world.entities && world.entities.length > 0) {
+        let entityHtml = '';
+        for (const entity of world.entities) {
+          entityHtml += `
+            <div class="entity-card" style="padding: 0.4rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: bold; color: ${entity.color || '#ff6666'};">${entity.char}</span>
+                <span style="font-size: 0.75rem;">${entity.name}</span>
+              </div>
+              <div style="font-size: 0.7rem; color: var(--text-dim);">
+                Position: (${entity.x}, ${entity.y}) · Facing: ${entity.facing}
+              </div>
+            </div>
+          `;
+        }
+        entitiesList.innerHTML = entityHtml;
+      } else {
+        entitiesList.innerHTML = '<p style="color: var(--text-dim)">No entities placed on grid</p>';
+      }
+    }
+    
+    // Canvas rendering with Visual component support
+    let animationFrame = 0;
+    
+    function drawShape(ctx, shape, x, y, size, color, glow, pulseRate) {
+      const pulse = pulseRate > 0 ? 1 + 0.2 * Math.sin(animationFrame * pulseRate * 0.1) : 1;
+      const s = size * pulse;
+      
+      if (glow) {
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = color;
+      }
+      
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      
+      switch (shape) {
+        case 'rect':
+          ctx.rect(x - s/2, y - s/2, s, s);
+          break;
+        case 'diamond':
+          ctx.moveTo(x, y - s/2);
+          ctx.lineTo(x + s/2, y);
+          ctx.lineTo(x, y + s/2);
+          ctx.lineTo(x - s/2, y);
+          break;
+        case 'triangle':
+          ctx.moveTo(x, y - s/2);
+          ctx.lineTo(x + s/2, y + s/2);
+          ctx.lineTo(x - s/2, y + s/2);
+          break;
+        case 'hexagon':
+          for (let i = 0; i < 6; i++) {
+            const angle = (i * Math.PI / 3) - Math.PI / 2;
+            const px = x + s/2 * Math.cos(angle);
+            const py = y + s/2 * Math.sin(angle);
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          break;
+        case 'star':
+          for (let i = 0; i < 10; i++) {
+            const angle = (i * Math.PI / 5) - Math.PI / 2;
+            const r = i % 2 === 0 ? s/2 : s/4;
+            const px = x + r * Math.cos(angle);
+            const py = y + r * Math.sin(angle);
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          break;
+        case 'circle':
+        default:
+          ctx.arc(x, y, s/2, 0, Math.PI * 2);
+          break;
+      }
+      
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+    
+    function renderCanvas() {
+      const canvas = document.getElementById('world-canvas');
+      const ctx = canvas.getContext('2d');
+      const container = canvas.parentElement;
+      
+      canvas.width = container.clientWidth;
+      canvas.height = container.clientHeight;
+      
+      ctx.fillStyle = '#0a0a0f';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      if (!state?.entities) return;
+      
+      animationFrame++;
+      
+      const rooms = state.entities.filter(e => e.type === 'room');
+      const agents = state.entities.filter(e => e.type === 'agent');
+      const sources = state.entities.filter(e => e.type === 'stimulus_source');
+      const mechanicalEntities = state.entities.filter(e => e.type === 'entity');
+      
+      // All positioned entities (not in rooms)
+      const freeEntities = [...agents, ...sources, ...mechanicalEntities].filter(e => 
+        e.position && !e.room
+      );
+      
+      // Layout rooms
+      const roomPositions = new Map();
+      const roomSize = 150;
+      const padding = 50;
+      let rx = padding;
+      let ry = padding;
+      
+      for (const room of rooms) {
+        if (room.position) {
+          roomPositions.set(room.name, { x: room.position.x, y: room.position.y, w: roomSize, h: roomSize });
+        } else {
+          roomPositions.set(room.name, { x: rx, y: ry, w: roomSize, h: roomSize });
+          rx += roomSize + padding;
+          if (rx > canvas.width - roomSize) {
+            rx = padding;
+            ry += roomSize + padding;
+          }
+        }
+      }
+      
+      // Draw rooms
+      for (const room of rooms) {
+        const pos = roomPositions.get(room.name);
+        const vis = room.visual;
+        
+        ctx.fillStyle = vis?.color ? `${vis.color}22` : 'rgba(34, 197, 94, 0.1)';
+        ctx.strokeStyle = vis?.color || COLORS.room;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(pos.x, pos.y, pos.w, pos.h, 8);
+        ctx.fill();
+        ctx.stroke();
+        
+        ctx.fillStyle = vis?.color || COLORS.room;
+        ctx.font = 'bold 12px monospace';
+        ctx.fillText(room.name, pos.x + 8, pos.y + 20);
+      }
+      
+      // Draw free entities (positioned outside rooms)
+      for (const entity of freeEntities) {
+        const x = entity.position.x;
+        const y = entity.position.y;
+        const vis = entity.visual || {};
+        const color = vis.color || COLORS[entity.type] || '#6366f1';
+        const size = vis.size || 30;
+        const shape = vis.shape || 'circle';
+        
+        ctx.globalAlpha = vis.opacity ?? 1;
+        drawShape(ctx, shape, x, y, size, color, vis.glow, vis.pulseRate || 0);
+        
+        // Arousal indicator for entities with Mind
+        if (entity.mind?.arousal !== undefined) {
+          const arousal = entity.mind.arousal;
+          ctx.beginPath();
+          ctx.arc(x, y, size/2 + 4, -Math.PI/2, -Math.PI/2 + Math.PI * 2 * arousal);
+          ctx.strokeStyle = `hsl(${(1 - arousal) * 120}, 80%, 50%)`;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+        
+        // Label
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#fff';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(vis.label || entity.name?.slice(0, 12) || '', x, y + size/2 + 14);
+        ctx.textAlign = 'left';
+      }
+      
+      // Draw entities in rooms
+      for (const room of rooms) {
+        const pos = roomPositions.get(room.name);
+        const roomAgents = agents.filter(a => a.room === room.name);
+        const roomSources = sources.filter(s => s.room === room.name);
+        const roomEntities = mechanicalEntities.filter(e => e.room === room.name);
+        
+        let entityX = pos.x + 25;
+        let entityY = pos.y + 50;
+        
+        const allInRoom = [...roomAgents, ...roomSources, ...roomEntities];
+        
+        for (const entity of allInRoom) {
+          const ex = entity.position?.x ?? entityX;
+          const ey = entity.position?.y ?? entityY;
+          const vis = entity.visual || {};
+          const color = vis.color || COLORS[entity.type] || '#6366f1';
+          const size = vis.size || 24;
+          const shape = vis.shape || (entity.type === 'stimulus_source' ? 'diamond' : 'circle');
+          
+          ctx.globalAlpha = vis.opacity ?? 1;
+          drawShape(ctx, shape, ex, ey, size, color, vis.glow, vis.pulseRate || 0);
+          
+          // Arousal indicator
+          if (entity.mind?.arousal !== undefined) {
+            const arousal = entity.mind.arousal;
+            ctx.beginPath();
+            ctx.arc(ex, ey, size/2 + 3, -Math.PI/2, -Math.PI/2 + Math.PI * 2 * arousal);
+            ctx.strokeStyle = `hsl(${(1 - arousal) * 120}, 80%, 50%)`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+          
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#fff';
+          ctx.font = '9px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(vis.label || entity.name?.slice(0, 8) || '', ex, ey + size/2 + 12);
+          ctx.textAlign = 'left';
+          
+          entityX += 45;
+          if (entityX > pos.x + pos.w - 30) {
+            entityX = pos.x + 25;
+            entityY += 55;
+          }
+        }
+      }
+      
+      // Request next frame for animations
+      if (state.entities.some(e => e.visual?.pulseRate > 0 || e.visual?.glow)) {
+        requestAnimationFrame(() => renderCanvas());
+      }
+    }
+    
+    function addNarrativeItem(payload) {
+      const container = document.getElementById('narrative-feed');
+      const item = document.createElement('div');
+      item.className = 'event-item';
+      
+      const time = new Date().toLocaleTimeString();
+      let content = '';
+      
+      if (payload.action?.type === 'speak') {
+        content = `<span class="event-speech">💬 ${payload.agent}: "${payload.action.content}"</span>`;
+      } else if (payload.action?.type === 'think') {
+        content = `<span class="event-thought">💭 ${payload.agent} thinks: "${payload.action.content}"</span>`;
+      } else if (payload.action?.type === 'observe') {
+        content = `<span class="event-action">👁️ ${payload.agent} observes ${payload.action.target}</span>`;
+      } else if (payload.action?.type === 'interact') {
+        content = `<span class="event-action">🤚 ${payload.agent} ${payload.action.content}</span>`;
+      } else {
+        content = `<span>${payload.agent}: ${payload.action?.type || 'unknown action'}</span>`;
+      }
+      
+      item.innerHTML = `<span class="event-time">${time}</span> ${content}`;
+      container.insertBefore(item, container.firstChild);
+      
+      while (container.children.length > 500) {
+        container.removeChild(container.lastChild);
+      }
+    }
+    
+    function addEvent(event) {
+      const container = document.getElementById('event-log');
+      const item = document.createElement('div');
+      item.className = 'event-item event-system';
+      
+      const time = new Date(event.timestamp).toLocaleTimeString();
+      item.innerHTML = `<span class="event-time">${time}</span> [${event.type}] ${JSON.stringify(event.data).slice(0, 60)}...`;
+      
+      container.insertBefore(item, container.firstChild);
+      
+      while (container.children.length > 500) {
+        container.removeChild(container.lastChild);
+      }
+    }
+    
+    function addSystemLog(message) {
+      const container = document.getElementById('event-log');
+      const item = document.createElement('div');
+      item.className = 'event-item event-system';
+      item.innerHTML = `<span class="event-time">${new Date().toLocaleTimeString()}</span> ${message}`;
+      container.insertBefore(item, container.firstChild);
+    }
+    
+    function sendGodCommand() {
+      const input = document.getElementById('god-input');
+      const btn = document.getElementById('god-send-btn');
+      const command = input.value.trim();
+      
+      if (!command || !ws || ws.readyState !== WebSocket.OPEN) return;
+      
+      btn.disabled = true;
+      btn.textContent = 'Thinking...';
+      
+      ws.send(JSON.stringify({ type: 'godCommand', payload: { command } }));
+      input.value = '';
+    }
+    
+    function handleGodResponse(payload) {
+      const btn = document.getElementById('god-send-btn');
+      btn.disabled = false;
+      btn.textContent = 'Send';
+      
+      const container = document.getElementById('event-log');
+      const time = new Date().toLocaleTimeString();
+      
+      // Show the God's response in the event log
+      if (payload.thinking) {
+        const item = document.createElement('div');
+        item.className = 'event-item';
+        item.innerHTML = `<span class="event-time">${time}</span> <span style="color: var(--accent); font-weight: bold;">⚡ GOD:</span> ${escapeHtml(payload.thinking)}`;
+        container.insertBefore(item, container.firstChild);
+      }
+      
+      // Show actions if any
+      if (payload.results && payload.results.length > 0) {
+        for (const result of payload.results) {
+          const item = document.createElement('div');
+          item.className = 'event-item';
+          if (result.success) {
+            item.innerHTML = `<span class="event-time">${time}</span> <span style="color: var(--success);">✓ Created:</span> ${JSON.stringify(result.result).slice(0, 100)}`;
+          } else {
+            item.innerHTML = `<span class="event-time">${time}</span> <span style="color: var(--danger);">✗ Error:</span> ${result.error}`;
+          }
+          container.insertBefore(item, container.firstChild);
+        }
+      }
+      
+      // Trim old entries
+      while (container.children.length > 500) {
+        container.removeChild(container.lastChild);
+      }
+      
+      if (payload.worldState) {
+        state = payload.worldState;
+        updateUI();
+      }
+    }
+    
+    function hideGodResponse() {
+      document.getElementById('god-response').classList.remove('visible');
+    }
+    
+    function togglePause() {
+      const btn = document.getElementById('pause-btn');
+      if (state?.isPaused) {
+        ws.send(JSON.stringify({ type: 'resume' }));
+        btn.textContent = '⏸ Pause';
+      } else {
+        ws.send(JSON.stringify({ type: 'pause' }));
+        btn.textContent = '▶ Resume';
+      }
+    }
+    
+    function saveWorld() {
+      const name = prompt('Save name:', `save_${Date.now()}`);
+      if (name) {
+        ws.send(JSON.stringify({ type: 'save', payload: { name } }));
+      }
+    }
+    
+    function resetWorld() {
+      if (confirm('Reset the world? All entities and systems will be cleared.')) {
+        ws.send(JSON.stringify({ type: 'reset' }));
+      }
+    }
+    
+    // Handle resize
+    window.addEventListener('resize', () => {
+      if (currentView === 'canvas') renderCanvas();
+    });
+    
+    connect();
+  </script>
+</body>
+</html>

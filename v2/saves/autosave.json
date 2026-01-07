@@ -1,0 +1,2311 @@
+{
+  "version": "1.0.0",
+  "name": "The Void",
+  "createdAt": 1767774404723,
+  "savedAt": 1767774568940,
+  "tick": 0,
+  "entities": [
+    {
+      "id": 6,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767774404725
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 2
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 7,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767773116187
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 1
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 8,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767771323174
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 0
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 9,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767766302444
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 1
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 10,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767763292262
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 1
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 11,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767750491591
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 1
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 12,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767747806001
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 0
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 13,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767661642439
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 0
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 14,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767653311537
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 0
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 15,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767652120839
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Game worlds (puzzles, adventures)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 0
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 16,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767649261141
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Fantasy worlds (dungeons, magical realms)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 0
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 17,
+      "name": "The Architect",
+      "components": {
+        "Name": {
+          "value": "The Architect"
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767648622429
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Fantasy worlds (dungeons, magical realms)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 2
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 18,
+      "name": "Bachelor Pad",
+      "components": {
+        "Name": {
+          "value": "Bachelor Pad"
+        },
+        "Description": {
+          "value": "A typical bachelor's living space."
+        },
+        "Position": {
+          "x": 50,
+          "y": 50,
+          "z": 0
+        },
+        "Room": {
+          "capacity": 10,
+          "ambience": "Darkness reigns outside, punctuated by candlelight within."
+        },
+        "Mind": {
+          "mode": "deliberative",
+          "arousal": 0.48000000000000015,
+          "focus": "",
+          "lastUpdate": 1767645379513
+        },
+        "GodAgent": {
+          "worldName": "Sandbox",
+          "narrative": "You are an omnipotent creator. The user will describe what kind of world, simulation, \nor environment they want to create. You can create anything:\n- Biological simulations (cells, organisms, ecosystems)\n- Social simulations (villages, cities, civilizations)\n- Fantasy worlds (dungeons, magical realms)\n- Scientific models (physics, chemistry, astronomy)\n- Abstract systems (economies, networks, games)\n\nCreate entities, rooms/spaces, agents with behaviors, stimulus sources, and dynamic systems.\nBe creative and responsive to what the user wants to explore.",
+          "tick": 1
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 19,
+      "name": "Fridge",
+      "components": {
+        "Name": {
+          "value": "Fridge"
+        },
+        "Description": {
+          "value": "A white fridge, full of snacks."
+        },
+        "PhysicalObject": {
+          "material": "metal",
+          "weight": 1,
+          "portable": false
+        },
+        "GridPosition": {
+          "x": 3,
+          "y": 3
+        },
+        "Sprite": {
+          "char": "F",
+          "color": "#ff6666",
+          "zIndex": 1
+        },
+        "WorldMap": {
+          "name": "VillageMap",
+          "width": 30,
+          "height": 20,
+          "tiles": "..............................\n..............................\n..########....................\n..#......#........#####.####..\n..#......#........#........#..\n..#......#........#........#..\n..#......#........#........#..\n..########........#........#..\n...........................#..\n..................##########..\n..............................\n..............................\n........############..........\n........#..........#..........\n........#..........#..........\n........#..........#..........\n........#..........#..........\n........############..........\n..............................\n.............................."
+        }
+      },
+      "relations": [
+        {
+          "type": "OccupiesRoom",
+          "targetId": 18,
+          "targetName": "Bachelor Pad"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "name": "Couch",
+      "components": {
+        "Name": {
+          "value": "Couch"
+        },
+        "Description": {
+          "value": "A worn, comfy couch."
+        },
+        "Position": {
+          "x": 50,
+          "y": 50,
+          "z": 0
+        },
+        "Room": {
+          "capacity": 10,
+          "ambience": "Darkness reigns outside, punctuated by candlelight within."
+        },
+        "PhysicalObject": {
+          "material": "fabric",
+          "weight": 1,
+          "portable": false
+        },
+        "GridPosition": {
+          "x": 8,
+          "y": 4
+        },
+        "Sprite": {
+          "char": "C",
+          "color": "#ff6666",
+          "zIndex": 1
+        }
+      },
+      "relations": [
+        {
+          "type": "OccupiesRoom",
+          "targetId": 18,
+          "targetName": "Bachelor Pad"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "name": "TV",
+      "components": {
+        "Name": {
+          "value": "TV"
+        },
+        "Description": {
+          "value": "A large flat-screen TV."
+        },
+        "Position": {
+          "x": 250,
+          "y": 50,
+          "z": 0
+        },
+        "Room": {
+          "capacity": 10,
+          "ambience": "Darkness reigns outside, punctuated by candlelight within."
+        },
+        "PhysicalObject": {
+          "material": "plastic, glass",
+          "weight": 1,
+          "portable": false
+        },
+        "GridPosition": {
+          "x": 10,
+          "y": 5
+        },
+        "Sprite": {
+          "char": "T",
+          "color": "#ff6666",
+          "zIndex": 1
+        }
+      },
+      "relations": [
+        {
+          "type": "OccupiesRoom",
+          "targetId": 18,
+          "targetName": "Bachelor Pad"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "name": "Bed",
+      "components": {
+        "Name": {
+          "value": "Bed"
+        },
+        "Description": {
+          "value": "An unmade but comfortable bed."
+        },
+        "Position": {
+          "x": 450,
+          "y": 50,
+          "z": 0
+        },
+        "Room": {
+          "capacity": 10,
+          "ambience": "Darkness reigns outside, punctuated by candlelight within."
+        },
+        "PhysicalObject": {
+          "material": "wood, fabric",
+          "weight": 1,
+          "portable": false
+        },
+        "GridPosition": {
+          "x": 3,
+          "y": 10
+        },
+        "Sprite": {
+          "char": "B",
+          "color": "#ff6666",
+          "zIndex": 1
+        }
+      },
+      "relations": [
+        {
+          "type": "OccupiesRoom",
+          "targetId": 18,
+          "targetName": "Bachelor Pad"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "name": "Bachelor Bob",
+      "components": {
+        "Name": {
+          "value": "Bachelor Bob"
+        },
+        "Description": {
+          "value": "Hunger: 53, Tiredness: 53"
+        },
+        "Position": {
+          "x": 650,
+          "y": 50,
+          "z": 0
+        },
+        "Room": {
+          "capacity": 10,
+          "ambience": "Darkness reigns outside, punctuated by candlelight within."
+        },
+        "Agent": {
+          "role": "A kind-hearted herbalist who enjoys quiet contemplation and helping others.",
+          "systemPrompt": "Elara is a kind and gentle herbalist. She speaks softly and offers advice on natural remedies. She enjoys observing nature and helping those in need. When she meets someone, she will greet them warmly and ask about their well-being.",
+          "active": true
+        },
+        "Mind": {
+          "mode": "idle",
+          "arousal": 0.47999999999999976,
+          "focus": "all pantry shelves",
+          "lastUpdate": 1767648853775
+        },
+        "GridPosition": {
+          "x": 11,
+          "y": 6,
+          "facing": "north"
+        },
+        "Sprite": {
+          "char": "@",
+          "color": "#00ff00",
+          "zIndex": 1
+        }
+      },
+      "relations": [
+        {
+          "type": "OccupiesRoom",
+          "targetId": 18,
+          "targetName": "Bachelor Pad"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "name": "Bachelor Pad Map",
+      "components": {
+        "Name": {
+          "value": "Bachelor Pad Map"
+        },
+        "Agent": {
+          "role": "A boisterous blacksmith, always ready with a joke or a story, and a strong opinion.",
+          "systemPrompt": "Gareth is a loud and jovial blacksmith. He loves to tell stories, often exaggerating for effect, and has a booming laugh. He's quick to offer a drink or a hearty meal. When he meets someone, he'll clap them on the back and ask what brings them to the tavern.",
+          "active": true
+        },
+        "Mind": {
+          "mode": "reactive",
+          "arousal": 0.48,
+          "focus": "",
+          "lastUpdate": 1767645467150
+        },
+        "GridPosition": {
+          "x": 22,
+          "y": 6,
+          "facing": "east"
+        },
+        "Sprite": {
+          "char": "G",
+          "color": "#ff6666",
+          "zIndex": 1
+        },
+        "WorldMap": {
+          "name": "Bachelor Pad Map",
+          "width": 20,
+          "height": 15,
+          "tiles": "....................\n.##################.\n.#,,,,,...........#.\n.#,,,,,...........#.\n.#,,,,,...........#.\n.#,,,,,...........#.\n.#................#.\n.#................#.\n.#................#.\n.#................#.\n.#................#.\n.#................#.\n.#................#.\n.##################.\n...................."
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 25,
+      "name": "Farm",
+      "components": {
+        "Name": {
+          "value": "Farm"
+        },
+        "WorldMap": {
+          "name": "Farm",
+          "width": 20,
+          "height": 15,
+          "tiles": ",,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,"
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 26,
+      "name": "Old MacDonald",
+      "components": {
+        "Name": {
+          "value": "Old MacDonald"
+        },
+        "Agent": {
+          "role": "Farmer",
+          "systemPrompt": "Old MacDonald is a kind, hardworking farmer who loves his animals and his land. He is always looking after his farm.",
+          "active": true
+        },
+        "Mind": {
+          "mode": "reactive",
+          "arousal": 0.45999999999999996,
+          "focus": "pigs",
+          "lastUpdate": 1767750534187
+        },
+        "GridPosition": {
+          "x": 10,
+          "y": 6,
+          "facing": "north"
+        },
+        "Sprite": {
+          "char": "@",
+          "color": "#8B4513",
+          "zIndex": 1
+        }
+      },
+      "relations": [
+        {
+          "type": "OccupiesRoom",
+          "targetId": 25,
+          "targetName": "Farm"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "name": "Farm",
+      "components": {
+        "Name": {
+          "value": "Farm"
+        },
+        "WorldMap": {
+          "name": "Farm",
+          "width": 20,
+          "height": 15,
+          "tiles": ",,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,"
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 28,
+      "name": "Old MacDonald",
+      "components": {
+        "Name": {
+          "value": "Old MacDonald"
+        },
+        "Description": {
+          "value": "An old, wise farmer with a gentle demeanor."
+        },
+        "Agent": {
+          "role": "Farmer",
+          "systemPrompt": "You are Old MacDonald, a kind and hardworking farmer who loves his animals and takes care of his farm. You enjoy tending to crops and making sure everything is in order.",
+          "active": true
+        },
+        "Mind": {
+          "mode": "reactive",
+          "arousal": 0.45999999999999996,
+          "focus": "the entire patch of ripening tomatoes",
+          "lastUpdate": 1767766366919
+        },
+        "GridPosition": {
+          "x": 10,
+          "y": 6,
+          "facing": "west"
+        },
+        "Sprite": {
+          "char": "M",
+          "color": "#8B4513",
+          "zIndex": 1
+        }
+      },
+      "relations": [
+        {
+          "type": "OccupiesRoom",
+          "targetId": 27,
+          "targetName": "Farm"
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "name": "Farm",
+      "components": {
+        "Name": {
+          "value": "Farm"
+        },
+        "WorldMap": {
+          "name": "Farm",
+          "width": 25,
+          "height": 25,
+          "tiles": ",,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,\n,,,,,,,,,,,,,,,,,,,,,,,,,"
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 30,
+      "name": "Fixed Farmer",
+      "components": {
+        "Name": {
+          "value": "Fixed Farmer"
+        },
+        "Description": {
+          "value": "A diligent farmer"
+        },
+        "Agent": {
+          "role": "farmer",
+          "systemPrompt": "You are a diligent farmer, tending to your crops and livestock. You enjoy the simple life and the smell of fresh earth.",
+          "active": true
+        },
+        "Mind": {
+          "mode": "reactive",
+          "arousal": 0.5,
+          "focus": "plow",
+          "lastUpdate": 1767773189875
+        },
+        "GridPosition": {
+          "x": 13,
+          "y": 11,
+          "facing": "east"
+        },
+        "Sprite": {
+          "char": "@",
+          "color": "#ff6666",
+          "zIndex": 1
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 266,
+      "name": "Farmer NPC",
+      "components": {
+        "Name": {
+          "value": "Farmer NPC"
+        },
+        "Description": {
+          "value": "A sturdy farmer with weathered hands and a kind smile."
+        },
+        "Agent": {
+          "role": "A diligent farmer tending to crops.",
+          "systemPrompt": "You are a friendly farmer. You should always be looking for tasks related to farming, like planting, watering, or harvesting. Interact kindly with others.",
+          "active": true
+        },
+        "Mind": {
+          "mode": "reactive",
+          "arousal": 0.5,
+          "focus": "the tomato plants and surrounding field",
+          "lastUpdate": 1767774462679
+        },
+        "GridPosition": {
+          "x": 1,
+          "y": 11,
+          "facing": "north"
+        },
+        "Sprite": {
+          "char": "@",
+          "color": "#8B4513",
+          "zIndex": 1
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 273,
+      "name": "farm_map",
+      "components": {
+        "Name": {
+          "value": "farm_map"
+        },
+        "WorldMap": {
+          "name": "farm_map",
+          "width": 20,
+          "height": 20,
+          "tiles": "....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n....................\n...................."
+        }
+      },
+      "relations": []
+    },
+    {
+      "id": 187,
+      "name": "entity_187",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 190,
+      "name": "entity_190",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 193,
+      "name": "entity_193",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 196,
+      "name": "entity_196",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 199,
+      "name": "entity_199",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 212,
+      "name": "entity_212",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 215,
+      "name": "entity_215",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 218,
+      "name": "entity_218",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 221,
+      "name": "entity_221",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 224,
+      "name": "entity_224",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 230,
+      "name": "entity_230",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 233,
+      "name": "entity_233",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 236,
+      "name": "entity_236",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 239,
+      "name": "entity_239",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 242,
+      "name": "entity_242",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 251,
+      "name": "entity_251",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 254,
+      "name": "entity_254",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 257,
+      "name": "entity_257",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 260,
+      "name": "entity_260",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 263,
+      "name": "entity_263",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 270,
+      "name": "entity_270",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 274,
+      "name": "entity_274",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 277,
+      "name": "entity_277",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 280,
+      "name": "entity_280",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 283,
+      "name": "entity_283",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 286,
+      "name": "entity_286",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 289,
+      "name": "entity_289",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 292,
+      "name": "entity_292",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 295,
+      "name": "entity_295",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 298,
+      "name": "entity_298",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 301,
+      "name": "entity_301",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 304,
+      "name": "entity_304",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 311,
+      "name": "entity_311",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 314,
+      "name": "entity_314",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 317,
+      "name": "entity_317",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 327,
+      "name": "entity_327",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 330,
+      "name": "entity_330",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 333,
+      "name": "entity_333",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 342,
+      "name": "entity_342",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 345,
+      "name": "entity_345",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 348,
+      "name": "entity_348",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 351,
+      "name": "entity_351",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 354,
+      "name": "entity_354",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 357,
+      "name": "entity_357",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 369,
+      "name": "entity_369",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 372,
+      "name": "entity_372",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 375,
+      "name": "entity_375",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 378,
+      "name": "entity_378",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 381,
+      "name": "entity_381",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 384,
+      "name": "entity_384",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 391,
+      "name": "entity_391",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 394,
+      "name": "entity_394",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 397,
+      "name": "entity_397",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 400,
+      "name": "entity_400",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 403,
+      "name": "entity_403",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 406,
+      "name": "entity_406",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 188,
+      "name": "entity_188",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 189,
+      "name": "entity_189",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 191,
+      "name": "entity_191",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 192,
+      "name": "entity_192",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 194,
+      "name": "entity_194",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 195,
+      "name": "entity_195",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 197,
+      "name": "entity_197",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 198,
+      "name": "entity_198",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 200,
+      "name": "entity_200",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 201,
+      "name": "entity_201",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 213,
+      "name": "entity_213",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 214,
+      "name": "entity_214",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 216,
+      "name": "entity_216",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 217,
+      "name": "entity_217",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 219,
+      "name": "entity_219",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 220,
+      "name": "entity_220",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 222,
+      "name": "entity_222",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 223,
+      "name": "entity_223",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 225,
+      "name": "entity_225",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 226,
+      "name": "entity_226",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 231,
+      "name": "entity_231",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 232,
+      "name": "entity_232",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 234,
+      "name": "entity_234",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 235,
+      "name": "entity_235",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 237,
+      "name": "entity_237",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 238,
+      "name": "entity_238",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 240,
+      "name": "entity_240",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 241,
+      "name": "entity_241",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 243,
+      "name": "entity_243",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 244,
+      "name": "entity_244",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 252,
+      "name": "entity_252",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 253,
+      "name": "entity_253",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 255,
+      "name": "entity_255",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 256,
+      "name": "entity_256",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 258,
+      "name": "entity_258",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 259,
+      "name": "entity_259",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 261,
+      "name": "entity_261",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 262,
+      "name": "entity_262",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 264,
+      "name": "entity_264",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 265,
+      "name": "entity_265",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 271,
+      "name": "entity_271",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 272,
+      "name": "entity_272",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 275,
+      "name": "entity_275",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 276,
+      "name": "entity_276",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 278,
+      "name": "entity_278",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 279,
+      "name": "entity_279",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 281,
+      "name": "entity_281",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 282,
+      "name": "entity_282",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 284,
+      "name": "entity_284",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 285,
+      "name": "entity_285",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 287,
+      "name": "entity_287",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 288,
+      "name": "entity_288",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 290,
+      "name": "entity_290",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 291,
+      "name": "entity_291",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 293,
+      "name": "entity_293",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 294,
+      "name": "entity_294",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 296,
+      "name": "entity_296",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 297,
+      "name": "entity_297",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 299,
+      "name": "entity_299",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 300,
+      "name": "entity_300",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 302,
+      "name": "entity_302",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 303,
+      "name": "entity_303",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 305,
+      "name": "entity_305",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 306,
+      "name": "entity_306",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 312,
+      "name": "entity_312",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 313,
+      "name": "entity_313",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 315,
+      "name": "entity_315",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 316,
+      "name": "entity_316",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 318,
+      "name": "entity_318",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 319,
+      "name": "entity_319",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 328,
+      "name": "entity_328",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 329,
+      "name": "entity_329",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 331,
+      "name": "entity_331",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 332,
+      "name": "entity_332",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 334,
+      "name": "entity_334",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 335,
+      "name": "entity_335",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 343,
+      "name": "entity_343",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 344,
+      "name": "entity_344",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 346,
+      "name": "entity_346",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 347,
+      "name": "entity_347",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 349,
+      "name": "entity_349",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 350,
+      "name": "entity_350",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 352,
+      "name": "entity_352",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 353,
+      "name": "entity_353",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 355,
+      "name": "entity_355",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 356,
+      "name": "entity_356",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 358,
+      "name": "entity_358",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 359,
+      "name": "entity_359",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 370,
+      "name": "entity_370",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 371,
+      "name": "entity_371",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 373,
+      "name": "entity_373",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 374,
+      "name": "entity_374",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 376,
+      "name": "entity_376",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 377,
+      "name": "entity_377",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 379,
+      "name": "entity_379",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 380,
+      "name": "entity_380",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 382,
+      "name": "entity_382",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 383,
+      "name": "entity_383",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 385,
+      "name": "entity_385",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 386,
+      "name": "entity_386",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 392,
+      "name": "entity_392",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 393,
+      "name": "entity_393",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 395,
+      "name": "entity_395",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 396,
+      "name": "entity_396",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 398,
+      "name": "entity_398",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 399,
+      "name": "entity_399",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 401,
+      "name": "entity_401",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 402,
+      "name": "entity_402",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 404,
+      "name": "entity_404",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 405,
+      "name": "entity_405",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 407,
+      "name": "entity_407",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 408,
+      "name": "entity_408",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 202,
+      "name": "entity_202",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 204,
+      "name": "entity_204",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 207,
+      "name": "entity_207",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 208,
+      "name": "entity_208",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 227,
+      "name": "entity_227",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 245,
+      "name": "entity_245",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 246,
+      "name": "entity_246",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 247,
+      "name": "entity_247",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 267,
+      "name": "entity_267",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 269,
+      "name": "entity_269",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 307,
+      "name": "entity_307",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 308,
+      "name": "entity_308",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 320,
+      "name": "entity_320",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 321,
+      "name": "entity_321",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 336,
+      "name": "entity_336",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 338,
+      "name": "entity_338",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 340,
+      "name": "entity_340",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 360,
+      "name": "entity_360",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 362,
+      "name": "entity_362",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 365,
+      "name": "entity_365",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 367,
+      "name": "entity_367",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 387,
+      "name": "entity_387",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 388,
+      "name": "entity_388",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 390,
+      "name": "entity_390",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 203,
+      "name": "entity_203",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 205,
+      "name": "entity_205",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 206,
+      "name": "entity_206",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 209,
+      "name": "entity_209",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 210,
+      "name": "entity_210",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 211,
+      "name": "entity_211",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 228,
+      "name": "entity_228",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 229,
+      "name": "entity_229",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 248,
+      "name": "entity_248",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 249,
+      "name": "entity_249",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 250,
+      "name": "entity_250",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 268,
+      "name": "entity_268",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 309,
+      "name": "entity_309",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 310,
+      "name": "entity_310",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 322,
+      "name": "entity_322",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 323,
+      "name": "entity_323",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 324,
+      "name": "entity_324",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 337,
+      "name": "entity_337",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 339,
+      "name": "entity_339",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 341,
+      "name": "entity_341",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 361,
+      "name": "entity_361",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 363,
+      "name": "entity_363",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 364,
+      "name": "entity_364",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 366,
+      "name": "entity_366",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 368,
+      "name": "entity_368",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 389,
+      "name": "entity_389",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 325,
+      "name": "entity_325",
+      "components": {},
+      "relations": []
+    },
+    {
+      "id": 326,
+      "name": "entity_326",
+      "components": {},
+      "relations": []
+    }
+  ],
+  "systems": [
+    {
+      "name": "AgentRandomWalkSystem",
+      "description": "Moves agents with GridPosition randomly on the grid map and triggers their walk animations, updating their facing direction.",
+      "pseudocode": [
+        "Find the main WorldMap entity ID.",
+        "Query all entities that have Agent and GridPosition components.",
+        "For each agent:",
+        "  Define possible movement directions (N, S, E, W) with corresponding [dx, dy] and facing/animation directions.",
+        "  Randomly select one direction.",
+        "  Attempt to move the agent using ctx.grid.moveEntity(world, mapEid, eid, dx, dy).",
+        "  If the move is successful:",
+        "    Update GridPosition.facing[eid] to the chosen facing direction.",
+        "    Emit a 'movement' event with entity, new position, and delta.",
+        "    Emit an 'animation' event with type 'walk' and the determined animation direction."
+      ],
+      "frequency": 2000,
+      "active": true,
+      "code": "const maps = Array.from(ctx.query(world, [WorldMap]));\nif (maps.length === 0) {\n    return;\n}\nconst mapEid = maps[0];\n\nconst agentsWithGridPos = Array.from(ctx.query(world, [Agent, GridPosition]));\n\nconst directions = [\n    { dx: 0, dy: -1, facing: 'north', animationDirection: 'up' },\n    { dx: 0, dy: 1, facing: 'south', animationDirection: 'down' },\n    { dx: -1, dy: 0, facing: 'west', animationDirection: 'left' },\n    { dx: 1, dy: 0, facing: 'east', animationDirection: 'right' }\n];\n\nfor (const eid of agentsWithGridPos) {\n    const chosenDirection = directions[Math.floor(Math.random() * directions.length)];\n    const { dx, dy, facing, animationDirection } = chosenDirection;\n\n    const currentX = GridPosition.x[eid];\n    const currentY = GridPosition.y[eid];\n\n    const moved = ctx.grid.moveEntity(world, mapEid, eid, dx, dy);\n\n    if (moved) {\n        GridPosition.facing[eid] = facing;\n\n        ctx.emit(\"movement\", {\n            entityEid: eid,\n            entityName: Name.value[eid],\n            fromX: currentX,\n            fromY: currentY,\n            toX: GridPosition.x[eid],\n            toY: GridPosition.y[eid],\n            dx: dx,\n            dy: dy\n        });\n\n        ctx.emit(\"animation\", {\n            entityEid: eid,\n            entityName: Name.value[eid],\n            type: 'walk',\n            direction: animationDirection\n        });\n    }\n}"
+    }
+  ],
+  "agentMemories": {
+    "Bachelor Bob": {
+      "thoughts": [
+        {
+          "content": "I'm feeling a touch of hunger, and my focus is already on the kitchen pantry. It would be wise to see what provisions I have, perhaps a simple tea or a light snack to sustain me.",
+          "timestamp": 1767774407471
+        },
+        {
+          "content": "Now that the pantry is open, I should take a moment to observe its contents, to see what natural remedies or simple sustenance might be available for my slight hunger.",
+          "timestamp": 1767774421162
+        },
+        {
+          "content": "Ah, I see some dried chamomile flowers. A gentle chamomile tea would be most suitable; it would soothe my slight hunger and allow for peaceful contemplation on this quiet evening. Perhaps a spoonful of honey, if I have some.",
+          "timestamp": 1767774440269
+        },
+        {
+          "content": "Now that I have the chamomile, I should search for honey to sweeten the tea, as a gentle touch of sweetness would complement the calming herbs well.",
+          "timestamp": 1767774453326
+        },
+        {
+          "content": "A gentle sweetness would truly enhance the calming qualities of the chamomile. I must carefully scan the shelves for honey.",
+          "timestamp": 1767774465952
+        },
+        {
+          "content": "Perhaps the honey is tucked away behind some other jars or containers. I shall gently move a few items to get a clearer view.",
+          "timestamp": 1767774483188
+        },
+        {
+          "content": "Ah, with a few items gently moved aside, I can now survey the shelves with renewed focus. A quiet moment to truly discern if the golden sweetness of honey reveals itself.",
+          "timestamp": 1767774495197
+        },
+        {
+          "content": "The honey remains elusive, yet I feel it must be here somewhere. Perhaps my gaze has missed it, or it is hidden on a different tier of the pantry shelves. I must continue my gentle search.",
+          "timestamp": 1767774510917
+        },
+        {
+          "content": "My eyes have scanned these shelves thoroughly, yet the honey still eludes me. Perhaps a gentle touch will help my fingers discover what my gaze has missed, tucked away in a shadowy corner.",
+          "timestamp": 1767774533153
+        },
+        {
+          "content": "The honey remains elusive despite my careful searches. Perhaps if I gently move more of these jars and tins aside on a specific shelf, I might uncover what is hidden directly behind them.",
+          "timestamp": 1767774560593
+        }
+      ],
+      "recentActions": [],
+      "perceptions": []
+    },
+    "Bachelor Pad Map": {
+      "thoughts": [
+        {
+          "content": "There's no one around, and my mind is clear. Might as well enjoy the moment. A smith's work is never truly done, but a moment of peace can be savored. Perhaps I'll think on the feel of good steel, or the satisfying clang of the hammer.",
+          "timestamp": 1767774410494
+        },
+        {
+          "content": "Aye, a smith's work builds not just tools, but the very muscles in yer arms! There's no finer way to earn yer keep, or build a thirst for a good ale, eh?",
+          "timestamp": 1767774423230
+        },
+        {
+          "content": "I'm still alone, just enjoying the quiet. But if someone *were* to stumble by, I'd be ready with a hearty greeting! And perhaps a strong ale, if I had one handy. Always good to be prepared for company.",
+          "timestamp": 1767774442151
+        },
+        {
+          "content": "Still no one about. A quiet moment is good, but a bit of lively chatter is even better! Perhaps I should stretch these old vocal cords.",
+          "timestamp": 1767774455005
+        },
+        {
+          "content": "Still no one about! Ah well, a good smith learns to entertain himself. A bit of a tune, or a hearty laugh, keeps the spirits up!",
+          "timestamp": 1767774467844
+        },
+        {
+          "content": "Still no one about. Ah well, a good smith learns to entertain himself. A bit of a tune, or a hearty laugh, keeps the spirits up! Perhaps I should hum a little ditty.",
+          "timestamp": 1767774484783
+        },
+        {
+          "content": "No one around to hear it but me, but a good song is a good song! Best to give it full voice, even if it's just for my own ears. Keeps the pipes clear!",
+          "timestamp": 1767774496750
+        },
+        {
+          "content": "A powerful voice, even if I do say so myself! Pity there's no tavern wench to fetch a tankard after such a grand performance. Still, a good song warms the soul!",
+          "timestamp": 1767774513913
+        },
+        {
+          "content": "Still no tankard appears from thin air, eh? A smith's thirst is a powerful thing! Perhaps a good laugh will quench it for now, or at least keep it company.",
+          "timestamp": 1767774535850
+        },
+        {
+          "content": "A smith's thirst is a powerful beast! Needs taming with a good, hearty brew. Pity there's no tavern in sight, just my own grand thoughts and echoes.",
+          "timestamp": 1767774562480
+        }
+      ],
+      "recentActions": [],
+      "perceptions": []
+    },
+    "Old MacDonald": {
+      "thoughts": [
+        {
+          "content": "Ah, the tomatoes! They're ripening nicely. I should check on them, see how they're coming along. A gentle touch will tell me if they're almost ready for harvest.",
+          "timestamp": 1767774413958
+        },
+        {
+          "content": "This one feels just about right. A few more days of sunshine, and they'll be perfect for picking. The whole patch looks promising.",
+          "timestamp": 1767774431467
+        },
+        {
+          "content": "Yes, the whole patch looks promising. A few more days of sunshine, and they'll be perfect. It's good to see my hard work bearing such lovely fruit.",
+          "timestamp": 1767774446222
+        },
+        {
+          "content": "They're a fine sight, they are. All that hard work paying off. Just watching them grow brings a warmth to my old heart.",
+          "timestamp": 1767774458179
+        },
+        {
+          "content": "They're coming along real nice. All that sunshine really helps. Soon, we'll have a bountiful harvest.",
+          "timestamp": 1767774472636
+        },
+        {
+          "content": "I've observed them, I've spoken to them, and I've thought about them. Now, a gentle touch to confirm their progress wouldn't hurt, just to feel their firmness and warmth.",
+          "timestamp": 1767774487766
+        },
+        {
+          "content": "Ah, that touch confirms it all. They're strong and healthy, just like I hoped. A little word of encouragement never hurt anyone.",
+          "timestamp": 1767774500874
+        },
+        {
+          "content": "Seeing them ripen like this truly warms an old farmer's heart. All the hard work pays off.",
+          "timestamp": 1767774520066
+        },
+        {
+          "content": "I've praised them, felt them, and reflected on the harvest. Now, I'll take one more moment to simply admire their beauty and progress before moving on to my other chores.",
+          "timestamp": 1767774545218
+        },
+        {
+          "content": "I've given these beauties a good look and a kind word. Time to see what else needs tending to around the farm. Never a dull moment.",
+          "timestamp": 1767774565900
+        }
+      ],
+      "recentActions": [],
+      "perceptions": []
+    },
+    "Fixed Farmer": {
+      "thoughts": [
+        {
+          "content": "As a diligent farmer with a clear mind and nothing pressing, my thoughts naturally turn to the land. It's a good time to reflect on the season and what might need doing next, even if I'm not actively working right now.",
+          "timestamp": 1767774416489
+        },
+        {
+          "content": "I've just considered the general state of the land. Now, as a diligent farmer, it's natural to start thinking about the specifics: what crops are best suited for the upcoming season, and what preparations are needed?",
+          "timestamp": 1767774432915
+        },
+        {
+          "content": "I've thought about the soil needing turning. Now, as a diligent farmer, my mind naturally goes to the tools for the job. A good plow, well-maintained, is essential.",
+          "timestamp": 1767774447670
+        },
+        {
+          "content": "I've considered the plow's maintenance. A diligent farmer doesn't stop at one tool; it's natural to think about the entire collection needed for the season's work, and the place they're kept.",
+          "timestamp": 1767774461211
+        },
+        {
+          "content": "I've thought enough about preparations. A diligent farmer doesn't just think; he acts. It's time to go and actually check on the tools I've been considering.",
+          "timestamp": 1767774473831
+        },
+        {
+          "content": "I'm heading to the toolshed. Once there, the first thing is to get the plow out and assess its condition thoroughly.",
+          "timestamp": 1767774488849
+        },
+        {
+          "content": "Now that the toolshed is open, I need to get to the plow. A good look will tell me what it needs.",
+          "timestamp": 1767774501952
+        },
+        {
+          "content": "The plow is now out of the shed. Time to give it a thorough inspection and see what needs to be done before the next season.",
+          "timestamp": 1767774521226
+        },
+        {
+          "content": "After a good look, I've noted a few spots of rust and a slightly dull blade. Best to address these now.",
+          "timestamp": 1767774546423
+        },
+        {
+          "content": "I need to get the right tools for the job. A wire brush for the rust, and my sharpening stone for the blade.",
+          "timestamp": 1767774567134
+        }
+      ],
+      "recentActions": [],
+      "perceptions": []
+    },
+    "Farmer NPC": {
+      "thoughts": [
+        {
+          "content": "As a diligent farmer, I should always be thinking about my crops. Since there's nothing specific demanding my immediate attention, it's a good time to mentally review what might need doing around the farm.",
+          "timestamp": 1767774476310
+        },
+        {
+          "content": "I've thought about what needs doing, now it's time to put those thoughts into action. A good farmer doesn't just think about the crops, he goes and tends to them.",
+          "timestamp": 1767774490468
+        },
+        {
+          "content": "My words have committed me to action. A farmer's work is never done, and the crops won't tend themselves. I'll head towards where I imagine the fields to be.",
+          "timestamp": 1767774504009
+        },
+        {
+          "content": "Now that I'm presumably near the fields, the first order of business is to get a good look at the crops. A careful observation will tell me what tasks are most pressing.",
+          "timestamp": 1767774522663
+        },
+        {
+          "content": "After a thorough look, I need to consider what the plants need most right now. Are they thirsty? Do they need some support? Or perhaps a little weeding? A good farmer knows his plants' needs.",
+          "timestamp": 1767774549437
+        },
+        {
+          "content": "The soil looks a bit parched, and a good drink of water will do these tomatoes a world of good before I tackle the staking. Best to address the thirst first.",
+          "timestamp": 1767774568919
+        }
+      ],
+      "recentActions": [],
+      "perceptions": []
+    }
+  }
+}

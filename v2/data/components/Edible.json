@@ -1,0 +1,8 @@
+{
+  "name": "Edible",
+  "description": "Indicates if an object is edible and its nutritional value",
+  "properties": {
+    "spoiled": "boolean",
+    "nutritionValue": "number"
+  }
+}

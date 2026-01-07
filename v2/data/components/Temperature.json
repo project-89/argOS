@@ -1,0 +1,8 @@
+{
+  "name": "Temperature",
+  "description": "Temperature of an object in Celsius and flammability",
+  "properties": {
+    "celsius": "number",
+    "flammable": "boolean"
+  }
+}

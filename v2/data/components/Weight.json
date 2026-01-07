@@ -1,0 +1,7 @@
+{
+  "name": "Weight",
+  "description": "Weight of an object in kilograms",
+  "properties": {
+    "value": "number"
+  }
+}

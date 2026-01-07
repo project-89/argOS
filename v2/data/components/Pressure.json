@@ -1,0 +1,8 @@
+{
+  "name": "Pressure",
+  "description": "Pressure plate state and threshold",
+  "properties": {
+    "activated": "boolean",
+    "threshold": "number"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "argos-v2",
+  "version": "0.1.0",
+  "description": "Self-evolving cognitive architecture for LLM agents",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "simulate": "tsx src/run-simulation.ts",
+    "sandbox": "tsx src/run-sandbox.ts",
+    "test": "tsx src/test.ts",
+    "typecheck": "tsc --noEmit",
+    "extract-sprites": "tsx src/scripts/extract-sprites.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^3.0.5",
+    "ai": "^6.0.14",
+    "bitecs": "^0.4.0",
+    "dotenv": "^16.3.1",
+    "express": "^5.2.1",
+    "nanoid": "^5.0.4",
+    "pixi.js": "^8.15.0",
+    "ws": "^8.18.3",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/sharp": "^0.31.1",
+    "gif-frames": "^1.0.1",
+    "sharp": "^0.34.5",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
