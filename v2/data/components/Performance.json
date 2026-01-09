@@ -1,0 +1,9 @@
+{
+  "name": "Performance",
+  "description": "Ability to generate Applause and appease the Ringmaster.",
+  "properties": {
+    "stagePresence": "number",
+    "applauseGenerated": "number",
+    "skill": "number"
+  }
+}

@@ -5,7 +5,7 @@ import { query } from "bitecs";
 import type { World } from "../ecs/world";
 import { createEcsTools, createEntityRegistry, type EntityRegistry, type EcsTools, type ToolResult } from "../ecs/tools";
 import { createGodAgentEntity } from "../ecs/prefabs";
-import { GodAgent, Name } from "../ecs/components";
+import { GodAgent, Name, Description, Agent, Mind } from "../ecs/components";
 import { AllComponents } from "../ecs/components";
 import { AllRelations } from "../ecs/relations";
 import {
@@ -82,6 +82,22 @@ import {
   type AffordanceDefinition,
   type RuleDefinition,
 } from "../world/schema";
+import {
+  createSimulation,
+  loadSimulation,
+  listSimulations,
+  deleteSimulation,
+  loadSnapshot,
+  getCurrentSimulation,
+  setCurrentSimulation,
+  type SimulationConfig,
+  type SimulationMetadata,
+  type SimulationInstance,
+} from "../persistence/simulation-manager";
+import {
+  writeSystemToDir,
+  loadSystemsFromDir,
+} from "../systems/system-loader";
 
 // Multi-model architecture:
 // - Planner (Pro): Deep thinking for design and review
@@ -172,14 +188,33 @@ export interface GodAgentState {
     plans: Plan[];
     activePlan: string | null;
   };
+  // Persistence - automatically saves if attached
+  simulation?: SimulationInstance;
 }
 
-export function createGodAgent(world: World, config: { name: string; worldName: string; narrative?: string }): GodAgentState {
+export interface GodAgentConfig {
+  name: string;
+  worldName: string;
+  narrative?: string;
+  /** Enable automatic persistence - creates a simulation folder for this run */
+  persistence?: boolean | {
+    /** Simulation name (defaults to worldName) */
+    name?: string;
+    /** Auto-save every N ticks (default: 50) */
+    autosaveInterval?: number;
+    /** Create snapshot every N ticks (default: 200) */
+    snapshotInterval?: number;
+    /** Max snapshots to keep (default: 10) */
+    maxSnapshots?: number;
+  };
+}
+
+export function createGodAgent(world: World, config: GodAgentConfig): GodAgentState {
   const registry = createEntityRegistry();
   const systemRegistry = createSystemRegistry();
   const tools = createEcsTools(world, registry);
   const renderingTools = createRenderingTools(world, registry);
-  
+
   const eid = createGodAgentEntity(world, {
     name: config.name,
     worldName: config.worldName,
@@ -213,7 +248,48 @@ export function createGodAgent(world: World, config: { name: string; worldName: 
       plans: [],
       activePlan: null,
     },
+    // simulation will be attached by initializeGodAgentWithPersistence
   };
+}
+
+/**
+ * Create a GodAgent with automatic persistence enabled.
+ * This creates a simulation folder and auto-saves on each tick.
+ */
+export async function createGodAgentWithPersistence(
+  world: World,
+  config: GodAgentConfig
+): Promise<GodAgentState> {
+  const state = createGodAgent(world, config);
+
+  // Create simulation if persistence is enabled
+  if (config.persistence) {
+    const persistConfig = typeof config.persistence === 'object' ? config.persistence : {};
+
+    const simulation = await createSimulation({
+      name: persistConfig.name || config.worldName,
+      description: config.narrative?.substring(0, 200),
+      autosaveInterval: persistConfig.autosaveInterval ?? 50,
+      snapshotInterval: persistConfig.snapshotInterval ?? 200,
+      maxSnapshots: persistConfig.maxSnapshots ?? 10,
+    });
+
+    state.simulation = simulation;
+    setCurrentSimulation(simulation);
+
+    console.log(`[GodAgent] Persistence enabled: ${simulation.basePath}`);
+  }
+
+  return state;
+}
+
+/**
+ * Attach an existing simulation to a GodAgent state
+ */
+export function attachSimulation(state: GodAgentState, simulation: SimulationInstance): void {
+  state.simulation = simulation;
+  setCurrentSimulation(simulation);
+  console.log(`[GodAgent] Attached simulation: ${simulation.id}`);
 }
 
 const SHORT_TERM_LIMIT = 50;
@@ -2723,6 +2799,40 @@ defineRule({
       },
     }),
 
+    describeEntity: tool({
+      description: `Update an entity's text description. Use this to change how an entity is described in the simulation.
+
+This affects what agents perceive when they observe the entity. Useful for:
+- Updating descriptions after state changes
+- Adding narrative flavor
+- Reflecting changes in appearance or condition
+
+EXAMPLE:
+describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, its branches now bare after the storm." })`,
+      inputSchema: z.object({
+        entityName: z.string().describe("Name of the entity to update"),
+        description: z.string().describe("New description text"),
+      }),
+      execute: async (params) => {
+        const eid = state.registry.byName.get(params.entityName);
+        if (eid === undefined) {
+          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+        }
+
+        // Update the Description component
+        Description.value[eid] = params.description;
+
+        console.log(`[Tool] describeEntity: ${params.entityName}`);
+        return {
+          success: true,
+          result: {
+            name: params.entityName,
+            description: params.description,
+          },
+        };
+      },
+    }),
+
     // ============ MONITORING & STEERING TOOLS ============
     // Tools for observing world state and steering the narrative
 
@@ -3015,6 +3125,919 @@ defineRule({
             currentStagnation: stagnation,
           },
         };
+      },
+    }),
+
+    // ============ SPIRIT HIERARCHY TOOLS ============
+    // Tools for managing the celestial hierarchy of AI spirits
+
+    getSpiritHierarchy: tool({
+      description: "View the current spirit hierarchy - the celestial agents watching over different domains of the simulation.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getSpiritSystemState, getSpiritSystemDebugInfo, getSystemSummary } = await import("../spirits");
+        const systemState = getSpiritSystemState();
+
+        if (!systemState) {
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized. Call initializeSpiritSystem first.",
+          };
+        }
+
+        const summary = getSystemSummary();
+        const debug = getSpiritSystemDebugInfo();
+
+        console.log("[Tool] getSpiritHierarchy");
+        return {
+          success: true,
+          result: {
+            summary,
+            details: debug,
+          },
+        };
+      },
+    }),
+
+    getSpiritReports: tool({
+      description: "Get reports from spirits that have observed the simulation. Spirits report narrative developments, conflicts, stagnation, and other significant events.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getSpiritSystemState, getMessagesForGodAI } = await import("../spirits");
+        const systemState = getSpiritSystemState();
+
+        if (!systemState) {
+          return { success: false, result: null, error: "Spirit system not initialized" };
+        }
+
+        const messages = getMessagesForGodAI(systemState.registry);
+
+        console.log(`[Tool] getSpiritReports: ${messages.length} messages`);
+        return {
+          success: true,
+          result: {
+            messageCount: messages.length,
+            messages: messages.map(m => ({
+              from: m.from,
+              type: m.type,
+              priority: m.priority,
+              subject: m.subject,
+              content: m.content,
+              timestamp: new Date(m.timestamp).toISOString(),
+            })),
+          },
+        };
+      },
+    }),
+
+    sendDirectiveToSpirit: tool({
+      description: "Send a directive to a spirit, commanding them to take specific action.",
+      inputSchema: z.object({
+        spiritName: z.string().describe("Name of the spirit to command (e.g., 'The Narrator')"),
+        directive: z.string().describe("What you want the spirit to do"),
+        priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Directive priority"),
+      }),
+      execute: async (params) => {
+        const { getSpiritSystemState, getSpiritByName, sendDirective } = await import("../spirits");
+        const systemState = getSpiritSystemState();
+
+        if (!systemState) {
+          return { success: false, result: null, error: "Spirit system not initialized" };
+        }
+
+        const spirit = getSpiritByName(systemState.registry, params.spiritName);
+        if (!spirit) {
+          return { success: false, result: null, error: `Spirit not found: ${params.spiritName}` };
+        }
+
+        const directive = sendDirective(systemState.registry, state.eid, spirit.eid, {
+          type: "intervene",
+          description: params.directive,
+          action: {
+            type: "custom",
+            parameters: { directive: params.directive },
+          },
+        });
+
+        addMemory(state, "action", `Sent directive to ${params.spiritName}: ${params.directive}`, {
+          importance: 7,
+          tags: ["spirit", "directive"],
+        });
+
+        console.log(`[Tool] sendDirectiveToSpirit: ${params.spiritName} - ${params.directive}`);
+        return {
+          success: true,
+          result: {
+            directiveId: directive.id,
+            to: params.spiritName,
+            description: params.directive,
+          },
+        };
+      },
+    }),
+
+    createSpirit: tool({
+      description: "Create a new spirit to watch over a specific domain or entity. Spirits observe the ECS and report to you.",
+      inputSchema: z.object({
+        name: z.string().describe("Name for the spirit (e.g., 'Guardian of Alice')"),
+        domain: z.enum(["narrative", "social", "ecology", "economy", "guardian", "locale"])
+          .describe("Domain the spirit manages"),
+        rank: z.enum(["archangel", "angel", "daemon"]).describe("Spirit rank in hierarchy"),
+        description: z.string().describe("What this spirit watches and does"),
+        watchEntities: z.array(z.string()).optional().describe("Specific entity names to watch"),
+        watchRooms: z.array(z.string()).optional().describe("Specific room names to watch"),
+        observationInterval: z.number().optional().describe("Milliseconds between observations (default: 30000)"),
+      }),
+      execute: async (params) => {
+        const { getSpiritSystemState, createNewSpirit } = await import("../spirits");
+        const systemState = getSpiritSystemState();
+
+        if (!systemState) {
+          return { success: false, result: null, error: "Spirit system not initialized" };
+        }
+
+        const definition = {
+          name: params.name,
+          domain: params.domain,
+          rank: params.rank,
+          description: params.description,
+          watchConfig: {
+            componentQueries: [],
+            eventTypes: ["action_executed", "dialogue_spoken", "mood_changed"],
+            watchEntities: params.watchEntities,
+            watchRooms: params.watchRooms,
+          },
+          canInjectEvents: params.rank !== "daemon",
+          canModifyMood: params.rank === "archangel",
+          canCreateEntities: false,
+          canBakeSystems: false,
+          model: params.rank === "archangel" ? "flash" : "flash" as const,
+          observationInterval: params.observationInterval || 30000,
+          systemPrompt: `You are ${params.name}, a ${params.rank} spirit of the ${params.domain} domain.
+${params.description}
+
+Observe the world and report significant events to your superior.
+If you can intervene, do so when narratively appropriate.
+Always respond with valid JSON.`,
+        };
+
+        const spirit = createNewSpirit(definition, state.eid);
+
+        if (!spirit) {
+          return { success: false, result: null, error: "Failed to create spirit" };
+        }
+
+        addMemory(state, "action", `Created spirit: ${params.name} (${params.domain} ${params.rank})`, {
+          importance: 8,
+          tags: ["spirit", "creation"],
+        });
+
+        console.log(`[Tool] createSpirit: ${params.name}`);
+        return {
+          success: true,
+          result: {
+            name: params.name,
+            domain: params.domain,
+            rank: params.rank,
+            eid: spirit.eid,
+          },
+        };
+      },
+    }),
+
+    getSpiritObservations: tool({
+      description: "Get recent observations from a specific spirit.",
+      inputSchema: z.object({
+        spiritName: z.string().describe("Name of the spirit"),
+        limit: z.number().optional().describe("Max observations to return (default: 10)"),
+      }),
+      execute: async (params) => {
+        const { getSpiritSystemState, getSpiritByName } = await import("../spirits");
+        const systemState = getSpiritSystemState();
+
+        if (!systemState) {
+          return { success: false, result: null, error: "Spirit system not initialized" };
+        }
+
+        const spirit = getSpiritByName(systemState.registry, params.spiritName);
+        if (!spirit) {
+          return { success: false, result: null, error: `Spirit not found: ${params.spiritName}` };
+        }
+
+        const limit = params.limit || 10;
+        const observations = spirit.observations.slice(-limit);
+
+        console.log(`[Tool] getSpiritObservations: ${params.spiritName} - ${observations.length} obs`);
+        return {
+          success: true,
+          result: {
+            spirit: params.spiritName,
+            observationCount: spirit.observations.length,
+            recent: observations.map(o => ({
+              type: o.type,
+              content: o.content,
+              entities: o.entities,
+              significance: o.significance,
+              timestamp: new Date(o.timestamp).toISOString(),
+            })),
+          },
+        };
+      },
+    }),
+
+    getNarratorState: tool({
+      description: "Get the Narrator spirit's current understanding of the narrative - plot threads, tension, character arcs.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getSpiritSystemState, getSpiritByName } = await import("../spirits");
+        const systemState = getSpiritSystemState();
+
+        if (!systemState) {
+          return { success: false, result: null, error: "Spirit system not initialized" };
+        }
+
+        const narrator = getSpiritByName(systemState.registry, "The Narrator");
+        if (!narrator) {
+          return { success: false, result: null, error: "Narrator spirit not found" };
+        }
+
+        if (!narrator.narrativeState) {
+          return {
+            success: true,
+            result: {
+              message: "Narrator has not yet analyzed the narrative",
+              shortTermMemory: narrator.shortTermMemory.slice(-5),
+            },
+          };
+        }
+
+        console.log("[Tool] getNarratorState");
+        return {
+          success: true,
+          result: {
+            currentAct: narrator.narrativeState.currentAct,
+            currentPhase: narrator.narrativeState.currentPhase,
+            tension: narrator.narrativeState.tension,
+            plotThreads: narrator.narrativeState.plotThreads,
+            protagonists: narrator.narrativeState.protagonists,
+            antagonists: narrator.narrativeState.antagonists,
+            recentThoughts: narrator.shortTermMemory.slice(-3),
+          },
+        };
+      },
+    }),
+
+    tickSpirits: tool({
+      description: "Manually trigger a spirit observation cycle. Normally spirits run on their own schedule, but this forces an immediate cycle.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getSpiritSystemState, tickSpiritSystem } = await import("../spirits");
+        const systemState = getSpiritSystemState();
+
+        if (!systemState) {
+          return { success: false, result: null, error: "Spirit system not initialized" };
+        }
+
+        // Force the tick by resetting lastTick
+        systemState.lastTick = 0;
+
+        const result = await tickSpiritSystem(state.world, state.registry);
+
+        console.log(`[Tool] tickSpirits: ${result.spiritsProcessed} spirits processed`);
+        return {
+          success: true,
+          result: {
+            spiritsProcessed: result.spiritsProcessed,
+            messagesGenerated: result.messagesForGodAI.length,
+          },
+        };
+      },
+    }),
+
+    // ============ STORY TEMPLATE TOOLS ============
+    // Tools for managing narrative templates that guide story structure
+
+    listStoryTemplates: tool({
+      description: `List all available story arc templates. Templates define narrative structures including:
+- Key story beats (inciting incident, climax, resolution)
+- Tension curves for pacing
+- Character role requirements
+- Intervention suggestions for when stories stagnate
+
+Use setStoryTemplate to activate a template for the current simulation.`,
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getAvailableTemplates } = await import("../spirits");
+        const templates = getAvailableTemplates();
+
+        console.log("[Tool] listStoryTemplates");
+        return {
+          success: true,
+          result: {
+            count: templates.length,
+            templates,
+          },
+        };
+      },
+    }),
+
+    setStoryTemplate: tool({
+      description: `Activate a story template for the current narrative. The template will guide:
+- What story beats should happen and when
+- Target tension levels for each phase
+- When and how to intervene if the story stagnates
+- Character role assignments
+
+Templates: "classic_three_act", "mystery", "slice_of_life", "conflict"`,
+      inputSchema: z.object({
+        templateId: z.string().describe("ID of the template to activate"),
+      }),
+      execute: async (params) => {
+        const { setActiveTemplate } = await import("../spirits");
+        const template = setActiveTemplate(params.templateId);
+
+        if (!template) {
+          return {
+            success: false,
+            result: null,
+            error: `Template not found: ${params.templateId}. Use listStoryTemplates to see available templates.`,
+          };
+        }
+
+        console.log(`[Tool] setStoryTemplate: ${template.name}`);
+        return {
+          success: true,
+          result: {
+            id: template.id,
+            name: template.name,
+            genre: template.genre,
+            description: template.description,
+            acts: template.acts.map(a => ({ number: a.number, name: a.name, purpose: a.purpose })),
+            requiredRoles: template.requiredRoles.map(r => r.role),
+            keyBeats: template.keyBeats.map(b => ({ id: b.id, name: b.name, phase: b.phase })),
+            themes: template.themes,
+          },
+        };
+      },
+    }),
+
+    getStoryTemplateStatus: tool({
+      description: "Get the current status of the active story template including alignment, next expected beat, and recommendations.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const {
+          getActiveTemplate,
+          getSpiritSystemState,
+          getSpiritByName,
+          generateNarrativeReport,
+        } = await import("../spirits");
+
+        const template = getActiveTemplate();
+        const systemState = getSpiritSystemState();
+
+        if (!template) {
+          return {
+            success: true,
+            result: {
+              templateActive: false,
+              message: "No story template is currently active. Use setStoryTemplate to activate one.",
+            },
+          };
+        }
+
+        if (!systemState) {
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
+        }
+
+        const narrator = getSpiritByName(systemState.registry, "The Narrator");
+        if (!narrator || !narrator.narrativeState) {
+          return {
+            success: true,
+            result: {
+              templateActive: true,
+              templateName: template.name,
+              message: "Narrator has not yet analyzed the narrative. Wait for spirit tick or call tickSpirits.",
+            },
+          };
+        }
+
+        const eventCount = narrator.observations.length;
+        const lastObservation = narrator.observations[narrator.observations.length - 1];
+        const ticksSinceLastEvent = lastObservation ? Date.now() - lastObservation.timestamp : 0;
+
+        const report = generateNarrativeReport(
+          narrator.narrativeState,
+          eventCount,
+          ticksSinceLastEvent
+        );
+
+        console.log("[Tool] getStoryTemplateStatus");
+        return {
+          success: true,
+          result: {
+            templateActive: true,
+            templateName: template.name,
+            ...report,
+          },
+        };
+      },
+    }),
+
+    markStoryBeat: tool({
+      description: `Mark a story beat as completed. This tracks progress through the template structure.
+Common beats include: "opening_image", "inciting_incident", "first_threshold", "midpoint", "all_is_lost", "climax", "resolution"`,
+      inputSchema: z.object({
+        beatId: z.string().describe("ID of the beat to mark as completed"),
+      }),
+      execute: async (params) => {
+        const { markBeatCompleted, getActiveTemplate } = await import("../spirits");
+
+        const template = getActiveTemplate();
+        if (!template) {
+          return {
+            success: false,
+            result: null,
+            error: "No story template is active. Use setStoryTemplate first.",
+          };
+        }
+
+        // Verify beat exists in template
+        const beat = [...template.keyBeats, ...template.optionalBeats].find(b => b.id === params.beatId);
+        if (!beat) {
+          const availableBeats = [...template.keyBeats, ...template.optionalBeats].map(b => b.id);
+          return {
+            success: false,
+            result: null,
+            error: `Beat not found: ${params.beatId}. Available beats: ${availableBeats.join(", ")}`,
+          };
+        }
+
+        markBeatCompleted(params.beatId);
+
+        console.log(`[Tool] markStoryBeat: ${params.beatId}`);
+        return {
+          success: true,
+          result: {
+            beatId: params.beatId,
+            beatName: beat.name,
+            phase: beat.phase,
+            tensionChange: beat.tensionChange,
+            establishes: beat.establishes,
+          },
+        };
+      },
+    }),
+
+    getTemplateInterventions: tool({
+      description: "Get suggested interventions based on the current story state and active template. Useful when the story is stagnating or deviating from the template.",
+      inputSchema: z.object({
+        includeAllSources: z.boolean().optional().describe("Include phase-based and stagnation suggestions in addition to template suggestions"),
+      }),
+      execute: async (params) => {
+        const {
+          getActiveTemplate,
+          getSpiritSystemState,
+          getSpiritByName,
+          suggestEnhancedInterventions,
+          getTemplateInterventions,
+        } = await import("../spirits");
+
+        const systemState = getSpiritSystemState();
+        if (!systemState) {
+          return { success: false, result: null, error: "Spirit system not initialized" };
+        }
+
+        const narrator = getSpiritByName(systemState.registry, "The Narrator");
+        if (!narrator || !narrator.narrativeState) {
+          return {
+            success: false,
+            result: null,
+            error: "Narrator has not yet analyzed the narrative",
+          };
+        }
+
+        // Collect agent info for targeting
+        const agents: { name: string; location: string; mood: string; arousal: number }[] = [];
+        for (const [name, eid] of state.registry.byName) {
+          if (Agent.active[eid]) {
+            agents.push({
+              name,
+              location: "", // Would need room lookup
+              mood: Mind.arousal[eid] > 0.7 ? "excited" : Mind.arousal[eid] < 0.3 ? "calm" : "alert",
+              arousal: Mind.arousal[eid],
+            });
+          }
+        }
+
+        const lastObservation = narrator.observations[narrator.observations.length - 1];
+        const ticksSinceLastEvent = lastObservation ? Date.now() - lastObservation.timestamp : 60000;
+
+        let suggestions;
+        if (params.includeAllSources) {
+          suggestions = suggestEnhancedInterventions(
+            narrator.narrativeState,
+            ticksSinceLastEvent,
+            agents
+          );
+        } else {
+          const template = getActiveTemplate();
+          if (!template) {
+            return {
+              success: false,
+              result: null,
+              error: "No story template active. Use setStoryTemplate or set includeAllSources=true for phase-based suggestions.",
+            };
+          }
+          suggestions = getTemplateInterventions(
+            narrator.narrativeState.tension,
+            narrator.narrativeState.currentPhase,
+            ticksSinceLastEvent
+          ).map(s => ({
+            type: s.type,
+            target: agents[0]?.name || "room",
+            content: s.templates[0],
+            reason: `Template trigger: ${s.trigger}`,
+            source: "template" as const,
+          }));
+        }
+
+        console.log(`[Tool] getTemplateInterventions: ${suggestions.length} suggestions`);
+        return {
+          success: true,
+          result: {
+            currentPhase: narrator.narrativeState.currentPhase,
+            currentTension: narrator.narrativeState.tension,
+            ticksSinceLastEvent,
+            suggestions,
+          },
+        };
+      },
+    }),
+
+    suggestCharacterRoles: tool({
+      description: "Get suggestions for assigning template character roles to agents in the simulation.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getActiveTemplate, getRoleSuggestions } = await import("../spirits");
+
+        const template = getActiveTemplate();
+        if (!template) {
+          return {
+            success: false,
+            result: null,
+            error: "No story template active. Use setStoryTemplate first.",
+          };
+        }
+
+        // Collect agent info
+        const agents: { name: string; traits: string[]; arousal: number }[] = [];
+        for (const [name, eid] of state.registry.byName) {
+          if (Agent.active[eid]) {
+            agents.push({
+              name,
+              traits: [], // Would need trait lookup
+              arousal: Mind.arousal[eid],
+            });
+          }
+        }
+
+        const suggestions = getRoleSuggestions(agents);
+
+        console.log("[Tool] suggestCharacterRoles");
+        return {
+          success: true,
+          result: {
+            templateName: template.name,
+            requiredRoles: template.requiredRoles.map(r => ({
+              role: r.role,
+              description: r.description,
+              arcType: r.arcType,
+            })),
+            optionalRoles: template.optionalRoles.map(r => ({
+              role: r.role,
+              description: r.description,
+              arcType: r.arcType,
+            })),
+            suggestions,
+          },
+        };
+      },
+    }),
+
+    // ========================================================================
+    // SIMULATION PERSISTENCE TOOLS
+    // ========================================================================
+
+    createNewSimulation: tool({
+      description: `Create a new simulation with its own folder structure for persistence.
+Each simulation gets:
+- simulation.json: Metadata and config
+- world.json: Full ECS world state
+- spirits.json: Spirit system state
+- systems/: Generated system files
+- snapshots/: Periodic full state snapshots
+- logs/: Narrative and event logs
+
+Returns the simulation ID for use with other persistence tools.`,
+      parameters: z.object({
+        name: z.string().describe("Human-readable name for the simulation"),
+        description: z.string().optional().describe("Description of what this simulation is about"),
+        storyTemplate: z.string().optional().describe("Story template to use (e.g., 'classic_three_act')"),
+        autosaveInterval: z.number().optional().describe("Auto-save every N ticks (0 to disable, default: 50)"),
+        snapshotInterval: z.number().optional().describe("Create snapshot every N ticks (0 to disable, default: 200)"),
+        maxSnapshots: z.number().optional().describe("Maximum snapshots to keep (default: 10)"),
+      }),
+      execute: async (params) => {
+        try {
+          const config: SimulationConfig = {
+            name: params.name,
+            description: params.description,
+            storyTemplate: params.storyTemplate,
+            autosaveInterval: params.autosaveInterval,
+            snapshotInterval: params.snapshotInterval,
+            maxSnapshots: params.maxSnapshots,
+          };
+
+          const simulation = await createSimulation(config);
+          setCurrentSimulation(simulation);
+
+          console.log(`[Tool] createNewSimulation: ${params.name} (${simulation.id})`);
+          return {
+            success: true,
+            result: {
+              id: simulation.id,
+              name: simulation.name,
+              basePath: simulation.basePath,
+              systemsDir: simulation.getSystemsDir(),
+              message: `Created simulation "${params.name}" with ID: ${simulation.id}`,
+            },
+          };
+        } catch (error) {
+          return {
+            success: false,
+            result: null,
+            error: String(error),
+          };
+        }
+      },
+    }),
+
+    listAllSimulations: tool({
+      description: "List all saved simulations with their metadata.",
+      parameters: z.object({}),
+      execute: async () => {
+        try {
+          const simulations = await listSimulations();
+          const current = getCurrentSimulation();
+
+          console.log(`[Tool] listAllSimulations: Found ${simulations.length} simulations`);
+          return {
+            success: true,
+            result: {
+              count: simulations.length,
+              currentId: current?.id || null,
+              simulations: simulations.map((s) => ({
+                id: s.id,
+                name: s.name,
+                description: s.description,
+                storyTemplate: s.storyTemplate,
+                createdAt: new Date(s.createdAt).toISOString(),
+                lastSavedAt: new Date(s.lastSavedAt).toISOString(),
+                currentTick: s.currentTick,
+                isCurrent: current?.id === s.id,
+              })),
+            },
+          };
+        } catch (error) {
+          return {
+            success: false,
+            result: null,
+            error: String(error),
+          };
+        }
+      },
+    }),
+
+    loadExistingSimulation: tool({
+      description: "Load an existing simulation by ID. This sets it as the current simulation.",
+      parameters: z.object({
+        simulationId: z.string().describe("The simulation ID to load"),
+      }),
+      execute: async (params) => {
+        try {
+          const simulation = await loadSimulation(params.simulationId);
+          setCurrentSimulation(simulation);
+
+          console.log(`[Tool] loadExistingSimulation: ${simulation.name} (${simulation.id})`);
+          return {
+            success: true,
+            result: {
+              id: simulation.id,
+              name: simulation.name,
+              currentTick: simulation.currentTick,
+              basePath: simulation.basePath,
+              message: `Loaded simulation "${simulation.name}" at tick ${simulation.currentTick}`,
+            },
+          };
+        } catch (error) {
+          return {
+            success: false,
+            result: null,
+            error: String(error),
+          };
+        }
+      },
+    }),
+
+    saveCurrentSimulation: tool({
+      description: "Save the current simulation state (world, spirits, systems). Requires an active simulation.",
+      parameters: z.object({
+        includeSnapshot: z.boolean().optional().describe("Also create a full snapshot (default: false)"),
+      }),
+      execute: async (params) => {
+        const simulation = getCurrentSimulation();
+        if (!simulation) {
+          return {
+            success: false,
+            result: null,
+            error: "No active simulation. Use createNewSimulation or loadExistingSimulation first.",
+          };
+        }
+
+        try {
+          // Get state references from GodAgent state (these would need to be passed properly)
+          // For now, we can only save metadata
+          await simulation.flushLogs();
+          await simulation.saveMetadata();
+
+          console.log(`[Tool] saveCurrentSimulation: ${simulation.name}`);
+          return {
+            success: true,
+            result: {
+              simulationId: simulation.id,
+              name: simulation.name,
+              savedAt: new Date().toISOString(),
+              message: `Saved simulation "${simulation.name}" metadata. Use tick-based auto-save for full world state.`,
+            },
+          };
+        } catch (error) {
+          return {
+            success: false,
+            result: null,
+            error: String(error),
+          };
+        }
+      },
+    }),
+
+    getSimulationStatus: tool({
+      description: "Get the current simulation status including paths and save info.",
+      parameters: z.object({}),
+      execute: async () => {
+        const simulation = getCurrentSimulation();
+        if (!simulation) {
+          return {
+            success: true,
+            result: {
+              hasActiveSimulation: false,
+              message: "No active simulation. Use createNewSimulation or loadExistingSimulation.",
+            },
+          };
+        }
+
+        try {
+          const snapshots = await simulation.listSnapshots();
+
+          return {
+            success: true,
+            result: {
+              hasActiveSimulation: true,
+              id: simulation.id,
+              name: simulation.name,
+              currentTick: simulation.currentTick,
+              createdAt: new Date(simulation.createdAt).toISOString(),
+              lastSavedAt: new Date(simulation.lastSavedAt).toISOString(),
+              paths: {
+                base: simulation.basePath,
+                systems: simulation.getSystemsDir(),
+                snapshots: simulation.getSnapshotsDir(),
+                logs: simulation.getLogsDir(),
+              },
+              snapshots: snapshots.slice(0, 5).map((s) => ({
+                tick: s.tick,
+                savedAt: s.savedAt.toISOString(),
+              })),
+              totalSnapshots: snapshots.length,
+            },
+          };
+        } catch (error) {
+          return {
+            success: false,
+            result: null,
+            error: String(error),
+          };
+        }
+      },
+    }),
+
+    appendToNarrative: tool({
+      description: "Append text to the current simulation's narrative log.",
+      parameters: z.object({
+        text: z.string().describe("The narrative text to append"),
+      }),
+      execute: async (params) => {
+        const simulation = getCurrentSimulation();
+        if (!simulation) {
+          return {
+            success: false,
+            result: null,
+            error: "No active simulation. Use createNewSimulation or loadExistingSimulation first.",
+          };
+        }
+
+        simulation.appendNarrative(params.text);
+        console.log(`[Tool] appendToNarrative: ${params.text.substring(0, 50)}...`);
+
+        return {
+          success: true,
+          result: {
+            message: "Narrative appended. Will be flushed to disk on next save.",
+          },
+        };
+      },
+    }),
+
+    logSimulationEvent: tool({
+      description: "Log a structured event to the current simulation's event log.",
+      parameters: z.object({
+        type: z.string().describe("Event type (e.g., 'agent_action', 'system_run', 'intervention')"),
+        data: z.any().describe("Event data payload"),
+      }),
+      execute: async (params) => {
+        const simulation = getCurrentSimulation();
+        if (!simulation) {
+          return {
+            success: false,
+            result: null,
+            error: "No active simulation. Use createNewSimulation or loadExistingSimulation first.",
+          };
+        }
+
+        simulation.logEvent(params.type, params.data);
+        console.log(`[Tool] logSimulationEvent: ${params.type}`);
+
+        return {
+          success: true,
+          result: {
+            message: "Event logged. Will be flushed to disk on next save.",
+          },
+        };
+      },
+    }),
+
+    deleteSimulationById: tool({
+      description: "Delete a simulation and all its data. Use with caution!",
+      parameters: z.object({
+        simulationId: z.string().describe("The simulation ID to delete"),
+        confirm: z.boolean().describe("Must be true to confirm deletion"),
+      }),
+      execute: async (params) => {
+        if (!params.confirm) {
+          return {
+            success: false,
+            result: null,
+            error: "Deletion not confirmed. Set confirm=true to delete.",
+          };
+        }
+
+        try {
+          // Clear current simulation if it's the one being deleted
+          const current = getCurrentSimulation();
+          if (current?.id === params.simulationId) {
+            setCurrentSimulation(null);
+          }
+
+          await deleteSimulation(params.simulationId);
+
+          console.log(`[Tool] deleteSimulationById: ${params.simulationId}`);
+          return {
+            success: true,
+            result: {
+              message: `Deleted simulation ${params.simulationId}`,
+            },
+          };
+        } catch (error) {
+          return {
+            success: false,
+            result: null,
+            error: String(error),
+          };
+        }
       },
     }),
   };
@@ -4175,13 +5198,15 @@ export function tickWorld(state: GodAgentState, delta: number = 1000): Array<{ t
   return consumeEvents(state.systemRegistry);
 }
 
-// Async version that also fixes runtime errors
+// Async version that also fixes runtime errors and handles persistence
 export async function tickWorldAsync(
   state: GodAgentState,
   delta: number = 1000
 ): Promise<{
   events: Array<{ type: string; data: any; timestamp: number }>;
   fixes: { fixed: string[]; failed: string[] };
+  saved?: boolean;
+  snapshot?: boolean;
 }> {
   const events = tickWorld(state, delta);
 
@@ -4202,7 +5227,30 @@ export async function tickWorldAsync(
     }
   }
 
-  return { events, fixes };
+  // Auto-persistence if simulation is attached
+  let saved = false;
+  let snapshot = false;
+  if (state.simulation) {
+    const sim = state.simulation;
+    sim.updateTick(state.tick);
+
+    // Log events to simulation
+    for (const event of events) {
+      sim.logEvent(event.type, event.data);
+    }
+
+    // Check if we should snapshot (takes priority over save)
+    if (sim.shouldSnapshot(state.tick)) {
+      await sim.saveSnapshot(state.world, state.systemRegistry);
+      snapshot = true;
+      saved = true;
+    } else if (sim.shouldAutosave(state.tick)) {
+      await sim.saveAll(state.world, state.systemRegistry);
+      saved = true;
+    }
+  }
+
+  return { events, fixes, saved, snapshot };
 }
 
 export function getWorldState(state: GodAgentState): string {

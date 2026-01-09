@@ -30,8 +30,20 @@ ArgOS is a **Linguistic Simulation Engine** - a platform where AI agents autonom
 │  - Receives prompts, designs simulations                        │
 │  - Creates/modifies world through tools                         │
 │  - Two-tier: Opus/Pro thinks, Flash executes                    │
+│  - Receives reports from Spirit hierarchy                       │
 │                                                                 │
 │  Status: ✅ IMPLEMENTED (god-agent.ts)                          │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ commands & receives reports
+┌──────────────────────────────▼──────────────────────────────────┐
+│                       SPIRIT HIERARCHY                          │
+│  - AI spirits that observe and steer simulation domains         │
+│  - Archangels: Domain managers (Narrator, Sociologist...)       │
+│  - Angels: Local/entity-specific managers                       │
+│  - Daemons: Task-specific helper spirits                        │
+│  - Inter-spirit messaging via DivineMessage protocol            │
+│                                                                 │
+│  Status: ✅ IMPLEMENTED (src/spirits/)                          │
 └──────────────────────────────┬──────────────────────────────────┘
                                │ uses tools
 ┌──────────────────────────────▼──────────────────────────────────┐
@@ -117,6 +129,8 @@ ArgOS is a **Linguistic Simulation Engine** - a platform where AI agents autonom
 | `addRelation` | Create relationship between entities | ✅ |
 | `bakeNewSystem` | Generate new system from description | ✅ |
 | `activateSystem` / `deactivateSystem` | Control system execution | ✅ |
+
+**Spirit Management Tools** - See **Section 13.7** for the 7 spirit hierarchy tools (`getSpiritHierarchy`, `getSpiritReports`, `sendDirectiveToSpirit`, etc.)
 
 ### 3.2 Planned Tools (To Integrate)
 
@@ -757,23 +771,31 @@ This allows agents to know what actions are available without explicitly examini
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 7.2 Future Option: Specialized Agent Hierarchy
+### 7.2 Specialized Agent Hierarchy (Implemented)
 
-If complexity requires, we could add specialized agents:
+**Status: ✅ IMPLEMENTED** - See **Section 13: Spirit Hierarchy** for full details.
+
+The Spirit Hierarchy implements an emanationist architecture where GodAI delegates observation and steering to specialized AI spirits:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Architect (Opus) - High-level design, narrative direction  │
+│  GodAI (Opus) - High-level design, narrative direction      │
 └──────────────────────────────┬──────────────────────────────┘
-                               │ delegates to
+                               │ commands & receives reports
            ┌───────────────────┼───────────────────┐
            ▼                   ▼                   ▼
 ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│  World Builder   │ │  Systems Baker   │ │  Narrator        │
-│  (Flash)         │ │  (Flash)         │ │  (Flash)         │
-│  - Spawns        │ │  - Writes code   │ │  - Descriptions  │
-│  - Layouts       │ │  - Rules         │ │  - Dialogue      │
+│  The Narrator    │ │  Sociologist     │ │  Guardian        │
+│  (Archangel)     │ │  (Archangel)     │ │  (Angel)         │
+│  - Story pacing  │ │  - Relationships │ │  - NPC watcher   │
+│  - Plot threads  │ │  - Group dynamics│ │  - Character arc │
 └──────────────────┘ └──────────────────┘ └──────────────────┘
+           │
+           ▼
+┌──────────────────┐
+│  Locale Spirits  │  (Daemons - subordinate to higher spirits)
+│  - Room watchers │
+└──────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
@@ -781,7 +803,12 @@ If complexity requires, we could add specialized agents:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Recommendation:** Design tools to be agent-agnostic so hierarchy can be added later.
+**Key Features:**
+- Spirits observe ECS state and report to superiors
+- The Narrator (first implemented) tracks narrative structure, tension, and pacing
+- Spirits can intervene by injecting stimuli, sending intuitions, or modifying moods
+- DivineMessage protocol enables inter-spirit communication
+- Full test coverage (43 unit + integration tests)
 
 ---
 
@@ -938,6 +965,14 @@ src/
 │   ├── cognition-system.ts # Agent tick processing
 │   ├── sensory-system.ts  # Sensory perception processing
 │   └── knowledge-graph.ts # Memory/knowledge
+├── spirits/
+│   ├── index.ts           # Module exports
+│   ├── types.ts           # Spirit types and interfaces
+│   ├── spirit-registry.ts # Hierarchy management & messaging
+│   ├── spirit-cognition.ts # Spirit LLM processing loop
+│   ├── spirit-system.ts   # ECS ticker for spirits
+│   ├── narrator-spirit.ts # The Narrator archangel definition
+│   └── story-templates.ts # Story arc templates (3-act, mystery, etc.)
 ├── systems/
 │   └── ambient-stimulus-system.ts # Periodic stimulus emission
 └── behavioral-tests/
@@ -1111,11 +1146,200 @@ interface WorldStateSummary {
 
 ### 12.7 Implementation Priority
 
-1. **`getWorldSummary()`** - Foundation for all monitoring
-2. **`injectEvent()`** - Basic intervention capability
-3. **Observation loop scheduler** - Periodic GodAI cognition
-4. **Narrative tension calculation** - Inform intervention decisions
-5. **Steering patterns** - Higher-level intervention logic
+1. **`getWorldSummary()`** - Foundation for all monitoring ✅
+2. **`injectEvent()`** - Basic intervention capability ✅
+3. **Observation loop scheduler** - Periodic GodAI cognition ✅
+4. **Narrative tension calculation** - Inform intervention decisions ✅
+5. **Steering patterns** - Higher-level intervention logic ✅
+
+---
+
+## 13. Spirit Hierarchy (Implemented)
+
+The Spirit System provides a celestial hierarchy of AI agents that observe and steer the simulation,
+inspired by emanationist/Kabbalistic cosmology. Spirits report up to GodAI while managing their domains.
+
+### 13.1 Hierarchy Structure
+
+```
+                    ┌─────────────────┐
+                    │     GODAI       │  Supreme Being
+                    │  (The Creator)  │  Designs world, receives reports
+                    └────────┬────────┘
+                             │ commands / receives reports
+            ┌────────────────┼────────────────┐
+            │                │                │
+    ┌───────▼───────┐ ┌──────▼──────┐ ┌───────▼───────┐
+    │  NARRATOR     │ │ SOCIOLOGIST │ │   ECOLOGIST   │  Archangels
+    │  (narrative)  │ │  (social)   │ │  (ecology)    │  Domain Managers
+    └───────┬───────┘ └──────┬──────┘ └───────┬───────┘
+            │                │                │
+    ┌───────▼───────┐ ┌──────▼──────┐ ┌───────▼───────┐
+    │ Scene Angel   │ │ Faction     │ │ Weather       │  Angels
+    │ (Act 2 focus) │ │ Manager     │ │ Spirit        │  Local Managers
+    └───────────────┘ └─────────────┘ └───────────────┘
+```
+
+### 13.2 Spirit Types
+
+| Rank | Role | Capabilities |
+|------|------|--------------|
+| **Archangel** | Domain manager | Inject events, modify mood, send reports |
+| **Angel** | Local/entity manager | Inject events to specific area, reports |
+| **Daemon** | Task-specific | Observe only, report to superior |
+
+### 13.3 Spirit Domains
+
+- **narrative**: Plot threads, dramatic tension, pacing, story beats
+- **social**: Relationships, factions, conflicts, social dynamics
+- **ecology**: Environment, weather, resources, space
+- **economy**: Trade, markets, resource flows
+- **guardian**: Watches over specific NPCs
+- **locale**: Manages specific locations
+
+### 13.4 Message Protocol (DivineMessage)
+
+Spirits communicate via structured messages:
+
+```typescript
+interface DivineMessage {
+  id: string;
+  timestamp: number;
+  from: number;        // Spirit entity ID
+  to: number;          // Target spirit entity ID
+  type: MessageType;   // "report" | "directive" | "alert" | "broadcast"
+  domain: SpiritDomain;
+  priority: MessagePriority;  // "low" | "normal" | "high" | "urgent"
+  subject: string;
+  content: string;
+  requiresResponse: boolean;
+}
+```
+
+### 13.5 The Narrator Spirit
+
+The first implemented spirit, **The Narrator**, is an archangel of the narrative domain:
+
+**Responsibilities:**
+- Track story structure (three-act, tension curves)
+- Identify stagnation and pacing issues
+- Track plot threads and character arcs
+- Identify protagonists and antagonists
+- Suggest and execute interventions
+
+**Narrative State Tracking:**
+```typescript
+interface NarrativeState {
+  currentAct: number;        // 1, 2, 3
+  currentPhase: NarrativePhase;  // "exposition" | "inciting" | "rising" | ...
+  tension: number;           // 0-1
+  plotThreads: PlotThread[];
+  protagonists: string[];
+  antagonists: string[];
+  characterArcs: CharacterArc[];
+}
+```
+
+### 13.6 Spirit Cognition Loop
+
+Each spirit follows this cycle:
+
+```
+1. OBSERVE ECS
+   ├── Collect agent snapshots (location, mood, actions)
+   ├── Collect room snapshots (occupants, ambience)
+   └── Review recent actions and events
+
+2. ANALYZE (LLM)
+   ├── Interpret observations through domain lens
+   ├── Identify significant patterns
+   └── Decide on actions
+
+3. REPORT
+   ├── Send observations to superior
+   └── Flag urgent issues
+
+4. INTERVENE (if authorized)
+   ├── Inject environmental stimuli
+   ├── Send intuitions to agents
+   └── Modify mood states
+```
+
+### 13.7 GodAI Spirit Tools
+
+GodAI has these tools for managing spirits:
+
+| Tool | Description |
+|------|-------------|
+| `getSpiritHierarchy` | View the current spirit hierarchy |
+| `getSpiritReports` | Get pending reports from spirits |
+| `sendDirectiveToSpirit` | Command a spirit to take action |
+| `createSpirit` | Create a new spirit for a domain |
+| `getSpiritObservations` | Get a spirit's recent observations |
+| `getNarratorState` | Get the Narrator's narrative analysis |
+| `tickSpirits` | Force an immediate spirit cognition cycle |
+
+### 13.8 Integration with Simulation
+
+```typescript
+// Initialize spirit system with simulation
+const spiritState = initializeSpiritSystem(world, {
+  godAgentEid: godAgent.eid,
+  autoCreateNarrator: true,  // Creates The Narrator automatically
+});
+
+// Start spirit observation cycles
+startSpiritSystem();
+
+// In main loop, tick spirits alongside simulation
+await tickSpiritSystem(world, entityRegistry);
+```
+
+### 13.9 Story Arc Templates
+
+The Narrator can follow pre-defined story templates that guide narrative structure. Templates define:
+
+**Available Templates:**
+| Template | Genre | Description |
+|----------|-------|-------------|
+| `classic_three_act` | adventure | Setup → Confrontation → Resolution |
+| `mystery` | mystery | Crime → Investigation → Solution |
+| `slice_of_life` | slice_of_life | Low-tension character-focused narrative |
+| `conflict` | conflict | Opposition → Escalation → Confrontation |
+
+**Template Components:**
+- **Story Beats**: Key moments (inciting incident, midpoint, climax, etc.)
+- **Tension Curves**: Target tension levels for each narrative phase
+- **Character Roles**: Required and optional character types (protagonist, antagonist, mentor)
+- **Pacing Guidelines**: When and how to intervene if story stagnates
+- **Intervention Suggestions**: Context-specific nudges to keep the story moving
+
+**GodAI Story Template Tools:**
+| Tool | Description |
+|------|-------------|
+| `listStoryTemplates` | View available narrative templates |
+| `setStoryTemplate` | Activate a template for the simulation |
+| `getStoryTemplateStatus` | Check alignment with template and get recommendations |
+| `markStoryBeat` | Mark a story beat as completed |
+| `getTemplateInterventions` | Get suggested interventions based on template |
+| `suggestCharacterRoles` | Get role assignment suggestions for agents |
+
+**Usage:**
+```typescript
+// GodAI activates a template
+setStoryTemplate({ templateId: "mystery" });
+
+// Check progress and get recommendations
+const status = getStoryTemplateStatus();
+// Returns: { alignment: 0.85, nextBeat: "first_clue", recommendations: [...] }
+
+// Mark story beats as they occur
+markStoryBeat({ beatId: "discovery" });
+markStoryBeat({ beatId: "detective_involved" });
+
+// Get intervention suggestions when story stagnates
+const interventions = getTemplateInterventions({ includeAllSources: true });
+```
 
 ---
 

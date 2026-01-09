@@ -1,0 +1,9 @@
+{
+  "name": "Psychology",
+  "description": "Mental state and resistance to the circus horrors.",
+  "properties": {
+    "morale": "number",
+    "sanity": "number",
+    "stress": "number"
+  }
+}

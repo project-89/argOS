@@ -1,0 +1,8 @@
+{
+  "name": "ResourceInventory",
+  "description": "Inventory for survival resources",
+  "properties": {
+    "wood": "number",
+    "meat": "number"
+  }
+}

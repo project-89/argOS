@@ -1,8 +1,27 @@
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext } from "../ecs/dynamic-systems";
-import { query, getRelationTargets } from "bitecs";
-import { Name, Agent, Mind, Room, StimulusSource } from "../ecs/components";
+import { safeGetRelationTargets } from "../ecs/dynamic-systems";
+import { query, entityExists } from "bitecs";
+import { Name, Agent, Mind, Room, StimulusSource, GridPosition } from "../ecs/components";
 import { OccupiesRoom } from "../ecs/relations";
+
+// Track movement targets for agents (agentEid -> targetEid)
+const movementTargets = new Map<number, number>();
+
+// Set a movement target for an agent
+export function setMovementTarget(agentEid: number, targetEid: number): void {
+  movementTargets.set(agentEid, targetEid);
+}
+
+// Clear a movement target
+export function clearMovementTarget(agentEid: number): void {
+  movementTargets.delete(agentEid);
+}
+
+// Get movement target
+export function getMovementTarget(agentEid: number): number | undefined {
+  return movementTargets.get(agentEid);
+}
 
 export function createTimeProgressionSystem(): SystemDefinition {
   let worldTime = 0;
@@ -79,23 +98,29 @@ export function createSocialDynamicsSystem(): SystemDefinition {
     active: true,
     lastRun: 0,
     compiledFn: (world: World, ctx: SystemContext) => {
-      const agents = Array.from(ctx.query(world, [Agent, Mind]));
-      
+      const agents = Array.from(ctx.query(world, [Agent, Mind])).filter(eid => entityExists(world, eid));
+
       for (const eid of agents) {
-        const rooms = ctx.getRelationTargets(world, eid, OccupiesRoom);
+        if (!entityExists(world, eid)) continue;
+
+        const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
         if (rooms.length === 0) continue;
-        
+
         const roomEid = rooms[0];
+        if (!entityExists(world, roomEid)) continue;
+
         let othersCount = 0;
-        
+
         for (const otherEid of agents) {
           if (otherEid === eid) continue;
-          const otherRooms = ctx.getRelationTargets(world, otherEid, OccupiesRoom);
+          if (!entityExists(world, otherEid)) continue;
+
+          const otherRooms = safeGetRelationTargets(world, otherEid, OccupiesRoom);
           if (otherRooms.includes(roomEid)) {
             othersCount++;
           }
         }
-        
+
         const currentArousal = Mind.arousal[eid];
         if (othersCount > 0 && currentArousal < 0.6) {
           Mind.arousal[eid] = Math.min(1, currentArousal + 0.05 * othersCount);
@@ -161,28 +186,36 @@ export function createRelationshipEvolutionSystem(): SystemDefinition {
     active: true,
     lastRun: 0,
     compiledFn: (world: World, ctx: SystemContext) => {
-      const agents = Array.from(ctx.query(world, [Agent]));
-      
+      const agents = Array.from(ctx.query(world, [Agent])).filter(eid => entityExists(world, eid));
+
       const agentsByRoom = new Map<number, number[]>();
       for (const eid of agents) {
-        const rooms = ctx.getRelationTargets(world, eid, OccupiesRoom);
+        if (!entityExists(world, eid)) continue;
+
+        const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
         if (rooms.length > 0) {
           const roomEid = rooms[0];
+          if (!entityExists(world, roomEid)) continue;
+
           if (!agentsByRoom.has(roomEid)) {
             agentsByRoom.set(roomEid, []);
           }
           agentsByRoom.get(roomEid)!.push(eid);
         }
       }
-      
+
       for (const [roomEid, roomAgents] of agentsByRoom) {
+        if (!entityExists(world, roomEid)) continue;
         if (roomAgents.length < 2) continue;
-        
+
         for (let i = 0; i < roomAgents.length; i++) {
+          if (!entityExists(world, roomAgents[i])) continue;
           for (let j = i + 1; j < roomAgents.length; j++) {
+            if (!entityExists(world, roomAgents[j])) continue;
+
             const name1 = Name.value[roomAgents[i]];
             const name2 = Name.value[roomAgents[j]];
-            
+
             ctx.emit("relationship_update", {
               agent1: name1,
               agent2: name2,
@@ -196,9 +229,82 @@ export function createRelationshipEvolutionSystem(): SystemDefinition {
   };
 }
 
+export function createMovementSystem(): SystemDefinition {
+  return {
+    name: "Movement",
+    description: "Moves agents towards their targets on the grid",
+    pseudocode: "For each agent with a target, move one step closer",
+    frequency: 2000, // Move every 2 seconds
+    active: true,
+    lastRun: 0,
+    compiledFn: (world: World, ctx: SystemContext) => {
+      const agents = Array.from(ctx.query(world, [Agent, GridPosition])).filter(eid => entityExists(world, eid));
+
+      for (const agentEid of agents) {
+        if (!entityExists(world, agentEid)) continue;
+
+        const targetEid = movementTargets.get(agentEid);
+        if (!targetEid || !entityExists(world, targetEid)) continue;
+
+        // Get current and target positions
+        const currentX = GridPosition.x[agentEid];
+        const currentY = GridPosition.y[agentEid];
+        const targetX = GridPosition.x[targetEid];
+        const targetY = GridPosition.y[targetEid];
+
+        if (currentX === undefined || currentY === undefined ||
+            targetX === undefined || targetY === undefined) continue;
+
+        // Calculate distance
+        const dx = targetX - currentX;
+        const dy = targetY - currentY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        // If close enough, stop moving
+        if (distance < 2) {
+          movementTargets.delete(agentEid);
+          ctx.emit("movement_complete", {
+            agent: Name.value[agentEid],
+            target: Name.value[targetEid],
+            position: { x: currentX, y: currentY }
+          });
+          continue;
+        }
+
+        // Move one step towards target
+        const stepSize = 1;
+        let newX = currentX;
+        let newY = currentY;
+
+        if (Math.abs(dx) > Math.abs(dy)) {
+          newX = currentX + (dx > 0 ? stepSize : -stepSize);
+        } else if (dy !== 0) {
+          newY = currentY + (dy > 0 ? stepSize : -stepSize);
+        }
+
+        // Update position
+        GridPosition.x[agentEid] = newX;
+        GridPosition.y[agentEid] = newY;
+
+        const agentName = Name.value[agentEid];
+        const targetName = Name.value[targetEid];
+
+        ctx.emit("agent_moved", {
+          agent: agentName,
+          from: { x: currentX, y: currentY },
+          to: { x: newX, y: newY },
+          target: targetName,
+          distance: Math.round(distance)
+        });
+      }
+    },
+  };
+}
+
 export const BUILTIN_SYSTEMS = {
   TimeProgression: createTimeProgressionSystem,
   SocialDynamics: createSocialDynamicsSystem,
   NarrativeEvents: createNarrativeEventSystem,
   RelationshipEvolution: createRelationshipEvolutionSystem,
+  Movement: createMovementSystem,
 };

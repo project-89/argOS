@@ -6,3 +6,4 @@ logs
 devLogs
 ./devLogs/**/* */
 feedback
+simulations

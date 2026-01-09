@@ -1,0 +1,9 @@
+{
+  "name": "Injury",
+  "description": "Physical injuries. Affects movement and comfort.",
+  "properties": {
+    "severity": "number",
+    "location": "string",
+    "painLevel": "number"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Warmth",
+  "description": "Individual body temperature. Above 50 is safe, below 25 is hypothermia.",
+  "properties": {
+    "current": "number"
+  }
+}

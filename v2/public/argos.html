@@ -1,0 +1,1721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArgOS - Simulation Engine</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-dark: #0a0a0f;
+      --bg-card: #12121a;
+      --bg-card-hover: #1a1a25;
+      --border: #2a2a3a;
+      --text: #e0e0e8;
+      --text-dim: #8888a0;
+      --accent: #6366f1;
+      --accent-glow: rgba(99, 102, 241, 0.3);
+      --success: #22c55e;
+      --warning: #eab308;
+      --danger: #ef4444;
+    }
+
+    body {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      background: var(--bg-dark);
+      color: var(--text);
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-dark) 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-size: 1.5rem;
+      font-weight: bold;
+      background: linear-gradient(135deg, var(--accent) 0%, #a855f7 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .status-bar {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.75rem;
+      background: var(--bg-card);
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+      font-size: 0.8rem;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-dim);
+    }
+    .status-dot.connected { background: var(--success); animation: pulse 2s infinite; }
+    .status-dot.running { background: var(--success); animation: pulse 1s infinite; }
+    .status-dot.paused { background: var(--warning); }
+    .status-dot.stopped { background: var(--danger); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Main Layout */
+    .main-container {
+      display: flex;
+      height: calc(100vh - 60px);
+    }
+
+    .sidebar {
+      width: 300px;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Tabs */
+    .tab-bar {
+      display: flex;
+      gap: 0.25rem;
+      padding: 0.5rem;
+      background: var(--bg-dark);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tab {
+      padding: 0.5rem 1rem;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      border-radius: 0.25rem;
+      font-family: inherit;
+      font-size: 0.85rem;
+      transition: all 0.2s;
+    }
+
+    .tab:hover { background: var(--bg-card-hover); color: var(--text); }
+    .tab.active { background: var(--accent); color: white; }
+
+    /* Panels */
+    .panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-header {
+      padding: 0.6rem 0.8rem;
+      border-bottom: 1px solid var(--border);
+      font-weight: bold;
+      font-size: 0.85rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--bg-dark);
+    }
+
+    .panel-content {
+      padding: 0.5rem;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    /* Sidebar sections */
+    .sidebar-section {
+      padding: 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-section h3 {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 0.5rem;
+    }
+
+    /* Create simulation form */
+    .create-form {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .create-form input, .create-form textarea {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.4rem;
+      padding: 0.5rem;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.85rem;
+    }
+
+    .create-form input:focus, .create-form textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .create-form textarea {
+      min-height: 80px;
+      resize: vertical;
+    }
+
+    .btn {
+      background: var(--accent);
+      border: none;
+      border-radius: 0.4rem;
+      padding: 0.5rem 1rem;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.85rem;
+      transition: all 0.2s;
+    }
+
+    .btn:hover { background: #4f46e5; }
+    .btn:disabled { background: var(--text-dim); cursor: not-allowed; }
+
+    .btn-secondary {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--accent); background: var(--bg-card-hover); }
+
+    .btn-danger { background: var(--danger); }
+    .btn-danger:hover { background: #dc2626; }
+
+    .btn-group {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    /* Entity cards */
+    .entity-card {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.4rem;
+      padding: 0.5rem;
+      margin-bottom: 0.4rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .entity-card:hover { border-color: var(--accent); }
+    .entity-card.selected { border-color: var(--accent); background: rgba(99, 102, 241, 0.1); }
+
+    .entity-name { font-weight: bold; font-size: 0.85rem; }
+    .entity-type { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; }
+    .entity-type.agent { color: var(--accent); }
+    .entity-type.room { color: var(--success); }
+
+    /* Views */
+    .view { display: none; flex: 1; overflow: hidden; }
+    .view.active { display: flex; flex-direction: column; }
+
+    /* World View */
+    .world-view {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 0.75rem;
+      padding: 0.75rem;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .world-main {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      overflow: hidden;
+    }
+
+    .narrative-panel { flex: 1; min-height: 200px; }
+    .event-panel { flex: 0 0 150px; min-height: 150px; }
+
+    .grid-narrative-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      flex: 2;
+      min-height: 300px;
+    }
+
+    .ascii-grid {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.2;
+      white-space: pre;
+      background: #0a0a0f;
+      padding: 0.5rem;
+      overflow: auto;
+      color: #888;
+    }
+
+    .ascii-grid .agent { color: #f472b6; font-weight: bold; }
+    .ascii-grid .tree { color: #22c55e; }
+    .ascii-grid .animal { color: #fbbf24; }
+    .ascii-grid .item { color: #60a5fa; }
+    .ascii-grid .room { color: #444; }
+
+    .world-sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      overflow: hidden;
+    }
+
+    /* Event items */
+    .event-item {
+      padding: 0.4rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+      line-height: 1.3;
+    }
+
+    .event-time { color: var(--text-dim); font-size: 0.7rem; margin-right: 0.5rem; }
+    .event-speech { color: #60a5fa; }
+    .event-action { color: #a855f7; }
+    .event-thought { color: #6b7280; font-style: italic; }
+
+    /* Minds View */
+    .minds-view {
+      display: grid;
+      grid-template-columns: 280px 1fr 320px;
+      gap: 0.75rem;
+      padding: 0.75rem;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .thought-item {
+      background: var(--bg-dark);
+      border-left: 3px solid var(--accent);
+      padding: 0.5rem 0.75rem;
+      margin-bottom: 0.5rem;
+      border-radius: 0 0.4rem 0.4rem 0;
+      font-size: 0.85rem;
+    }
+
+    .thought-item.reasoning { border-left-color: #a855f7; }
+    .thought-item.reflection { border-left-color: #22c55e; }
+
+    .thought-content { font-style: italic; margin-bottom: 0.25rem; }
+    .thought-meta { font-size: 0.7rem; color: var(--text-dim); }
+
+    .perception-item {
+      background: var(--bg-dark);
+      border-radius: 0.4rem;
+      padding: 0.5rem;
+      margin-bottom: 0.4rem;
+      border-left: 3px solid #eab308;
+      font-size: 0.8rem;
+    }
+
+    /* Spirits View */
+    .spirits-view {
+      display: grid;
+      grid-template-columns: 320px 1fr 300px;
+      gap: 0.75rem;
+      padding: 0.75rem;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .spirit-node {
+      padding: 0.4rem 0.6rem;
+      margin: 0.2rem 0;
+      border-radius: 0.4rem;
+      cursor: pointer;
+    }
+
+    .spirit-node:hover { background: var(--bg-card-hover); }
+    .spirit-node.selected { background: rgba(99, 102, 241, 0.2); border-left: 3px solid var(--accent); }
+
+    .spirit-rank-god { color: #fbbf24; font-weight: bold; }
+    .spirit-rank-archangel { color: #a855f7; }
+    .spirit-rank-angel { color: #60a5fa; }
+
+    .spirit-domain {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.4rem;
+      background: var(--bg-dark);
+      border-radius: 0.25rem;
+      margin-left: 0.5rem;
+    }
+
+    .spirit-children { margin-left: 1.25rem; border-left: 1px dashed var(--border); padding-left: 0.5rem; }
+
+    /* God Console */
+    .god-console {
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      padding: 0.75rem;
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .god-console-input {
+      flex: 1;
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.6rem 1rem;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.85rem;
+    }
+
+    .god-console-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 10px var(--accent-glow);
+    }
+
+    /* Tension bar */
+    .tension-bar {
+      height: 6px;
+      background: var(--bg-dark);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .tension-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);
+      transition: width 0.3s;
+    }
+
+    /* Loading overlay */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(10, 10, 15, 0.9);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .loading-overlay.hidden { display: none; }
+
+    .loading-content {
+      text-align: center;
+    }
+
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 1rem;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Systems View */
+    .systems-view {
+      display: grid;
+      grid-template-columns: 350px 1fr 1fr;
+      gap: 0.75rem;
+      padding: 0.75rem;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .tick-rate-control {
+      margin-bottom: 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tick-rate-control label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-bottom: 0.25rem;
+    }
+
+    .tick-rate-control input[type="range"] {
+      width: 100%;
+      margin: 0.25rem 0;
+    }
+
+    .tick-rate-control span {
+      font-size: 0.85rem;
+      color: var(--accent);
+      font-weight: bold;
+    }
+
+    .system-card {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.4rem;
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .system-card.active { border-left: 3px solid var(--success); }
+    .system-card.inactive { border-left: 3px solid var(--danger); opacity: 0.6; }
+    .system-card.running { border-left: 3px solid var(--accent); animation: pulse 1s infinite; }
+
+    .system-name { font-weight: bold; font-size: 0.9rem; }
+    .system-desc { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.25rem; }
+    .system-stats { font-size: 0.75rem; margin-top: 0.5rem; display: flex; gap: 1rem; }
+    .system-stat { display: flex; flex-direction: column; }
+    .system-stat-label { color: var(--text-dim); }
+    .system-stat-value { color: var(--accent); font-weight: bold; }
+
+    .system-status-indicators {
+      display: flex;
+      gap: 1.5rem;
+      margin-top: 1rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .system-indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.85rem;
+    }
+
+    .indicator-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--text-dim);
+    }
+
+    .indicator-dot.running {
+      background: var(--success);
+      animation: pulse 0.5s infinite;
+    }
+
+    .indicator-dot.idle {
+      background: var(--text-dim);
+    }
+  </style>
+</head>
+<body>
+  <div class="loading-overlay" id="loading-overlay">
+    <div class="loading-content">
+      <div class="loading-spinner"></div>
+      <div id="loading-text">Connecting...</div>
+    </div>
+  </div>
+
+  <header class="header">
+    <div class="logo">ArgOS</div>
+    <div class="status-bar">
+      <div class="status-badge">
+        <div class="status-dot" id="connection-dot"></div>
+        <span id="connection-status">Disconnected</span>
+      </div>
+      <div class="status-badge">
+        <div class="status-dot" id="sim-status-dot"></div>
+        <span id="sim-status">No simulation</span>
+      </div>
+      <div class="status-badge">
+        <span>Tick: <strong id="tick-counter">0</strong></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="main-container">
+    <aside class="sidebar">
+      <div class="sidebar-section" id="create-section">
+        <h3>Create Simulation</h3>
+        <div class="create-form">
+          <input type="text" id="sim-name" placeholder="Simulation name...">
+          <textarea id="sim-prompt" placeholder="Describe the world you want to create..."></textarea>
+          <button class="btn" id="create-btn" onclick="createSimulation()">Create World</button>
+        </div>
+      </div>
+
+      <div class="sidebar-section" id="active-sim-section" style="display: none;">
+        <h3>Active Simulation</h3>
+        <div id="active-sim-info" style="margin-bottom: 0.75rem;">
+          <div style="font-weight: bold; font-size: 1rem;" id="active-sim-name">-</div>
+          <div style="font-size: 0.8rem; color: var(--text-dim);" id="active-sim-status">-</div>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-secondary" id="pause-btn" onclick="togglePause()">Pause</button>
+          <button class="btn btn-danger" id="stop-btn" onclick="stopSimulation()">Stop</button>
+        </div>
+        <button class="btn btn-secondary" style="width: 100%; margin-top: 0.5rem;" onclick="showNewSimulationForm()">+ New Simulation</button>
+      </div>
+
+      <div class="sidebar-section" id="controls-section">
+        <h3>Tick Speed</h3>
+        <div>
+          <input type="range" id="tick-speed" min="500" max="10000" value="1000" style="width: 100%;" onchange="setTickSpeed(this.value)">
+          <span id="tick-speed-label" style="font-size: 0.75rem;">1000ms</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section" style="flex: 1; overflow: hidden; display: flex; flex-direction: column;">
+        <h3>Entities</h3>
+        <div id="entity-list" style="flex: 1; overflow-y: auto;"></div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <nav class="tab-bar">
+        <button class="tab active" onclick="switchView('world')">World</button>
+        <button class="tab" onclick="switchView('minds')">Agent Minds</button>
+        <button class="tab" onclick="switchView('spirits')">Spirits</button>
+        <button class="tab" onclick="switchView('systems')">Systems</button>
+      </nav>
+
+      <!-- World View -->
+      <div class="view active" id="view-world">
+        <div class="world-view">
+          <div class="world-main">
+            <div class="grid-narrative-row">
+              <div class="panel">
+                <div class="panel-header">World Grid</div>
+                <div class="panel-content ascii-grid" id="world-grid">No simulation running</div>
+              </div>
+              <div class="panel narrative-panel">
+                <div class="panel-header">Narrative Feed</div>
+                <div class="panel-content" id="narrative-feed"></div>
+              </div>
+            </div>
+            <div class="panel event-panel">
+              <div class="panel-header">System Events</div>
+              <div class="panel-content" id="event-log"></div>
+            </div>
+          </div>
+          <div class="world-sidebar">
+            <div class="panel" style="flex: 1;">
+              <div class="panel-header">Details</div>
+              <div class="panel-content" id="detail-panel">
+                <p style="color: var(--text-dim)">Select an entity</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Minds View -->
+      <div class="view" id="view-minds">
+        <div class="minds-view">
+          <div class="panel">
+            <div class="panel-header">Agents <span id="agent-count" style="color: var(--text-dim);">0</span></div>
+            <div class="panel-content" id="mind-agent-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header" id="thought-header">Thought Stream</div>
+            <div class="panel-content" id="thought-stream">
+              <p style="color: var(--text-dim)">Select an agent</p>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">Perceptions</div>
+            <div class="panel-content" id="perception-list">
+              <p style="color: var(--text-dim)">Agent perceptions</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Spirits View -->
+      <div class="view" id="view-spirits">
+        <div class="spirits-view">
+          <div class="panel">
+            <div class="panel-header">Spirit Hierarchy <span id="spirit-count" style="color: var(--text-dim);">0</span></div>
+            <div class="panel-content" id="spirit-hierarchy"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header" id="spirit-detail-header">Spirit Details</div>
+            <div class="panel-content" id="spirit-detail">
+              <p style="color: var(--text-dim)">Select a spirit</p>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">Divine Messages</div>
+            <div class="panel-content" id="spirit-messages"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Systems View -->
+      <div class="view" id="view-systems">
+        <div class="systems-view">
+          <div class="panel">
+            <div class="panel-header">Tick Rates
+              <span id="tick-rates-status" style="font-size: 0.75rem; color: var(--text-dim);"></span>
+            </div>
+            <div class="panel-content" id="tick-rates-panel">
+              <div class="tick-rate-control">
+                <label>Base Tick (ms)</label>
+                <input type="range" id="base-tick-slider" min="500" max="10000" value="1000" onchange="updateTickRate('baseTick', this.value)">
+                <span id="base-tick-value">1000ms</span>
+              </div>
+              <div class="tick-rate-control">
+                <label>ECS Systems Rate</label>
+                <input type="range" id="ecs-rate-slider" min="1" max="10" value="1" onchange="updateTickRate('ecsRate', this.value)">
+                <span id="ecs-rate-value">every 1 tick</span>
+              </div>
+              <div class="tick-rate-control">
+                <label>Cognition Rate (AI)</label>
+                <input type="range" id="cognition-rate-slider" min="1" max="20" value="5" onchange="updateTickRate('cognitionRate', this.value)">
+                <span id="cognition-rate-value">every 5 ticks</span>
+              </div>
+              <div class="tick-rate-control">
+                <label>Spirit Rate</label>
+                <input type="range" id="spirit-rate-slider" min="1" max="30" value="10" onchange="updateTickRate('spiritRate', this.value)">
+                <span id="spirit-rate-value">every 10 ticks</span>
+              </div>
+              <div class="system-status-indicators">
+                <div class="system-indicator">
+                  <div class="indicator-dot" id="cognition-indicator"></div>
+                  <span>Cognition</span>
+                </div>
+                <div class="system-indicator">
+                  <div class="indicator-dot" id="spirit-indicator"></div>
+                  <span>Spirits</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">ECS Systems (Fast)
+              <span id="ecs-system-count" style="font-size: 0.75rem; color: var(--text-dim);">0</span>
+            </div>
+            <div class="panel-content" id="ecs-systems-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">AI Systems (Slow)
+              <span id="ai-system-count" style="font-size: 0.75rem; color: var(--text-dim);">0</span>
+            </div>
+            <div class="panel-content" id="ai-systems-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- God Console -->
+      <div class="god-console">
+        <span style="color: var(--accent); font-weight: bold;">GOD:</span>
+        <input type="text" class="god-console-input" id="god-input"
+               placeholder="Command the simulation... (e.g., 'Add a mysterious stranger')"
+               onkeypress="if(event.key==='Enter') sendGodCommand()">
+        <button class="btn" onclick="sendGodCommand()" id="god-send-btn">Send</button>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let ws;
+    let state = null;
+    let selectedEntityId = null;
+    let selectedAgentId = null;
+    let selectedSpiritEid = null;
+    let currentView = 'world';
+    let isConnected = false;
+
+    // =============================================================================
+    // WEBSOCKET
+    // =============================================================================
+
+    function connect() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}`);
+
+      ws.onopen = () => {
+        isConnected = true;
+        document.getElementById('connection-dot').className = 'status-dot connected';
+        document.getElementById('connection-status').textContent = 'Connected';
+        document.getElementById('loading-overlay').classList.add('hidden');
+        ws.send(JSON.stringify({ type: 'getState' }));
+      };
+
+      ws.onclose = () => {
+        isConnected = false;
+        document.getElementById('connection-dot').className = 'status-dot';
+        document.getElementById('connection-status').textContent = 'Disconnected';
+        setTimeout(connect, 2000);
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleMessage(msg);
+      };
+    }
+
+    function handleMessage(msg) {
+      switch (msg.type) {
+        case 'state':
+          state = msg.payload;
+          updateUI();
+          break;
+
+        case 'tick':
+          document.getElementById('tick-counter').textContent = msg.payload.tick;
+          // Update running indicators in systems view
+          if (msg.payload.cognitionRunning !== undefined && state?.simulation) {
+            state.simulation.cognitionRunning = msg.payload.cognitionRunning;
+            state.simulation.spiritRunning = msg.payload.spiritRunning;
+            if (currentView === 'systems') {
+              const cognitionIndicator = document.getElementById('cognition-indicator');
+              const spiritIndicator = document.getElementById('spirit-indicator');
+              if (cognitionIndicator) cognitionIndicator.className = msg.payload.cognitionRunning ? 'indicator-dot running' : 'indicator-dot idle';
+              if (spiritIndicator) spiritIndicator.className = msg.payload.spiritRunning ? 'indicator-dot running' : 'indicator-dot idle';
+            }
+          }
+          break;
+
+        case 'event':
+          addEvent(msg.payload);
+          // Also add environmental/atmospheric events to narrative feed
+          if (msg.payload?.type === 'environmental' ||
+              msg.payload?.type === 'time_change' ||
+              msg.payload?.type === 'narrative_event' ||
+              msg.payload?.data?.type === 'environmental') {
+            addEnvironmentalEvent(msg.payload);
+          }
+          // Add movement events to narrative feed
+          if (msg.payload?.type === 'agent_moved') {
+            addMovementEvent(msg.payload);
+          }
+          // Add movement completion events
+          if (msg.payload?.type === 'movement_complete') {
+            addMovementCompleteEvent(msg.payload);
+          }
+          break;
+
+        case 'agentAction':
+          addNarrativeItem(msg.payload);
+          break;
+
+        case 'narrative':
+          addNarrativeProse(msg.payload);
+          break;
+
+        case 'agentThought':
+          // Real-time thought streaming
+          if (state?.agentMinds && msg.payload.agentEid === selectedAgentId) {
+            updateSelectedAgentThoughts();
+          }
+          break;
+
+        case 'godResponse':
+          handleGodResponse(msg.payload);
+          break;
+
+        case 'log':
+          addLog(msg.payload);
+          break;
+
+        case 'error':
+          console.error('Server error:', msg.payload);
+          addLog(`[ERROR] ${msg.payload}`);
+          document.getElementById('create-btn').disabled = false;
+          document.getElementById('create-btn').textContent = 'Create World';
+          document.getElementById('god-send-btn').disabled = false;
+          break;
+
+        case 'simulationCreated':
+          document.getElementById('create-btn').disabled = false;
+          document.getElementById('create-btn').textContent = 'Create World';
+          break;
+
+        case 'tickRates':
+          if (state?.simulation) {
+            state.simulation.tickRates = msg.payload;
+            if (currentView === 'systems') renderSystemsView();
+          }
+          break;
+      }
+    }
+
+    // =============================================================================
+    // SIMULATION CONTROL
+    // =============================================================================
+
+    function createSimulation() {
+      const name = document.getElementById('sim-name').value.trim();
+      const prompt = document.getElementById('sim-prompt').value.trim();
+
+      if (!name || !prompt) {
+        alert('Please enter a name and description for your simulation');
+        return;
+      }
+
+      document.getElementById('create-btn').disabled = true;
+      document.getElementById('create-btn').textContent = 'Creating...';
+      document.getElementById('loading-overlay').classList.remove('hidden');
+      document.getElementById('loading-text').textContent = 'Creating simulation...';
+
+      // Clear previous simulation data from UI
+      document.getElementById('narrative-feed').innerHTML = '';
+      document.getElementById('event-log').innerHTML = '';
+      document.getElementById('entity-list').innerHTML = '<p style="color: var(--text-dim)">Creating world...</p>';
+      document.getElementById('spirit-messages').innerHTML = '';
+
+      // Reset selections
+      selectedEntityId = null;
+      selectedAgentId = null;
+      selectedSpiritEid = null;
+
+      ws.send(JSON.stringify({
+        type: 'createSimulation',
+        payload: { name, prompt }
+      }));
+    }
+
+    function togglePause() {
+      if (!state?.simulation) return;
+
+      if (state.simulation.status === 'running') {
+        ws.send(JSON.stringify({ type: 'pause' }));
+      } else {
+        ws.send(JSON.stringify({ type: 'resume' }));
+      }
+    }
+
+    function stopSimulation() {
+      if (confirm('Stop this simulation? You can create a new one after.')) {
+        ws.send(JSON.stringify({ type: 'stop' }));
+        // Show create form after stopping
+        setTimeout(() => {
+          document.getElementById('create-section').style.display = 'block';
+          document.getElementById('active-sim-section').style.display = 'none';
+          // Clear the form
+          document.getElementById('sim-name').value = '';
+          document.getElementById('sim-prompt').value = '';
+        }, 100);
+      }
+    }
+
+    function showNewSimulationForm() {
+      if (state?.simulation) {
+        if (!confirm('This will stop the current simulation. Continue?')) {
+          return;
+        }
+        ws.send(JSON.stringify({ type: 'stop' }));
+      }
+
+      // Show create section with cleared form
+      document.getElementById('create-section').style.display = 'block';
+      document.getElementById('active-sim-section').style.display = 'none';
+      document.getElementById('sim-name').value = '';
+      document.getElementById('sim-prompt').value = '';
+      document.getElementById('sim-name').focus();
+    }
+
+    function setTickSpeed(speed) {
+      document.getElementById('tick-speed-label').textContent = `${speed}ms`;
+      ws.send(JSON.stringify({ type: 'setTickSpeed', payload: { speed: parseInt(speed) } }));
+    }
+
+    function sendGodCommand() {
+      const input = document.getElementById('god-input');
+      const command = input.value.trim();
+      if (!command) return;
+
+      document.getElementById('god-send-btn').disabled = true;
+      ws.send(JSON.stringify({ type: 'godCommand', payload: { command } }));
+      input.value = '';
+    }
+
+    function handleGodResponse(payload) {
+      document.getElementById('god-send-btn').disabled = false;
+      document.getElementById('loading-overlay').classList.add('hidden');
+
+      // Add to narrative
+      if (payload.thinking) {
+        addLog(`[GOD] ${payload.thinking}`);
+      }
+
+      // Update state after god command
+      ws.send(JSON.stringify({ type: 'getState' }));
+    }
+
+    // =============================================================================
+    // UI UPDATE
+    // =============================================================================
+
+    function updateUI() {
+      if (!state) return;
+
+      // Update simulation status and toggle UI sections
+      if (state.simulation) {
+        const simStatus = state.simulation.status;
+        const simDot = document.getElementById('sim-status-dot');
+        simDot.className = `status-dot ${simStatus}`;
+        document.getElementById('sim-status').textContent =
+          `${state.simulation.name} (${simStatus})`;
+        document.getElementById('tick-counter').textContent = state.simulation.tick;
+
+        // Show active simulation section, hide create section
+        document.getElementById('create-section').style.display = 'none';
+        document.getElementById('active-sim-section').style.display = 'block';
+        document.getElementById('active-sim-name').textContent = state.simulation.name;
+        document.getElementById('active-sim-status').textContent =
+          `Tick ${state.simulation.tick} | ${simStatus.charAt(0).toUpperCase() + simStatus.slice(1)}`;
+
+        document.getElementById('pause-btn').textContent =
+          simStatus === 'running' ? 'Pause' : 'Resume';
+
+        // Update tick speed slider if we have tickRates
+        if (state.simulation.tickRates) {
+          document.getElementById('tick-speed').value = state.simulation.tickRates.baseTick;
+          document.getElementById('tick-speed-label').textContent = `${state.simulation.tickRates.baseTick}ms`;
+        }
+      } else {
+        document.getElementById('sim-status-dot').className = 'status-dot';
+        document.getElementById('sim-status').textContent = 'No simulation';
+
+        // Show create section, hide active simulation section
+        document.getElementById('create-section').style.display = 'block';
+        document.getElementById('active-sim-section').style.display = 'none';
+      }
+
+      renderEntities();
+      renderWorldGrid();
+
+      if (currentView === 'minds') renderMindsView();
+      if (currentView === 'spirits') renderSpiritsView();
+      if (currentView === 'systems') renderSystemsView();
+
+      if (selectedEntityId) renderEntityDetails(selectedEntityId);
+      if (selectedAgentId) updateSelectedAgentThoughts();
+      if (selectedSpiritEid) renderSpiritDetails(selectedSpiritEid);
+    }
+
+    function switchView(view) {
+      currentView = view;
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.querySelector(`.tab[onclick*="${view}"]`).classList.add('active');
+      document.getElementById(`view-${view}`).classList.add('active');
+
+      if (view === 'minds') renderMindsView();
+      if (view === 'spirits') renderSpiritsView();
+      if (view === 'systems') renderSystemsView();
+    }
+
+    // =============================================================================
+    // WORLD GRID
+    // =============================================================================
+
+    function renderWorldGrid() {
+      const container = document.getElementById('world-grid');
+      if (!state?.asciiWorld) {
+        container.textContent = state?.simulation ? 'Grid loading...' : 'No simulation running';
+        return;
+      }
+
+      // The server sends pre-rendered ASCII, but we can colorize it
+      const colorizedGrid = colorizeAsciiGrid(state.asciiWorld);
+      container.innerHTML = colorizedGrid;
+    }
+
+    function colorizeAsciiGrid(ascii) {
+      if (!ascii) return '';
+
+      // Apply colors based on character types
+      return ascii
+        .replace(/(@)/g, '<span class="agent">$1</span>')  // Agents
+        .replace(/(T)/g, '<span class="tree">$1</span>')   // Trees
+        .replace(/([YBD])/g, '<span class="animal">$1</span>') // Animals (Young deer, Buck, Deer)
+        .replace(/([*+])/g, '<span class="item">$1</span>') // Items
+        .replace(/([#|_\-])/g, '<span class="room">$1</span>'); // Room borders
+    }
+
+    // =============================================================================
+    // ENTITIES
+    // =============================================================================
+
+    function renderEntities() {
+      const container = document.getElementById('entity-list');
+      if (!state?.entities) {
+        container.innerHTML = '<p style="color: var(--text-dim)">No entities</p>';
+        return;
+      }
+
+      const rooms = state.entities.filter(e => e.type === 'room');
+      const agents = state.entities.filter(e => e.type === 'agent');
+
+      let html = '';
+
+      for (const room of rooms) {
+        html += `
+          <div class="entity-card ${room.id === selectedEntityId ? 'selected' : ''}"
+               onclick="selectEntity(${room.id})">
+            <div class="entity-type room">Room</div>
+            <div class="entity-name">${room.name}</div>
+          </div>
+        `;
+
+        const roomAgents = agents.filter(a => a.room === room.name);
+        for (const agent of roomAgents) {
+          html += `
+            <div class="entity-card ${agent.id === selectedEntityId ? 'selected' : ''}"
+                 style="margin-left: 0.75rem;"
+                 onclick="selectEntity(${agent.id})">
+              <div class="entity-type agent">Agent</div>
+              <div class="entity-name">${agent.name}</div>
+              <div style="font-size: 0.7rem; color: var(--text-dim);">${agent.role || ''}</div>
+            </div>
+          `;
+        }
+      }
+
+      container.innerHTML = html || '<p style="color: var(--text-dim)">No entities</p>';
+    }
+
+    function selectEntity(id) {
+      selectedEntityId = id;
+      renderEntities();
+      renderEntityDetails(id);
+    }
+
+    function renderEntityDetails(id) {
+      const entity = state?.entities?.find(e => e.id === id);
+      if (!entity) return;
+
+      const container = document.getElementById('detail-panel');
+
+      let html = `
+        <div style="margin-bottom: 0.75rem;">
+          <div style="font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase;">${entity.type}</div>
+          <div style="font-size: 1.1rem; font-weight: bold;">${entity.name}</div>
+        </div>
+        <div style="margin-bottom: 0.5rem; font-size: 0.85rem; color: var(--text-dim);">
+          ${entity.description || 'No description'}
+        </div>
+      `;
+
+      if (entity.type === 'agent') {
+        html += `
+          <div style="margin-top: 0.75rem;">
+            <div style="font-size: 0.7rem; color: var(--text-dim);">Role</div>
+            <div style="font-size: 0.85rem;">${entity.role || 'None'}</div>
+          </div>
+          <div style="margin-top: 0.5rem;">
+            <div style="font-size: 0.7rem; color: var(--text-dim);">Mental State</div>
+            <div style="font-size: 0.85rem;">
+              Mode: ${entity.mind?.mode || 'unknown'}<br>
+              Arousal: ${((entity.mind?.arousal || 0) * 100).toFixed(0)}%
+            </div>
+          </div>
+        `;
+
+        if (entity.recentThoughts?.length > 0) {
+          html += `<div style="margin-top: 0.75rem;">
+            <div style="font-size: 0.7rem; color: var(--text-dim);">Recent Thoughts</div>`;
+          for (const thought of entity.recentThoughts.slice(0, 3)) {
+            html += `<div style="font-size: 0.8rem; font-style: italic; margin-top: 0.25rem; padding: 0.25rem; background: var(--bg-dark); border-radius: 0.25rem;">"${escapeHtml(thought?.slice(0, 100) || '')}..."</div>`;
+          }
+          html += '</div>';
+        }
+      } else if (entity.type === 'room') {
+        html += `
+          <div style="margin-top: 0.5rem;">
+            <div style="font-size: 0.7rem; color: var(--text-dim);">Ambience</div>
+            <div style="font-size: 0.85rem;">${entity.ambience || 'None'}</div>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+    }
+
+    // =============================================================================
+    // MINDS VIEW
+    // =============================================================================
+
+    function renderMindsView() {
+      const agents = state?.agentMinds || [];
+      document.getElementById('agent-count').textContent = agents.length;
+
+      const container = document.getElementById('mind-agent-list');
+
+      if (agents.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-dim)">No agents</p>';
+        return;
+      }
+
+      let html = '';
+      for (const agent of agents) {
+        const arousal = ((agent.mind?.arousal || 0) * 100).toFixed(0);
+        html += `
+          <div class="entity-card ${agent.eid === selectedAgentId ? 'selected' : ''}"
+               onclick="selectMindAgent(${agent.eid})">
+            <div class="entity-name" style="color: var(--accent);">${agent.name}</div>
+            <div style="font-size: 0.75rem; color: var(--text-dim);">${agent.role || 'No role'}</div>
+            <div style="font-size: 0.75rem; margin-top: 0.25rem;">
+              Mode: ${agent.mind?.mode || '?'} | Arousal: ${arousal}%
+            </div>
+            <div style="font-size: 0.75rem; color: var(--text-dim);">
+              ${agent.thoughts?.length || 0} thoughts | ${agent.perceptions?.length || 0} perceptions
+            </div>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+    }
+
+    function selectMindAgent(eid) {
+      selectedAgentId = eid;
+      renderMindsView();
+      updateSelectedAgentThoughts();
+    }
+
+    function updateSelectedAgentThoughts() {
+      const agent = state?.agentMinds?.find(a => a.eid === selectedAgentId);
+      if (!agent) return;
+
+      document.getElementById('thought-header').textContent = `${agent.name}'s Thoughts`;
+
+      const thoughtContainer = document.getElementById('thought-stream');
+      if (agent.thoughts?.length > 0) {
+        thoughtContainer.innerHTML = agent.thoughts.map(t => {
+          const time = t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : '';
+          return `
+            <div class="thought-item ${t.type || 'reflection'}">
+              <div class="thought-content">"${escapeHtml(t.content || '')}"</div>
+              <div class="thought-meta">${t.type || 'thought'} ${time ? `• ${time}` : ''}</div>
+            </div>
+          `;
+        }).join('');
+      } else {
+        thoughtContainer.innerHTML = '<p style="color: var(--text-dim)">No thoughts yet</p>';
+      }
+
+      const perceptionContainer = document.getElementById('perception-list');
+      if (agent.perceptions?.length > 0) {
+        perceptionContainer.innerHTML = agent.perceptions.map(p => `
+          <div class="perception-item">
+            <div style="font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase;">${p.type || 'unknown'}</div>
+            <div>${escapeHtml(p.content || '')}</div>
+            <div style="font-size: 0.7rem; color: var(--text-dim);">from: ${p.source || 'unknown'}</div>
+          </div>
+        `).join('');
+      } else {
+        perceptionContainer.innerHTML = '<p style="color: var(--text-dim)">No perceptions yet</p>';
+      }
+    }
+
+    // =============================================================================
+    // SPIRITS VIEW
+    // =============================================================================
+
+    function renderSpiritsView() {
+      if (!state?.spirits) {
+        document.getElementById('spirit-hierarchy').innerHTML = '<p style="color: var(--text-dim)">No spirits active</p>';
+        document.getElementById('spirit-count').textContent = '0';
+        return;
+      }
+
+      document.getElementById('spirit-count').textContent = state.spirits.totalCount || 0;
+
+      const hierarchyContainer = document.getElementById('spirit-hierarchy');
+      if (state.spirits.hierarchy) {
+        hierarchyContainer.innerHTML = renderHierarchyNode(state.spirits.hierarchy);
+      }
+
+      // Render messages
+      const messagesContainer = document.getElementById('spirit-messages');
+      const allMessages = [];
+      if (state.spirits.active) {
+        for (const spirit of state.spirits.active) {
+          if (spirit.recentMessages) {
+            for (const msg of spirit.recentMessages) {
+              allMessages.push({ ...msg, to: spirit.name });
+            }
+          }
+        }
+      }
+
+      if (allMessages.length > 0) {
+        allMessages.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        messagesContainer.innerHTML = allMessages.slice(0, 10).map(msg => `
+          <div style="background: var(--bg-dark); border-radius: 0.4rem; padding: 0.5rem; margin-bottom: 0.4rem; border-left: 3px solid var(--accent);">
+            <div style="font-size: 0.7rem; color: var(--text-dim);">${msg.from} -> ${msg.to}</div>
+            <div style="font-weight: bold; font-size: 0.85rem;">${msg.subject || 'No subject'}</div>
+            <div style="font-size: 0.8rem;">${escapeHtml(msg.content || '')}</div>
+          </div>
+        `).join('');
+      } else {
+        messagesContainer.innerHTML = '<p style="color: var(--text-dim)">No messages yet</p>';
+      }
+    }
+
+    function renderHierarchyNode(node) {
+      if (!node) return '';
+
+      const rankEmoji = node.rank === 'god' ? '👑' :
+                        node.rank === 'archangel' ? '👼' :
+                        node.rank === 'angel' ? '😇' : '👻';
+      const rankClass = `spirit-rank-${node.rank || 'spirit'}`;
+
+      let html = `
+        <div class="spirit-node ${node.eid === selectedSpiritEid ? 'selected' : ''}"
+             onclick="selectSpirit(${node.eid})">
+          <span class="${rankClass}">${rankEmoji} ${node.name}</span>
+          <span class="spirit-domain">${node.domain || 'unknown'}</span>
+        </div>
+      `;
+
+      if (node.children?.length > 0) {
+        html += '<div class="spirit-children">';
+        for (const child of node.children) {
+          html += renderHierarchyNode(child);
+        }
+        html += '</div>';
+      }
+
+      return html;
+    }
+
+    function selectSpirit(eid) {
+      selectedSpiritEid = eid;
+      renderSpiritsView();
+      renderSpiritDetails(eid);
+    }
+
+    function renderSpiritDetails(eid) {
+      const spirit = state?.spirits?.active?.find(s => s.eid === eid);
+      const container = document.getElementById('spirit-detail');
+
+      if (!spirit) {
+        container.innerHTML = '<p style="color: var(--text-dim)">Spirit not found</p>';
+        return;
+      }
+
+      document.getElementById('spirit-detail-header').textContent = spirit.name;
+
+      let html = `
+        <div style="margin-bottom: 0.5rem;">
+          <span class="spirit-rank-${spirit.rank}">${spirit.rank}</span>
+          <span class="spirit-domain">${spirit.domain}</span>
+        </div>
+        <div style="font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.75rem;">
+          ${spirit.description || 'No description'}
+        </div>
+      `;
+
+      if (spirit.narrativeState) {
+        html += `
+          <div style="background: rgba(99, 102, 241, 0.1); border: 1px solid var(--accent); border-radius: 0.5rem; padding: 0.75rem; margin-bottom: 0.75rem;">
+            <div style="font-size: 0.7rem; color: var(--text-dim);">NARRATIVE STATE</div>
+            <div style="display: flex; gap: 1rem; margin-top: 0.25rem; font-size: 0.85rem;">
+              <span>Act ${spirit.narrativeState.currentAct}</span>
+              <span>${spirit.narrativeState.currentPhase}</span>
+            </div>
+            <div style="margin-top: 0.5rem;">
+              <span style="font-size: 0.75rem;">Tension</span>
+              <div class="tension-bar">
+                <div class="tension-fill" style="width: ${(spirit.narrativeState.tension || 0) * 100}%"></div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (spirit.socialState) {
+        html += `
+          <div style="font-size: 0.85rem; margin-bottom: 0.75rem;">
+            <div style="font-size: 0.7rem; color: var(--text-dim);">SOCIAL STATE</div>
+            <div style="display: flex; gap: 1rem; margin-top: 0.25rem;">
+              <span>${spirit.socialState.relationships || 0} relationships</span>
+              <span>${spirit.socialState.activeConflicts || 0} conflicts</span>
+            </div>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+    }
+
+    // =============================================================================
+    // SYSTEMS VIEW
+    // =============================================================================
+
+    function renderSystemsView() {
+      if (!state?.simulation) {
+        document.getElementById('ecs-systems-list').innerHTML = '<p style="color: var(--text-dim)">No active simulation</p>';
+        document.getElementById('ai-systems-list').innerHTML = '<p style="color: var(--text-dim)">No active simulation</p>';
+        return;
+      }
+
+      // Update tick rates from state
+      const rates = state.simulation.tickRates;
+      if (rates) {
+        document.getElementById('base-tick-slider').value = rates.baseTick;
+        document.getElementById('base-tick-value').textContent = `${rates.baseTick}ms`;
+
+        document.getElementById('ecs-rate-slider').value = rates.ecsRate;
+        document.getElementById('ecs-rate-value').textContent = `every ${rates.ecsRate} tick${rates.ecsRate > 1 ? 's' : ''}`;
+
+        document.getElementById('cognition-rate-slider').value = rates.cognitionRate;
+        document.getElementById('cognition-rate-value').textContent = `every ${rates.cognitionRate} ticks`;
+
+        document.getElementById('spirit-rate-slider').value = rates.spiritRate;
+        document.getElementById('spirit-rate-value').textContent = `every ${rates.spiritRate} ticks`;
+      }
+
+      // Update running indicators
+      const cognitionIndicator = document.getElementById('cognition-indicator');
+      const spiritIndicator = document.getElementById('spirit-indicator');
+
+      if (state.simulation.cognitionRunning) {
+        cognitionIndicator.className = 'indicator-dot running';
+      } else {
+        cognitionIndicator.className = 'indicator-dot idle';
+      }
+
+      if (state.simulation.spiritRunning) {
+        spiritIndicator.className = 'indicator-dot running';
+      } else {
+        spiritIndicator.className = 'indicator-dot idle';
+      }
+
+      // Render ECS systems
+      const ecsSystems = state.systems || [];
+      document.getElementById('ecs-system-count').textContent = ecsSystems.length;
+
+      const ecsContainer = document.getElementById('ecs-systems-list');
+      if (ecsSystems.length === 0) {
+        ecsContainer.innerHTML = '<p style="color: var(--text-dim)">No ECS systems registered</p>';
+      } else {
+        ecsContainer.innerHTML = ecsSystems.map(sys => {
+          const statusClass = sys.active ? 'active' : 'inactive';
+          return `
+            <div class="system-card ${statusClass}">
+              <div class="system-name">${sys.name}</div>
+              <div class="system-desc">${sys.description || 'No description'}</div>
+              <div class="system-stats">
+                <div class="system-stat">
+                  <span class="system-stat-label">Frequency</span>
+                  <span class="system-stat-value">${sys.frequency ? (sys.frequency / 1000).toFixed(1) + 's' : 'every tick'}</span>
+                </div>
+                <div class="system-stat">
+                  <span class="system-stat-label">Status</span>
+                  <span class="system-stat-value">${sys.active ? 'Active' : 'Inactive'}</span>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      // Render AI systems - includes cognition + spirits
+      const aiContainer = document.getElementById('ai-systems-list');
+      const cognitionMs = rates ? rates.cognitionRate * rates.baseTick : 5000;
+      const spiritMs = rates ? rates.spiritRate * rates.baseTick : 10000;
+
+      aiContainer.innerHTML = `
+        <div class="system-card ${state.simulation.cognitionRunning ? 'running' : 'active'}">
+          <div class="system-name">Agent Cognition</div>
+          <div class="system-desc">Perception, thinking, and action cycle for all agents</div>
+          <div class="system-stats">
+            <div class="system-stat">
+              <span class="system-stat-label">Effective Rate</span>
+              <span class="system-stat-value">${(cognitionMs / 1000).toFixed(1)}s</span>
+            </div>
+            <div class="system-stat">
+              <span class="system-stat-label">Status</span>
+              <span class="system-stat-value">${state.simulation.cognitionRunning ? 'Running...' : 'Idle'}</span>
+            </div>
+          </div>
+        </div>
+        <div class="system-card ${state.simulation.spiritRunning ? 'running' : 'active'}">
+          <div class="system-name">Spirit System</div>
+          <div class="system-desc">Spirit hierarchy observation and narrative intervention</div>
+          <div class="system-stats">
+            <div class="system-stat">
+              <span class="system-stat-label">Effective Rate</span>
+              <span class="system-stat-value">${(spiritMs / 1000).toFixed(1)}s</span>
+            </div>
+            <div class="system-stat">
+              <span class="system-stat-label">Status</span>
+              <span class="system-stat-value">${state.simulation.spiritRunning ? 'Running...' : 'Idle'}</span>
+            </div>
+            <div class="system-stat">
+              <span class="system-stat-label">Spirits</span>
+              <span class="system-stat-value">${state.spirits?.totalCount || 0}</span>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('ai-system-count').textContent = '2';
+    }
+
+    function updateTickRate(rateKey, value) {
+      const intValue = parseInt(value);
+
+      // Update display
+      switch (rateKey) {
+        case 'baseTick':
+          document.getElementById('base-tick-value').textContent = `${intValue}ms`;
+          break;
+        case 'ecsRate':
+          document.getElementById('ecs-rate-value').textContent = `every ${intValue} tick${intValue > 1 ? 's' : ''}`;
+          break;
+        case 'cognitionRate':
+          document.getElementById('cognition-rate-value').textContent = `every ${intValue} ticks`;
+          break;
+        case 'spiritRate':
+          document.getElementById('spirit-rate-value').textContent = `every ${intValue} ticks`;
+          break;
+      }
+
+      // Send to server
+      const payload = {};
+      payload[rateKey] = intValue;
+      ws.send(JSON.stringify({ type: 'setTickRates', payload }));
+    }
+
+    // =============================================================================
+    // EVENT FEED
+    // =============================================================================
+
+    function addEvent(event) {
+      const container = document.getElementById('event-log');
+      const item = document.createElement('div');
+      item.className = 'event-item';
+      const time = new Date(event.timestamp).toLocaleTimeString();
+      item.innerHTML = `<span class="event-time">${time}</span> [${event.type}] ${JSON.stringify(event.data).slice(0, 80)}`;
+      container.insertBefore(item, container.firstChild);
+      while (container.children.length > 100) container.removeChild(container.lastChild);
+    }
+
+    function addNarrativeItem(payload) {
+      const container = document.getElementById('narrative-feed');
+      const actionType = payload.action?.type;
+      const actionContent = payload.action?.content || payload.action?.target || '';
+
+      // Skip wait/idle actions - they clutter the feed
+      if (actionType === 'wait' || actionType === 'idle') return;
+
+      const item = document.createElement('div');
+      item.className = 'event-item';
+      const time = new Date().toLocaleTimeString();
+
+      let content = '';
+      const agent = payload.agent || 'Unknown';
+      const truncatedContent = actionContent.length > 100 ? actionContent.slice(0, 100) + '...' : actionContent;
+
+      switch (actionType) {
+        case 'speak':
+          content = `<span class="event-speech"><strong>${agent}</strong>: "${truncatedContent}"</span>`;
+          break;
+        case 'think':
+          content = `<span class="event-thought"><strong>${agent}</strong> thinks: "${truncatedContent}"</span>`;
+          break;
+        case 'observe':
+          content = `<span class="event-action">👁️ <strong>${agent}</strong> observes ${truncatedContent || 'the area'}</span>`;
+          break;
+        case 'move':
+        case 'go':
+          content = `<span class="event-action">🚶 <strong>${agent}</strong> moves ${truncatedContent || 'around'}</span>`;
+          break;
+        case 'interact':
+          content = `<span class="event-action">✋ <strong>${agent}</strong> ${truncatedContent || 'interacts with something'}</span>`;
+          break;
+        case 'craft':
+          content = `<span class="event-action">🔨 <strong>${agent}</strong> crafts ${truncatedContent}</span>`;
+          break;
+        case 'chop':
+        case 'chop_tree':
+          content = `<span class="event-action">🪓 <strong>${agent}</strong> chops ${truncatedContent || 'a tree'}</span>`;
+          break;
+        case 'hunt':
+          content = `<span class="event-action">🏹 <strong>${agent}</strong> hunts ${truncatedContent}</span>`;
+          break;
+        case 'forage':
+          content = `<span class="event-action">🍃 <strong>${agent}</strong> forages ${truncatedContent || 'for food'}</span>`;
+          break;
+        case 'eat':
+          content = `<span class="event-action">🍖 <strong>${agent}</strong> eats ${truncatedContent || 'food'}</span>`;
+          break;
+        default:
+          if (truncatedContent) {
+            content = `<span class="event-action"><strong>${agent}</strong>: ${actionType} - ${truncatedContent}</span>`;
+          } else {
+            content = `<span class="event-action"><strong>${agent}</strong>: ${actionType || 'does something'}</span>`;
+          }
+      }
+
+      item.innerHTML = `<span class="event-time">${time}</span> ${content}`;
+      container.insertBefore(item, container.firstChild);
+      while (container.children.length > 100) container.removeChild(container.lastChild);
+    }
+
+    function addEnvironmentalEvent(event) {
+      const container = document.getElementById('narrative-feed');
+      const item = document.createElement('div');
+      item.className = 'environmental-event';
+      item.style.cssText = `
+        padding: 0.5rem 0.75rem;
+        margin: 0.25rem 0;
+        background: rgba(34, 197, 94, 0.1);
+        border-left: 2px solid #22c55e;
+        border-radius: 0 0.25rem 0.25rem 0;
+        color: #86efac;
+        font-size: 0.9rem;
+      `;
+
+      let content = '';
+      if (event.type === 'time_change') {
+        const timeData = event.data || {};
+        content = `🌅 Time changed to ${timeData.timeOfDay || timeData.period || 'unknown'} (hour ${timeData.hour || '?'})`;
+      } else if (event.data?.content) {
+        content = `🌍 ${event.data.content}`;
+      } else if (typeof event.data === 'string') {
+        content = `🌍 ${event.data}`;
+      } else {
+        content = `🌍 Something happens in the environment`;
+      }
+
+      item.textContent = content;
+      container.insertBefore(item, container.firstChild);
+      while (container.children.length > 100) container.removeChild(container.lastChild);
+    }
+
+    function addMovementEvent(event) {
+      const container = document.getElementById('narrative-feed');
+      const item = document.createElement('div');
+      item.className = 'movement-event';
+      item.style.cssText = `
+        padding: 0.4rem 0.75rem;
+        margin: 0.15rem 0;
+        background: rgba(59, 130, 246, 0.1);
+        border-left: 2px solid #3b82f6;
+        border-radius: 0 0.25rem 0.25rem 0;
+        color: #93c5fd;
+        font-size: 0.85rem;
+      `;
+
+      const data = event.data || event;
+      const agent = data.agent || 'Someone';
+      const target = data.target || 'somewhere';
+      const distance = data.distance;
+
+      let content = `🚶 <strong>${agent}</strong> moves toward ${target}`;
+      if (distance) {
+        content += ` <span style="color: #64748b;">(${distance} steps away)</span>`;
+      }
+
+      item.innerHTML = content;
+      container.insertBefore(item, container.firstChild);
+      while (container.children.length > 100) container.removeChild(container.lastChild);
+    }
+
+    function addMovementCompleteEvent(event) {
+      const container = document.getElementById('narrative-feed');
+      const item = document.createElement('div');
+      item.className = 'movement-complete-event';
+      item.style.cssText = `
+        padding: 0.4rem 0.75rem;
+        margin: 0.15rem 0;
+        background: rgba(34, 197, 94, 0.15);
+        border-left: 2px solid #22c55e;
+        border-radius: 0 0.25rem 0.25rem 0;
+        color: #86efac;
+        font-size: 0.85rem;
+      `;
+
+      const data = event.data || event;
+      const agent = data.agent || 'Someone';
+      const target = data.target || 'their destination';
+
+      item.innerHTML = `✓ <strong>${agent}</strong> reaches ${target}`;
+      container.insertBefore(item, container.firstChild);
+      while (container.children.length > 100) container.removeChild(container.lastChild);
+    }
+
+    function addNarrativeProse(prose) {
+      const container = document.getElementById('narrative-feed');
+      const item = document.createElement('div');
+      item.className = 'narrative-prose';
+      item.style.cssText = `
+        padding: 0.75rem 1rem;
+        margin: 0.5rem 0;
+        background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.1));
+        border-left: 3px solid var(--accent);
+        border-radius: 0 0.5rem 0.5rem 0;
+        font-style: italic;
+        color: var(--text);
+        line-height: 1.6;
+        font-size: 0.95rem;
+      `;
+      item.textContent = prose;
+      container.insertBefore(item, container.firstChild);
+      while (container.children.length > 100) container.removeChild(container.lastChild);
+    }
+
+    function addLog(message) {
+      const container = document.getElementById('event-log');
+      const item = document.createElement('div');
+      item.className = 'event-item';
+      const time = new Date().toLocaleTimeString();
+      item.innerHTML = `<span class="event-time">${time}</span> ${escapeHtml(message)}`;
+      container.insertBefore(item, container.firstChild);
+      while (container.children.length > 100) container.removeChild(container.lastChild);
+    }
+
+    // =============================================================================
+    // HELPERS
+    // =============================================================================
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Start
+    connect();
+  </script>
+</body>
+</html>

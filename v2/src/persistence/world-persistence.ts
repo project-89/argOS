@@ -1,6 +1,7 @@
-import { query, getRelationTargets, addEntity, addComponent } from "bitecs";
+import { query, getRelationTargets, addEntity, addComponent, entityExists } from "bitecs";
 import type { World } from "../ecs/world";
 import type { SystemRegistry, SystemDefinition } from "../ecs/dynamic-systems";
+import { safeGetRelationTargets } from "../ecs/dynamic-systems";
 import {
   AllComponents,
   Name, Description, Position, Room, Agent, Mind,
@@ -144,19 +145,28 @@ export function serializeWorld(
   }
 
   for (const eid of allEntities) {
+    // Skip entities that no longer exist (stale references)
+    if (!entityExists(world, eid)) continue;
+
     const components: Record<string, Record<string, any>> = {};
-    
+
     for (const [compName, serializer] of Object.entries(COMPONENT_SERIALIZERS)) {
-      const data = serializer(eid);
-      if (data) {
-        components[compName] = data;
+      try {
+        const data = serializer(eid);
+        if (data) {
+          components[compName] = data;
+        }
+      } catch {
+        // Skip components that fail to serialize (entity may have been removed)
       }
     }
 
     const relations: SerializedEntity["relations"] = [];
-    
-    const roomTargets = getRelationTargets(world, eid, OccupiesRoom);
+
+    // Use safeGetRelationTargets to avoid errors with stale entity references
+    const roomTargets = safeGetRelationTargets(world, eid, OccupiesRoom);
     for (const targetId of roomTargets) {
+      if (!entityExists(world, targetId)) continue;
       relations.push({
         type: "OccupiesRoom",
         targetId,
@@ -164,8 +174,9 @@ export function serializeWorld(
       });
     }
 
-    const knowsTargets = getRelationTargets(world, eid, Knows);
+    const knowsTargets = safeGetRelationTargets(world, eid, Knows);
     for (const targetId of knowsTargets) {
+      if (!entityExists(world, targetId)) continue;
       const store = Knows(targetId);
       relations.push({
         type: "Knows",
@@ -179,8 +190,9 @@ export function serializeWorld(
       });
     }
 
-    const containsTargets = getRelationTargets(world, eid, Contains);
+    const containsTargets = safeGetRelationTargets(world, eid, Contains);
     for (const targetId of containsTargets) {
+      if (!entityExists(world, targetId)) continue;
       relations.push({
         type: "Contains",
         targetId,

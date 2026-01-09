@@ -1,0 +1,9 @@
+{
+  "name": "AnimalState",
+  "description": "Marks a deer or animal entity",
+  "properties": {
+    "isFleeing": "boolean",
+    "lastY": "number",
+    "lastX": "number"
+  }
+}

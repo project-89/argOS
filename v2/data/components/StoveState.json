@@ -1,0 +1,8 @@
+{
+  "name": "StoveState",
+  "description": "State of the heating stove.",
+  "properties": {
+    "burning": "boolean",
+    "fuelLevel": "number"
+  }
+}

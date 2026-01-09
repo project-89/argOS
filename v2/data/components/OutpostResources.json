@@ -1,0 +1,8 @@
+{
+  "name": "OutpostResources",
+  "description": "The colony's shared survival resources.",
+  "properties": {
+    "wood": "number",
+    "food": "number"
+  }
+}

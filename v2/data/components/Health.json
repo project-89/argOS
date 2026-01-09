@@ -1,8 +1,8 @@
 {
   "name": "Health",
-  "description": "Health for ecosystem entities",
+  "description": "Health for destructible/killable entities",
   "properties": {
-    "max": "number",
-    "current": "number"
+    "current": "number",
+    "max": "number"
   }
 }

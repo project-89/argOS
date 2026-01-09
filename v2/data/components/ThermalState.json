@@ -1,0 +1,9 @@
+{
+  "name": "ThermalState",
+  "description": "Thermal state and fire mechanics.",
+  "properties": {
+    "burnRate": "number",
+    "isBurning": "boolean",
+    "temperature": "number"
+  }
+}

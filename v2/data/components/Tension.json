@@ -1,0 +1,8 @@
+{
+  "name": "Tension",
+  "description": "Localized atmospheric tension in a room",
+  "properties": {
+    "level": "number",
+    "max": "number"
+  }
+}

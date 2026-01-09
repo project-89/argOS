@@ -1,7 +1,9 @@
 {
   "name": "Inventory",
-  "description": "Storage for physical resources held by entities",
+  "description": "Resources held by an entity",
   "properties": {
-    "amount": "number"
+    "meat": "number",
+    "wood": "number",
+    "sharpStick": "number"
   }
 }

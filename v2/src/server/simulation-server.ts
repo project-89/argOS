@@ -19,6 +19,10 @@ import { getAgentMemory } from "../cognition/agent-mind";
 import { listSystems } from "../ecs/dynamic-systems";
 import { godThink } from "../god/god-agent";
 import { saveWorld, getWorldSaves } from "../persistence/world-persistence";
+import type { SpiritRegistry } from "../spirits/spirit-registry";
+import { getHierarchyTree, getActiveSpirits, getMessagesForGodAI } from "../spirits/spirit-registry";
+import { Thought, Perception } from "../ecs/components";
+import { getAgentThoughts, getAgentPerceptions, getAgentConversation } from "../cognition/agent-mind";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,6 +32,7 @@ export interface SimulationState {
   tick: number;
   events: Array<{ type: string; data: any; timestamp: number }>;
   logs: string[];
+  spiritRegistry?: SpiritRegistry;
 }
 
 export interface ClientMessage {
@@ -433,6 +438,89 @@ export function createSimulationServer(port: number = 3000) {
 
     const asciiWorld = renderAsciiWorld(world);
 
+    // Spirit data
+    let spirits: any = null;
+    if (simulationState.spiritRegistry) {
+      const sr = simulationState.spiritRegistry;
+      const hierarchy = getHierarchyTree(sr);
+      const activeSpirits = getActiveSpirits(sr);
+
+      spirits = {
+        hierarchy,
+        totalCount: sr.spirits.size,
+        pendingMessages: sr.messageQueue.length,
+        active: activeSpirits.map(s => ({
+          eid: s.eid,
+          name: s.definition.name,
+          domain: s.definition.domain,
+          rank: s.definition.rank,
+          description: s.definition.description,
+          observations: s.observations.slice(-5),
+          recentMessages: s.inbox.slice(-3).map(m => ({
+            from: Name.value[m.from] || m.from,
+            subject: m.subject,
+            content: m.content.slice(0, 100),
+            type: m.type,
+            timestamp: m.timestamp,
+          })),
+          pendingDirectives: s.pendingDirectives.slice(-3).map(d => ({
+            description: d.description,
+            type: d.type,
+            status: d.status,
+          })),
+          narrativeState: s.narrativeState ? {
+            currentAct: s.narrativeState.currentAct,
+            currentPhase: s.narrativeState.currentPhase,
+            tension: s.narrativeState.tension,
+            activeThreads: s.narrativeState.activeThreads?.length || 0,
+          } : null,
+          socialState: s.socialState ? {
+            relationships: s.socialState.relationships?.length || 0,
+            activeConflicts: s.socialState.activeConflicts?.length || 0,
+            factions: s.socialState.factions?.length || 0,
+          } : null,
+        })),
+      };
+    }
+
+    // Enhanced agent minds data for dedicated Minds view
+    const agentMinds = agents.map(eid => {
+      const thoughtEids = getAgentThoughts(world, eid);
+      const perceptionEids = getAgentPerceptions(world, eid);
+      const conversationEids = getAgentConversation(world, eid);
+
+      return {
+        eid,
+        name: Name.value[eid],
+        role: Agent.role[eid],
+        mind: {
+          mode: Mind.mode[eid],
+          arousal: Mind.arousal[eid],
+          focus: Mind.focus[eid],
+        },
+        thoughts: thoughtEids
+          .sort((a, b) => (Thought.timestamp[b] || 0) - (Thought.timestamp[a] || 0))
+          .slice(0, 10)
+          .map(tid => ({
+            content: Thought.content[tid],
+            type: Thought.type[tid],
+            timestamp: Thought.timestamp[tid],
+            salience: Thought.salience[tid],
+          })),
+        perceptions: perceptionEids
+          .sort((a, b) => (Perception.timestamp[b] || 0) - (Perception.timestamp[a] || 0))
+          .slice(0, 10)
+          .map(pid => ({
+            type: Perception.type[pid],
+            content: Perception.content[pid],
+            source: Perception.source[pid],
+            intensity: Perception.intensity[pid],
+            timestamp: Perception.timestamp[pid],
+          })),
+        conversationLength: conversationEids.length,
+      };
+    });
+
     const atlases: Record<string, any> = {};
     for (const atlas of SpriteRegistry.listAtlases()) {
       // Convert absolute file system path to web-accessible URL
@@ -462,6 +550,8 @@ export function createSimulationServer(port: number = 3000) {
       asciiWorld,
       atlases,
       characterRigs: listCharacterRigs(),
+      spirits,
+      agentMinds,
     };
   }
 
@@ -480,6 +570,12 @@ export function createSimulationServer(port: number = 3000) {
 
   function setGodAgent(god: GodAgentState) {
     godAgent = god;
+  }
+
+  function setSpiritRegistry(registry: SpiritRegistry) {
+    if (simulationState) {
+      simulationState.spiritRegistry = registry;
+    }
   }
 
   function pushEvent(type: string, data: any) {
@@ -528,6 +624,7 @@ export function createSimulationServer(port: number = 3000) {
     start,
     setSimulationState,
     setGodAgent,
+    setSpiritRegistry,
     pushEvent,
     pushLog,
     pushAgentAction,

@@ -467,6 +467,139 @@
       font-family: monospace;
       font-weight: bold;
     }
+
+    /* Agent Minds View */
+    .mind-agent-card {
+      background: var(--bg-dark);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.6rem;
+      margin-bottom: 0.4rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .mind-agent-card:hover { border-color: var(--accent); }
+    .mind-agent-card.selected { border-color: var(--accent); background: rgba(99, 102, 241, 0.1); }
+
+    .mind-agent-name { font-weight: bold; font-size: 0.9rem; color: var(--accent); }
+    .mind-agent-role { font-size: 0.75rem; color: var(--text-dim); }
+
+    .mind-stat {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      margin-top: 0.25rem;
+    }
+
+    .thought-item {
+      background: var(--bg-dark);
+      border-left: 3px solid var(--accent);
+      padding: 0.5rem 0.75rem;
+      margin-bottom: 0.5rem;
+      border-radius: 0 0.4rem 0.4rem 0;
+    }
+
+    .thought-item.reasoning { border-left-color: #a855f7; }
+    .thought-item.reflection { border-left-color: #22c55e; }
+    .thought-item.emotion { border-left-color: #ef4444; }
+
+    .thought-content { font-size: 0.85rem; font-style: italic; margin-bottom: 0.25rem; }
+    .thought-meta { font-size: 0.7rem; color: var(--text-dim); }
+
+    .perception-item {
+      background: var(--bg-dark);
+      border-radius: 0.4rem;
+      padding: 0.5rem;
+      margin-bottom: 0.4rem;
+      border-left: 3px solid #eab308;
+    }
+
+    .perception-item.visual { border-left-color: #60a5fa; }
+    .perception-item.auditory { border-left-color: #22c55e; }
+    .perception-item.speech { border-left-color: #f472b6; }
+
+    .perception-type { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; }
+    .perception-content { font-size: 0.8rem; margin-top: 0.2rem; }
+    .perception-source { font-size: 0.7rem; color: var(--text-dim); margin-top: 0.2rem; }
+
+    /* Spirits View */
+    .spirit-node {
+      padding: 0.4rem 0.6rem;
+      margin: 0.2rem 0;
+      border-radius: 0.4rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .spirit-node:hover { background: var(--bg-card-hover); }
+    .spirit-node.selected { background: rgba(99, 102, 241, 0.2); border-left: 3px solid var(--accent); }
+
+    .spirit-rank-god { color: #fbbf24; font-weight: bold; }
+    .spirit-rank-archangel { color: #a855f7; }
+    .spirit-rank-angel { color: #60a5fa; }
+    .spirit-rank-spirit { color: var(--text-dim); }
+
+    .spirit-domain {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.4rem;
+      background: var(--bg-dark);
+      border-radius: 0.25rem;
+      margin-left: 0.5rem;
+    }
+
+    .spirit-domain.narrative { background: rgba(99, 102, 241, 0.2); color: #6366f1; }
+    .spirit-domain.social { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+    .spirit-domain.environment { background: rgba(234, 179, 8, 0.2); color: #eab308; }
+    .spirit-domain.emotional { background: rgba(244, 114, 182, 0.2); color: #f472b6; }
+
+    .spirit-children { margin-left: 1.25rem; border-left: 1px dashed var(--border); padding-left: 0.5rem; }
+
+    .observation-item {
+      background: var(--bg-dark);
+      border-radius: 0.4rem;
+      padding: 0.5rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.8rem;
+    }
+
+    .message-item {
+      background: var(--bg-dark);
+      border-radius: 0.4rem;
+      padding: 0.5rem;
+      margin-bottom: 0.4rem;
+      border-left: 3px solid var(--accent);
+    }
+
+    .message-item.report { border-left-color: #22c55e; }
+    .message-item.directive { border-left-color: #ef4444; }
+    .message-item.observation { border-left-color: #eab308; }
+
+    .message-from { font-size: 0.7rem; color: var(--text-dim); }
+    .message-subject { font-size: 0.85rem; font-weight: bold; margin: 0.2rem 0; }
+    .message-content { font-size: 0.8rem; color: var(--text); }
+
+    .narrative-state {
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid var(--accent);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      margin-top: 0.5rem;
+    }
+
+    .tension-bar {
+      height: 6px;
+      background: var(--bg-dark);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 0.25rem;
+    }
+
+    .tension-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);
+      transition: width 0.3s;
+    }
   </style>
 </head>
 <body>
@@ -489,6 +622,8 @@
   
   <nav class="tab-bar">
     <button class="tab active" onclick="switchView('dashboard')">Dashboard</button>
+    <button class="tab" onclick="switchView('minds')">Agent Minds</button>
+    <button class="tab" onclick="switchView('spirits')">Spirits</button>
     <button class="tab" onclick="switchView('ascii')">ASCII World</button>
     <button class="tab" onclick="switchView('canvas')">2D World</button>
     <button class="tab" onclick="switchView('systems')">Systems</button>
@@ -609,7 +744,7 @@
         <div class="panel-header">Active Systems</div>
         <div class="panel-content" id="systems-list-full"></div>
       </aside>
-      
+
       <div class="panel">
         <div class="panel-header">System Details</div>
         <div class="panel-content" id="system-detail-panel">
@@ -618,7 +753,61 @@
       </div>
     </main>
   </div>
-  
+
+  <!-- Agent Minds View -->
+  <div class="view" id="view-minds">
+    <main class="main" style="grid-template-columns: 280px 1fr 320px;">
+      <aside class="panel">
+        <div class="panel-header">
+          <span>Agents</span>
+          <span id="agent-count-badge" style="font-size: 0.7rem; color: var(--text-dim);">0</span>
+        </div>
+        <div class="panel-content" id="minds-agent-list"></div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header" id="mind-stream-header">Thought Stream</div>
+        <div class="panel-content" id="mind-thought-stream">
+          <p style="color: var(--text-dim)">Select an agent to view their thought stream</p>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="panel-header">Perceptions</div>
+        <div class="panel-content" id="mind-perceptions">
+          <p style="color: var(--text-dim)">Recent perceptions will appear here</p>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Spirits View -->
+  <div class="view" id="view-spirits">
+    <main class="main" style="grid-template-columns: 320px 1fr 300px;">
+      <aside class="panel">
+        <div class="panel-header">
+          <span>Spirit Hierarchy</span>
+          <span id="spirit-count-badge" style="font-size: 0.7rem; color: var(--text-dim);">0</span>
+        </div>
+        <div class="panel-content" id="spirit-hierarchy"></div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header" id="spirit-detail-header">Spirit Details</div>
+        <div class="panel-content" id="spirit-detail">
+          <p style="color: var(--text-dim)">Select a spirit to view details and observations</p>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="panel-header">Divine Messages</div>
+        <div class="panel-content" id="spirit-messages">
+          <p style="color: var(--text-dim)">Messages between spirits</p>
+        </div>
+      </aside>
+    </main>
+  </div>
+
   <footer class="god-console">
     <span style="color: var(--accent); font-weight: bold;">⚡ GOD:</span>
     <input 
@@ -639,6 +828,8 @@
     let state = null;
     let selectedEntityId = null;
     let selectedSystemName = null;
+    let selectedMindAgentId = null;
+    let selectedSpiritEid = null;
     let currentView = 'dashboard';
     
     const COLORS = {
@@ -706,10 +897,12 @@
       document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       document.querySelector(`.tab[onclick*="${view}"]`).classList.add('active');
       document.getElementById(`view-${view}`).classList.add('active');
-      
+
       if (view === 'ascii') renderAsciiWorld();
       if (view === 'canvas') renderCanvas();
       if (view === 'systems') renderSystemsFull();
+      if (view === 'minds') renderMindsView();
+      if (view === 'spirits') renderSpiritsView();
     }
     
     function updateUI() {
@@ -727,9 +920,13 @@
       if (currentView === 'ascii') renderAsciiWorld();
       if (currentView === 'canvas') renderCanvas();
       if (currentView === 'systems') renderSystemsFull();
-      
+      if (currentView === 'minds') renderMindsView();
+      if (currentView === 'spirits') renderSpiritsView();
+
       if (selectedEntityId) renderDetails(selectedEntityId);
       if (selectedSystemName) renderSystemDetails(selectedSystemName);
+      if (selectedMindAgentId) renderMindDetails(selectedMindAgentId);
+      if (selectedSpiritEid) renderSpiritDetails(selectedSpiritEid);
     }
     
     function renderEntities() {
@@ -1373,7 +1570,277 @@
     window.addEventListener('resize', () => {
       if (currentView === 'canvas') renderCanvas();
     });
-    
+
+    // ============= AGENT MINDS VIEW =============
+
+    function renderMindsView() {
+      if (!state?.agentMinds) {
+        document.getElementById('minds-agent-list').innerHTML = '<p style="color: var(--text-dim)">No agents in simulation</p>';
+        return;
+      }
+
+      const agentMinds = state.agentMinds;
+      document.getElementById('agent-count-badge').textContent = agentMinds.length;
+
+      const container = document.getElementById('minds-agent-list');
+      container.innerHTML = '';
+
+      for (const agent of agentMinds) {
+        const card = document.createElement('div');
+        card.className = 'mind-agent-card' + (agent.eid === selectedMindAgentId ? ' selected' : '');
+        card.onclick = () => selectMindAgent(agent.eid);
+
+        const arousal = ((agent.mind?.arousal || 0) * 100).toFixed(0);
+        const thoughtCount = agent.thoughts?.length || 0;
+
+        card.innerHTML = `
+          <div class="mind-agent-name">${agent.name}</div>
+          <div class="mind-agent-role">${agent.role || 'No role'}</div>
+          <div class="mind-stat">
+            <span>Mode: ${agent.mind?.mode || 'unknown'}</span>
+            <span>Arousal: ${arousal}%</span>
+          </div>
+          <div class="mind-stat">
+            <span>💭 ${thoughtCount} thoughts</span>
+            <span>👁️ ${agent.perceptions?.length || 0} perceptions</span>
+          </div>
+        `;
+        container.appendChild(card);
+      }
+    }
+
+    function selectMindAgent(eid) {
+      selectedMindAgentId = eid;
+      renderMindsView();
+      renderMindDetails(eid);
+    }
+
+    function renderMindDetails(eid) {
+      const agent = state?.agentMinds?.find(a => a.eid === eid);
+      if (!agent) return;
+
+      document.getElementById('mind-stream-header').textContent = `${agent.name}'s Thoughts`;
+
+      // Render thought stream
+      const thoughtContainer = document.getElementById('mind-thought-stream');
+      if (agent.thoughts?.length > 0) {
+        thoughtContainer.innerHTML = agent.thoughts.map(t => {
+          const time = t.timestamp ? new Date(t.timestamp).toLocaleTimeString() : '';
+          const typeClass = t.type || 'reflection';
+          return `
+            <div class="thought-item ${typeClass}">
+              <div class="thought-content">"${escapeHtml(t.content || '')}"</div>
+              <div class="thought-meta">
+                <span>${t.type || 'thought'}</span>
+                ${t.salience ? `<span>• salience: ${(t.salience * 100).toFixed(0)}%</span>` : ''}
+                ${time ? `<span>• ${time}</span>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('');
+      } else {
+        thoughtContainer.innerHTML = '<p style="color: var(--text-dim)">No thoughts recorded yet</p>';
+      }
+
+      // Render perceptions
+      const perceptionContainer = document.getElementById('mind-perceptions');
+      if (agent.perceptions?.length > 0) {
+        perceptionContainer.innerHTML = agent.perceptions.map(p => {
+          const time = p.timestamp ? new Date(p.timestamp).toLocaleTimeString() : '';
+          const typeClass = p.type?.toLowerCase() || '';
+          return `
+            <div class="perception-item ${typeClass}">
+              <div class="perception-type">${p.type || 'unknown'}</div>
+              <div class="perception-content">${escapeHtml(p.content || '')}</div>
+              <div class="perception-source">from: ${p.source || 'unknown'} ${time ? `• ${time}` : ''}</div>
+            </div>
+          `;
+        }).join('');
+      } else {
+        perceptionContainer.innerHTML = '<p style="color: var(--text-dim)">No perceptions recorded yet</p>';
+      }
+    }
+
+    // ============= SPIRITS VIEW =============
+
+    function renderSpiritsView() {
+      if (!state?.spirits) {
+        document.getElementById('spirit-hierarchy').innerHTML = '<p style="color: var(--text-dim)">No spirit hierarchy active</p>';
+        document.getElementById('spirit-count-badge').textContent = '0';
+        return;
+      }
+
+      const spirits = state.spirits;
+      document.getElementById('spirit-count-badge').textContent = spirits.totalCount || 0;
+
+      // Render hierarchy tree
+      const hierarchyContainer = document.getElementById('spirit-hierarchy');
+      if (spirits.hierarchy) {
+        hierarchyContainer.innerHTML = renderHierarchyNode(spirits.hierarchy);
+      } else {
+        hierarchyContainer.innerHTML = '<p style="color: var(--text-dim)">No hierarchy data</p>';
+      }
+
+      // Render all messages from active spirits
+      const messagesContainer = document.getElementById('spirit-messages');
+      const allMessages = [];
+      if (spirits.active) {
+        for (const spirit of spirits.active) {
+          if (spirit.recentMessages) {
+            for (const msg of spirit.recentMessages) {
+              allMessages.push({ ...msg, to: spirit.name });
+            }
+          }
+        }
+      }
+
+      if (allMessages.length > 0) {
+        allMessages.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        messagesContainer.innerHTML = allMessages.slice(0, 10).map(msg => {
+          const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
+          return `
+            <div class="message-item ${msg.type || ''}">
+              <div class="message-from">${msg.from} → ${msg.to} ${time ? `• ${time}` : ''}</div>
+              <div class="message-subject">${msg.subject || 'No subject'}</div>
+              <div class="message-content">${escapeHtml(msg.content || '')}</div>
+            </div>
+          `;
+        }).join('');
+      } else {
+        messagesContainer.innerHTML = '<p style="color: var(--text-dim)">No messages yet</p>';
+      }
+    }
+
+    function renderHierarchyNode(node, depth = 0) {
+      if (!node) return '';
+
+      const rankEmoji = node.rank === 'god' ? '👑' :
+                        node.rank === 'archangel' ? '👼' :
+                        node.rank === 'angel' ? '😇' : '👻';
+      const rankClass = `spirit-rank-${node.rank || 'spirit'}`;
+      const domainClass = node.domain || 'narrative';
+      const isSelected = node.eid === selectedSpiritEid;
+
+      let html = `
+        <div class="spirit-node ${isSelected ? 'selected' : ''}" onclick="selectSpirit(${node.eid})">
+          <span class="${rankClass}">${rankEmoji} ${node.name}</span>
+          <span class="spirit-domain ${domainClass}">${node.domain || 'unknown'}</span>
+        </div>
+      `;
+
+      if (node.children?.length > 0) {
+        html += '<div class="spirit-children">';
+        for (const child of node.children) {
+          html += renderHierarchyNode(child, depth + 1);
+        }
+        html += '</div>';
+      }
+
+      return html;
+    }
+
+    function selectSpirit(eid) {
+      selectedSpiritEid = eid;
+      renderSpiritsView();
+      renderSpiritDetails(eid);
+    }
+
+    function renderSpiritDetails(eid) {
+      const spirit = state?.spirits?.active?.find(s => s.eid === eid);
+      if (!spirit) {
+        document.getElementById('spirit-detail-header').textContent = 'Spirit Details';
+        document.getElementById('spirit-detail').innerHTML = '<p style="color: var(--text-dim)">Spirit not found or inactive</p>';
+        return;
+      }
+
+      document.getElementById('spirit-detail-header').textContent = spirit.name;
+
+      const rankEmoji = spirit.rank === 'god' ? '👑' :
+                        spirit.rank === 'archangel' ? '👼' :
+                        spirit.rank === 'angel' ? '😇' : '👻';
+
+      let html = `
+        <div class="detail-section">
+          <div class="detail-title">Identity</div>
+          <div class="detail-value">
+            <span class="spirit-rank-${spirit.rank}">${rankEmoji} ${spirit.rank}</span>
+            <span class="spirit-domain ${spirit.domain}">${spirit.domain}</span>
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-title">Description</div>
+          <div class="detail-value">${spirit.description || 'No description'}</div>
+        </div>
+      `;
+
+      // Narrative state (if exists)
+      if (spirit.narrativeState) {
+        const ns = spirit.narrativeState;
+        html += `
+          <div class="narrative-state">
+            <div class="detail-title">Narrative State</div>
+            <div style="display: flex; gap: 1rem; margin-top: 0.25rem;">
+              <span>Act: ${ns.currentAct}</span>
+              <span>Phase: ${ns.currentPhase}</span>
+            </div>
+            <div style="margin-top: 0.5rem;">
+              <span style="font-size: 0.75rem;">Tension Level</span>
+              <div class="tension-bar">
+                <div class="tension-fill" style="width: ${(ns.tension || 0) * 100}%"></div>
+              </div>
+            </div>
+            ${ns.activeThreads > 0 ? `<div style="margin-top: 0.5rem; font-size: 0.75rem;">Active Threads: ${ns.activeThreads}</div>` : ''}
+          </div>
+        `;
+      }
+
+      // Social state (if exists)
+      if (spirit.socialState) {
+        const ss = spirit.socialState;
+        html += `
+          <div class="detail-section" style="margin-top: 0.5rem;">
+            <div class="detail-title">Social Overview</div>
+            <div style="display: flex; gap: 1rem; font-size: 0.8rem;">
+              <span>👥 ${ss.relationships || 0} relationships</span>
+              <span>⚔️ ${ss.activeConflicts || 0} conflicts</span>
+              <span>🏛️ ${ss.factions || 0} factions</span>
+            </div>
+          </div>
+        `;
+      }
+
+      // Observations
+      if (spirit.observations?.length > 0) {
+        html += `
+          <div class="detail-section">
+            <div class="detail-title">Recent Observations</div>
+            ${spirit.observations.map(obs => `
+              <div class="observation-item">${escapeHtml(typeof obs === 'string' ? obs : JSON.stringify(obs))}</div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      // Pending directives
+      if (spirit.pendingDirectives?.length > 0) {
+        html += `
+          <div class="detail-section">
+            <div class="detail-title">Pending Directives</div>
+            ${spirit.pendingDirectives.map(d => `
+              <div class="observation-item" style="border-left: 2px solid #ef4444; padding-left: 0.5rem;">
+                <strong>${d.description || 'No description'}</strong>
+                <div style="font-size: 0.7rem; color: var(--text-dim);">
+                  Type: ${d.type || 'unknown'} • Status: ${d.status || 'pending'}
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      document.getElementById('spirit-detail').innerHTML = html;
+    }
+
     connect();
   </script>
 </body>

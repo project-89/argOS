@@ -13,12 +13,13 @@
  */
 
 import type { World } from "../ecs/world";
-import { query, getRelationTargets, hasComponent } from "bitecs";
+import { query, getRelationTargets, hasComponent, entityExists } from "bitecs";
 import { Name, Description, Agent, Mind, Room, StimulusSource } from "../ecs/components";
 import { OccupiesRoom, Contains } from "../ecs/relations";
 import { getDynamicComponentValues } from "../ecs/dynamic-components";
 import { getAvailableAffordances } from "./cognition-system";
 import { worldSchema } from "../world/schema";
+import { safeGetRelationTargets } from "../ecs/dynamic-systems";
 
 // ============================================================================
 // SENSORY MODALITIES
@@ -69,11 +70,15 @@ export function generateStimuliForAgent(
   pendingEvents: Array<{ modality: SensoryModality; type: string; content: string; source: string; intensity?: number }>
 ): Stimulus[] {
   const stimuli: Stimulus[] = [];
+
+  // Validate agent exists
+  if (!entityExists(world, agentEid)) return stimuli;
+
   const capabilities = getAgentCapabilities(world, agentEid);
-  const rooms = getRelationTargets(world, agentEid, OccupiesRoom);
+  const rooms = safeGetRelationTargets(world, agentEid, OccupiesRoom);
   const roomEid = rooms[0];
 
-  if (roomEid === undefined) return stimuli;
+  if (roomEid === undefined || !entityExists(world, roomEid)) return stimuli;
 
   // Visual perception - what the agent sees
   if (capabilities.visual > 0) {
@@ -168,12 +173,14 @@ function generateVisualStimuli(
   });
 
   // Other people present
-  const allAgents = Array.from(query(world, [Agent]));
+  const allAgents = Array.from(query(world, [Agent])).filter(eid => entityExists(world, eid));
   const peopleLines: string[] = [];
 
   for (const otherEid of allAgents) {
     if (otherEid === agentEid) continue;
-    const otherRooms = getRelationTargets(world, otherEid, OccupiesRoom);
+    if (!entityExists(world, otherEid)) continue;
+
+    const otherRooms = safeGetRelationTargets(world, otherEid, OccupiesRoom);
     if (otherRooms.includes(roomEid)) {
       const otherName = Name.value[otherEid] || "someone";
       const otherDesc = Description.value[otherEid];
@@ -200,10 +207,11 @@ function generateVisualStimuli(
   }
 
   // Objects in room
-  const contents = getRelationTargets(world, roomEid, Contains);
+  const contents = safeGetRelationTargets(world, roomEid, Contains);
   const objectLines: string[] = [];
 
   for (const contentEid of contents) {
+    if (!entityExists(world, contentEid)) continue;
     if (hasComponent(world, contentEid, Agent)) continue;
 
     const objName = Name.value[contentEid];
@@ -244,11 +252,13 @@ function generateAmbientAuditoryStimuli(
   sensitivity: number
 ): Stimulus[] {
   const stimuli: Stimulus[] = [];
+  if (!entityExists(world, roomEid)) return stimuli;
 
   // Find stimulus sources in room that emit sounds
-  const contents = getRelationTargets(world, roomEid, Contains);
+  const contents = safeGetRelationTargets(world, roomEid, Contains);
 
   for (const contentEid of contents) {
+    if (!entityExists(world, contentEid)) continue;
     if (!hasComponent(world, contentEid, StimulusSource)) continue;
 
     const stimType = StimulusSource.stimulusType[contentEid];
@@ -294,11 +304,13 @@ function generateOlfactoryStimuli(
   sensitivity: number
 ): Stimulus[] {
   const stimuli: Stimulus[] = [];
+  if (!entityExists(world, roomEid)) return stimuli;
 
   // Find things that smell
-  const contents = getRelationTargets(world, roomEid, Contains);
+  const contents = safeGetRelationTargets(world, roomEid, Contains);
 
   for (const contentEid of contents) {
+    if (!entityExists(world, contentEid)) continue;
     const meta = getDynamicComponentValues("ObjectMeta", contentEid);
     if (!meta?.traits) continue;
 
@@ -353,16 +365,19 @@ function generateCognitiveStimuli(
 
   // Only generate cognitive stimuli if sensitivity is high enough
   if (sensitivity < 0.3) return stimuli;
+  if (!entityExists(world, agentEid) || !entityExists(world, roomEid)) return stimuli;
 
   // Affordance awareness - what actions are possible
-  const contents = getRelationTargets(world, roomEid, Contains);
+  const contents = safeGetRelationTargets(world, roomEid, Contains);
   const affordanceAwareness: string[] = [];
 
   // Check other agents for interaction possibilities
-  const allAgents = Array.from(query(world, [Agent]));
+  const allAgents = Array.from(query(world, [Agent])).filter(eid => entityExists(world, eid));
   for (const otherEid of allAgents) {
     if (otherEid === agentEid) continue;
-    const otherRooms = getRelationTargets(world, otherEid, OccupiesRoom);
+    if (!entityExists(world, otherEid)) continue;
+
+    const otherRooms = safeGetRelationTargets(world, otherEid, OccupiesRoom);
     if (otherRooms.includes(roomEid)) {
       const otherName = Name.value[otherEid] || "someone";
       const affordances = getAvailableAffordances(world, agentEid, otherEid);
@@ -374,6 +389,7 @@ function generateCognitiveStimuli(
 
   // Check objects for interaction possibilities
   for (const contentEid of contents) {
+    if (!entityExists(world, contentEid)) continue;
     if (hasComponent(world, contentEid, Agent)) continue;
 
     const objName = Name.value[contentEid];
@@ -400,6 +416,7 @@ function generateCognitiveStimuli(
   const dangerSources: string[] = [];
   for (const contentEid of [...contents, ...allAgents]) {
     if (contentEid === agentEid) continue;
+    if (!entityExists(world, contentEid)) continue;
 
     const meta = getDynamicComponentValues("ObjectMeta", contentEid);
     if (!meta?.traits) continue;

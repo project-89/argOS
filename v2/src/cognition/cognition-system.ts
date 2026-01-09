@@ -1,6 +1,7 @@
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext, SystemRegistry } from "../ecs/dynamic-systems";
-import { query, getRelationTargets, addComponent, removeComponent, hasComponent } from "bitecs";
+import { safeGetRelationTargets } from "../ecs/dynamic-systems";
+import { query, getRelationTargets, addComponent, removeComponent, hasComponent, entityExists } from "bitecs";
 import { Name, Agent, Mind, Room, Description, Portal } from "../ecs/components";
 import { OccupiesRoom, Contains } from "../ecs/relations";
 import {
@@ -20,6 +21,7 @@ import {
   type SensoryModality,
   type Stimulus,
 } from "./sensory-system";
+import { setMovementTarget } from "../systems/builtin-systems";
 
 export interface PendingStimulus {
   targetEid: number;
@@ -59,7 +61,7 @@ export function unregisterEntity(eid: number): void {
 }
 
 /**
- * Find an entity by name
+ * Find an entity by name (with fuzzy matching for natural language)
  */
 export function findEntityByName(world: World, name: string): number | undefined {
   // First check registry
@@ -68,8 +70,14 @@ export function findEntityByName(world: World, name: string): number | undefined
 
   // Fall back to searching all entities with Name component
   const allEntities = Array.from(query(world, []));
-  const nameLower = name.toLowerCase();
+  const nameLower = name.toLowerCase().trim();
 
+  // Normalize: remove trailing 's' for plural handling (trees -> tree)
+  const singularized = nameLower.endsWith('s') ? nameLower.slice(0, -1) : nameLower;
+  // Also handle "ies" -> "y" (berries -> berry)
+  const singularizedIes = nameLower.endsWith('ies') ? nameLower.slice(0, -3) + 'y' : singularized;
+
+  // Exact match first
   for (const eid of allEntities) {
     const entityName = Name.value[eid];
     if (entityName?.toLowerCase() === nameLower) {
@@ -77,10 +85,20 @@ export function findEntityByName(world: World, name: string): number | undefined
     }
   }
 
-  // Try partial match
+  // Try partial match (entity name contains search term)
   for (const eid of allEntities) {
-    const entityName = Name.value[eid];
-    if (entityName?.toLowerCase().includes(nameLower)) {
+    const entityName = Name.value[eid]?.toLowerCase();
+    if (!entityName) continue;
+
+    // Check if search term is in entity name OR singularized version matches
+    if (entityName.includes(nameLower) ||
+        entityName.includes(singularized) ||
+        entityName.includes(singularizedIes)) {
+      return eid;
+    }
+
+    // Also check if entity name starts with search term (tree matches "Tree 1")
+    if (entityName.startsWith(singularized) || entityName.startsWith(singularizedIes)) {
       return eid;
     }
   }
@@ -139,10 +157,12 @@ export function broadcastToRoom(
   stimulus: { type: string; content: string; source: string; modality?: SensoryModality; intensity?: number },
   excludeEid?: number
 ): void {
-  const agents = Array.from(query(world, [Agent]));
+  if (!entityExists(world, roomEid)) return;
+
+  const agents = Array.from(query(world, [Agent])).filter(eid => entityExists(world, eid));
   for (const eid of agents) {
     if (eid === excludeEid) continue;
-    const rooms = getRelationTargets(world, eid, OccupiesRoom);
+    const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
     if (rooms.includes(roomEid)) {
       pendingStimuli.push({ targetEid: eid, ...stimulus });
     }
@@ -217,6 +237,11 @@ export function renderRoomPerception(
 ): string {
   const lines: string[] = [];
 
+  // Validate entities exist
+  if (!entityExists(world, agentEid) || !entityExists(world, roomEid)) {
+    return "You are nowhere.";
+  }
+
   // Room header
   const roomName = Name.value[roomEid] || "Unknown Location";
   const roomDesc = Description.value[roomEid] || "";
@@ -235,12 +260,14 @@ export function renderRoomPerception(
   }
 
   // Find other agents in the room
-  const allAgents = Array.from(query(world, [Agent]));
+  const allAgents = Array.from(query(world, [Agent])).filter(eid => entityExists(world, eid));
   const othersInRoom: Array<{ name: string; desc?: string; affordances: string[] }> = [];
 
   for (const otherEid of allAgents) {
     if (otherEid === agentEid) continue;
-    const otherRooms = getRelationTargets(world, otherEid, OccupiesRoom);
+    if (!entityExists(world, otherEid)) continue;
+
+    const otherRooms = safeGetRelationTargets(world, otherEid, OccupiesRoom);
     if (otherRooms.includes(roomEid)) {
       const otherName = Name.value[otherEid] || "someone";
       const otherDesc = Description.value[otherEid];
@@ -273,10 +300,12 @@ export function renderRoomPerception(
   }
 
   // Find objects/items in room (via Contains relation)
-  const contents = getRelationTargets(world, roomEid, Contains);
+  const contents = safeGetRelationTargets(world, roomEid, Contains);
   const objectEntries: Array<{ name: string; desc?: string; affordances: string[] }> = [];
 
   for (const contentEid of contents) {
+    // Skip non-existent entities
+    if (!entityExists(world, contentEid)) continue;
     // Skip agents (already listed)
     if (hasComponent(world, contentEid, Agent)) continue;
 
@@ -413,8 +442,11 @@ export function executeActions(
   registry: SystemRegistry
 ): void {
   for (const { eid, action } of actions) {
+    // Skip if entity no longer exists
+    if (!entityExists(world, eid)) continue;
+
     const name = Name.value[eid];
-    const rooms = getRelationTargets(world, eid, OccupiesRoom);
+    const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
     const roomEid = rooms[0];
 
     switch (action.type) {
@@ -440,6 +472,8 @@ export function executeActions(
           // Find the target and provide detailed observation
           const observeTargetEid = findEntityByName(world, action.target);
           if (observeTargetEid !== undefined) {
+            // Set movement target so agent moves towards what they're observing
+            setMovementTarget(eid, observeTargetEid);
             const targetName = Name.value[observeTargetEid] || action.target;
             const targetDesc = Description.value[observeTargetEid] || "You see nothing special.";
             const targetMeta = getDynamicComponentValues("ObjectMeta", observeTargetEid);
@@ -493,6 +527,9 @@ export function executeActions(
             console.log(`❓ ${name} tried to interact with "${action.target}" but couldn't find it`);
             break;
           }
+
+          // Set movement target so agent moves towards the object they're interacting with
+          setMovementTarget(eid, targetEid);
 
           // Parse affordance name from content (e.g., "eat the apple" -> "eat")
           const affordanceName = action.content.split(" ")[0].toLowerCase();

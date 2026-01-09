@@ -1,9 +1,10 @@
 {
   "name": "Vitals",
-  "description": "Stores dynamic need values. Standardized scale: 0 (Critical) to 100 (Optimal).",
+  "description": "Core survival metrics for agents.",
   "properties": {
-    "satiety": "number",
-    "safety": "number",
-    "social": "number"
+    "health": "number",
+    "energy": "number",
+    "hunger": "number",
+    "hydration": "number"
   }
 }

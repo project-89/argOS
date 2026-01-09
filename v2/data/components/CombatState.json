@@ -1,0 +1,10 @@
+{
+  "name": "CombatState",
+  "description": "Combat stats and current target information.",
+  "properties": {
+    "targetEid": "number",
+    "glory": "number",
+    "defense": "number",
+    "attack": "number"
+  }
+}

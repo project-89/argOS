@@ -1,9 +1,42 @@
 import type { World } from "./world";
-import { query, hasComponent, getRelationTargets, addEntity, addComponent, removeEntity } from "bitecs";
+import { query, hasComponent, getRelationTargets, addEntity, addComponent, removeEntity, entityExists } from "bitecs";
 import { AllComponents, Name, Agent, Mind, StimulusSource, Stimulus, WorldMap, GridPosition, Goal, Memory, Belief, Thought, Impression } from "./components";
 import { AllRelations, OccupiesRoom, HasGoal, HasMemory, HasBelief, HasThought, HasImpression } from "./relations";
 import { createAIContext, type AIContext } from "../ai/ai-context";
 import { moveEntity, isWalkable, getTile } from "../world/ascii-world";
+
+/**
+ * Safe wrapper for getRelationTargets that filters out non-existent entities.
+ * BitECS can return stale entity IDs after entities are removed, causing
+ * "entity does not exist" errors when accessing their components.
+ */
+export function safeGetRelationTargets(world: World, eid: number, relation: any): number[] {
+  if (!entityExists(world, eid)) {
+    return [];
+  }
+  try {
+    const targets = getRelationTargets(world, eid, relation);
+    // Filter out any targets that no longer exist
+    return targets.filter(targetEid => entityExists(world, targetEid));
+  } catch (e) {
+    // If getRelationTargets itself fails, return empty array
+    return [];
+  }
+}
+
+/**
+ * Check if an entity exists before accessing its components
+ */
+export function safeEntityAccess<T>(world: World, eid: number, accessor: () => T, fallback: T): T {
+  if (!entityExists(world, eid)) {
+    return fallback;
+  }
+  try {
+    return accessor();
+  } catch (e) {
+    return fallback;
+  }
+}
 
 export interface SystemDefinition {
   name: string;
@@ -224,7 +257,7 @@ function createCognitiveContext(): CognitiveContext {
       return impEid;
     },
     getGoals: (world: World, agentEid: number): Array<{ eid: number; data: GoalData }> => {
-      const targets = getRelationTargets(world, agentEid, HasGoal);
+      const targets = safeGetRelationTargets(world, agentEid, HasGoal);
       return targets.map(eid => ({
         eid,
         data: {
@@ -237,7 +270,7 @@ function createCognitiveContext(): CognitiveContext {
       }));
     },
     getMemories: (world: World, agentEid: number): Array<{ eid: number; data: MemoryData }> => {
-      const targets = getRelationTargets(world, agentEid, HasMemory);
+      const targets = safeGetRelationTargets(world, agentEid, HasMemory);
       return targets.map(eid => ({
         eid,
         data: {
@@ -249,7 +282,7 @@ function createCognitiveContext(): CognitiveContext {
       }));
     },
     getBeliefs: (world: World, agentEid: number): Array<{ eid: number; data: BeliefData }> => {
-      const targets = getRelationTargets(world, agentEid, HasBelief);
+      const targets = safeGetRelationTargets(world, agentEid, HasBelief);
       return targets.map(eid => ({
         eid,
         data: {
@@ -294,7 +327,8 @@ function createSystemContext(world: World, registry: SystemRegistry, tick: numbe
     },
     query,
     hasComponent,
-    getRelationTargets,
+    // Use safe wrapper that filters out non-existent entities
+    getRelationTargets: (w: World, eid: number, rel: any) => safeGetRelationTargets(w, eid, rel),
     addEntity,
     addComponent,
     removeEntity,

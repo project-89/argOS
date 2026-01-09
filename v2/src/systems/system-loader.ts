@@ -448,3 +448,101 @@ export async function fixAllQueuedSystems(
   clearSystemsNeedingFix();
   return { fixed, failed };
 }
+
+// ============================================================================
+// Simulation-Aware System Management
+// ============================================================================
+
+/**
+ * Write a system file to a custom directory (e.g., simulation folder)
+ */
+export async function writeSystemToDir(
+  dir: string,
+  system: {
+    name: string;
+    description: string;
+    frequency: number;
+    code: string;
+  }
+): Promise<string> {
+  await mkdir(dir, { recursive: true });
+
+  const kebabName = system.name.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+  const filePath = path.join(dir, `${kebabName}.ts`);
+  const code = generateSystemCode(system);
+
+  await writeFile(filePath, code, "utf-8");
+  console.log(`[SystemLoader] Wrote system to ${filePath}`);
+
+  return filePath;
+}
+
+/**
+ * Load all systems from a custom directory (e.g., simulation folder)
+ */
+export async function loadSystemsFromDir(dir: string): Promise<LoadedSystem[]> {
+  if (!existsSync(dir)) {
+    return [];
+  }
+
+  const files = await readdir(dir);
+  const tsFiles = files.filter(f => f.endsWith(".ts") && !f.startsWith("_"));
+
+  const systems: LoadedSystem[] = [];
+
+  for (const file of tsFiles) {
+    const filePath = path.join(dir, file);
+    const system = await loadSystemFromFile(filePath);
+    if (system) {
+      systems.push(system);
+    }
+  }
+
+  console.log(`[SystemLoader] Loaded ${systems.length} systems from ${dir}`);
+  return systems;
+}
+
+/**
+ * Delete a system file from a custom directory
+ */
+export async function deleteSystemFromDir(dir: string, systemName: string): Promise<boolean> {
+  const { unlink } = await import("fs/promises");
+  const kebabName = systemName.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+  const filePath = path.join(dir, `${kebabName}.ts`);
+  try {
+    await unlink(filePath);
+    console.log(`[SystemLoader] Deleted system ${systemName} from ${dir}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get system source from a custom directory
+ */
+export async function getSystemSourceFromDir(dir: string, systemName: string): Promise<string | null> {
+  const kebabName = systemName.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+  const filePath = path.join(dir, `${kebabName}.ts`);
+  try {
+    return await readFile(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get the path to a system file (supports both default and custom directories)
+ */
+export function getSystemFilePath(systemName: string, customDir?: string): string {
+  const kebabName = systemName.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+  const dir = customDir ?? GENERATED_DIR;
+  return path.join(dir, `${kebabName}.ts`);
+}
+
+/**
+ * Export the default generated directory path
+ */
+export function getDefaultSystemsDir(): string {
+  return GENERATED_DIR;
+}
