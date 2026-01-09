@@ -1,0 +1,9 @@
+{
+  "name": "Forageable",
+  "description": "Resources that can be gathered by agents.",
+  "properties": {
+    "respawnTime": "number",
+    "quantity": "number",
+    "itemType": "string"
+  }
+}

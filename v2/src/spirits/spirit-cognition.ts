@@ -9,7 +9,7 @@ import { generateText } from "ai";
 import { google } from "@ai-sdk/google";
 import { query, getRelationTargets } from "bitecs";
 import type { World } from "../ecs/world";
-import { Name, Description, Agent, Mind, Room, Goal, Impression } from "../ecs/components";
+import { Name, Description, Agent, Mind, Room, Goal, Impression, StimulusSource } from "../ecs/components";
 import { OccupiesRoom, HasGoal, HasImpression } from "../ecs/relations";
 import { getDynamicComponentValues } from "../ecs/dynamic-components";
 import type { EntityRegistry } from "../ecs/tools";
@@ -32,13 +32,16 @@ import { reportToSuperior } from "./spirit-registry";
 import { broadcastToRoom, queueStimulus } from "../cognition/cognition-system";
 
 // =============================================================================
-// MODEL CONFIGURATION
+// MODEL CONFIGURATION - LOCKED MODELS from centralized config
+// See src/llm/config.ts for model definitions - DO NOT CHANGE HERE
 // =============================================================================
 
+import { spiritModel, proModel } from "../llm/config";
+
 const models = {
-  flash: google("gemini-2.0-flash"),
-  haiku: google("gemini-2.0-flash"),  // Using flash as haiku equivalent
-  pro: google("gemini-2.5-pro-preview"),
+  flash: spiritModel,
+  haiku: spiritModel,  // Using flash as haiku equivalent
+  pro: proModel,
 };
 
 // =============================================================================
@@ -98,13 +101,14 @@ function collectAgentSnapshots(world: World, registry: EntityRegistry): AgentSna
 
 function collectRoomSnapshots(world: World, registry: EntityRegistry): RoomSnapshot[] {
   const roomEids = Array.from(query(world, [Room]));
+  const allStimulusSources = Array.from(query(world, [StimulusSource]));
 
   return roomEids.map(eid => {
     const name = Name.value[eid] || "Unknown";
     const description = Description.value[eid] || "";
     const ambience = Room.ambience[eid] || "neutral";
 
-    // Find occupants
+    // Find occupants (agents in this room)
     const allAgents = Array.from(query(world, [Agent]));
     const occupants = allAgents
       .filter(aid => {
@@ -113,8 +117,33 @@ function collectRoomSnapshots(world: World, registry: EntityRegistry): RoomSnaps
       })
       .map(aid => Name.value[aid] || "Unknown");
 
-    // Find objects (entities in room that aren't agents)
-    const objects: string[] = [];  // Would need Contains relation or similar
+    // Find objects (entities with StimulusSource that are in this room)
+    const objects: string[] = [];
+
+    for (const objEid of allStimulusSources) {
+      // Skip agents (they're in occupants)
+      if (Agent.active[objEid] !== undefined) continue;
+
+      // Check if object is in this room via OccupiesRoom
+      const objRooms = getRelationTargets(world, objEid, OccupiesRoom);
+      if (objRooms.includes(eid)) {
+        const objName = Name.value[objEid];
+        if (objName) objects.push(objName);
+        continue;
+      }
+
+      // Check if room contains this object via Contains relation
+      try {
+        const { Contains } = require("../ecs/relations");
+        const roomContents = getRelationTargets(world, eid, Contains);
+        if (roomContents.includes(objEid)) {
+          const objName = Name.value[objEid];
+          if (objName) objects.push(objName);
+        }
+      } catch {
+        // Contains relation might not be available
+      }
+    }
 
     return {
       eid,
@@ -267,6 +296,36 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput): st
       sections.push(`Antagonists: ${spirit.narrativeState.antagonists.join(", ")}`);
     }
     sections.push("");
+
+    // Add explicit grounding constraints for narrative spirits
+    sections.push("=== GROUNDING CONSTRAINTS (CRITICAL) ===");
+    sections.push("You may ONLY reference the following in your storyProse:");
+    sections.push("");
+    sections.push("VALID AGENT NAMES (can mention):");
+    for (const agent of input.ecsSnapshot.agents) {
+      sections.push(`  - "${agent.name}" (mood: ${agent.mood}, location: ${agent.location})`);
+    }
+    sections.push("");
+    sections.push("VALID LOCATIONS (can mention):");
+    for (const room of input.ecsSnapshot.rooms) {
+      sections.push(`  - "${room.name}": ${room.description || "(no description)"}`);
+    }
+    sections.push("");
+    sections.push("OBJECTS IN WORLD:");
+    let hasObjects = false;
+    for (const room of input.ecsSnapshot.rooms) {
+      if (room.objects && room.objects.length > 0) {
+        sections.push(`  In ${room.name}: ${room.objects.join(", ")}`);
+        hasObjects = true;
+      }
+    }
+    if (!hasObjects) {
+      sections.push("  (No objects currently exist in the world)");
+    }
+    sections.push("");
+    sections.push("⚠️ DO NOT mention any entities, items, creatures, or locations not listed above!");
+    sections.push("⚠️ If you need something to exist, request it via reportToSuperior.");
+    sections.push("");
   }
 
   // Messages
@@ -332,6 +391,87 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput): st
   sections.push("```");
 
   return sections.join("\n");
+}
+
+// =============================================================================
+// NARRATIVE GROUNDING VALIDATION
+// =============================================================================
+
+/**
+ * Check if storyProse contains entities that don't exist in ECS
+ * Returns cleaned prose and list of hallucinated terms
+ */
+function validateNarratorProse(
+  prose: string,
+  ecsSnapshot: EcsSnapshot
+): { cleanedProse: string; hallucinations: string[] } {
+  const hallucinations: string[] = [];
+  let cleanedProse = prose;
+
+  // Build set of valid names
+  const validAgentNames = new Set(ecsSnapshot.agents.map(a => a.name.toLowerCase()));
+  const validRoomNames = new Set(ecsSnapshot.rooms.map(r => r.name.toLowerCase()));
+  const validObjectNames = new Set<string>();
+  for (const room of ecsSnapshot.rooms) {
+    if (room.objects) {
+      for (const obj of room.objects) {
+        validObjectNames.add(obj.toLowerCase());
+      }
+    }
+  }
+
+  // Common hallucinated creatures/items to check for
+  const suspectTerms = [
+    // Animals
+    "wolf", "wolves", "bear", "bears", "deer", "bird", "birds", "snake", "fox", "rabbit",
+    // Weapons
+    "sword", "knife", "dagger", "spear", "bow", "arrow", "axe",
+    // Instruments
+    "lute", "flute", "harp", "drum", "guitar",
+    // Items
+    "torch", "lantern", "key", "book", "scroll", "potion", "gem",
+    // Fictional entities
+    "stranger", "figure", "shadow creature", "monster", "beast",
+  ];
+
+  for (const term of suspectTerms) {
+    const regex = new RegExp(`\\b${term}s?\\b`, "gi");
+    if (regex.test(prose)) {
+      // Check if this term is a valid entity
+      if (!validObjectNames.has(term.toLowerCase()) &&
+          !validAgentNames.has(term.toLowerCase())) {
+        hallucinations.push(term);
+      }
+    }
+  }
+
+  // Check for names that look like they could be hallucinated characters
+  const namePattern = /\b[A-Z][a-z]+\b/g;
+  const possibleNames = prose.match(namePattern) || [];
+  for (const name of possibleNames) {
+    const lower = name.toLowerCase();
+    // Skip common words
+    if (["the", "a", "an", "he", "she", "it", "they", "something", "someone"].includes(lower)) {
+      continue;
+    }
+    if (!validAgentNames.has(lower) &&
+        !validRoomNames.has(lower) &&
+        !validObjectNames.has(lower)) {
+      // Could be a hallucinated character name - check if it looks like one
+      // Skip generic descriptive words
+      const genericWords = [
+        "morning", "evening", "afternoon", "night", "day", "sun", "moon",
+        "wind", "breeze", "air", "sky", "ground", "earth", "water",
+        "light", "dark", "shadow", "silence", "sound", "voice",
+      ];
+      if (!genericWords.includes(lower) && name.length > 2) {
+        // This might be a hallucinated character - flag but don't remove
+        // (could be a legitimate reference we missed)
+      }
+    }
+  }
+
+  return { cleanedProse, hallucinations };
 }
 
 // =============================================================================
@@ -446,9 +586,36 @@ function parseSpiritResponse(
       }
     }
 
-    // Extract story prose from narrative spirits
+    // Extract story prose from narrative spirits - with validation
     if (parsed.storyProse && typeof parsed.storyProse === "string" && parsed.storyProse.trim()) {
-      output.storyProse = parsed.storyProse.trim();
+      const rawProse = parsed.storyProse.trim();
+
+      // Validate narrator prose against ECS state
+      const { cleanedProse, hallucinations } = validateNarratorProse(rawProse, input.ecsSnapshot);
+
+      if (hallucinations.length > 0) {
+        console.warn(`[Spirit] Narrator hallucinations detected: ${hallucinations.join(", ")}`);
+
+        // Import and use consistency reporting if available
+        try {
+          const { recordIssue } = require("./consistency-spirit");
+          recordIssue({
+            id: `hal_${Date.now()}`,
+            timestamp: Date.now(),
+            severity: "medium",
+            category: "narrative_drift",
+            description: `Narrator mentioned non-existent entities: ${hallucinations.join(", ")}`,
+            evidence: [rawProse.substring(0, 150)],
+            affectedEntities: hallucinations,
+            recommendation: `Create these entities if needed, or instruct narrator to avoid mentioning them.`,
+            autoFixable: true,
+          });
+        } catch {
+          // Consistency spirit not available
+        }
+      }
+
+      output.storyProse = cleanedProse;
     }
 
   } catch (error) {

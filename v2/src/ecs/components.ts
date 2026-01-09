@@ -215,6 +215,68 @@ export const WorldMap = {
 
 export const Removed = {};
 
+// ============================================================================
+// COMBAT SYSTEM COMPONENTS
+// ============================================================================
+
+/** Health for living entities */
+export const Health = {
+  current: [] as number[],
+  max: [] as number[],
+  regenRate: [] as number[],  // Health per second
+  lastDamage: [] as number[], // Timestamp of last damage
+};
+
+/** Combat stats for entities that can fight */
+export const CombatStats = {
+  attack: [] as number[],
+  defense: [] as number[],
+  speed: [] as number[],      // Determines turn order
+  accuracy: [] as number[],   // 0-1, chance to hit
+};
+
+/** Current combat state */
+export const InCombat = {
+  targetEid: [] as number[],  // Who are we fighting
+  stance: [] as string[],     // "aggressive", "defensive", "fleeing"
+  lastAction: [] as number[], // Timestamp of last combat action
+};
+
+/** Status effects from combat */
+export const StatusEffect = {
+  effectType: [] as string[], // "stunned", "poisoned", "bleeding", etc.
+  duration: [] as number[],   // Remaining duration in ms
+  intensity: [] as number[],  // Effect strength 0-1
+  source: [] as number[],     // Entity that applied this
+};
+
+// ============================================================================
+// INVENTORY SYSTEM COMPONENTS
+// ============================================================================
+
+/** Inventory for entities that can carry items */
+export const Inventory = {
+  items: [] as string[],      // JSON array of item entity IDs
+  maxSlots: [] as number[],   // Maximum number of items
+  weight: [] as number[],     // Current carried weight
+  maxWeight: [] as number[],  // Maximum weight capacity
+};
+
+/** Item properties for entities that can be picked up */
+export const Item = {
+  stackable: [] as boolean[], // Can stack multiple of this
+  quantity: [] as number[],   // Current stack size
+  maxStack: [] as number[],   // Max stack size
+  weight: [] as number[],     // Weight per unit
+  category: [] as string[],   // "weapon", "tool", "food", "resource", etc.
+};
+
+/** Equipment slots for equipped items */
+export const EquipSlot = {
+  slot: [] as string[],       // "mainHand", "offHand", "head", "body", etc.
+  equippedBy: [] as number[], // Entity ID of who has this equipped
+};
+
 export const Needs = {
   hunger: [] as number[],
   energy: [] as number[],
@@ -358,6 +420,16 @@ export const AllComponents = {
   Tile,
   WorldMap,
   Removed,
+  // Combat system components
+  Health,
+  CombatStats,
+  InCombat,
+  StatusEffect,
+  // Inventory system components
+  Inventory,
+  Item,
+  EquipSlot,
+  // Needs and behavior
   Needs,
   Interactable,
   CurrentAction,

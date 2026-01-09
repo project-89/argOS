@@ -1,0 +1,9 @@
+{
+  "name": "Wanderer",
+  "description": "For entities that wander aimlessly within a room or on a grid.",
+  "properties": {
+    "lastMove": "number",
+    "radius": "number",
+    "interval": "number"
+  }
+}

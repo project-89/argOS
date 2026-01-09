@@ -234,7 +234,7 @@ export function createMovementSystem(): SystemDefinition {
     name: "Movement",
     description: "Moves agents towards their targets on the grid",
     pseudocode: "For each agent with a target, move one step closer",
-    frequency: 2000, // Move every 2 seconds
+    frequency: 500, // Move every 500ms for smoother movement
     active: true,
     lastRun: 0,
     compiledFn: (world: World, ctx: SystemContext) => {

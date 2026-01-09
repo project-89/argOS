@@ -1,5 +1,4 @@
 import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemRegistry, SystemContext, CognitiveContext, GoalData, MemoryData, BeliefData, ThoughtData, ImpressionData } from "../ecs/dynamic-systems";
 import { AllComponents, Goal, Memory, Belief, Thought, Impression } from "../ecs/components";
@@ -9,8 +8,10 @@ import { createAIContext } from "../ai/ai-context";
 import { moveEntity, isWalkable, getTile } from "../world/ascii-world";
 import { query as q } from "bitecs";
 import { WorldMap as WorldMapComponent } from "../ecs/components";
+// LOCKED MODELS from centralized config - DO NOT CHANGE
+import { systemBakerModel } from "../llm/config";
 
-const model = google("gemini-2.5-flash");
+const model = systemBakerModel;
 
 export interface SystemBakeResult {
   success: boolean;

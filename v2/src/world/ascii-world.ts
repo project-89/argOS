@@ -118,12 +118,20 @@ export function moveEntity(world: World, mapEid: number, eid: number, dx: number
 
 export function renderAsciiWorld(world: World): AsciiWorldState | null {
   const maps = Array.from(query(world, [WorldMap]));
-  if (maps.length === 0) return null;
-  
+  if (maps.length === 0) {
+    return null;
+  }
+
   const mapEid = maps[0];
   const width = WorldMap.width[mapEid];
   const height = WorldMap.height[mapEid];
-  const tileData = WorldMap.tiles[mapEid].split('\n');
+  const tilesRaw = WorldMap.tiles[mapEid];
+
+  if (!tilesRaw || !width || !height) {
+    return null;
+  }
+
+  const tileData = tilesRaw.split('\n');
   
   const cells: AsciiCell[][] = [];
   for (let y = 0; y < height; y++) {
@@ -140,16 +148,54 @@ export function renderAsciiWorld(world: World): AsciiWorldState | null {
   }
   
   const entities: AsciiWorldState['entities'] = [];
-  const gridEntities = Array.from(query(world, [GridPosition, Sprite]));
-  
+
+  // Get all entities with GridPosition (not just those with Sprite)
+  const gridEntities = Array.from(query(world, [GridPosition]));
+
   for (const eid of gridEntities) {
     const x = GridPosition.x[eid];
     const y = GridPosition.y[eid];
-    const char = Sprite.char[eid] || '@';
-    const color = Sprite.color[eid] || '#fff';
+
+    // Skip if position is invalid
+    if (x === undefined || y === undefined) continue;
+
+    // Get sprite info, using defaults based on entity type
+    let char = Sprite.char[eid];
+    let color = Sprite.color[eid];
+
+    // If no sprite, determine default based on entity type
+    if (!char) {
+      const name = Name.value[eid] || '';
+      const isAgent = Agent.active?.[eid] !== undefined;
+
+      if (isAgent) {
+        char = '@';
+        color = color || '#f472b6'; // Pink for agents
+      } else if (name.toLowerCase().includes('tree') || name.toLowerCase().includes('oak') || name.toLowerCase().includes('pine')) {
+        char = 'T';
+        color = color || '#22c55e'; // Green for trees
+      } else if (name.toLowerCase().includes('bush') || name.toLowerCase().includes('berry')) {
+        char = '*';
+        color = color || '#84cc16'; // Lime for bushes
+      } else if (name.toLowerCase().includes('rabbit') || name.toLowerCase().includes('deer') || name.toLowerCase().includes('animal')) {
+        char = 'a';
+        color = color || '#fbbf24'; // Yellow for animals
+      } else if (name.toLowerCase().includes('chest') || name.toLowerCase().includes('treasure')) {
+        char = '$';
+        color = color || '#eab308'; // Gold for treasure
+      } else if (name.toLowerCase().includes('fire') || name.toLowerCase().includes('campfire')) {
+        char = '^';
+        color = color || '#ef4444'; // Red for fire
+      } else {
+        char = 'o';
+        color = color || '#64748b'; // Gray for other objects
+      }
+    }
+
+    color = color || '#fff';
     const facing = GridPosition.facing[eid] || 'south';
     const name = Name.value[eid] || `Entity ${eid}`;
-    
+
     if (x >= 0 && x < width && y >= 0 && y < height) {
       cells[y][x] = {
         char,
@@ -158,10 +204,10 @@ export function renderAsciiWorld(world: World): AsciiWorldState | null {
         entityId: eid,
       };
     }
-    
+
     entities.push({ id: eid, name, x, y, char, color, facing });
   }
-  
+
   return { width, height, cells, entities };
 }
 

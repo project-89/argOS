@@ -20,6 +20,7 @@ import {
 } from "./spirit-registry";
 import { runSpiritCognition, getSpiritSummary as getCognitionSummary } from "./spirit-cognition";
 import { NarratorDefinition } from "./narrator-spirit";
+import { ConsistencySpiritDefinition } from "./consistency-spirit";
 
 // =============================================================================
 // SPIRIT SYSTEM STATE
@@ -306,6 +307,13 @@ export function createStandardHierarchy(godAgentEid: number): void {
   const existingNarrator = systemState.registry.byName.get("The Narrator");
   if (!existingNarrator) {
     createSpirit(systemState.registry, NarratorDefinition);
+  }
+
+  // Create Consistency Spirit (The Arbiter)
+  const existingArbiter = systemState.registry.byName.get("The Arbiter");
+  if (!existingArbiter) {
+    createSpirit(systemState.registry, ConsistencySpiritDefinition);
+    console.log("[SpiritSystem] Consistency spirit (The Arbiter) created");
   }
 
   // Future: Add other archangels here

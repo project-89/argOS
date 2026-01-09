@@ -972,12 +972,21 @@ src/
 │   ├── spirit-cognition.ts # Spirit LLM processing loop
 │   ├── spirit-system.ts   # ECS ticker for spirits
 │   ├── narrator-spirit.ts # The Narrator archangel definition
+│   ├── consistency-spirit.ts # The Arbiter - validates & routes reports ✅ NEW
+│   ├── agent-daemon.ts    # Personal agent daemons (protection + challenge) ✅ NEW
 │   └── story-templates.ts # Story arc templates (3-act, mystery, etc.)
+├── introspection/
+│   └── introspection.ts   # Dynamic registries & event buffer ✅ NEW
+├── llm/
+│   └── config.ts          # Centralized LLM model config (LOCKED) ✅ NEW
 ├── systems/
 │   └── ambient-stimulus-system.ts # Periodic stimulus emission
 └── behavioral-tests/
     ├── challenge-01-economy.ts     # Economy simulation test
-    └── challenge-02-predator-prey.ts # Ecosystem test
+    ├── challenge-02-predator-prey.ts # Ecosystem test
+    ├── 03-introspection-stress.ts  # Introspection system stress test ✅ NEW
+    ├── 04-spirit-godai-integration.ts # Spirit → GodAI integration test ✅ NEW
+    └── 05-daemon-routing-integration.ts # Daemon & routing test ✅ NEW
 ```
 
 ---
@@ -1159,42 +1168,144 @@ interface WorldStateSummary {
 The Spirit System provides a celestial hierarchy of AI agents that observe and steer the simulation,
 inspired by emanationist/Kabbalistic cosmology. Spirits report up to GodAI while managing their domains.
 
-### 13.1 Hierarchy Structure
+### 13.1 Hierarchy Structure (Updated)
 
 ```
-                    ┌─────────────────┐
-                    │     GODAI       │  Supreme Being
-                    │  (The Creator)  │  Designs world, receives reports
-                    └────────┬────────┘
-                             │ commands / receives reports
-            ┌────────────────┼────────────────┐
-            │                │                │
-    ┌───────▼───────┐ ┌──────▼──────┐ ┌───────▼───────┐
-    │  NARRATOR     │ │ SOCIOLOGIST │ │   ECOLOGIST   │  Archangels
-    │  (narrative)  │ │  (social)   │ │  (ecology)    │  Domain Managers
-    └───────┬───────┘ └──────┬──────┘ └───────┬───────┘
-            │                │                │
-    ┌───────▼───────┐ ┌──────▼──────┐ ┌───────▼───────┐
-    │ Scene Angel   │ │ Faction     │ │ Weather       │  Angels
-    │ (Act 2 focus) │ │ Manager     │ │ Spirit        │  Local Managers
-    └───────────────┘ └─────────────┘ └───────────────┘
+                         ┌─────────────────┐
+                         │     GODAI       │  Supreme Being
+                         │  (The Creator)  │  Designs world, creates spirits
+                         └────────┬────────┘
+                                  │ commands / receives growth recommendations
+                    ┌─────────────┴─────────────┐
+                    │                           │
+         ┌──────────▼──────────┐       ┌────────▼────────┐
+         │    THE ARBITER      │       │    NARRATOR     │  Archangels
+         │   (Consistency)     │       │   (Narrative)   │  Domain Managers
+         │  Routes reports,    │◄──────│   Story pacing  │
+         │  validates actions  │       │   Plot threads  │
+         └──────────┬──────────┘       └─────────────────┘
+                    │
+                    │ receives daemon reports
+                    │
+    ┌───────────────┼───────────────┬───────────────┐
+    │               │               │               │
+┌───▼────┐    ┌────▼────┐    ┌─────▼────┐    ┌────▼────┐
+│ Alice  │    │  Bob    │    │ Charlie  │    │ Diana   │  Agent Daemons
+│ Daemon │    │ Daemon  │    │ Daemon   │    │ Daemon  │  Personal Guardians
+└────────┘    └─────────┘    └──────────┘    └─────────┘  + Challengers
+    │               │               │               │
+    ▼               ▼               ▼               ▼
+ (watch)        (watch)         (watch)         (watch)
+    │               │               │               │
+┌───▼────┐    ┌────▼────┐    ┌─────▼────┐    ┌────▼────┐
+│ Alice  │    │  Bob    │    │ Charlie  │    │ Diana   │  NPC Agents
+│  NPC   │    │  NPC    │    │   NPC    │    │  NPC    │  (in simulation)
+└────────┘    └─────────┘    └──────────┘    └─────────┘
 ```
+
+**Key Features of the Updated Hierarchy:**
+1. **GodAI** receives growth recommendations (not just concerns) for world expansion
+2. **The Arbiter** (ConsistencySpirit) is the central hub for routing all daemon reports
+3. **Agent Daemons** serve dual purpose: protection AND growth challenges
+4. **The Narrator** receives narrative-domain issues from The Arbiter
+5. Future spirits (Sociologist, Ecologist, etc.) will receive their domain-specific issues
 
 ### 13.2 Spirit Types
 
 | Rank | Role | Capabilities |
 |------|------|--------------|
-| **Archangel** | Domain manager | Inject events, modify mood, send reports |
+| **Archangel** | Domain manager | Inject events, modify mood, send reports, route reports |
 | **Angel** | Local/entity manager | Inject events to specific area, reports |
-| **Daemon** | Task-specific | Observe only, report to superior |
+| **Daemon** | Task-specific | Observe, whisper to agents, report to superior |
+| **Agent Daemon** | Personal guardian | Watch individual agent, whisper guidance AND challenge |
+
+### 13.2.1 Agent Daemons (Personal Guardian Spirits) ✅ NEW
+
+Each agent in the simulation has a personal daemon that serves a **dual purpose**:
+
+**Protection Mode (Guidance Whispers):**
+- Detects concerns: stuck agents, low arousal, high arousal, danger, goal drift
+- Sends gentle guidance via cognitive stimuli ("inner voice")
+- Reports urgent concerns to higher spirits (The Arbiter)
+
+**Growth Mode (Challenge Whispers):**
+- Detects growth opportunities: too comfortable, ready for challenge, stagnating, needs conflict
+- Sends provocative challenges via cognitive stimuli to push growth
+- Reports growth opportunities to GodAI for world-level challenge creation
+
+```typescript
+// Daemon observes and detects BOTH concerns AND growth opportunities
+interface DaemonObservation {
+  agentName: string;
+  currentState: AgentStateSnapshot;
+  concerns: DaemonConcern[];           // Protection mode
+  growthOpportunities: GrowthOpportunity[];  // Challenge mode
+  achievements: string[];
+}
+
+// Growth opportunity types
+type GrowthOpportunity = {
+  type: "too_comfortable" | "ready_for_challenge" | "stagnating" |
+        "needs_conflict" | "breakthrough_possible" | "skill_plateau" |
+        "relationship_test";
+  description: string;
+  suggestedChallenge: string;
+  urgency: "low" | "medium" | "high";
+}
+```
+
+**Challenge Whisper Types:**
+| Type | Purpose | Example |
+|------|---------|---------|
+| `provocation` | Plant doubt, stir jealousy | "Are you truly content with this?" |
+| `doubt` | Question abilities | "Is this really the best you can do?" |
+| `ambition` | Whisper of greater things | "You were meant for greater things" |
+| `curiosity` | Hint at mysteries | "What lies beyond?" |
+| `restlessness` | Create need to change | "Something is wrong. You need to move." |
+
+### 13.2.2 The Arbiter (ConsistencySpirit) ✅ NEW
+
+**The Arbiter** is a special archangel responsible for:
+
+1. **Dynamic Introspection**: Maintains awareness of ALL actions, components, systems via dynamic registries
+2. **Validation**: Validates agent actions and narrative events against world state
+3. **Report Routing**: Routes daemon reports and issues to appropriate spirits:
+   - **Narrative issues** → The Narrator (narrative domain)
+   - **Mechanical issues** → GodAI (for system fixes/additions)
+   - **Social issues** → Sociologist (when implemented)
+
+**Issue Categories:**
+| Category | Examples | Routed To |
+|----------|----------|-----------|
+| `narrative` | "Dragon mentioned but not established", plot holes | Narrator |
+| `mechanical` | Impossible actions, missing systems, broken rules | GodAI |
+| `social` | Relationship inconsistencies, faction issues | Sociologist |
+| `environmental` | Weather anomalies, resource inconsistencies | Ecologist |
+
+**Report Routing Flow:**
+```
+Agent Daemons ─────┐
+                   │
+                   ▼
+          ┌──────────────┐
+          │  THE ARBITER │ ← Receives all daemon reports
+          │  (Consistency)│
+          └──────┬───────┘
+                 │
+    ┌────────────┼────────────┐
+    ▼            ▼            ▼
+Narrator       GodAI     Sociologist
+(narrative)  (mechanical)  (social)
+```
 
 ### 13.3 Spirit Domains
 
+- **guardian**: The Arbiter - validates consistency, routes reports ✅ NEW
 - **narrative**: Plot threads, dramatic tension, pacing, story beats
 - **social**: Relationships, factions, conflicts, social dynamics
 - **ecology**: Environment, weather, resources, space
 - **economy**: Trade, markets, resource flows
-- **guardian**: Watches over specific NPCs
+- **watcher**: Watches over specific NPCs (via Agent Daemons) ✅ NEW
 - **locale**: Manages specific locations
 
 ### 13.4 Message Protocol (DivineMessage)
@@ -1339,6 +1450,255 @@ markStoryBeat({ beatId: "detective_involved" });
 
 // Get intervention suggestions when story stagnates
 const interventions = getTemplateInterventions({ includeAllSources: true });
+```
+
+---
+
+## 14. Dynamic Spirit Creation (Design) 🔮 PROPOSED
+
+This section explores how GodAI could dynamically create new spirits to manage emerging complexity.
+
+### 14.1 Vision: Self-Expanding Hierarchy
+
+As the simulation grows in complexity, GodAI should be able to:
+
+1. **Create System Watchers**: Spirits that observe specific baked systems
+   - WeatherSpirit watching a weather system
+   - PhysicsSpirit monitoring physics simulation
+   - EconomySpirit tracking market dynamics
+
+2. **Create Higher Angels**: Spirits that can themselves architect new subsystems
+   - CraftingArchitect that designs and proposes crafting systems
+   - QuestDesigner that creates quest structures and objectives
+   - DungeonMaster that builds challenge areas
+
+3. **Create Domain Coordinators**: Meta-spirits that manage groups of spirits
+   - EnvironmentCoordinator managing Weather + Physics + Ecology spirits
+   - SocialCoordinator managing Faction + Relationship + Politics spirits
+
+### 14.2 Spirit Factory Design
+
+```typescript
+// GodAI tool for dynamic spirit creation
+interface CreateSpiritParams {
+  name: string;
+  type: "watcher" | "manager" | "architect" | "coordinator";
+  domain: SpiritDomain;
+  rank: "archangel" | "angel" | "daemon";
+  superior?: number;  // Entity ID of superior spirit
+
+  // For watchers - what to observe
+  watchConfig?: {
+    targetSystems?: string[];      // System names to watch
+    targetEntities?: number[];     // Specific entities
+    targetComponents?: string[];   // Component types
+    watchInterval?: number;        // How often to observe
+  };
+
+  // For architects - what they can create
+  architectConfig?: {
+    canProposeSystems?: boolean;   // Can suggest new systems
+    canProposeEntities?: boolean;  // Can suggest new entities
+    canProposeRules?: boolean;     // Can suggest new rules
+    proposalApproval?: "auto" | "godai" | "user";  // Who approves
+  };
+
+  // For coordinators - who they manage
+  coordinatorConfig?: {
+    subordinates?: number[];       // Spirit entity IDs
+    canCreateSubordinates?: boolean;
+  };
+}
+```
+
+### 14.3 Example: Weather System Watcher
+
+```
+GodAI creates a weather system via bakeNewSystem()
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ GodAI: "Create a spirit to watch the weather system"       │
+│                                                             │
+│ createSpirit({                                              │
+│   name: "Zephyros",                                         │
+│   type: "watcher",                                          │
+│   domain: "ecology",                                        │
+│   rank: "angel",                                            │
+│   superior: arbiterEid,                                     │
+│   watchConfig: {                                            │
+│     targetSystems: ["WeatherSystem"],                       │
+│     targetComponents: ["Weather", "Temperature"],           │
+│     watchInterval: 30000,  // Every 30 seconds              │
+│   }                                                         │
+│ });                                                         │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Zephyros (Weather Watcher) observes:                        │
+│ - Weather patterns becoming stale                          │
+│ - Temperature not affecting NPCs                           │
+│ - Missing seasonal transitions                             │
+│                                                             │
+│ Reports to Arbiter:                                         │
+│ "Weather system functioning but lacks agent interaction.   │
+│  Recommend: Add temperature effects on agent mood."        │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Arbiter routes to GodAI:                                   │
+│ "Mechanical enhancement needed: Weather → Agent effects"   │
+│                                                             │
+│ GodAI decides to bake TemperatureEffectSystem              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 14.4 Example: Quest Architect Angel
+
+```typescript
+// GodAI creates a quest architect spirit
+createSpirit({
+  name: "The Questmaster",
+  type: "architect",
+  domain: "narrative",
+  rank: "angel",
+  superior: narratorEid,  // Reports to The Narrator
+  architectConfig: {
+    canProposeSystems: true,
+    canProposeEntities: true,
+    canProposeRules: true,
+    proposalApproval: "godai",  // GodAI must approve proposals
+  }
+});
+```
+
+**Questmaster's Cognition Loop:**
+```
+1. OBSERVE: Current narrative state, agent goals, world state
+2. ANALYZE: What quests would enhance the story?
+3. PROPOSE: Submit quest design to GodAI
+   - "Propose: Create 'The Missing Merchant' quest"
+   - "Requires: QuestTracker component, RewardSystem"
+   - "Entities: Quest giver NPC, clue objects, reward chest"
+4. AWAIT: GodAI approval
+5. EXECUTE: If approved, create quest infrastructure
+```
+
+### 14.5 Hierarchical Self-Organization
+
+The ultimate vision is a self-organizing hierarchy:
+
+```
+                    ┌───────────────┐
+                    │    GODAI      │
+                    │ (Supreme)     │
+                    └───────┬───────┘
+                            │ creates & receives proposals
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+┌───────▼──────┐    ┌───────▼──────┐    ┌───────▼──────┐
+│  ARBITER     │    │  NARRATOR    │    │ ENVIRONMENT  │
+│ (Consistency)│    │ (Narrative)  │    │ COORDINATOR  │
+└───────┬──────┘    └───────┬──────┘    └───────┬──────┘
+        │                   │                   │
+        │           ┌───────┴──────┐    ┌───────┴──────┐
+        │           │              │    │              │
+        │    ┌──────▼─────┐ ┌──────▼─────┐ ┌──────▼─────┐
+        │    │ Quest      │ │ Scene      │ │ Weather    │
+        │    │ Architect  │ │ Director   │ │ Watcher    │
+        │    └────────────┘ └────────────┘ └──────┬─────┘
+        │                                         │
+┌───────┴───────────────────────────┐      ┌──────▼─────┐
+│     AGENT DAEMONS                 │      │ Seasons    │
+│ (Alice, Bob, Charlie, Diana...)  │      │ Sub-Spirit │
+└───────────────────────────────────┘      └────────────┘
+```
+
+### 14.6 Benefits
+
+1. **Scalability**: Complexity is managed by delegation, not centralization
+2. **Domain Expertise**: Spirits specialize in their domains
+3. **Emergent Organization**: Hierarchy grows organically based on needs
+4. **Reduced GodAI Load**: Lower spirits handle routine observation/steering
+5. **Richer World**: More eyes watching = more opportunities discovered
+
+### 14.7 Implementation Roadmap
+
+| Phase | Feature | Priority |
+|-------|---------|----------|
+| 1 | `createSystemWatcher` tool | High |
+| 2 | System Watcher cognition loop | High |
+| 3 | `createArchitectSpirit` tool | Medium |
+| 4 | Proposal/approval workflow | Medium |
+| 5 | `createCoordinatorSpirit` tool | Low |
+| 6 | Self-organization rules | Low |
+
+---
+
+## 15. Dynamic Introspection System ✅ NEW
+
+The introspection system provides real-time awareness of all actions, components, and systems.
+
+### 15.1 Registries
+
+```typescript
+// Action Registry - ALL actions available in the simulation
+const ACTION_REGISTRY: Record<string, ActionMetadata> = {
+  "speak": { domain: "social", canFail: false },
+  "move": { domain: "navigation", requiresTarget: true },
+  "attack": { domain: "combat", canFail: true, dangerous: true },
+  "craft": { domain: "production", requiresTarget: true, producesItem: true },
+  // ... 15 actions total, dynamically populated
+};
+
+// Component Registry - ALL components in the simulation
+const COMPONENT_REGISTRY: ComponentMetadata[] = [
+  { name: "Agent", category: "identity" },
+  { name: "Mind", category: "cognition" },
+  { name: "Health", category: "stats" },
+  { name: "Inventory", category: "equipment" },
+  // ... 30 components total, dynamically populated
+];
+```
+
+### 15.2 Rolling Event Buffer
+
+Tracks recent events for pattern detection:
+
+```typescript
+interface RollingEventBuffer {
+  events: RecordedEvent[];
+  maxSize: number;
+  addEvent(type: string, data: any, source: string): void;
+  detectPatterns(): DetectedPattern[];
+}
+
+// Detected patterns inform spirit decisions
+interface DetectedPattern {
+  type: string;  // "repetition", "conflict", "stagnation", "emergence"
+  description: string;
+  frequency: number;
+  relevantEvents: RecordedEvent[];
+}
+```
+
+### 15.3 Context Generation
+
+Spirits can request full system context:
+
+```typescript
+function getIntrospectionContext(world: World): IntrospectionContext {
+  return {
+    entities: getEntitySnapshot(world),
+    components: COMPONENT_REGISTRY,
+    actions: ACTION_REGISTRY,
+    systems: getActiveSystems(),
+    recentEvents: getRecentEvents(100),
+    detectedPatterns: detectPatterns(),
+  };
+}
 ```
 
 ---

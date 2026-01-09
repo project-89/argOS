@@ -267,21 +267,32 @@
 
     .grid-narrative-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1.2fr 1fr;
       gap: 0.75rem;
       flex: 2;
-      min-height: 300px;
+      min-height: 350px;
+    }
+
+    .grid-narrative-row > .panel:first-child {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .grid-narrative-row > .panel:first-child > .panel-content {
+      flex: 1;
+      min-height: 0;
     }
 
     .ascii-grid {
       font-family: 'Courier New', monospace;
-      font-size: 12px;
-      line-height: 1.2;
       white-space: pre;
       background: #0a0a0f;
       padding: 0.5rem;
       overflow: auto;
       color: #888;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
     }
 
     .ascii-grid .agent { color: #f472b6; font-weight: bold; }
@@ -289,6 +300,52 @@
     .ascii-grid .animal { color: #fbbf24; }
     .ascii-grid .item { color: #60a5fa; }
     .ascii-grid .room { color: #444; }
+
+    .ascii-grid .grid-row {
+      display: block;
+      line-height: 1.5;
+    }
+
+    .ascii-grid .grid-cell {
+      display: inline-block;
+      text-align: center;
+    }
+
+    #world-grid {
+      min-height: 250px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #world-grid .ascii-grid {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .ascii-grid .entity-cell:hover {
+      outline: 1px solid var(--accent);
+      background: rgba(139, 92, 246, 0.3) !important;
+    }
+
+    .grid-legend {
+      margin-top: 0.5rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.75rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
 
     .world-sidebar {
       display: flex;
@@ -1049,21 +1106,66 @@
         return;
       }
 
-      // The server sends pre-rendered ASCII, but we can colorize it
-      const colorizedGrid = colorizeAsciiGrid(state.asciiWorld);
-      container.innerHTML = colorizedGrid;
+      const { cells, width, height, entities } = state.asciiWorld;
+      if (!cells || !cells.length) {
+        container.textContent = 'Grid data unavailable';
+        return;
+      }
+
+      // Get container dimensions for dynamic sizing
+      const containerRect = container.getBoundingClientRect();
+      const availableWidth = containerRect.width - 16; // padding
+      const availableHeight = containerRect.height - 60; // padding + legend space
+
+      // Calculate optimal cell size to fill the container
+      // Each cell needs width for the character and height for line-height
+      const cellWidth = Math.floor(availableWidth / width);
+      const cellHeight = Math.floor(availableHeight / height);
+
+      // Use the smaller dimension to maintain square-ish cells, with min/max limits
+      // Allow larger cells (up to 32px) when there's space
+      const cellSize = Math.max(12, Math.min(32, Math.min(cellWidth, cellHeight)));
+      const fontSize = Math.max(10, Math.floor(cellSize * 0.8));
+
+      // Render the grid from cells array
+      let html = `<div class="ascii-grid" style="font-size:${fontSize}px;">`;
+      for (let y = 0; y < cells.length; y++) {
+        const row = cells[y];
+        html += `<div class="grid-row" style="height:${cellSize}px;line-height:${cellSize}px;">`;
+        for (let x = 0; x < row.length; x++) {
+          const cell = row[x];
+          const char = cell.char || '.';
+          const color = cell.color || '#444';
+          const bgColor = cell.bgColor || '#111';
+          const entityId = cell.entityId;
+
+          // Add click handler for entity cells
+          const clickHandler = entityId ? `onclick="selectEntity(${entityId})"` : '';
+          const hoverClass = entityId ? 'entity-cell' : '';
+          const cursorStyle = entityId ? 'cursor:pointer;' : '';
+
+          html += `<span class="grid-cell ${hoverClass}" style="color:${color};background:${bgColor};width:${cellSize}px;${cursorStyle}" ${clickHandler}>${escapeHtml(char)}</span>`;
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+
+      // Add entity legend
+      if (entities && entities.length > 0) {
+        html += '<div class="grid-legend">';
+        for (const entity of entities) {
+          html += `<span class="legend-item" style="color:${entity.color};">${entity.char} ${entity.name}</span> `;
+        }
+        html += '</div>';
+      }
+
+      container.innerHTML = html;
     }
 
-    function colorizeAsciiGrid(ascii) {
-      if (!ascii) return '';
-
-      // Apply colors based on character types
-      return ascii
-        .replace(/(@)/g, '<span class="agent">$1</span>')  // Agents
-        .replace(/(T)/g, '<span class="tree">$1</span>')   // Trees
-        .replace(/([YBD])/g, '<span class="animal">$1</span>') // Animals (Young deer, Buck, Deer)
-        .replace(/([*+])/g, '<span class="item">$1</span>') // Items
-        .replace(/([#|_\-])/g, '<span class="room">$1</span>'); // Room borders
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
     }
 
     // =============================================================================
@@ -1079,6 +1181,8 @@
 
       const rooms = state.entities.filter(e => e.type === 'room');
       const agents = state.entities.filter(e => e.type === 'agent');
+      const objects = state.entities.filter(e => e.type === 'object');
+      const stimulusSources = state.entities.filter(e => e.type === 'stimulus_source');
 
       let html = '';
 
@@ -1099,7 +1203,56 @@
                  onclick="selectEntity(${agent.id})">
               <div class="entity-type agent">Agent</div>
               <div class="entity-name">${agent.name}</div>
-              <div style="font-size: 0.7rem; color: var(--text-dim);">${agent.role || ''}</div>
+              <div style="font-size: 0.7rem; color: var(--text-dim);">${agent.description?.slice(0, 60) || agent.role || ''}</div>
+            </div>
+          `;
+        }
+
+        // Show objects in this room
+        const roomObjects = objects.filter(o => o.room === room.name);
+        for (const obj of roomObjects) {
+          html += `
+            <div class="entity-card ${obj.id === selectedEntityId ? 'selected' : ''}"
+                 style="margin-left: 0.75rem;"
+                 onclick="selectEntity(${obj.id})">
+              <div class="entity-type" style="background: #854d0e; color: #fef08a;">Object</div>
+              <div class="entity-name">${obj.name}</div>
+              <div style="font-size: 0.7rem; color: var(--text-dim);">${obj.components?.ObjectMeta?.state || ''}</div>
+            </div>
+          `;
+        }
+
+        // Show stimulus sources in this room
+        const roomStimuli = stimulusSources.filter(s => s.room === room.name);
+        for (const stimulus of roomStimuli) {
+          html += `
+            <div class="entity-card ${stimulus.id === selectedEntityId ? 'selected' : ''}"
+                 style="margin-left: 0.75rem;"
+                 onclick="selectEntity(${stimulus.id})">
+              <div class="entity-type" style="background: #4c1d95; color: #c4b5fd;">Stimulus</div>
+              <div class="entity-name">${stimulus.name}</div>
+            </div>
+          `;
+        }
+      }
+
+      // Show objects not in any room (or with grid positions)
+      const unplacedObjects = objects.filter(o => !o.room);
+      if (unplacedObjects.length > 0) {
+        html += `
+          <div class="entity-card" style="opacity: 0.7; pointer-events: none;">
+            <div class="entity-type" style="background: #374151;">World Objects</div>
+          </div>
+        `;
+        for (const obj of unplacedObjects) {
+          const posInfo = obj.position ? ` (${obj.position.x}, ${obj.position.y})` : '';
+          html += `
+            <div class="entity-card ${obj.id === selectedEntityId ? 'selected' : ''}"
+                 style="margin-left: 0.75rem;"
+                 onclick="selectEntity(${obj.id})">
+              <div class="entity-type" style="background: #854d0e; color: #fef08a;">Object</div>
+              <div class="entity-name">${obj.name}${posInfo}</div>
+              <div style="font-size: 0.7rem; color: var(--text-dim);">${obj.components?.ObjectMeta?.state || obj.components?.ObjectMeta?.type || ''}</div>
             </div>
           `;
         }
@@ -1518,7 +1671,35 @@
     // EVENT FEED
     // =============================================================================
 
+    // Track recent events for deduplication (broadcasts show once, not per-agent)
+    const recentEventHashes = new Set();
+    const MAX_RECENT_EVENTS = 50;
+
+    function hashEvent(event) {
+      // Create a hash that ignores per-agent differences for broadcast events
+      const data = event.data || {};
+      // For broadcasts, use content+source+type as hash (ignores targetName)
+      if (data.content && data.source) {
+        return `${event.type}|${data.type || ''}|${data.content}|${data.source}`;
+      }
+      // For other events, use type + stringified data
+      return `${event.type}|${JSON.stringify(data).slice(0, 100)}`;
+    }
+
     function addEvent(event) {
+      // Deduplicate broadcast events (which are sent per-agent)
+      const hash = hashEvent(event);
+      if (recentEventHashes.has(hash)) {
+        return; // Skip duplicate
+      }
+      recentEventHashes.add(hash);
+
+      // Keep the set from growing too large
+      if (recentEventHashes.size > MAX_RECENT_EVENTS) {
+        const firstKey = recentEventHashes.values().next().value;
+        recentEventHashes.delete(firstKey);
+      }
+
       const container = document.getElementById('event-log');
       const item = document.createElement('div');
       item.className = 'event-item';

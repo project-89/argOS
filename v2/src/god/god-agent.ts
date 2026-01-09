@@ -99,20 +99,16 @@ import {
   loadSystemsFromDir,
 } from "../systems/system-loader";
 
-// Multi-model architecture:
-// - Planner (Pro): Deep thinking for design and review
-// - Executor (Flash): Fast implementation
-const plannerModel = google("gemini-3-pro-preview");
-const executorModel = google("gemini-3-flash-preview");
+// Multi-model architecture - LOCKED MODELS from centralized config
+// See src/llm/config.ts for model definitions - DO NOT CHANGE HERE
+import { plannerModel, executorModel, THINKING_LEVELS } from "../llm/config";
 // Keep backward compatibility
 const model = executorModel;
 
-// Thinking levels for Gemini 3 models
-// Pro supports: 'low', 'high'
-// Flash supports: 'minimal', 'low', 'medium', 'high'
-const PLANNER_THINKING_LEVEL = 'high' as const;  // Main design phase
-const REVIEW_THINKING_LEVEL = 'low' as const;    // Review phase
-const EXECUTOR_THINKING_LEVEL = 'medium' as const; // System code generation
+// Thinking levels imported from centralized config
+const PLANNER_THINKING_LEVEL = THINKING_LEVELS.PLANNER;
+const REVIEW_THINKING_LEVEL = THINKING_LEVELS.REVIEW;
+const EXECUTOR_THINKING_LEVEL = THINKING_LEVELS.EXECUTOR;
 
 // Environment variable to control review phase (default: enabled)
 const ENABLE_DESIGN_REVIEW = process.env.SKIP_DESIGN_REVIEW !== 'true';

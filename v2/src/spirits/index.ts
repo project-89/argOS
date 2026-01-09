@@ -97,6 +97,24 @@ export {
 // Spirit Definitions
 export { NarratorDefinition } from "./narrator-spirit";
 export {
+  ConsistencySpiritDefinition,
+  VALID_AGENT_ACTIONS,
+  isValidAction,
+  suggestValidAction,
+  entityExistsByName,
+  validateAgentAction,
+  validateNarrativeEvent,
+  checkNarrativeMechanics,
+  generateConsistencyReport,
+  recordIssue,
+  getAndClearAccumulatedIssues,
+  getAccumulatedIssues,
+  hasRecentIssue,
+  type ConsistencyIssue,
+  type ConsistencyCategory,
+  type ValidAction,
+} from "./consistency-spirit";
+export {
   calculateNarrativeUrgency,
   identifyPotentialPlotThreads,
   detectStagnation,
