@@ -10,6 +10,11 @@ import {
 import type { World } from "./world";
 import { Name, Description, Agent, Mind, Room, PhysicalObject, StimulusSource, GodAgent, Position } from "./components";
 import { OccupiesRoom, BelongsTo } from "./relations";
+import {
+  getDynamicComponent,
+  setDynamicComponentValue,
+  createDynamicComponent,
+} from "./dynamic-components";
 
 let AgentPrefab: number;
 let RoomPrefab: number;
@@ -146,11 +151,35 @@ export function createAgentEntity(
   Mind.focus[eid] = "";
   Mind.lastUpdate[eid] = Date.now();
 
+  // Set default agent traits for affordance system
+  // Agents are talkable, observable, and attackable by default
+  ensureObjectMetaComponent();
+  setDynamicComponentValue("ObjectMeta", eid, "type", "agent");
+  setDynamicComponentValue("ObjectMeta", eid, "state", "active");
+  setDynamicComponentValue("ObjectMeta", eid, "traits", "talkable,examinable,attackable,alive");
+
   if (config.roomId !== undefined) {
     addComponent(world, eid, OccupiesRoom(config.roomId));
   }
 
   return eid;
+}
+
+/**
+ * Ensure ObjectMeta dynamic component exists
+ */
+function ensureObjectMetaComponent(): void {
+  if (!getDynamicComponent("ObjectMeta")) {
+    createDynamicComponent({
+      name: "ObjectMeta",
+      description: "Metadata for object affordance system",
+      properties: {
+        type: "string",
+        state: "string",
+        traits: "string",
+      },
+    });
+  }
 }
 
 let roomPositionCounter = 0;
@@ -197,6 +226,7 @@ export function createObjectEntity(
     weight?: number;
     portable?: boolean;
     roomId?: number;
+    traits?: string[];
   }
 ): number {
   const eid = addEntity(world);
@@ -207,6 +237,17 @@ export function createObjectEntity(
   PhysicalObject.material[eid] = config.material ?? "unknown";
   PhysicalObject.weight[eid] = config.weight ?? 1;
   PhysicalObject.portable[eid] = config.portable ?? true;
+
+  // Set default object traits for affordance system
+  ensureObjectMetaComponent();
+  const defaultTraits = ["examinable"];
+  if (config.portable !== false) {
+    defaultTraits.push("takeable");
+  }
+  const allTraits = [...defaultTraits, ...(config.traits || [])];
+  setDynamicComponentValue("ObjectMeta", eid, "type", "object");
+  setDynamicComponentValue("ObjectMeta", eid, "state", "normal");
+  setDynamicComponentValue("ObjectMeta", eid, "traits", allTraits.join(","));
 
   if (config.roomId !== undefined) {
     addComponent(world, eid, OccupiesRoom(config.roomId));
@@ -247,6 +288,8 @@ export function createGodAgentEntity(
     name: string;
     worldName: string;
     narrative?: string;
+    narrativeGoals?: string[];
+    observationInterval?: number;
   }
 ): number {
   const eid = addEntity(world);
@@ -256,6 +299,14 @@ export function createGodAgentEntity(
   GodAgent.worldName[eid] = config.worldName;
   GodAgent.narrative[eid] = config.narrative ?? "";
   GodAgent.tick[eid] = 0;
+  // Monitoring fields
+  GodAgent.narrativeGoals[eid] = JSON.stringify(config.narrativeGoals ?? []);
+  GodAgent.tension[eid] = 0;
+  GodAgent.lastObservation[eid] = 0;
+  GodAgent.interventionCount[eid] = 0;
+  GodAgent.observationInterval[eid] = config.observationInterval ?? 30000;
+  GodAgent.stagnationScore[eid] = 0;
+  // Mind state
   Mind.mode[eid] = "deliberative";
   Mind.arousal[eid] = 0.3;
   Mind.focus[eid] = "";

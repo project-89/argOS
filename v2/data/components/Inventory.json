@@ -1,0 +1,7 @@
+{
+  "name": "Inventory",
+  "description": "Storage for physical resources held by entities",
+  "properties": {
+    "amount": "number"
+  }
+}

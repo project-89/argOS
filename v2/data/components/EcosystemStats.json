@@ -1,0 +1,10 @@
+{
+  "name": "EcosystemStats",
+  "description": "Core stats for ecosystem entities",
+  "properties": {
+    "type": "string",
+    "maxEnergy": "number",
+    "energy": "number",
+    "reproduceThreshold": "number"
+  }
+}

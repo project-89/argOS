@@ -1,0 +1,109 @@
+{
+  "spriteId": "farmer_1",
+  "imagePath": "public/32x32/Characters_32x32/Farmer_1_32x32.png",
+  "frameWidth": 32,
+  "frameHeight": 64,
+  "columns": 24,
+  "rows": 3,
+  "characterType": "farmer",
+  "description": "Farmer character sprite sheet with standing frames and walk/run animations.",
+  "layout": {
+    "row0": "Standing frames - 1 frame per direction (cols 0-3: down, right, up, left). Cols 4-23 empty.",
+    "row1": "Walk animations - 6 frames per direction (cols 0-5: down, 6-11: right, 12-17: up, 18-23: left)",
+    "row2": "Run animations - 6 frames per direction (same layout as row 1)"
+  },
+  "animations": [
+    {
+      "name": "idle_down",
+      "row": 0,
+      "startCol": 0,
+      "frameCount": 1,
+      "note": "Static standing frame facing down"
+    },
+    {
+      "name": "idle_right",
+      "row": 0,
+      "startCol": 1,
+      "frameCount": 1,
+      "note": "Static standing frame facing right"
+    },
+    {
+      "name": "idle_up",
+      "row": 0,
+      "startCol": 2,
+      "frameCount": 1,
+      "note": "Static standing frame facing up"
+    },
+    {
+      "name": "idle_left",
+      "row": 0,
+      "startCol": 3,
+      "frameCount": 1,
+      "note": "Static standing frame facing left"
+    },
+    {
+      "name": "walk_down",
+      "row": 1,
+      "startCol": 0,
+      "frameCount": 6,
+      "frameRate": 8,
+      "loop": true
+    },
+    {
+      "name": "walk_right",
+      "row": 1,
+      "startCol": 6,
+      "frameCount": 6,
+      "frameRate": 8,
+      "loop": true
+    },
+    {
+      "name": "walk_up",
+      "row": 1,
+      "startCol": 12,
+      "frameCount": 6,
+      "frameRate": 8,
+      "loop": true
+    },
+    {
+      "name": "walk_left",
+      "row": 1,
+      "startCol": 18,
+      "frameCount": 6,
+      "frameRate": 8,
+      "loop": true
+    },
+    {
+      "name": "run_down",
+      "row": 2,
+      "startCol": 0,
+      "frameCount": 6,
+      "frameRate": 10,
+      "loop": true
+    },
+    {
+      "name": "run_right",
+      "row": 2,
+      "startCol": 6,
+      "frameCount": 6,
+      "frameRate": 10,
+      "loop": true
+    },
+    {
+      "name": "run_up",
+      "row": 2,
+      "startCol": 12,
+      "frameCount": 6,
+      "frameRate": 10,
+      "loop": true
+    },
+    {
+      "name": "run_left",
+      "row": 2,
+      "startCol": 18,
+      "frameCount": 6,
+      "frameRate": 10,
+      "loop": true
+    }
+  ]
+}

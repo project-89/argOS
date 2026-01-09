@@ -283,13 +283,44 @@
   <script>
     let ws;
     let app;
-    let state = { entities: [], spriteMap: new Map(), textures: new Map() };
+    let state = { entities: [], spriteMap: new Map(), textures: new Map(), tilemap: null };
     let selectedEntityId = null;
     let lastFrameTime = performance.now();
     let frameCount = 0;
-    
+    let tilemapContainer = null;
+    let entityContainer = null;
+
     const TILE_SIZE = 32;
     const SCALE = 2;
+    const TERRAIN_TILESET = '/32x32/1_Terrains_32x32.png';
+    const TERRAIN_COLS = 32; // 1024px / 32px
+    const TERRAIN_ROWS = 23; // 736px / 32px
+
+    // Map ASCII characters to tile positions in the terrain tileset (col, row)
+    // Tileset is 32x23 tiles (1024x736 px). Uses autotile format.
+    // Tileset uses grass as background - we render green fill first, then overlay tiles
+    // Using green grass tiles with small dirt details for visual variety
+    const TILE_MAP = {
+      ',': { col: 8, row: 0 },    // grass - green with small dirt corner detail
+      '.': { col: 1, row: 1 },    // floor - tan dirt fill
+      '#': { col: 0, row: 7 },    // wall - dark tilled soil
+      '~': { col: 17, row: 3 },   // water - blue water
+      '+': { col: 2, row: 0 },    // door - grass/dirt edge transition
+      ' ': null,                   // void - no tile
+    };
+
+    // Fallback colors if tileset fails to load
+    const TILE_COLORS = {
+      '.': { floor: 0x3d3d2d, stroke: 0x2a2a1f }, // floor
+      ',': { floor: 0x2d4d2d, stroke: 0x1a3a1a }, // grass
+      '#': { floor: 0x4a4a4a, stroke: 0x333333 }, // wall
+      '~': { floor: 0x2244aa, stroke: 0x113377 }, // water
+      '+': { floor: 0x8b6914, stroke: 0x5a4410 }, // door
+      ' ': { floor: 0x0a0a0f, stroke: 0x0a0a0f }, // void
+    };
+
+    let terrainTexture = null;
+    let terrainTileTextures = new Map();
     
     function log(message, type = 'info') {
       const container = document.getElementById('log-output');
@@ -321,13 +352,129 @@
       });
       
       app.stage.scale.set(SCALE);
-      
+
+      // Create containers for layered rendering
+      tilemapContainer = new PIXI.Container();
+      entityContainer = new PIXI.Container();
+      entityContainer.sortableChildren = true;
+
+      app.stage.addChild(tilemapContainer);
+      app.stage.addChild(entityContainer);
+
       window.addEventListener('resize', () => {
         app.renderer.resize(container.clientWidth, container.clientHeight);
       });
-      
+
       app.ticker.add(gameLoop);
       log('Pixi.js initialized', 'success');
+    }
+
+    // Get or create a texture for a specific tile from the terrain tileset
+    function getTileTexture(tileChar) {
+      if (terrainTileTextures.has(tileChar)) {
+        return terrainTileTextures.get(tileChar);
+      }
+
+      const tileInfo = TILE_MAP[tileChar];
+      if (!tileInfo || !terrainTexture) {
+        return null;
+      }
+
+      const texture = new PIXI.Texture({
+        source: terrainTexture.source,
+        frame: new PIXI.Rectangle(
+          tileInfo.col * TILE_SIZE,
+          tileInfo.row * TILE_SIZE,
+          TILE_SIZE,
+          TILE_SIZE
+        ),
+      });
+
+      terrainTileTextures.set(tileChar, texture);
+      return texture;
+    }
+
+    async function loadTerrainTileset() {
+      if (terrainTexture) return true;
+
+      try {
+        terrainTexture = await PIXI.Assets.load(TERRAIN_TILESET);
+        terrainTexture.source.scaleMode = 'nearest';
+        log(`Loaded terrain tileset: ${TERRAIN_TILESET}`, 'success');
+        return true;
+      } catch (e) {
+        log(`Failed to load terrain tileset: ${e.message}`, 'error');
+        return false;
+      }
+    }
+
+    async function renderTilemap(asciiWorld) {
+      if (!asciiWorld || !asciiWorld.cells) return;
+
+      // Clear existing tilemap
+      tilemapContainer.removeChildren();
+
+      const { width, height, cells } = asciiWorld;
+
+      // Try to load terrain tileset
+      const hasTileset = await loadTerrainTileset();
+
+      if (hasTileset) {
+        // First, draw a solid grass-green background
+        const bgGraphics = new PIXI.Graphics();
+        bgGraphics.rect(0, 0, width * TILE_SIZE, height * TILE_SIZE);
+        bgGraphics.fill(0x4a7c4e); // Grass green color matching tileset
+        tilemapContainer.addChild(bgGraphics);
+
+        // Use tileset sprites on top
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const cell = cells[y]?.[x];
+            if (!cell) continue;
+
+            const tileChar = cell.char || '.';
+
+            // Skip void tiles
+            if (tileChar === ' ' || TILE_MAP[tileChar] === null) continue;
+
+            const texture = getTileTexture(tileChar);
+            if (texture) {
+              const sprite = new PIXI.Sprite(texture);
+              sprite.x = x * TILE_SIZE;
+              sprite.y = y * TILE_SIZE;
+              tilemapContainer.addChild(sprite);
+            }
+          }
+        }
+        log(`Rendered tilemap with sprites: ${width}x${height}`, 'success');
+      } else {
+        // Fallback to colored rectangles
+        const graphics = new PIXI.Graphics();
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const cell = cells[y]?.[x];
+            if (!cell) continue;
+
+            const tileChar = cell.char || '.';
+            const colors = TILE_COLORS[tileChar] || TILE_COLORS['.'];
+
+            const px = x * TILE_SIZE;
+            const py = y * TILE_SIZE;
+
+            // Fill tile
+            graphics.rect(px, py, TILE_SIZE, TILE_SIZE);
+            graphics.fill(colors.floor);
+
+            // Stroke for grid effect
+            graphics.rect(px, py, TILE_SIZE, TILE_SIZE);
+            graphics.stroke({ color: colors.stroke, width: 1 });
+          }
+        }
+
+        tilemapContainer.addChild(graphics);
+        log(`Rendered tilemap with fallback colors: ${width}x${height}`, 'info');
+      }
     }
     
     function gameLoop(ticker) {
@@ -455,17 +602,17 @@
     
     function syncEntities(entities) {
       const existingIds = new Set(entities.map(e => e.id));
-      
+
       for (const [eid, spriteData] of state.spriteMap) {
         if (!existingIds.has(eid)) {
           if (spriteData.sprite) {
-            app.stage.removeChild(spriteData.sprite);
+            entityContainer.removeChild(spriteData.sprite);
             spriteData.sprite.destroy();
           }
           state.spriteMap.delete(eid);
         }
       }
-      
+
       for (const entity of entities) {
         if (!entity.gridPosition) continue;
 
@@ -496,7 +643,7 @@
           const spriteEntity = { ...entity, pixiSprite: { atlasId, frameId } };
           const sprite = createSprite(spriteEntity);
           if (sprite) {
-            app.stage.addChild(sprite);
+            entityContainer.addChild(sprite);
             spriteData = {
               sprite,
               atlasId: atlasId,
@@ -509,12 +656,12 @@
             state.spriteMap.set(entity.id, spriteData);
           }
         }
-        
+
         if (spriteData && spriteData.sprite) {
           spriteData.sprite.x = entity.gridPosition.x * TILE_SIZE + TILE_SIZE / 2;
           spriteData.sprite.y = entity.gridPosition.y * TILE_SIZE + TILE_SIZE;
           spriteData.sprite.zIndex = entity.gridPosition.y;
-          
+
           if (entity.characterRig) {
             const rig = entity.characterRig;
             if (rig.currentAnimation) {
@@ -525,9 +672,7 @@
           }
         }
       }
-      
-      app.stage.sortableChildren = true;
-      
+
       document.getElementById('entity-count').textContent = state.spriteMap.size;
       renderEntityList(entities);
     }
@@ -625,19 +770,23 @@
       }
     }
 
-    function handleMessage(msg) {
+    async function handleMessage(msg) {
       switch (msg.type) {
         case 'state':
           if (msg.payload) {
             state.entities = msg.payload.entities || [];
             state.atlases = msg.payload.atlases ? convertAtlases(msg.payload.atlases) : state.atlases;
+            // Render tilemap if available
+            if (msg.payload.asciiWorld) {
+              await renderTilemap(msg.payload.asciiWorld);
+            }
             // Auto-load atlas textures
             loadAtlasTextures();
             syncEntities(state.entities);
           }
           break;
         case 'godResponse':
-          handleGodResponse(msg.payload);
+          await handleGodResponse(msg.payload);
           break;
         case 'error':
           log(msg.payload, 'error');
@@ -645,7 +794,7 @@
       }
     }
     
-    function handleGodResponse(payload) {
+    async function handleGodResponse(payload) {
       if (payload.thinking) {
         log(`God: ${payload.thinking}`, 'info');
       }
@@ -661,6 +810,10 @@
       if (payload.worldState) {
         state.entities = payload.worldState.entities || [];
         state.atlases = payload.worldState.atlases ? convertAtlases(payload.worldState.atlases) : state.atlases;
+        // Render tilemap if available
+        if (payload.worldState.asciiWorld) {
+          await renderTilemap(payload.worldState.asciiWorld);
+        }
         syncEntities(state.entities);
       }
     }
@@ -732,9 +885,8 @@ Show me the world map and all entities after creation.`);
       if (confirm('Reset the scene?')) {
         ws.send(JSON.stringify({ type: 'reset' }));
         state.spriteMap.clear();
-        while (app.stage.children.length > 0) {
-          app.stage.removeChildAt(0);
-        }
+        tilemapContainer.removeChildren();
+        entityContainer.removeChildren();
         log('Scene reset', 'info');
       }
     }

@@ -729,9 +729,9 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
         const dy = params.direction === 'south' ? 1 : params.direction === 'north' ? -1 : 0;
         const newX = GridPosition.x[eid] + dx;
         const newY = GridPosition.y[eid] + dy;
-        
+
         const tileWalkable = isWalkable(world, mapEid, newX, newY);
-        
+
         const entitiesAtTarget = Array.from(query(world, [GridPosition])).filter(
           (otherEid) => otherEid !== eid && GridPosition.x[otherEid] === newX && GridPosition.y[otherEid] === newY
         );
@@ -739,7 +739,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
           id: otherEid,
           name: lookupEntityName(registry, otherEid) ?? `entity:${otherEid}`,
         }));
-        
+
         return {
           success: true,
           result: {

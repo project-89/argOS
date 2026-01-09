@@ -1,0 +1,10 @@
+{
+  "name": "MarketState",
+  "description": "Stores the macro-economic state of a specific resource",
+  "properties": {
+    "currentPrice": "number",
+    "totalSupply": "number",
+    "totalDemand": "number",
+    "priceVelocity": "number"
+  }
+}

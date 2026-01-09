@@ -1,0 +1,10 @@
+{
+  "name": "Consumer",
+  "description": "Defines predation behavior: what to eat and how efficient the digestion is.",
+  "properties": {
+    "target_entity_id": "number",
+    "interaction_rate": "number",
+    "conversion_efficiency": "number",
+    "energy_gained": "number"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Autotroph",
+  "description": "Defines intrinsic growth characteristics for producers (plants).",
+  "properties": {
+    "growth_rate": "number"
+  }
+}

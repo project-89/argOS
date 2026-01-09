@@ -1,0 +1,10 @@
+{
+  "name": "Interactable",
+  "description": "Defines utility provided to an NPC upon usage",
+  "properties": {
+    "interactionType": "number",
+    "utilityValue": "number",
+    "durationTicks": "number",
+    "occupantId": "number"
+  }
+}

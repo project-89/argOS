@@ -159,6 +159,13 @@ export const GodAgent = {
   worldName: [] as string[],
   narrative: [] as string[],
   tick: [] as number[],
+  // Monitoring & steering fields
+  narrativeGoals: [] as string[],      // JSON array of narrative goals
+  tension: [] as number[],             // Current narrative tension (0-1)
+  lastObservation: [] as number[],     // Timestamp of last observation
+  interventionCount: [] as number[],   // Track how often GodAI intervenes
+  observationInterval: [] as number[], // How often to observe (ms)
+  stagnationScore: [] as number[],     // Current stagnation level (0-1)
 };
 
 export const Visual = {
@@ -230,6 +237,96 @@ export const CurrentAction = {
   duration: [] as number[],
 };
 
+export const CharacterRigConfig = {
+  baseAtlas: [] as string[],
+  idleAnimation: [] as string[],
+  currentDirection: [] as string[],
+};
+
+// ============================================================================
+// OBJECT SYSTEM COMPONENTS - For world objects with states and affordances
+// ============================================================================
+
+/** Links entity to its type definition in WorldSchema */
+export const ObjectType = {
+  typeId: [] as string[],      // Key into WorldSchema.objectTypes
+  instanceName: [] as string[], // Unique instance name (e.g., "Old Wooden Chair")
+};
+
+/** Current state of an object */
+export const ObjectState = {
+  current: [] as string[],      // Current state key
+  previous: [] as string[],     // Previous state (for transitions)
+  lockedUntil: [] as number[],  // Tick when state can change again
+};
+
+/** Active traits on an entity (bitfield or string array) */
+export const Traits = {
+  active: [] as string[],       // JSON array of active trait strings
+};
+
+/** Object durability/health */
+export const Durability = {
+  current: [] as number[],
+  max: [] as number[],
+};
+
+/** Fuel for things that burn (torches, fires, etc.) */
+export const Fuel = {
+  current: [] as number[],
+  max: [] as number[],
+  burnRate: [] as number[],
+};
+
+/** Container properties */
+export const Container = {
+  capacity: [] as number[],
+  currentCount: [] as number[],
+  allowedTypes: [] as string[],  // JSON array of allowed object types, empty = all
+};
+
+/** Surface properties (tables, shelves) */
+export const Surface = {
+  capacity: [] as number[],
+  currentCount: [] as number[],
+};
+
+/** Portal properties (doors, gates, passages) */
+export const Portal = {
+  destinationRoom: [] as number[], // Entity ID of destination room
+  bidirectional: [] as boolean[],
+};
+
+/** Light source properties */
+export const LightSource = {
+  intensity: [] as number[],
+  radius: [] as number[],
+  color: [] as string[],
+};
+
+/** Marks entity for state transition */
+export const StateTransition = {
+  targetState: [] as string[],
+  triggeredBy: [] as string[],   // What caused this transition
+  timestamp: [] as number[],
+};
+
+/** Custom dynamic description (overrides type default) */
+export const DynamicDescription = {
+  text: [] as string[],
+  lastUpdated: [] as number[],
+  updatedBy: [] as string[],     // "system" or "godai"
+};
+
+/** Properties for template substitution in descriptions */
+export const ObjectProperties = {
+  adjective: [] as string[],
+  material: [] as string[],
+  color: [] as string[],
+  size: [] as string[],
+  custom: [] as string[],        // JSON object for extra properties
+};
+
 export const AllComponents = {
   Name,
   Description,
@@ -264,6 +361,20 @@ export const AllComponents = {
   Needs,
   Interactable,
   CurrentAction,
+  CharacterRigConfig,
+  // Object system components
+  ObjectType,
+  ObjectState,
+  Traits,
+  Durability,
+  Fuel,
+  Container,
+  Surface,
+  Portal,
+  LightSource,
+  StateTransition,
+  DynamicDescription,
+  ObjectProperties,
 };
 
 export type ComponentName = keyof typeof AllComponents;

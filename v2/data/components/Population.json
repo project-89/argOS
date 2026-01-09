@@ -1,0 +1,9 @@
+{
+  "name": "Population",
+  "description": "Tracks the aggregate number of organisms for a specific species entity.",
+  "properties": {
+    "current": "number",
+    "max_capacity": "number",
+    "min_threshold": "number"
+  }
+}

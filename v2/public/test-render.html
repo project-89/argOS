@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArgOS v2 - Rendering Test</title>
+  <script src="https://pixijs.download/v8.0.0/pixi.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'SF Mono', monospace;
+      background: #0a0a0f;
+      color: #e0e0e8;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      background: #12121a;
+      border-bottom: 1px solid #2a2a3a;
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .logo {
+      font-size: 1.25rem;
+      font-weight: bold;
+      background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .main {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+    .canvas-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    #pixi-canvas { display: block; }
+    .sidebar {
+      width: 350px;
+      background: #12121a;
+      border-left: 1px solid #2a2a3a;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel {
+      border-bottom: 1px solid #2a2a3a;
+    }
+    .panel-header {
+      padding: 0.75rem 1rem;
+      background: #0a0a0f;
+      font-weight: bold;
+      font-size: 0.85rem;
+    }
+    .panel-content {
+      padding: 0.75rem;
+      font-size: 0.85rem;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .btn {
+      padding: 0.5rem 1rem;
+      background: #0a0a0f;
+      border: 1px solid #2a2a3a;
+      color: #e0e0e8;
+      border-radius: 0.25rem;
+      cursor: pointer;
+      font-size: 0.8rem;
+      margin: 0.25rem;
+    }
+    .btn:hover { border-color: #6366f1; }
+    .btn.active { background: #6366f1; border-color: #6366f1; }
+    .tile-palette {
+      display: grid;
+      grid-template-columns: repeat(8, 40px);
+      gap: 4px;
+      padding: 0.5rem;
+    }
+    .tile-btn {
+      width: 40px;
+      height: 40px;
+      border: 2px solid #2a2a3a;
+      border-radius: 4px;
+      cursor: pointer;
+      image-rendering: pixelated;
+      background-size: cover;
+    }
+    .tile-btn:hover { border-color: #6366f1; }
+    .tile-btn.selected { border-color: #22c55e; border-width: 3px; }
+    .log {
+      font-family: monospace;
+      font-size: 0.75rem;
+      padding: 0.5rem;
+      background: #0a0a0f;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .log-entry { padding: 0.2rem 0; border-bottom: 1px solid #1a1a2a; }
+    .info { color: #60a5fa; }
+    .success { color: #22c55e; }
+    .error { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="logo">ArgOS v2 - Standalone Rendering Test</div>
+    <div>
+      <button class="btn" onclick="zoomIn()">Zoom +</button>
+      <button class="btn" onclick="zoomOut()">Zoom -</button>
+      <button class="btn" onclick="resetView()">Reset View</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="canvas-container">
+      <canvas id="pixi-canvas"></canvas>
+    </div>
+
+    <aside class="sidebar">
+      <div class="panel">
+        <div class="panel-header">Controls</div>
+        <div class="panel-content">
+          <button class="btn" onclick="generateRandomMap()">Generate Random Map</button>
+          <button class="btn" onclick="generateFarmMap()">Generate Farm</button>
+          <button class="btn" onclick="addCharacter()">Add Farmer</button>
+          <button class="btn" onclick="addAnimal()">Add Animal</button>
+          <button class="btn" onclick="clearEntities()">Clear Entities</button>
+          <button class="btn" onclick="toggleCollisions()" id="collision-btn">Show Collisions</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">Tile Palette</div>
+        <div class="tile-palette" id="tile-palette"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">Log</div>
+        <div class="log" id="log"></div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    let app;
+    let tilemapContainer;
+    let entityContainer;
+    let collisionContainer;
+    let terrainTexture;
+    let characterTextures = {};
+    let animalTextures = {};
+    let entities = [];
+    let currentZoom = 2;
+    let collisionGrid = [];
+    let showCollisions = false;
+
+    const TILE_SIZE = 32;
+    const CHAR_WIDTH = 32;
+    const CHAR_HEIGHT = 64;  // Characters are 32x64 (full height including head to toe)
+    const COW_SIZE = 64;     // Cows are 64x64
+    const MAP_WIDTH = 25;
+    const MAP_HEIGHT = 18;
+
+    // AI-analyzed tileset: 32x23 grid (1024x736px)
+    // These tile positions were identified by Gemini AI vision
+    const TILE_TYPES = {
+      // Grass - base terrain (from AI analysis)
+      grass_full: { col: 0, row: 0, name: 'Grass' },
+      grass_dirt_transition: { col: 1, row: 0, name: 'Grass/Dirt Edge' },
+
+      // Dirt/path tiles
+      dirt_full: { col: 2, row: 0, name: 'Dirt' },
+      dirt_grass_transition: { col: 4, row: 1, name: 'Dirt/Grass' },
+
+      // Water tiles
+      water_full: { col: 3, row: 0, name: 'Water' },
+      water_edge_top: { col: 5, row: 0, name: 'Water Top' },
+      water_corner_tl: { col: 6, row: 0, name: 'Water Corner TL' },
+
+      // Sand/beach
+      sand_full: { col: 2, row: 1, name: 'Sand' },
+      sand_grass_transition: { col: 0, row: 1, name: 'Sand/Grass' },
+
+      // Tilled soil (farm plots) - from bottom of tileset
+      soil_full: { col: 1, row: 5, name: 'Tilled Soil' },
+      soil_row: { col: 0, row: 7, name: 'Soil Row' },
+
+      // Lighter grass variations
+      grass_light: { col: 8, row: 0, name: 'Light Grass' },
+    };
+
+    // Farmer_1 sprite: 768x192 pixels, 32x64 per frame (24 cols × 3 rows)
+    // VERIFIED LAYOUT:
+    // - Row 0: Standing frames (1 per direction) - col 0: down, col 1: right, col 2: up, col 3: left
+    // - Row 1: Walk animations - 4 directions × 6 frames (down/right/up/left)
+    // - Row 2: Run animations - 4 directions × 6 frames (down/right/up/left)
+    const FARMER_ANIMATIONS = {
+      // Idle/standing - Row 0 has 1 static frame per direction
+      // col 0=right, col 1=up, col 2=left, col 3=down
+      idle_right: { row: 0, startCol: 0, frames: 1, frameRate: 1 },
+      idle_up:    { row: 0, startCol: 1, frames: 1, frameRate: 1 },
+      idle_left:  { row: 0, startCol: 2, frames: 1, frameRate: 1 },
+      idle_down:  { row: 0, startCol: 3, frames: 1, frameRate: 1 },
+      // Walk animations (row 1) - 6 frames each direction
+      walk_down:  { row: 1, startCol: 0,  frames: 6, frameRate: 8 },
+      walk_right: { row: 1, startCol: 6,  frames: 6, frameRate: 8 },
+      walk_up:    { row: 1, startCol: 12, frames: 6, frameRate: 8 },
+      walk_left:  { row: 1, startCol: 18, frames: 6, frameRate: 8 },
+    };
+
+    // Animal frame sizes
+    const ANIMAL_SIZES = {
+      chicken: { width: 32, height: 32 },
+      cow: { width: 64, height: 64 }
+    };
+
+    function log(msg, type = 'info') {
+      const el = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      el.insertBefore(entry, el.firstChild);
+      while (el.children.length > 50) el.removeChild(el.lastChild);
+    }
+
+    async function init() {
+      log('Initializing Pixi.js...');
+
+      const canvas = document.getElementById('pixi-canvas');
+      const container = canvas.parentElement;
+
+      app = new PIXI.Application();
+      await app.init({
+        canvas,
+        width: container.clientWidth,
+        height: container.clientHeight,
+        backgroundColor: 0x1a1a2e,
+        antialias: false,
+        resolution: window.devicePixelRatio || 1,
+        autoDensity: true,
+      });
+
+      app.stage.scale.set(currentZoom);
+
+      tilemapContainer = new PIXI.Container();
+      collisionContainer = new PIXI.Container();
+      collisionContainer.visible = false;
+      entityContainer = new PIXI.Container();
+      entityContainer.sortableChildren = true;
+
+      app.stage.addChild(tilemapContainer);
+      app.stage.addChild(collisionContainer);
+      app.stage.addChild(entityContainer);
+
+      window.addEventListener('resize', () => {
+        app.renderer.resize(container.clientWidth, container.clientHeight);
+      });
+
+      // Load textures
+      await loadTextures();
+
+      // Create tile palette
+      createTilePalette();
+
+      // Generate initial map
+      generateFarmMap();
+
+      // Start animation loop
+      app.ticker.add(updateAnimations);
+
+      log('Initialization complete!', 'success');
+    }
+
+    async function loadTextures() {
+      log('Loading textures...');
+
+      try {
+        terrainTexture = await PIXI.Assets.load('/32x32/1_Terrains_32x32.png');
+        terrainTexture.source.scaleMode = 'nearest';
+        log('Loaded terrain tileset', 'success');
+
+        // Load Farmer_1 (768x192 pixels - fits within WebGPU texture limits)
+        // Note: Farmer_2 (12288x1664) exceeded max texture size of 8192
+        characterTextures.farmer1 = await PIXI.Assets.load('/32x32/Characters_32x32/Farmer_1_32x32.png');
+        characterTextures.farmer1.source.scaleMode = 'nearest';
+        log('Loaded farmer sprites (Farmer_1)', 'success');
+
+        // Try to load some animals
+        try {
+          animalTextures.chicken = await PIXI.Assets.load('/32x32/Animals_32x32/Chickens_and_Roosters_32x32/Chicken_Brown_32x32.png');
+          animalTextures.chicken.source.scaleMode = 'nearest';
+          log('Loaded chicken sprites', 'success');
+        } catch (e) {
+          log('Could not load chicken sprites', 'error');
+        }
+
+        try {
+          animalTextures.cow = await PIXI.Assets.load('/32x32/Animals_32x32/Cows_32x32/Cow_32x32.png');
+          animalTextures.cow.source.scaleMode = 'nearest';
+          log('Loaded cow sprites', 'success');
+        } catch (e) {
+          log('Could not load cow sprites', 'error');
+        }
+
+      } catch (e) {
+        log(`Error loading textures: ${e.message}`, 'error');
+      }
+    }
+
+    function getTileTexture(tileType) {
+      const tile = TILE_TYPES[tileType];
+      if (!tile || !terrainTexture) return null;
+
+      return new PIXI.Texture({
+        source: terrainTexture.source,
+        frame: new PIXI.Rectangle(
+          tile.col * TILE_SIZE,
+          tile.row * TILE_SIZE,
+          TILE_SIZE,
+          TILE_SIZE
+        ),
+      });
+    }
+
+    function createTilePalette() {
+      const palette = document.getElementById('tile-palette');
+      palette.innerHTML = '';
+
+      for (const [key, tile] of Object.entries(TILE_TYPES)) {
+        const btn = document.createElement('div');
+        btn.className = 'tile-btn';
+        btn.title = tile.name;
+        btn.style.backgroundImage = `url(/32x32/1_Terrains_32x32.png)`;
+        btn.style.backgroundPosition = `-${tile.col * 40}px -${tile.row * 40}px`;
+        btn.style.backgroundSize = `${32 * 40}px ${23 * 40}px`;
+        btn.onclick = () => selectTile(key, btn);
+        palette.appendChild(btn);
+      }
+    }
+
+    let selectedTile = 'grass_full';
+    function selectTile(key, btn) {
+      document.querySelectorAll('.tile-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      selectedTile = key;
+      log(`Selected tile: ${TILE_TYPES[key].name}`);
+    }
+
+    function renderTilemap(mapData) {
+      tilemapContainer.removeChildren();
+      collisionContainer.removeChildren();
+
+      // Initialize collision grid
+      collisionGrid = [];
+      for (let y = 0; y < MAP_HEIGHT; y++) {
+        collisionGrid[y] = [];
+        for (let x = 0; x < MAP_WIDTH; x++) {
+          collisionGrid[y][x] = false;  // Default walkable
+        }
+      }
+
+      // Draw grass background
+      const bg = new PIXI.Graphics();
+      bg.rect(0, 0, MAP_WIDTH * TILE_SIZE, MAP_HEIGHT * TILE_SIZE);
+      bg.fill(0x4a7c4e);
+      tilemapContainer.addChild(bg);
+
+      // Draw tiles and build collision grid
+      for (let y = 0; y < MAP_HEIGHT; y++) {
+        for (let x = 0; x < MAP_WIDTH; x++) {
+          const tileType = mapData[y]?.[x] || 'grass_full';
+          const texture = getTileTexture(tileType);
+
+          if (texture) {
+            const sprite = new PIXI.Sprite(texture);
+            sprite.x = x * TILE_SIZE;
+            sprite.y = y * TILE_SIZE;
+            tilemapContainer.addChild(sprite);
+          }
+
+          // Mark water tiles as non-walkable
+          if (tileType === 'water_full' || tileType.includes('water')) {
+            collisionGrid[y][x] = true;
+          }
+        }
+      }
+
+      // Render collision overlay
+      renderCollisionOverlay();
+
+      log(`Rendered ${MAP_WIDTH}x${MAP_HEIGHT} tilemap`, 'success');
+    }
+
+    function renderCollisionOverlay() {
+      collisionContainer.removeChildren();
+
+      const graphics = new PIXI.Graphics();
+
+      for (let y = 0; y < MAP_HEIGHT; y++) {
+        for (let x = 0; x < MAP_WIDTH; x++) {
+          if (collisionGrid[y][x]) {
+            // Red overlay for non-walkable
+            graphics.rect(x * TILE_SIZE + 2, y * TILE_SIZE + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+            graphics.fill({ color: 0xff0000, alpha: 0.4 });
+          } else {
+            // Green overlay for walkable
+            graphics.rect(x * TILE_SIZE + 2, y * TILE_SIZE + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+            graphics.fill({ color: 0x00ff00, alpha: 0.2 });
+          }
+        }
+      }
+
+      collisionContainer.addChild(graphics);
+    }
+
+    function toggleCollisions() {
+      showCollisions = !showCollisions;
+      collisionContainer.visible = showCollisions;
+      const btn = document.getElementById('collision-btn');
+      btn.textContent = showCollisions ? 'Hide Collisions' : 'Show Collisions';
+      btn.classList.toggle('active', showCollisions);
+      log(`Collision view: ${showCollisions ? 'ON' : 'OFF'}`);
+    }
+
+    function isWalkable(x, y) {
+      if (x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) return false;
+      return !collisionGrid[y][x];
+    }
+
+    function generateRandomMap() {
+      const tileKeys = Object.keys(TILE_TYPES);
+      const mapData = [];
+
+      for (let y = 0; y < MAP_HEIGHT; y++) {
+        mapData[y] = [];
+        for (let x = 0; x < MAP_WIDTH; x++) {
+          // Mostly grass with random features
+          const rand = Math.random();
+          if (rand < 0.7) {
+            mapData[y][x] = 'grass_full';
+          } else if (rand < 0.8) {
+            mapData[y][x] = 'dirt_full';
+          } else if (rand < 0.85) {
+            mapData[y][x] = 'water_full';
+          } else if (rand < 0.9) {
+            mapData[y][x] = 'sand_full';
+          } else {
+            mapData[y][x] = 'soil_full';
+          }
+        }
+      }
+
+      renderTilemap(mapData);
+      log('Generated random map');
+    }
+
+    function generateFarmMap() {
+      const mapData = [];
+
+      // Fill with grass
+      for (let y = 0; y < MAP_HEIGHT; y++) {
+        mapData[y] = [];
+        for (let x = 0; x < MAP_WIDTH; x++) {
+          mapData[y][x] = 'grass_full';
+        }
+      }
+
+      // Add farm plots (tilled soil areas)
+      for (let py = 4; py < 8; py++) {
+        for (let px = 3; px < 10; px++) {
+          mapData[py][px] = 'soil_full';
+        }
+      }
+
+      // Add another plot
+      for (let py = 10; py < 14; py++) {
+        for (let px = 3; px < 10; px++) {
+          mapData[py][px] = 'soil_full';
+        }
+      }
+
+      // Add a path
+      for (let x = 0; x < MAP_WIDTH; x++) {
+        mapData[8][x] = 'dirt_full';
+        mapData[9][x] = 'dirt_full';
+      }
+
+      // Add a pond
+      for (let py = 5; py < 9; py++) {
+        for (let px = 15; px < 20; px++) {
+          mapData[py][px] = 'water_full';
+        }
+      }
+
+      // Add sandy beach around pond
+      for (let py = 4; py < 10; py++) {
+        mapData[py][14] = 'sand_full';
+        mapData[py][20] = 'sand_full';
+      }
+      for (let px = 14; px < 21; px++) {
+        mapData[4][px] = 'sand_full';
+        mapData[9][px] = 'sand_full';
+      }
+
+      renderTilemap(mapData);
+      log('Generated farm map', 'success');
+    }
+
+    function addCharacter() {
+      if (!characterTextures.farmer1) {
+        log('Farmer texture not loaded', 'error');
+        return;
+      }
+
+      const x = Math.floor(Math.random() * (MAP_WIDTH - 4)) + 2;
+      const y = Math.floor(Math.random() * (MAP_HEIGHT - 4)) + 2;
+
+      // Get initial animation config for idle_down
+      const initAnim = FARMER_ANIMATIONS.idle_down;
+
+      // Create sprite from first frame of idle_down animation
+      // Farmer_1 uses simple row layout (row * frameHeight)
+      const texture = new PIXI.Texture({
+        source: characterTextures.farmer1.source,
+        frame: new PIXI.Rectangle(
+          initAnim.startCol * CHAR_WIDTH,
+          initAnim.row * CHAR_HEIGHT,
+          CHAR_WIDTH,
+          CHAR_HEIGHT
+        ),
+      });
+
+      const sprite = new PIXI.Sprite(texture);
+      // Anchor at bottom-center so feet align with tile
+      sprite.anchor.set(0.5, 1);
+      // Position: center of tile X, bottom of tile Y
+      sprite.x = x * TILE_SIZE + TILE_SIZE / 2;
+      sprite.y = (y + 1) * TILE_SIZE;  // +1 because anchor is at bottom
+      sprite.zIndex = y;
+
+      entityContainer.addChild(sprite);
+
+      const entity = {
+        sprite,
+        type: 'farmer',
+        texture: characterTextures.farmer1,
+        animation: 'idle_down',
+        frameIndex: 0,
+        frameTime: 0,
+        frameWidth: CHAR_WIDTH,
+        frameHeight: CHAR_HEIGHT,
+        x, y,
+        direction: 'down',
+        moving: false,
+        targetX: x,
+        targetY: y,
+      };
+
+      entities.push(entity);
+
+      // Start random movement
+      setInterval(() => randomMove(entity), 2000 + Math.random() * 3000);
+
+      log(`Added farmer at (${x}, ${y})`, 'success');
+    }
+
+    function addAnimal() {
+      const animalKeys = Object.keys(animalTextures);
+      if (animalKeys.length === 0) {
+        log('No animal textures loaded', 'error');
+        return;
+      }
+
+      const animalType = animalKeys[Math.floor(Math.random() * animalKeys.length)];
+      const texture = animalTextures[animalType];
+
+      // Get correct frame size for this animal type
+      const animalSize = ANIMAL_SIZES[animalType] || { width: 32, height: 32 };
+
+      const x = Math.floor(Math.random() * (MAP_WIDTH - 4)) + 2;
+      const y = Math.floor(Math.random() * (MAP_HEIGHT - 4)) + 2;
+
+      // Create sprite from first frame with correct size
+      const frameTexture = new PIXI.Texture({
+        source: texture.source,
+        frame: new PIXI.Rectangle(0, 0, animalSize.width, animalSize.height),
+      });
+
+      const sprite = new PIXI.Sprite(frameTexture);
+      sprite.anchor.set(0.5, 1);
+      sprite.x = x * TILE_SIZE + TILE_SIZE / 2;
+      sprite.y = y * TILE_SIZE + TILE_SIZE;
+      sprite.zIndex = y;
+
+      entityContainer.addChild(sprite);
+
+      const entity = {
+        sprite,
+        type: animalType,
+        texture,
+        frameIndex: 0,
+        frameTime: 0,
+        frameWidth: animalSize.width,
+        frameHeight: animalSize.height,
+        x, y,
+        moving: false,
+      };
+
+      entities.push(entity);
+
+      // Random movement for animals
+      setInterval(() => randomMove(entity), 3000 + Math.random() * 5000);
+
+      log(`Added ${animalType} (${animalSize.width}x${animalSize.height}) at (${x}, ${y})`, 'success');
+    }
+
+    // Update entity texture immediately (used when animation changes)
+    function updateEntityTexture(entity) {
+      if (entity.type !== 'farmer') return;
+
+      const anim = FARMER_ANIMATIONS[entity.animation];
+      if (!anim) return;
+
+      const frameW = entity.frameWidth;
+      const frameH = entity.frameHeight;
+      const col = anim.startCol + entity.frameIndex;
+      const pixelY = anim.row * frameH;
+
+      const texture = new PIXI.Texture({
+        source: entity.texture.source,
+        frame: new PIXI.Rectangle(col * frameW, pixelY, frameW, frameH),
+      });
+      entity.sprite.texture = texture;
+      entity.sprite.scale.x = anim.flipX ? -1 : 1;
+    }
+
+    // Set animation and reset frame index
+    function setEntityAnimation(entity, animName) {
+      if (entity.animation === animName) return; // Already playing this animation
+
+      entity.animation = animName;
+      entity.frameIndex = 0;
+      entity.frameTime = 0;
+      updateEntityTexture(entity);
+      log(`Animation: ${animName}`, 'info');
+    }
+
+    function randomMove(entity) {
+      if (entity.moving) return;
+
+      const dirs = ['up', 'down', 'left', 'right'];
+      const dir = dirs[Math.floor(Math.random() * dirs.length)];
+
+      let nx = entity.x;
+      let ny = entity.y;
+
+      switch (dir) {
+        case 'up': ny--; break;
+        case 'down': ny++; break;
+        case 'left': nx--; break;
+        case 'right': nx++; break;
+      }
+
+      // Bounds check
+      if (nx < 0 || nx >= MAP_WIDTH || ny < 0 || ny >= MAP_HEIGHT) return;
+
+      // Collision check - don't walk into non-walkable tiles
+      if (!isWalkable(nx, ny)) {
+        // Try to find alternate direction
+        return;
+      }
+
+      entity.targetX = nx;
+      entity.targetY = ny;
+      entity.direction = dir;
+      entity.moving = true;
+
+      if (entity.type === 'farmer') {
+        setEntityAnimation(entity, `walk_${dir}`);
+      }
+    }
+
+    function updateAnimations(ticker) {
+      const deltaMs = ticker.deltaMS;
+
+      for (const entity of entities) {
+        // Update animation frame
+        entity.frameTime += deltaMs;
+
+        let frameInterval = 150; // default
+        let frameCount = 4;
+        let startCol = 0;
+        let row = 0;
+        let flipX = false;
+
+        if (entity.type === 'farmer' && entity.animation) {
+          const anim = FARMER_ANIMATIONS[entity.animation];
+          if (anim) {
+            frameInterval = 1000 / anim.frameRate;
+            frameCount = anim.frames;
+            startCol = anim.startCol;
+            row = anim.row;
+            flipX = anim.flipX || false;
+          }
+        }
+
+        if (entity.frameTime >= frameInterval) {
+          entity.frameTime = 0;
+          entity.frameIndex = (entity.frameIndex + 1) % frameCount;
+
+          // Update texture - use correct frame size based on entity type
+          const col = startCol + entity.frameIndex;
+          const frameW = entity.frameWidth || (entity.type === 'farmer' ? CHAR_WIDTH : TILE_SIZE);
+          const frameH = entity.frameHeight || (entity.type === 'farmer' ? CHAR_HEIGHT : TILE_SIZE);
+
+          // For Farmer_1, use simple row * frameHeight calculation
+          const pixelY = row * frameH;
+
+          const texture = new PIXI.Texture({
+            source: entity.texture.source,
+            frame: new PIXI.Rectangle(col * frameW, pixelY, frameW, frameH),
+          });
+          entity.sprite.texture = texture;
+
+          // Apply flipX if needed (for left-facing animations)
+          entity.sprite.scale.x = flipX ? -1 : 1;
+        }
+
+        // Update position for movement
+        if (entity.moving) {
+          const targetPx = entity.targetX * TILE_SIZE + TILE_SIZE / 2;
+          const targetPy = (entity.targetY + 1) * TILE_SIZE;  // +1 for bottom anchor
+
+          const dx = targetPx - entity.sprite.x;
+          const dy = targetPy - entity.sprite.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < 2) {
+            entity.sprite.x = targetPx;
+            entity.sprite.y = targetPy;
+            entity.x = entity.targetX;
+            entity.y = entity.targetY;
+            entity.moving = false;
+            entity.sprite.zIndex = entity.y;
+
+            if (entity.type === 'farmer') {
+              setEntityAnimation(entity, `idle_${entity.direction}`);
+            }
+          } else {
+            const speed = 1.5;
+            entity.sprite.x += (dx / dist) * speed;
+            entity.sprite.y += (dy / dist) * speed;
+          }
+        }
+      }
+    }
+
+    function clearEntities() {
+      for (const entity of entities) {
+        entityContainer.removeChild(entity.sprite);
+        entity.sprite.destroy();
+      }
+      entities = [];
+      log('Cleared all entities');
+    }
+
+    function zoomIn() {
+      currentZoom = Math.min(currentZoom + 0.5, 4);
+      app.stage.scale.set(currentZoom);
+      log(`Zoom: ${currentZoom}x`);
+    }
+
+    function zoomOut() {
+      currentZoom = Math.max(currentZoom - 0.5, 0.5);
+      app.stage.scale.set(currentZoom);
+      log(`Zoom: ${currentZoom}x`);
+    }
+
+    function resetView() {
+      currentZoom = 2;
+      app.stage.scale.set(currentZoom);
+      app.stage.pivot.set(0, 0);
+      log('View reset');
+    }
+
+    // Panning with mouse drag
+    let dragging = false;
+    let dragStart = { x: 0, y: 0 };
+    let pivotStart = { x: 0, y: 0 };
+
+    document.getElementById('pixi-canvas').addEventListener('mousedown', (e) => {
+      dragging = true;
+      dragStart = { x: e.clientX, y: e.clientY };
+      pivotStart = { x: app.stage.pivot.x, y: app.stage.pivot.y };
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const dx = (e.clientX - dragStart.x) / currentZoom;
+      const dy = (e.clientY - dragStart.y) / currentZoom;
+      app.stage.pivot.set(pivotStart.x - dx, pivotStart.y - dy);
+    });
+
+    document.addEventListener('mouseup', () => {
+      dragging = false;
+    });
+
+    init();
+  </script>
+</body>
+</html>

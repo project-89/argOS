@@ -1,13 +1,14 @@
 import { query, getRelationTargets, addEntity, addComponent } from "bitecs";
 import type { World } from "../ecs/world";
 import type { SystemRegistry, SystemDefinition } from "../ecs/dynamic-systems";
-import { 
-  AllComponents, 
-  Name, Description, Position, Room, Agent, Mind, 
+import {
+  AllComponents,
+  Name, Description, Position, Room, Agent, Mind,
   Stimulus, KnowledgeNode, Memory, Belief, Goal, Impression,
   Action, CognitiveEvent, PhysicalObject, StimulusSource, GodAgent,
-  GridPosition, Sprite, WorldMap, Visual
+  GridPosition, Sprite, WorldMap, Visual, CharacterRigConfig, Needs, Interactable
 } from "../ecs/components";
+import { createCharacterRig, getCharacterRig } from "../rendering/character-rig";
 import { AllRelations, OccupiesRoom, Knows, Contains, BelongsTo } from "../ecs/relations";
 import { getAgentKnowledge } from "../cognition/knowledge-graph";
 import { getAgentMemory } from "../cognition/agent-mind";
@@ -99,6 +100,24 @@ const COMPONENT_SERIALIZERS: Record<string, (eid: number) => Record<string, any>
     opacity: Visual.opacity[eid],
     glow: Visual.glow[eid],
     pulseRate: Visual.pulseRate[eid]
+  } : null,
+  CharacterRigConfig: (eid) => CharacterRigConfig.baseAtlas[eid] ? {
+    baseAtlas: CharacterRigConfig.baseAtlas[eid],
+    idleAnimation: CharacterRigConfig.idleAnimation[eid],
+    currentDirection: CharacterRigConfig.currentDirection[eid]
+  } : null,
+  Needs: (eid) => Needs.hunger[eid] !== undefined ? {
+    hunger: Needs.hunger[eid],
+    energy: Needs.energy[eid],
+    social: Needs.social[eid],
+    comfort: Needs.comfort[eid]
+  } : null,
+  Interactable: (eid) => Interactable.action[eid] ? {
+    action: Interactable.action[eid],
+    targetNeed: Interactable.targetNeed[eid],
+    effectAmount: Interactable.effectAmount[eid],
+    cooldown: Interactable.cooldown[eid],
+    lastUsed: Interactable.lastUsed[eid]
   } : null,
 };
 
@@ -282,14 +301,32 @@ const COMPONENT_DESERIALIZERS: Record<string, (eid: number, data: Record<string,
     WorldMap.height[eid] = data.height; 
     WorldMap.tiles[eid] = data.tiles; 
   },
-  Visual: (eid, data) => { 
-    Visual.shape[eid] = data.shape; 
-    Visual.color[eid] = data.color; 
-    Visual.size[eid] = data.size; 
-    Visual.label[eid] = data.label; 
-    Visual.opacity[eid] = data.opacity; 
-    Visual.glow[eid] = data.glow; 
-    Visual.pulseRate[eid] = data.pulseRate; 
+  Visual: (eid, data) => {
+    Visual.shape[eid] = data.shape;
+    Visual.color[eid] = data.color;
+    Visual.size[eid] = data.size;
+    Visual.label[eid] = data.label;
+    Visual.opacity[eid] = data.opacity;
+    Visual.glow[eid] = data.glow;
+    Visual.pulseRate[eid] = data.pulseRate;
+  },
+  CharacterRigConfig: (eid, data) => {
+    CharacterRigConfig.baseAtlas[eid] = data.baseAtlas;
+    CharacterRigConfig.idleAnimation[eid] = data.idleAnimation;
+    CharacterRigConfig.currentDirection[eid] = data.currentDirection;
+  },
+  Needs: (eid, data) => {
+    Needs.hunger[eid] = data.hunger;
+    Needs.energy[eid] = data.energy;
+    Needs.social[eid] = data.social;
+    Needs.comfort[eid] = data.comfort;
+  },
+  Interactable: (eid, data) => {
+    Interactable.action[eid] = data.action;
+    Interactable.targetNeed[eid] = data.targetNeed;
+    Interactable.effectAmount[eid] = data.effectAmount;
+    Interactable.cooldown[eid] = data.cooldown;
+    Interactable.lastUsed[eid] = data.lastUsed;
   },
 };
 
@@ -355,12 +392,32 @@ export function deserializeWorld(
       }
     }
   }
-  
+
+  // Recreate character rigs from saved config
+  let rigCount = 0;
+  for (const entity of data.entities) {
+    const eid = oldToNewId.get(entity.id)!;
+    const rigConfig = entity.components.CharacterRigConfig;
+    if (rigConfig && rigConfig.baseAtlas) {
+      const entityName = Name.value[eid] || `entity_${eid}`;
+      // Check if rig already exists (shouldn't, but just in case)
+      if (!getCharacterRig(eid)) {
+        createCharacterRig({
+          entityId: eid,
+          entityName: entityName,
+          baseAtlas: rigConfig.baseAtlas,
+        });
+        rigCount++;
+        console.log(`[Persistence] Recreated character rig for ${entityName} (${rigConfig.baseAtlas})`);
+      }
+    }
+  }
+
   world.meta.name = data.name;
   world.time.tick = data.tick;
-  
-  console.log(`[Persistence] Loaded world with ${data.entities.length} entities, ${data.systems.length} systems`);
-  
+
+  console.log(`[Persistence] Loaded world with ${data.entities.length} entities, ${data.systems.length} systems, ${rigCount} character rigs`);
+
   return { oldToNewId };
 }
 

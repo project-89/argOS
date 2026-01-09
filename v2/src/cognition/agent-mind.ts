@@ -2,8 +2,8 @@ import { generateText } from "ai";
 import { google } from "@ai-sdk/google";
 import type { World } from "../ecs/world";
 import { addEntity, addComponent, removeEntity, query, getRelationTargets, hasComponent } from "bitecs";
-import { Name, Description, Agent, Mind, Room, Thought, Perception, ConversationTurn } from "../ecs/components";
-import { OccupiesRoom, HasThought, HasPerception, HasConversation } from "../ecs/relations";
+import { Name, Description, Agent, Mind, Room, Thought, Perception, ConversationTurn, Goal, Personality } from "../ecs/components";
+import { OccupiesRoom, HasThought, HasPerception, HasConversation, HasGoal } from "../ecs/relations";
 import { 
   getKnowledgeSummary, 
   getRelevantMemories, 
@@ -212,6 +212,40 @@ function buildAgentContext(world: World, eid: number): string {
     .sort((a, b) => (Thought.timestamp[b] || 0) - (Thought.timestamp[a] || 0))
     .slice(0, 3);
 
+  // Get active goals
+  const goalTargets = getRelationTargets(world, eid, HasGoal);
+  const activeGoals = goalTargets
+    .filter(gid => hasComponent(world, gid, Goal) && Goal.status[gid] === "active")
+    .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0))
+    .slice(0, 5);
+
+  // Get personality traits if present
+  const hasPersonality = hasComponent(world, eid, Personality);
+  const personalityTraits = hasPersonality ? {
+    openness: Personality.openness[eid] ?? 0.5,
+    conscientiousness: Personality.conscientiousness[eid] ?? 0.5,
+    extraversion: Personality.extraversion[eid] ?? 0.5,
+    agreeableness: Personality.agreeableness[eid] ?? 0.5,
+    neuroticism: Personality.neuroticism[eid] ?? 0.5,
+  } : null;
+
+  // Format personality as natural language
+  const formatPersonality = (traits: typeof personalityTraits): string => {
+    if (!traits) return "";
+    const descriptions: string[] = [];
+    if (traits.openness > 0.7) descriptions.push("curious and creative");
+    else if (traits.openness < 0.3) descriptions.push("practical and conventional");
+    if (traits.conscientiousness > 0.7) descriptions.push("organized and disciplined");
+    else if (traits.conscientiousness < 0.3) descriptions.push("flexible and spontaneous");
+    if (traits.extraversion > 0.7) descriptions.push("outgoing and energetic");
+    else if (traits.extraversion < 0.3) descriptions.push("reserved and reflective");
+    if (traits.agreeableness > 0.7) descriptions.push("cooperative and trusting");
+    else if (traits.agreeableness < 0.3) descriptions.push("competitive and skeptical");
+    if (traits.neuroticism > 0.7) descriptions.push("sensitive and prone to worry");
+    else if (traits.neuroticism < 0.3) descriptions.push("calm and emotionally stable");
+    return descriptions.length > 0 ? descriptions.join(", ") : "balanced temperament";
+  };
+
   return `You are ${name}.
 
 IDENTITY:
@@ -229,6 +263,16 @@ CURRENT STATE:
 - Arousal Level: ${(arousal * 100).toFixed(0)}%
 - Current Focus: ${focus || "nothing specific"}
 - Others Present: ${othersInRoom.length > 0 ? othersInRoom.join(", ") : "no one else"}
+${personalityTraits ? `- Temperament: ${formatPersonality(personalityTraits)}` : ""}
+
+ACTIVE GOALS:
+${activeGoals.length > 0
+  ? activeGoals.map(gid => {
+      const progress = Goal.progress[gid] || 0;
+      const priority = Goal.priority[gid] || 5;
+      return `- [Priority ${priority}] ${Goal.description[gid]} (${progress}% complete)`;
+    }).join("\n")
+  : "No specific goals right now."}
 
 RECENT PERCEPTIONS:
 ${recentPerceptions.length > 0 
@@ -253,20 +297,23 @@ export async function agentThink(world: World, eid: number): Promise<AgentAction
     content: ConversationTurn.content[turnEid],
   }));
 
-  const prompt = `Based on your current situation, perceptions, and character, decide what to do next.
+  const prompt = `Based on your current situation, perceptions, goals, and character, decide what to do next.
 
 You can:
 - speak: Say something out loud (provide content)
 - observe: Pay attention to someone/something specific (provide target)
 - think: Have an internal thought (provide content)
 - interact: Physically interact with something (provide target and content describing the action)
+- move: Go to a different location (provide target as the destination name)
 - wait: Do nothing, just exist in the moment
+
+Consider your active goals when deciding what to do. Work toward completing them.
 
 Respond with JSON only:
 {
   "innerThought": "Your internal reasoning about what to do",
   "action": {
-    "type": "speak|observe|think|interact|wait",
+    "type": "speak|observe|think|interact|move|wait",
     "target": "optional - who/what",
     "content": "optional - what you say/think/do"
   }

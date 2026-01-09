@@ -1,0 +1,7 @@
+{
+  "name": "TestValue",
+  "description": "Stores a raw numeric value to verify data persistence and array indexing",
+  "properties": {
+    "amount": "number"
+  }
+}

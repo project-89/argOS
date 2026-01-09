@@ -1,0 +1,7 @@
+{
+  "name": "Metabolism",
+  "description": "Defines natural mortality rates regardless of food supply.",
+  "properties": {
+    "death_rate": "number"
+  }
+}

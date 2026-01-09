@@ -22,6 +22,7 @@ import { OccupiesRoom } from "./ecs/relations";
 import { clearAllAgentMemory } from "./cognition/agent-mind";
 import { autoSave, hasAutoSave, loadAutoSave } from "./persistence/world-persistence";
 import { loadCharacterAnimations } from "./rendering/animation-loader";
+import { loadAllSystems } from "./systems/system-loader";
 import type { World } from "./ecs/world";
 
 interface SimulationInstance {
@@ -85,7 +86,13 @@ async function main() {
   let lastRoomCount = 0;
   let lastAutoSave = Date.now();
   const AUTO_SAVE_INTERVAL = 30000;
-  
+
+  // Load file-based systems (NeedsDecay, SeekNeeds, RandomWander, etc.)
+  console.log("⚙️  Loading behavior systems...");
+  const fileSystems = await loadAllSystems();
+  sim.god.fileSystems = fileSystems;
+  console.log(`✅ Loaded ${fileSystems.length} systems: ${fileSystems.map(s => s.name).join(", ")}`);
+
   if (await hasAutoSave()) {
     console.log("📂 Found autosave, restoring...");
     const loaded = await loadAutoSave(sim.world, sim.god.systemRegistry);
@@ -109,6 +116,7 @@ async function main() {
     console.log("\n🔄 Resetting world...\n");
     clearAllAgentMemory(sim.world);
     sim = createSimulation();
+    sim.god.fileSystems = fileSystems; // Restore file-based systems
     lastRoomCount = 0;
     updateServerState();
     server.updateState();

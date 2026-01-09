@@ -1,0 +1,10 @@
+{
+  "name": "ConsumerParams",
+  "description": "Defining characteristics of a resource consumer",
+  "properties": {
+    "baseDemand": "number",
+    "currentDemand": "number",
+    "maxBudget": "number",
+    "elasticity": "number"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "Producer",
+  "description": "Entities that generate resources. Uses price to adjust production effort.",
+  "properties": {
+    "resource_id": "number",
+    "inventory": "number",
+    "production_rate": "number",
+    "max_capacity": "number",
+    "price_sensitivity": "number"
+  }
+}

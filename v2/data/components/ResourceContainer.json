@@ -1,0 +1,10 @@
+{
+  "name": "ResourceContainer",
+  "description": "Stores consumable resources (Water, Ale, Goods)",
+  "properties": {
+    "resourceType": "number",
+    "currentStock": "number",
+    "maxStock": "number",
+    "replenishRate": "number"
+  }
+}

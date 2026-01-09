@@ -1,0 +1,7 @@
+{
+  "name": "ResourceType",
+  "description": "Identifies the type of resource an entity deals with (1=Food, 2=Wood)",
+  "properties": {
+    "typeId": "number"
+  }
+}

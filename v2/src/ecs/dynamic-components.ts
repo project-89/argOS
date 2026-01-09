@@ -47,6 +47,11 @@ export function listDynamicComponents(): ComponentDefinition[] {
   return Array.from(componentDefinitions.values());
 }
 
+export function clearDynamicComponents(): void {
+  runtimeComponents.clear();
+  componentDefinitions.clear();
+}
+
 export async function saveComponentDefinition(def: ComponentDefinition): Promise<string> {
   await ensureComponentsDir();
   const filePath = path.join(COMPONENTS_DIR, `${def.name}.json`);

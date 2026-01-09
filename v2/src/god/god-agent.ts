@@ -1,6 +1,7 @@
 import { generateText, tool, stepCountIs } from "ai";
 import { google } from "@ai-sdk/google";
 import { z } from 'zod/v3';
+import { query } from "bitecs";
 import type { World } from "../ecs/world";
 import { createEcsTools, createEntityRegistry, type EntityRegistry, type EcsTools, type ToolResult } from "../ecs/tools";
 import { createGodAgentEntity } from "../ecs/prefabs";
@@ -21,14 +22,17 @@ import {
   createMindDecaySystem,
 } from "../ecs/dynamic-systems";
 import { bakeSystem, modifySystem, activateBakedSystem } from "./system-baker";
-import { 
-  writeSystemFile, 
-  loadSystemFromFile, 
-  loadAllSystems, 
+import {
+  writeSystemFile,
+  loadSystemFromFile,
+  loadAllSystems,
+  runLoadedSystems,
   getSystemSource,
   deleteSystemFile,
   updateSystemFile,
-  type LoadedSystem 
+  getSystemsNeedingFix,
+  fixAllQueuedSystems,
+  type LoadedSystem
 } from "../systems/system-loader";
 import {
   createDynamicComponent,
@@ -41,8 +45,84 @@ import {
   type ComponentDefinition,
 } from "../ecs/dynamic-components";
 import { createRenderingTools, type RenderingTools } from "../rendering/rendering-tools";
+import {
+  createInterventionRegistry,
+  registerIntervention,
+  unregisterIntervention,
+  listInterventions,
+  activateIntervention,
+  deactivateIntervention,
+  runInterventions,
+  createSimpleIntervention,
+  type InterventionRegistry,
+  type InterventionDefinition,
+  type InterventionCondition,
+  type InterventionEffect,
+} from "../ecs/interventions";
+import {
+  createPropositionRegistry,
+  registerProposition,
+  unregisterProposition,
+  listPropositions,
+  evaluateProposition,
+  evaluateAllPropositions,
+  getCategoryReport,
+  getPropositionHistory,
+  createNeedsHealthProposition,
+  createValueRangeProposition,
+  createExistenceProposition,
+  type PropositionRegistry,
+  type PropositionDefinition,
+  type PropositionCheck,
+} from "../ecs/propositions";
+import {
+  WorldSchema,
+  worldSchema as defaultWorldSchema,
+  type ObjectTypeDefinition,
+  type AffordanceDefinition,
+  type RuleDefinition,
+} from "../world/schema";
 
-const model = google("gemini-2.5-flash");
+// Multi-model architecture:
+// - Planner (Pro): Deep thinking for design and review
+// - Executor (Flash): Fast implementation
+const plannerModel = google("gemini-3-pro-preview");
+const executorModel = google("gemini-3-flash-preview");
+// Keep backward compatibility
+const model = executorModel;
+
+// Thinking levels for Gemini 3 models
+// Pro supports: 'low', 'high'
+// Flash supports: 'minimal', 'low', 'medium', 'high'
+const PLANNER_THINKING_LEVEL = 'high' as const;  // Main design phase
+const REVIEW_THINKING_LEVEL = 'low' as const;    // Review phase
+const EXECUTOR_THINKING_LEVEL = 'medium' as const; // System code generation
+
+// Environment variable to control review phase (default: enabled)
+const ENABLE_DESIGN_REVIEW = process.env.SKIP_DESIGN_REVIEW !== 'true';
+
+export interface DesignDocument {
+  summary: string;
+  components: Array<{
+    name: string;
+    purpose: string;
+    properties: Record<string, string>;
+  }>;
+  entities: Array<{
+    name: string;
+    type: "producer" | "consumer" | "market" | "other";
+    components: string[];
+    initialValues?: Record<string, any>;
+  }>;
+  systems: Array<{
+    name: string;
+    purpose: string;
+    frequency: number;
+    logic: string; // Pseudocode description
+  }>;
+  feedbackLoops?: string[];
+  notes?: string;
+}
 
 export interface PlanStep {
   id: string;
@@ -77,6 +157,9 @@ export interface GodAgentState {
   world: World;
   registry: EntityRegistry;
   systemRegistry: SystemRegistry;
+  interventionRegistry: InterventionRegistry;
+  propositionRegistry: PropositionRegistry;
+  worldSchema: WorldSchema;
   tools: EcsTools;
   renderingTools: RenderingTools;
   conversationHistory: Array<{ role: "user" | "assistant" | "system"; content: string }>;
@@ -106,11 +189,18 @@ export function createGodAgent(world: World, config: { name: string; worldName: 
   systemRegistry.systems.set("StimulusEmission", createStimulusEmissionSystem());
   systemRegistry.systems.set("MindDecay", createMindDecaySystem());
 
+  const interventionRegistry = createInterventionRegistry();
+  const propositionRegistry = createPropositionRegistry();
+  const worldSchema = new WorldSchema(); // Each god agent gets its own schema instance
+
   return {
     eid,
     world,
     registry,
     systemRegistry,
+    interventionRegistry,
+    propositionRegistry,
+    worldSchema,
     tools,
     renderingTools,
     conversationHistory: [],
@@ -311,6 +401,50 @@ function formatMemoryForPrompt(state: GodAgentState): string {
   return lines.join("\n");
 }
 
+function buildCurrentWorldContext(state: GodAgentState): string {
+  const lines: string[] = [];
+
+  // List existing entities
+  const entities = state.tools.listEntities().result as Array<{ name: string; id: number }>;
+  if (entities.length > 1) { // More than just the GodAgent
+    lines.push(`Entities (${entities.length}):`);
+    for (const e of entities.slice(0, 20)) {
+      if (!e.name.includes("GodAgent") && !e.name.includes("Architect")) {
+        lines.push(`  - ${e.name}`);
+      }
+    }
+    if (entities.length > 20) lines.push(`  ... and ${entities.length - 20} more`);
+  }
+
+  // List dynamic components
+  const dynComponents = listDynamicComponents();
+  if (dynComponents.length > 0) {
+    lines.push(`\nCustom Components (${dynComponents.length}):`);
+    for (const c of dynComponents.slice(0, 10)) {
+      lines.push(`  - ${c.name}: { ${Object.keys(c.properties).join(", ")} }`);
+    }
+  }
+
+  // List file-based systems
+  if (state.fileSystems.length > 0) {
+    lines.push(`\nFile Systems (${state.fileSystems.length}):`);
+    for (const s of state.fileSystems.slice(0, 10)) {
+      lines.push(`  - ${s.name} (${s.active ? 'active' : 'inactive'}): ${s.description}`);
+    }
+  }
+
+  // List interventions
+  const interventions = listInterventions(state.interventionRegistry);
+  if (interventions.length > 0) {
+    lines.push(`\nInterventions (${interventions.length}):`);
+    for (const i of interventions.slice(0, 5)) {
+      lines.push(`  - ${i.name}: ${i.description}`);
+    }
+  }
+
+  return lines.length > 0 ? lines.join("\n") : "World is empty - ready to build!";
+}
+
 function buildSystemPrompt(state: GodAgentState): string {
   const worldName = GodAgent.worldName[state.eid];
   const narrative = GodAgent.narrative[state.eid];
@@ -347,9 +481,9 @@ You: [Creates the agent directly since the request is clear]
 
 ${narrative ? `NARRATIVE CONTEXT:\n${narrative}\n` : ""}
 
-AVAILABLE COMPONENTS (you can ONLY use these - do not invent new ones):
+BUILT-IN COMPONENTS:
 - Name: { value: string } - Entity's name
-- Description: { value: string } - Entity's description  
+- Description: { value: string } - Entity's description
 - Position: { x: number, y: number, z: number } - Spatial position for 2D/3D visualization
 - Room: { capacity: number, ambience: string } - A location/space
 - Agent: { role: string, systemPrompt: string, active: boolean } - Cognitive agent that thinks
@@ -363,6 +497,73 @@ AVAILABLE COMPONENTS (you can ONLY use these - do not invent new ones):
 - CurrentAction: { type: string, targetEid: number, startTick: number, duration: number } - Agent's ongoing action
 - Stimulus, Memory, Belief, Goal, Impression, Action, CognitiveEvent - Other components
 
+DYNAMIC COMPONENT SYSTEM - CREATE YOUR OWN COMPONENTS:
+You can create ANY custom component types to model ANY domain. This is the key to flexible simulation!
+
+To create a custom component:
+  createComponent({ name: "Temperature", description: "Thermal state", properties: { current: "number", target: "number" } })
+
+To use on entities:
+  setDynamicComponent({ entityName: "Reactor Core", componentName: "Temperature", values: { current: 100, target: 200 } })
+
+⚠️ CRITICAL - STRUCTURE OF ARRAYS (SoA) DATA ACCESS:
+Components use a Structure of Arrays pattern - NOT object-per-entity!
+
+The component is a single object where each property is an ARRAY indexed by entity ID:
+  const Temperature = ctx.getDynamic("Temperature");
+  // Temperature looks like: { current: [undefined, undefined, 100, undefined, 200], target: [...] }
+  // The arrays are indexed by entity ID (eid)
+
+✅ CORRECT - Access data via Component.property[eid]:
+  const temp = Temperature.current[eid];       // READ a value
+  Temperature.current[eid] = temp + 5;         // WRITE a value
+  Temperature.target[eid] = 200;               // SET a value
+
+  // Loop example:
+  for (const eid of entities) {
+    const currentPrice = Market.currentPrice[eid];
+    const supply = Market.supply[eid];
+    Market.currentPrice[eid] = currentPrice + (supply * 0.1);
+  }
+
+❌ WRONG - Do NOT use OOP-style methods (they don't exist!):
+  Temperature.getByEntity(eid)           // ❌ NO! This does not exist
+  Temperature.get(eid)                   // ❌ NO! Use Temperature.current[eid]
+  Temperature.set(eid, value)            // ❌ NO! Use Temperature.current[eid] = value
+  const tempObj = Temperature[eid]       // ❌ NO! Properties ARE the arrays
+  tempObj.current = 50                   // ❌ NO! This is wrong
+
+The SoA pattern means: Component.PROPERTY[eid], not Component.getByEntity(eid).PROPERTY
+
+EXAMPLE - Creating a custom simulation:
+1. createComponent({ name: "Health", properties: { current: "number", max: "number" } })
+2. createEntity({ name: "Player" })
+3. setDynamicComponent({ entityName: "Player", componentName: "Health", values: { current: 100, max: 100 } })
+4. createSystem with code that uses SoA access:
+   const Health = ctx.getDynamic("Health");
+   if (!Health) return;
+   for (const eid of entities) {
+     // SoA: Component.property[eid]
+     const current = Health.current[eid] || 0;
+     Health.current[eid] = Math.min(current + 1, Health.max[eid] || 100);
+   }
+
+⚠️ CRITICAL - SIMULATIONS NEED SYSTEMS TO RUN:
+Entities and components are just DATA. Without SYSTEMS, nothing happens!
+
+When building any simulation, you MUST create systems that:
+1. Process entities and modify component data over time
+2. Implement the behavioral rules of your simulation
+3. Log interesting events so we can observe the simulation
+
+COMPLETE SIMULATION = Components + Entities + Systems
+- Components define WHAT data exists
+- Entities hold the data
+- Systems make things HAPPEN by processing entities each tick
+
+If you create components and entities but NO systems, the simulation will be STATIC.
+Always finish your setup by creating the necessary systems!
+
 2D VISUALIZATION SYSTEM:
 The Visual component controls how entities appear in the 2D canvas:
 - shape: "circle", "rect", "diamond", "triangle", "hexagon", "star"
@@ -375,12 +576,13 @@ The Visual component controls how entities appear in the 2D canvas:
 
 Use setComponentValues to update Visual properties dynamically from systems!
 
-IMPORTANT: Systems can ONLY read/write the components above. If you need custom data (like hunger, energy, temperature), 
-use existing components creatively:
-- Use Mind.arousal for energy/alertness levels
-- Use Description.value to store state as text
-- Use Position for spatial simulation
-- Create StimulusSource entities to trigger events
+FLEXIBLE ENTITY COMPOSITION:
+You can compose entities with ANY combination of components using these tools:
+- addComponent({ entityName, componentName, values }) - Add a built-in component to any entity
+- removeComponent({ entityName, componentName }) - Remove a component from an entity
+- createComponent/setDynamicComponent - For custom component types
+
+This lets you build ANY entity type from primitives, not just the predefined createAgent/createRoom/etc.
 
 AVAILABLE RELATIONS:
 ${Object.keys(AllRelations).map(r => `- ${r}`).join("\n")}
@@ -500,6 +702,99 @@ For complex tasks, use the planning tools to break them into steps:
 - recordMemory: Store important observations or decisions
 - searchMemories: Recall relevant past information
 
+WORLD SCHEMA SYSTEM - PREFABS, TRAITS & AFFORDANCES:
+The WorldSchema provides a trait-based object system for rich interactive worlds.
+
+OBJECT TYPES (Prefabs):
+Pre-defined templates with traits and states. Use spawn() to create instances.
+Available types: ${state.worldSchema.getAllObjectTypes().map(t => t.name).join(", ")}
+
+To spawn from a type:
+  spawn({ type: "bed", name: "Guest Bed", properties: { adjective: "creaky", material: "oak" }, roomName: "Bedroom" })
+
+To define a NEW object type:
+  defineObjectType({
+    name: "ale_mug",
+    description: "A {adjective} mug of {beverage}",
+    traits: ["drinkable", "takeable", "examinable"],
+    states: {
+      full: { description: "The mug is full.", traits: ["drinkable"] },
+      empty: { description: "Empty.", blockedTraits: ["drinkable"] }
+    },
+    defaultState: "full",
+    category: "consumable"
+  })
+
+TRAITS (for affordance system):
+Traits define what ACTIONS can be performed on objects. NOT for game logic - use components for that.
+Common traits: takeable, openable, lockable, drinkable, edible, sleepable, sittable, examinable, lightSource, talkable, alive, prey, predator
+
+COMPONENTS (for game systems):
+Components hold REAL DATA that systems process. When building simulations, define components in your object types!
+
+⚠️ CRITICAL: Object types with ONLY traits are STATIC. To make entities that PARTICIPATE in systems:
+  - Add defaultComponents with numeric data (health, energy, speed, etc.)
+  - Systems query for entities by component: query(world, [Health, Energy])
+  - Systems read/write component values: Health.current[eid] += 10
+
+EXAMPLE - Simulation entity with components:
+defineObjectType({
+  name: "rabbit",
+  description: "A {adjective} rabbit",
+  traits: ["prey", "edible", "alive"],  // For affordances (what can be done TO it)
+  states: { active: {...}, dead: {...} },
+  defaultState: "active",
+  defaultComponents: [  // For systems (HOW IT BEHAVES)
+    { name: "Health", values: { current: 100, max: 100 } },
+    { name: "Energy", values: { current: 80, max: 100, decayRate: 0.5 } },
+    { name: "Movement", values: { speed: 2, canMove: true } }
+  ]
+})
+
+When you spawn("rabbit", "Rabbit 1"), it gets all those components with real data!
+
+AFFORDANCES (for interaction):
+Actions that can be performed on objects. When an agent uses an affordance, the EFFECTS execute and modify REAL game state!
+Available: ${state.worldSchema.getAllAffordances().slice(0, 10).map(a => a.name).join(", ")}...
+
+AFFORDANCE EFFECT TYPES:
+- modify_component: Change component data (e.g., { type: "modify_component", target: "actor", modifications: [{ component: "Health", property: "current", operation: "subtract", value: 10 }] })
+- set_state: Change object state (recalculates traits)
+- add_trait / remove_trait: Modify semantic traits
+- destroy: Remove entity from world
+- emit_stimulus: Broadcast perception to nearby agents
+- spawn: Create new entity
+
+Example affordance with effects:
+defineAffordance({
+  name: "eat",
+  requires: ["edible"],
+  effects: [
+    { type: "modify_component", target: "actor", modifications: [{ component: "Needs", property: "hunger", operation: "subtract", value: 30 }] },
+    { type: "destroy", target: "target" }
+  ]
+})
+
+WORLD RULES (declarative behaviors):
+Rules check conditions each tick and execute effects on matching entities.
+defineRule({
+  name: "torch_burns_out",
+  when: { event: "tick", condition: { has: ["burning"] } },
+  then: [{ action: "modify_value", target: "self", params: { component: "fuel", field: "current", delta: -0.1 } }]
+})
+
+WORLDSCHEMA TOOLS:
+- spawn(type, name, properties?, roomName?, state?, componentOverrides?) - Create entity WITH components
+- defineObjectType(..., defaultComponents) - Define prefab with components for game systems
+- defineAffordance(..., effects) - Define action with REAL effects on game state
+- defineRule(...) - Define declarative world rule
+- listObjectTypes/listAffordances/listRules - Query the schema
+- getObjectTraits/getAvailableActions - Query entity state
+- transitionObjectState(entityName, newState) - Change object state
+
+CURRENT WORLD STATE:
+${buildCurrentWorldContext(state)}
+
 ${formatMemoryForPrompt(state)}`;
 }
 
@@ -603,7 +898,7 @@ function buildTools(state: GodAgentState) {
     }),
 
     setComponentValues: tool({
-      description: "Update component values on an entity",
+      description: "Update component values on an entity (component must already be attached)",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
         componentName: z.enum(componentNames).describe("Component to update"),
@@ -612,6 +907,33 @@ function buildTools(state: GodAgentState) {
       execute: async (params) => {
         const result = state.tools.setComponentValues(params);
         console.log(`[Tool] setComponentValues: ${params.entityName}.${params.componentName}`);
+        return result;
+      },
+    }),
+
+    addComponent: tool({
+      description: "Add a built-in component to an entity (can also set initial values)",
+      inputSchema: z.object({
+        entityName: z.string().describe("Name of the entity"),
+        componentName: z.enum(componentNames).describe("Component to add"),
+        values: z.record(z.any()).optional().describe("Optional initial values to set"),
+      }),
+      execute: async (params) => {
+        const result = state.tools.addComponent(params);
+        console.log(`[Tool] addComponent: ${params.entityName} += ${params.componentName}`);
+        return result;
+      },
+    }),
+
+    removeComponent: tool({
+      description: "Remove a built-in component from an entity",
+      inputSchema: z.object({
+        entityName: z.string().describe("Name of the entity"),
+        componentName: z.enum(componentNames).describe("Component to remove"),
+      }),
+      execute: async (params) => {
+        const result = state.tools.removeComponentFromEntity(params);
+        console.log(`[Tool] removeComponent: ${params.entityName} -= ${params.componentName}`);
         return result;
       },
     }),
@@ -717,37 +1039,55 @@ function buildTools(state: GodAgentState) {
     }),
 
     activateSystem: tool({
-      description: "Activate a system so it runs periodically",
+      description: "Activate a system so it runs periodically. Works for both baked systems and file-based systems.",
       inputSchema: z.object({
         systemName: z.string().describe("Name of the system to activate"),
       }),
       execute: async (params) => {
-        const success = activateSystem(state.systemRegistry, params.systemName);
+        // Try baked systems first
+        let success = activateSystem(state.systemRegistry, params.systemName);
+
+        // Also check file-based systems
+        const fileSystem = state.fileSystems.find(s => s.name === params.systemName);
+        if (fileSystem) {
+          fileSystem.active = true;
+          success = true;
+        }
+
         console.log(`[Tool] activateSystem: ${params.systemName} -> ${success}`);
         return { success, result: { activated: params.systemName } };
       },
     }),
 
     deactivateSystem: tool({
-      description: "Deactivate a system so it stops running",
+      description: "Deactivate a system so it stops running. Works for both baked systems and file-based systems.",
       inputSchema: z.object({
         systemName: z.string().describe("Name of the system to deactivate"),
       }),
       execute: async (params) => {
-        const success = deactivateSystem(state.systemRegistry, params.systemName);
+        // Try baked systems first
+        let success = deactivateSystem(state.systemRegistry, params.systemName);
+
+        // Also check file-based systems
+        const fileSystem = state.fileSystems.find(s => s.name === params.systemName);
+        if (fileSystem) {
+          fileSystem.active = false;
+          success = true;
+        }
+
         console.log(`[Tool] deactivateSystem: ${params.systemName} -> ${success}`);
         return { success, result: { deactivated: params.systemName } };
       },
     }),
 
     createSystem: tool({
-      description: `Create a new deterministic ECS system that runs every tick. The system will be written to a file and loaded dynamically. 
-      
+      description: `Create a new deterministic ECS system that runs every tick. The system will be written to a file and loaded dynamically.
+
 IMPORTANT: The code should be the BODY of the run function only (not the function declaration).
 
 Available in ctx:
 - ctx.tick, ctx.delta - timing info
-- ctx.query(world, [Component1, Component2]) - query entities
+- ctx.query(world, [Component1, Component2]) - query entities (ONLY works with built-in components!)
 - ctx.addComponent(world, eid, Component) - add component to entity
 - ctx.removeEntity(world, eid) - remove entity
 - ctx.getRelationTargets(world, eid, Relation) - get relation targets
@@ -755,8 +1095,13 @@ Available in ctx:
 - ctx.relations.{OccupiesRoom, StimulusInRoom, etc.}
 - ctx.dynamicComponents - Map of all dynamic components
 - ctx.getDynamic(name) - get a dynamic component by name (returns component or undefined)
+- ctx.hasDynamic(eid, name) - check if entity has dynamic component data
 - ctx.log(message) - log to system output
 - ctx.emit(type, data) - emit event
+
+⚠️ CRITICAL: Dynamic components CANNOT be used in ctx.query()!
+Dynamic components are NOT bitECS components - they're separate data stores.
+You MUST query by built-in components, then filter by dynamic data.
 
 EXAMPLE 1 - Using built-in components (decay system):
 const { Needs, Agent, Name } = ctx.components;
@@ -769,13 +1114,16 @@ for (const eid of agents) {
 }
 
 EXAMPLE 2 - Using dynamic components (temperature system):
+⚠️ NOTE: Query by Name (built-in), then check for dynamic data!
 const Temperature = ctx.getDynamic("Temperature");
 if (!Temperature) return;
 const { Name } = ctx.components;
+// Query by built-in component Name, NOT by Temperature!
 const entities = Array.from(ctx.query(world, [Name]));
 for (const eid of entities) {
+  // Check if this entity has Temperature data
   const current = Temperature.current[eid];
-  if (current === undefined) continue;
+  if (current === undefined) continue; // Skip entities without Temperature
   const target = Temperature.target[eid] ?? current;
   const rate = Temperature.rate[eid] ?? 1;
   if (current !== target) {
@@ -785,7 +1133,13 @@ for (const eid of entities) {
       ctx.emit("overheat", { entity: Name.value[eid], temp: Temperature.current[eid] });
     }
   }
-}`,
+}
+
+WRONG - DO NOT DO THIS:
+// const entities = ctx.query(world, [Name, Temperature]); // BROKEN! Temperature is dynamic!
+
+RIGHT - DO THIS INSTEAD:
+// const entities = ctx.query(world, [Name]).filter(eid => ctx.hasDynamic(eid, "Temperature"));`,
       inputSchema: z.object({
         name: z.string().describe("PascalCase name for the system (e.g., 'NeedsDecay', 'SeekFood')"),
         description: z.string().describe("What the system does"),
@@ -1493,7 +1847,2229 @@ Use getSystemCode first to see the current system implementation before modifyin
         return result;
       },
     }),
+
+    // ============ INTERVENTION TOOLS ============
+    // Interventions are event-driven precondition→effect rules
+
+    createIntervention: tool({
+      description: `Create an intervention - a rule that fires effects when conditions are met.
+
+Interventions are event-driven: they check conditions each tick and execute effects when ALL conditions pass.
+This is more efficient than systems for reactive behaviors that only need to act occasionally.
+
+EXAMPLE - Hunger warning:
+{
+  name: "HungerWarning",
+  description: "Warn when agent gets too hungry",
+  conditions: [{ targetEntity: "*", component: "Needs", property: "hunger", operator: ">", value: 80 }],
+  effects: [{ type: "log", message: "$name is starving!", targetEntity: "$target" }],
+  repeatable: true,
+  cooldown: 10,
+  priority: 5
+}
+
+EXAMPLE - Auto-heal:
+{
+  name: "AutoHeal",
+  description: "Heal injured agents slowly",
+  conditions: [{ targetEntity: "*", component: "Health", property: "current", operator: "<", value: 100 }],
+  effects: [{ type: "setDynamic", targetEntity: "$target", component: "Health", property: "current", value: "$current + 1" }],
+  repeatable: true,
+  cooldown: 5,
+  priority: 3
+}`,
+      inputSchema: z.object({
+        name: z.string().describe("Unique name for the intervention"),
+        description: z.string().describe("What this intervention does"),
+        conditions: z.array(z.object({
+          targetEntity: z.string().describe("Entity name, '*' for all, or '@Component' for all with component"),
+          component: z.string().describe("Component to check (built-in or dynamic)"),
+          property: z.string().describe("Property to check"),
+          operator: z.enum([">", "<", ">=", "<=", "==", "!=", "contains", "exists"]),
+          value: z.any().optional().describe("Value to compare (not needed for 'exists')"),
+        })),
+        effects: z.array(z.object({
+          type: z.enum(["setComponent", "setDynamic", "log", "emit"]).describe("Effect type"),
+          targetEntity: z.string().describe("Entity name or '$target' for triggering entity"),
+          component: z.string().optional().describe("Component to modify (for set effects)"),
+          property: z.string().optional().describe("Property to set"),
+          value: z.any().optional().describe("Value to set (use '$current + N' for relative)"),
+          message: z.string().optional().describe("For log: message (use $name, $value)"),
+          eventType: z.string().optional().describe("For emit: event type"),
+          eventData: z.record(z.any()).optional().describe("For emit: event data"),
+        })),
+        repeatable: z.boolean().optional().describe("Fire multiple times? (default true)"),
+        cooldown: z.number().optional().describe("Ticks between firings (default 1)"),
+        priority: z.number().optional().describe("Higher = checked first (default 5)"),
+        active: z.boolean().optional().describe("Start active? (default true)"),
+      }),
+      execute: async (params) => {
+        const definition: InterventionDefinition = {
+          name: params.name,
+          description: params.description,
+          conditions: params.conditions as InterventionCondition[],
+          effects: params.effects as InterventionEffect[],
+          repeatable: params.repeatable ?? true,
+          cooldown: params.cooldown ?? 1,
+          priority: params.priority ?? 5,
+          active: params.active ?? true,
+        };
+        registerIntervention(state.interventionRegistry, definition);
+        console.log(`[Tool] createIntervention: ${params.name}`);
+        return { success: true, result: { name: params.name, conditions: params.conditions.length, effects: params.effects.length } };
+      },
+    }),
+
+    listInterventions: tool({
+      description: "List all registered interventions and their status",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const interventions = listInterventions(state.interventionRegistry);
+        return {
+          success: true,
+          result: interventions.map(i => ({
+            name: i.name,
+            description: i.description,
+            conditions: i.conditions.length,
+            effects: i.effects.length,
+            repeatable: i.repeatable,
+            cooldown: i.cooldown,
+            active: i.active,
+            priority: i.priority,
+          })),
+        };
+      },
+    }),
+
+    activateIntervention: tool({
+      description: "Activate an intervention so it starts checking conditions",
+      inputSchema: z.object({
+        name: z.string().describe("Name of the intervention"),
+      }),
+      execute: async (params) => {
+        const success = activateIntervention(state.interventionRegistry, params.name);
+        console.log(`[Tool] activateIntervention: ${params.name} -> ${success}`);
+        return { success, result: { activated: params.name } };
+      },
+    }),
+
+    deactivateIntervention: tool({
+      description: "Deactivate an intervention to stop it from firing",
+      inputSchema: z.object({
+        name: z.string().describe("Name of the intervention"),
+      }),
+      execute: async (params) => {
+        const success = deactivateIntervention(state.interventionRegistry, params.name);
+        console.log(`[Tool] deactivateIntervention: ${params.name} -> ${success}`);
+        return { success, result: { deactivated: params.name } };
+      },
+    }),
+
+    removeIntervention: tool({
+      description: "Remove an intervention entirely",
+      inputSchema: z.object({
+        name: z.string().describe("Name of the intervention to remove"),
+      }),
+      execute: async (params) => {
+        const success = unregisterIntervention(state.interventionRegistry, params.name);
+        console.log(`[Tool] removeIntervention: ${params.name} -> ${success}`);
+        return { success, result: { removed: params.name } };
+      },
+    }),
+
+    getInterventionLogs: tool({
+      description: "Get recent logs from intervention executions",
+      inputSchema: z.object({
+        limit: z.number().optional().describe("Max logs to return (default 20)"),
+      }),
+      execute: async (params) => {
+        const limit = params.limit ?? 20;
+        const logs = state.interventionRegistry.logs.slice(-limit);
+        return { success: true, result: { logs, total: state.interventionRegistry.logs.length } };
+      },
+    }),
+
+    getInterventionEvents: tool({
+      description: "Get events emitted by interventions",
+      inputSchema: z.object({
+        limit: z.number().optional().describe("Max events to return (default 20)"),
+        eventType: z.string().optional().describe("Filter by event type"),
+      }),
+      execute: async (params) => {
+        const limit = params.limit ?? 20;
+        let events = state.interventionRegistry.events;
+        if (params.eventType) {
+          events = events.filter(e => e.type === params.eventType);
+        }
+        return { success: true, result: { events: events.slice(-limit), total: events.length } };
+      },
+    }),
+
+    // ============ PROPOSITION TOOLS ============
+    // Propositions are claims about entities that can be validated and scored
+
+    createProposition: tool({
+      description: `Create a proposition - a claim about entities that can be validated and scored.
+
+Propositions let you define criteria for entity states and check if they're met.
+Each check contributes to an overall score (0-9) based on its weight.
+
+EXAMPLE - Agent health check:
+{
+  name: "AgentIsHealthy",
+  claim: "Agent has healthy vital signs",
+  target: "*",  // Check all entities
+  checks: [
+    { component: "Needs", property: "hunger", operator: "<", value: 70, weight: 0.3, description: "Not too hungry" },
+    { component: "Needs", property: "energy", operator: ">", value: 30, weight: 0.4, description: "Has energy" },
+    { component: "Needs", property: "social", operator: ">", value: 20, weight: 0.3, description: "Not isolated" }
+  ],
+  passThreshold: 5,
+  category: "agent_health"
+}
+
+EXAMPLE - Temperature in range:
+{
+  name: "SafeTemperature",
+  claim: "Entity temperature is in safe range",
+  target: "@Temperature",  // All entities with Temperature component
+  checks: [
+    { component: "Temperature", property: "current", operator: "in_range", min: 20, max: 80, weight: 1.0, description: "Temp 20-80" }
+  ],
+  passThreshold: 9,
+  category: "simulation_health"
+}`,
+      inputSchema: z.object({
+        name: z.string().describe("Unique name for the proposition"),
+        claim: z.string().describe("Natural language claim being validated"),
+        target: z.string().describe("Entity name, '*' for all, or '@Component' for all with component"),
+        checks: z.array(z.object({
+          component: z.string().describe("Component to check"),
+          property: z.string().describe("Property to check"),
+          operator: z.enum([">", "<", ">=", "<=", "==", "!=", "contains", "exists", "in_range"]),
+          value: z.any().optional().describe("Value for comparison"),
+          min: z.number().optional().describe("Min for in_range"),
+          max: z.number().optional().describe("Max for in_range"),
+          weight: z.number().describe("Weight 0-1 for this check"),
+          description: z.string().describe("What this check validates"),
+        })),
+        passThreshold: z.number().describe("Minimum score (0-9) to pass"),
+        category: z.string().describe("Category for grouping (e.g., 'agent_health', 'simulation_health')"),
+      }),
+      execute: async (params) => {
+        const definition: PropositionDefinition = {
+          name: params.name,
+          claim: params.claim,
+          target: params.target,
+          checks: params.checks as PropositionCheck[],
+          passThreshold: params.passThreshold,
+          category: params.category,
+        };
+        registerProposition(state.propositionRegistry, definition);
+        console.log(`[Tool] createProposition: ${params.name}`);
+        return { success: true, result: { name: params.name, checks: params.checks.length, category: params.category } };
+      },
+    }),
+
+    listPropositions: tool({
+      description: "List all registered propositions",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const propositions = listPropositions(state.propositionRegistry);
+        return {
+          success: true,
+          result: propositions.map(p => ({
+            name: p.name,
+            claim: p.claim,
+            target: p.target,
+            checks: p.checks.length,
+            passThreshold: p.passThreshold,
+            category: p.category,
+          })),
+        };
+      },
+    }),
+
+    evaluatePropositionTool: tool({
+      description: "Evaluate a specific proposition against the world and get detailed results",
+      inputSchema: z.object({
+        propositionName: z.string().describe("Name of the proposition to evaluate"),
+      }),
+      execute: async (params) => {
+        const results = evaluateProposition(state.world, state.propositionRegistry, params.propositionName);
+        console.log(`[Tool] evaluateProposition: ${params.propositionName} -> ${results.length} results`);
+        return {
+          success: true,
+          result: results.map(r => ({
+            target: r.target,
+            passed: r.passed,
+            score: r.score,
+            checkResults: r.checkResults,
+          })),
+        };
+      },
+    }),
+
+    evaluateAllPropositionsTool: tool({
+      description: "Evaluate all propositions and get a summary",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const allResults = evaluateAllPropositions(state.world, state.propositionRegistry);
+        const summary: Record<string, { passed: number; failed: number; avgScore: number }> = {};
+
+        for (const [name, results] of allResults) {
+          const passed = results.filter(r => r.passed).length;
+          const avgScore = results.length > 0
+            ? results.reduce((sum, r) => sum + r.score, 0) / results.length
+            : 0;
+          summary[name] = { passed, failed: results.length - passed, avgScore: Math.round(avgScore * 10) / 10 };
+        }
+
+        console.log(`[Tool] evaluateAllPropositions: ${allResults.size} propositions evaluated`);
+        return { success: true, result: summary };
+      },
+    }),
+
+    getValidationReport: tool({
+      description: "Get a category-level validation report showing overall health of the simulation",
+      inputSchema: z.object({}),
+      execute: async () => {
+        // First evaluate all propositions to update scores
+        evaluateAllPropositions(state.world, state.propositionRegistry);
+        const report = getCategoryReport(state.propositionRegistry);
+        console.log(`[Tool] getValidationReport: ${Object.keys(report).length} categories`);
+        return { success: true, result: report };
+      },
+    }),
+
+    getPropositionHistoryTool: tool({
+      description: "Get historical proposition evaluation results",
+      inputSchema: z.object({
+        propositionName: z.string().optional().describe("Filter by proposition name"),
+        targetEntity: z.string().optional().describe("Filter by entity name"),
+        category: z.string().optional().describe("Filter by category"),
+        passedOnly: z.boolean().optional().describe("Only show passed results"),
+        failedOnly: z.boolean().optional().describe("Only show failed results"),
+        limit: z.number().optional().describe("Max results to return"),
+      }),
+      execute: async (params) => {
+        const history = getPropositionHistory(state.propositionRegistry, params);
+        return {
+          success: true,
+          result: history.map(r => ({
+            proposition: r.proposition,
+            target: r.target,
+            passed: r.passed,
+            score: r.score,
+            timestamp: r.timestamp,
+          })),
+        };
+      },
+    }),
+
+    removeProposition: tool({
+      description: "Remove a proposition",
+      inputSchema: z.object({
+        name: z.string().describe("Name of the proposition to remove"),
+      }),
+      execute: async (params) => {
+        const success = unregisterProposition(state.propositionRegistry, params.name);
+        console.log(`[Tool] removeProposition: ${params.name} -> ${success}`);
+        return { success, result: { removed: params.name } };
+      },
+    }),
+
+    // ============ WORLD SCHEMA TOOLS ============
+    // Tools for defining object types, affordances, rules, and spawning from prefabs
+
+    spawn: tool({
+      description: `Spawn an entity from a defined object type (prefab). Creates a REAL ECS entity with:
+- All traits from the object type (for affordance system)
+- All defaultComponents defined in the type (for game systems)
+- Component values can be overridden via componentOverrides
+
+EXAMPLE - Simple spawn:
+spawn({ type: "bed", name: "Grand Oak Bed", properties: { adjective: "ornate", material: "oak" }, roomName: "Bedroom" })
+
+EXAMPLE - Spawn with component data for simulation:
+spawn({
+  type: "rabbit",
+  name: "Rabbit 1",
+  componentOverrides: {
+    "Health": { current: 80, max: 100 },
+    "Movement": { speed: 3 }
+  }
+})
+
+Available base types: bed, chair, table, chest, door, torch, food_item, npc, room
+Custom types defined via defineObjectType can include defaultComponents for systems.`,
+      inputSchema: z.object({
+        type: z.string().describe("Object type name (e.g., 'bed', 'chest', 'rabbit')"),
+        name: z.string().describe("Unique name for this instance"),
+        properties: z.record(z.string()).optional().describe("Template properties like {adjective, material}"),
+        roomName: z.string().optional().describe("Room to place the entity in"),
+        state: z.string().optional().describe("Initial state (uses defaultState if not provided)"),
+        componentOverrides: z.record(z.record(z.any())).optional().describe("Override component values: { ComponentName: { prop: value } }"),
+      }),
+      execute: async (params) => {
+        const objectType = state.worldSchema.getObjectType(params.type);
+        if (!objectType) {
+          return { success: false, result: null, error: `Unknown object type: ${params.type}. Use listObjectTypes to see available types.` };
+        }
+
+        // Create the entity
+        const createResult = state.tools.createEntity({
+          name: params.name,
+          description: interpolateTemplate(objectType.description, params.properties || {}),
+        });
+
+        if (!createResult.success) {
+          return createResult;
+        }
+
+        const eid = state.registry.byName.get(params.name);
+        if (eid === undefined) {
+          return { success: false, result: null, error: "Entity was created but not found in registry" };
+        }
+
+        // Determine initial state
+        const initialState = params.state || objectType.defaultState;
+        const stateData = objectType.states[initialState];
+
+        // Store object type metadata on entity (using dynamic component)
+        const ObjectMeta = getDynamicComponent("ObjectMeta");
+        if (!ObjectMeta) {
+          createDynamicComponent({
+            name: "ObjectMeta",
+            description: "Metadata for spawned objects including type and state",
+            properties: { type: "string", state: "string", traits: "string" },
+          });
+        }
+        setDynamicComponentValue("ObjectMeta", eid, "type", params.type);
+        setDynamicComponentValue("ObjectMeta", eid, "state", initialState);
+
+        // Combine base traits with state-specific traits (using Set to dedupe)
+        const traitSet = new Set(objectType.traits);
+        if (stateData?.traits) {
+          stateData.traits.forEach(t => traitSet.add(t));
+        }
+        if (stateData?.blockedTraits) {
+          stateData.blockedTraits.forEach(t => traitSet.delete(t));
+        }
+        const allTraits = Array.from(traitSet);
+        setDynamicComponentValue("ObjectMeta", eid, "traits", allTraits.join(","));
+
+        // === NEW: Create defaultComponents from object type ===
+        const createdComponents: string[] = [];
+        if (objectType.defaultComponents) {
+          for (const compSpec of objectType.defaultComponents) {
+            // Check if component exists, create if dynamic
+            let comp = getDynamicComponent(compSpec.name);
+            if (!comp && compSpec.dynamic !== false) {
+              // Auto-create dynamic component from schema or infer from values
+              const schema = compSpec.schema || inferSchema(compSpec.values);
+              createDynamicComponent({
+                name: compSpec.name,
+                description: `Component for ${params.type} entities`,
+                properties: schema,
+              });
+              comp = getDynamicComponent(compSpec.name);
+            }
+
+            if (comp) {
+              // Merge default values with any overrides
+              const overrides = params.componentOverrides?.[compSpec.name] || {};
+              const finalValues = { ...compSpec.values, ...overrides };
+
+              // Set each property value
+              for (const [prop, value] of Object.entries(finalValues)) {
+                setDynamicComponentValue(compSpec.name, eid, prop, value);
+              }
+              createdComponents.push(compSpec.name);
+            }
+          }
+        }
+
+        // Apply any additional component overrides not in defaultComponents
+        if (params.componentOverrides) {
+          for (const [compName, values] of Object.entries(params.componentOverrides)) {
+            if (!createdComponents.includes(compName)) {
+              // Check if component exists
+              let comp = getDynamicComponent(compName);
+              if (!comp) {
+                // Auto-create from values
+                createDynamicComponent({
+                  name: compName,
+                  description: `Custom component for ${params.name}`,
+                  properties: inferSchema(values),
+                });
+              }
+              for (const [prop, value] of Object.entries(values)) {
+                setDynamicComponentValue(compName, eid, prop, value);
+              }
+              createdComponents.push(compName);
+            }
+          }
+        }
+
+        // Place in room if specified
+        if (params.roomName) {
+          state.tools.addRelation({
+            subjectName: params.name,
+            relationName: "OccupiesRoom",
+            targetName: params.roomName,
+          });
+        }
+
+        console.log(`[Tool] spawn: ${params.name} (${params.type}) in state ${initialState}${createdComponents.length ? ` with [${createdComponents.join(", ")}]` : ""}`);
+        return {
+          success: true,
+          result: {
+            name: params.name,
+            type: params.type,
+            state: initialState,
+            traits: allTraits,
+            components: createdComponents,
+            description: interpolateTemplate(objectType.description, params.properties || {}),
+          },
+        };
+      },
+    }),
+
+    defineObjectType: tool({
+      description: `Define a new object type (prefab) that can be spawned. Creates REAL ECS entities with components for game systems.
+
+IMPORTANT: Use defaultComponents to give spawned entities REAL data that systems can query and process!
+
+EXAMPLE - Simple object:
+defineObjectType({
+  name: "lantern",
+  description: "A {adjective} lantern",
+  traits: ["lightSource", "portable"],
+  states: { lit: { description: "Glowing" }, unlit: { description: "Dark" } },
+  defaultState: "unlit",
+  category: "lighting"
+})
+
+EXAMPLE - Simulation entity with components for systems:
+defineObjectType({
+  name: "rabbit",
+  description: "A {adjective} rabbit",
+  traits: ["prey", "edible", "alive", "herbivore"],
+  states: {
+    active: { description: "Hopping around" },
+    resting: { description: "Resting quietly" },
+    dead: { description: "Dead", blockedTraits: ["alive"] }
+  },
+  defaultState: "active",
+  category: "creature",
+  defaultComponents: [
+    { name: "Health", values: { current: 100, max: 100 }, schema: { current: "number", max: "number" } },
+    { name: "Energy", values: { current: 80, max: 100, decayRate: 0.5 }, schema: { current: "number", max: "number", decayRate: "number" } },
+    { name: "Movement", values: { speed: 2, canMove: true }, schema: { speed: "number", canMove: "boolean" } },
+    { name: "Diet", values: { foodType: "grass", hungerThreshold: 30 }, schema: { foodType: "string", hungerThreshold: "number" } }
+  ]
+})
+
+When you spawn a "rabbit", it will automatically have Health, Energy, Movement, Diet components with data!
+Systems can then query: "for (const eid of query(world, [Health, Energy])) { ... }"`,
+      inputSchema: z.object({
+        name: z.string().describe("Unique name for this object type (lowercase)"),
+        description: z.string().describe("Description template - use {property} for interpolation"),
+        traits: z.array(z.string()).describe("Traits for affordance system (what actions can be done)"),
+        states: z.record(z.object({
+          description: z.string(),
+          traits: z.array(z.string()).optional(),
+          blockedTraits: z.array(z.string()).optional(),
+        })).describe("Possible states and their configurations"),
+        defaultState: z.string().describe("State when first spawned"),
+        isContainer: z.boolean().optional().describe("Can this contain other objects?"),
+        containerCapacity: z.number().optional().describe("How many items can it hold?"),
+        category: z.string().optional().describe("Category (creature, furniture, item, etc)"),
+        defaultComponents: z.array(z.object({
+          name: z.string().describe("Component name (will be created if doesn't exist)"),
+          values: z.record(z.any()).describe("Default property values"),
+          schema: z.record(z.enum(["number", "string", "boolean"])).optional().describe("Property types (inferred if not provided)"),
+        })).optional().describe("Components to add when spawned - THIS IS HOW ENTITIES PARTICIPATE IN SYSTEMS"),
+      }),
+      execute: async (params) => {
+        const def: ObjectTypeDefinition = {
+          name: params.name,
+          description: params.description,
+          traits: params.traits,
+          states: params.states,
+          defaultState: params.defaultState,
+          isContainer: params.isContainer,
+          containerCapacity: params.containerCapacity,
+          category: params.category,
+          defaultComponents: params.defaultComponents?.map(c => ({
+            name: c.name,
+            values: c.values,
+            schema: c.schema,
+            dynamic: true,
+          })),
+        };
+        state.worldSchema.defineObjectType(def);
+        console.log(`[Tool] defineObjectType: ${params.name}${params.defaultComponents ? ` with components [${params.defaultComponents.map(c => c.name).join(", ")}]` : ""}`);
+        return {
+          success: true,
+          result: {
+            defined: params.name,
+            traits: params.traits,
+            states: Object.keys(params.states),
+            components: params.defaultComponents?.map(c => c.name) || [],
+          }
+        };
+      },
+    }),
+
+    defineAffordance: tool({
+      description: `Define a new affordance (action that can be performed on objects). Affordances execute REAL effects that modify game state.
+
+IMPORTANT: Affordances should have EFFECTS that actually change component data! This is how the semantic layer connects to real ECS state.
+
+EFFECT TYPES:
+- modify_component: Change component property (e.g., subtract health, add energy)
+- set_state: Change object state (recalculates traits)
+- add_trait / remove_trait: Add or remove a trait
+- destroy: Remove entity from world
+- emit_stimulus: Broadcast perception to nearby agents
+- spawn: Create a new entity
+
+EXAMPLE with effects:
+defineAffordance({
+  name: "harvest",
+  requires: ["harvestable", "ripe"],
+  blockedBy: ["depleted"],
+  effects: [
+    { type: "modify_component", target: "actor", modifications: [
+      { component: "Inventory", property: "items", operation: "add", value: 1 }
+    ]},
+    { type: "set_state", target: "target", state: "depleted" },
+    { type: "emit_stimulus", target: "nearby", stimulusType: "action", stimulusContent: "{actor.name} harvests {target.name}" }
+  ],
+  descriptionTemplate: "{actor.name} harvests {target.name}."
+})`,
+      inputSchema: z.object({
+        name: z.string().describe("Unique name for this affordance"),
+        requires: z.array(z.string()).describe("Traits the object must have to allow this action"),
+        blockedBy: z.array(z.string()).optional().describe("Traits that prevent this action"),
+        actorRequires: z.array(z.string()).optional().describe("Traits the actor must have"),
+        duration: z.number().optional().describe("How long the action takes (0 = instant)"),
+        effects: z.array(z.object({
+          type: z.enum([
+            "modify_component", "set_state", "add_trait", "remove_trait",
+            "destroy", "spawn", "emit_stimulus", "transfer", "add_relation", "remove_relation"
+          ]).describe("Effect type"),
+          target: z.string().optional().describe("'actor', 'target', 'nearby', or entity name"),
+          modifications: z.array(z.object({
+            component: z.string(),
+            property: z.string(),
+            operation: z.enum(["set", "add", "subtract", "multiply"]),
+            value: z.union([z.number(), z.string(), z.boolean()]),
+          })).optional().describe("For modify_component"),
+          state: z.string().optional().describe("For set_state"),
+          trait: z.string().optional().describe("For add_trait/remove_trait"),
+          stimulusType: z.string().optional().describe("For emit_stimulus"),
+          stimulusContent: z.string().optional().describe("For emit_stimulus (supports {actor.name}, {target.name})"),
+          chance: z.number().optional().describe("Probability 0-1 (default 1)"),
+        })).optional().describe("Effects to execute when affordance is used - STRONGLY RECOMMENDED"),
+        transitions: z.record(z.string()).optional().describe("Legacy state transitions (use effects instead)"),
+        descriptionTemplate: z.string().optional().describe("Perception text template for nearby agents"),
+      }),
+      execute: async (params) => {
+        const def: AffordanceDefinition = {
+          name: params.name,
+          requires: params.requires,
+          blockedBy: params.blockedBy,
+          actorRequires: params.actorRequires,
+          transitions: params.transitions,
+          duration: params.duration,
+          effects: params.effects as any,
+          descriptionTemplate: params.descriptionTemplate,
+        };
+        state.worldSchema.defineAffordance(def);
+        console.log(`[Tool] defineAffordance: ${params.name} (${params.effects?.length || 0} effects)`);
+        return { success: true, result: { defined: params.name, requires: params.requires, effectCount: params.effects?.length || 0 } };
+      },
+    }),
+
+    defineRule: tool({
+      description: `Define a world rule - a declarative behavior that systems interpret. Rules trigger effects when conditions are met.
+
+EXAMPLE:
+defineRule({
+  name: "candle_burns_out",
+  description: "Candles eventually burn out",
+  when: { event: "tick", condition: { has: ["burning", "candle"] } },
+  then: [
+    { action: "modify_value", target: "self", params: { component: "fuel", field: "current", delta: -0.05 } }
+  ],
+  priority: 5
+})`,
+      inputSchema: z.object({
+        name: z.string().describe("Unique name for this rule"),
+        description: z.string().describe("What this rule does"),
+        when: z.object({
+          event: z.string().describe("Event that triggers check (tick, value_change, etc)"),
+          condition: z.object({
+            has: z.array(z.string()).optional().describe("Required traits"),
+            not: z.array(z.string()).optional().describe("Traits that must be absent"),
+            inState: z.string().optional().describe("Required state"),
+            expression: z.string().optional().describe("Custom expression"),
+          }).optional(),
+        }),
+        then: z.array(z.object({
+          action: z.string().describe("Action to perform"),
+          target: z.string().optional().describe("self, source, nearby, or entity name"),
+          query: z.object({
+            radius: z.number().optional(),
+            has: z.array(z.string()).optional(),
+            not: z.array(z.string()).optional(),
+          }).optional(),
+          params: z.record(z.any()).optional(),
+        })),
+        priority: z.number().optional().describe("Higher = runs first"),
+        enabled: z.boolean().optional().describe("Is rule active?"),
+      }),
+      execute: async (params) => {
+        const def: RuleDefinition = {
+          name: params.name,
+          description: params.description,
+          when: params.when,
+          then: params.then,
+          priority: params.priority,
+          enabled: params.enabled ?? true,
+        };
+        state.worldSchema.defineRule(def);
+        console.log(`[Tool] defineRule: ${params.name}`);
+        return { success: true, result: { defined: params.name, priority: params.priority ?? 0 } };
+      },
+    }),
+
+    listObjectTypes: tool({
+      description: "List all defined object types (prefabs) that can be spawned",
+      inputSchema: z.object({
+        category: z.string().optional().describe("Filter by category"),
+      }),
+      execute: async (params) => {
+        const types = params.category
+          ? state.worldSchema.getObjectTypesByCategory(params.category)
+          : state.worldSchema.getAllObjectTypes();
+        return {
+          success: true,
+          result: types.map(t => ({
+            name: t.name,
+            description: t.description,
+            traits: t.traits,
+            states: Object.keys(t.states),
+            defaultState: t.defaultState,
+            category: t.category,
+          })),
+        };
+      },
+    }),
+
+    listAffordances: tool({
+      description: "List all defined affordances (actions that can be performed on objects)",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const affordances = state.worldSchema.getAllAffordances();
+        return {
+          success: true,
+          result: affordances.map(a => ({
+            name: a.name,
+            requires: a.requires,
+            blockedBy: a.blockedBy,
+            transitions: a.transitions,
+          })),
+        };
+      },
+    }),
+
+    listRules: tool({
+      description: "List all defined world rules",
+      inputSchema: z.object({
+        activeOnly: z.boolean().optional().describe("Only show active rules"),
+      }),
+      execute: async (params) => {
+        const rules = params.activeOnly
+          ? state.worldSchema.getActiveRules()
+          : Array.from(state.worldSchema["rules"].values());
+        return {
+          success: true,
+          result: rules.map(r => ({
+            name: r.name,
+            description: r.description,
+            event: r.when.event,
+            priority: r.priority ?? 0,
+            enabled: r.enabled ?? true,
+          })),
+        };
+      },
+    }),
+
+    getObjectTraits: tool({
+      description: "Get the current traits of a spawned object (considering its state)",
+      inputSchema: z.object({
+        entityName: z.string().describe("Name of the entity"),
+      }),
+      execute: async (params) => {
+        const eid = state.registry.byName.get(params.entityName);
+        if (eid === undefined) {
+          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+        }
+        const traitsStr = getDynamicComponentValues("ObjectMeta", eid)?.traits;
+        const traits = traitsStr ? traitsStr.split(",") : [];
+        const objectType = getDynamicComponentValues("ObjectMeta", eid)?.type;
+        const objectState = getDynamicComponentValues("ObjectMeta", eid)?.state;
+        return {
+          success: true,
+          result: {
+            name: params.entityName,
+            type: objectType,
+            state: objectState,
+            traits,
+          },
+        };
+      },
+    }),
+
+    getAvailableActions: tool({
+      description: "Get actions available on an object based on its traits",
+      inputSchema: z.object({
+        entityName: z.string().describe("Name of the entity"),
+      }),
+      execute: async (params) => {
+        const eid = state.registry.byName.get(params.entityName);
+        if (eid === undefined) {
+          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+        }
+        const traitsStr = getDynamicComponentValues("ObjectMeta", eid)?.traits;
+        const traits = new Set(traitsStr ? traitsStr.split(",") : []);
+
+        const availableActions: string[] = [];
+        for (const aff of state.worldSchema.getAllAffordances()) {
+          // Check if all required traits are present
+          const hasRequired = aff.requires.every(t => traits.has(t));
+          // Check if no blocking traits are present
+          const notBlocked = !aff.blockedBy?.some(t => traits.has(t));
+          if (hasRequired && notBlocked) {
+            availableActions.push(aff.name);
+          }
+        }
+
+        return {
+          success: true,
+          result: {
+            name: params.entityName,
+            availableActions,
+          },
+        };
+      },
+    }),
+
+    transitionObjectState: tool({
+      description: "Transition an object to a new state, updating its traits",
+      inputSchema: z.object({
+        entityName: z.string().describe("Name of the entity"),
+        newState: z.string().describe("State to transition to"),
+      }),
+      execute: async (params) => {
+        const eid = state.registry.byName.get(params.entityName);
+        if (eid === undefined) {
+          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+        }
+
+        const objectType = getDynamicComponentValues("ObjectMeta", eid)?.type;
+        if (!objectType) {
+          return { success: false, result: null, error: `Entity ${params.entityName} has no ObjectMeta (not spawned from object type)` };
+        }
+
+        const typeDef = state.worldSchema.getObjectType(objectType);
+        if (!typeDef) {
+          return { success: false, result: null, error: `Object type not found: ${objectType}` };
+        }
+
+        const newStateData = typeDef.states[params.newState];
+        if (!newStateData) {
+          return { success: false, result: null, error: `State not found: ${params.newState}. Available: ${Object.keys(typeDef.states).join(", ")}` };
+        }
+
+        // Update state
+        setDynamicComponentValue("ObjectMeta", eid, "state", params.newState);
+
+        // Recalculate traits (using Set to dedupe)
+        const traitSet = new Set(typeDef.traits);
+        if (newStateData.traits) {
+          newStateData.traits.forEach(t => traitSet.add(t));
+        }
+        if (newStateData.blockedTraits) {
+          newStateData.blockedTraits.forEach(t => traitSet.delete(t));
+        }
+        const allTraits = Array.from(traitSet);
+        setDynamicComponentValue("ObjectMeta", eid, "traits", allTraits.join(","));
+
+        console.log(`[Tool] transitionObjectState: ${params.entityName} -> ${params.newState}`);
+        return {
+          success: true,
+          result: {
+            name: params.entityName,
+            oldState: getDynamicComponentValues("ObjectMeta", eid)?.state,
+            newState: params.newState,
+            traits: allTraits,
+          },
+        };
+      },
+    }),
+
+    // ============ MONITORING & STEERING TOOLS ============
+    // Tools for observing world state and steering the narrative
+
+    getWorldSummary: tool({
+      description: "Get a comprehensive summary of the current world state including agents, rooms, conflicts, and narrative tension. Use this to understand the simulation state before deciding on interventions.",
+      inputSchema: z.object({
+        includeDetails: z.boolean().optional().describe("Include full agent and room details (default: true)"),
+      }),
+      execute: async (params) => {
+        const { getWorldSummary: getWorldSummaryFn, getWorldSummaryText } = await import("./monitoring-system");
+        const recentEvents: string[] = state.memory.shortTerm
+          .filter(m => m.type === "observation" || m.type === "action")
+          .map(m => m.content)
+          .slice(-20);
+
+        const summary = getWorldSummaryFn(state.world, state.registry, recentEvents, state.tick);
+
+        // Update GodAgent component with current values
+        GodAgent.tension[state.eid] = summary.narrativeArc.tension;
+        GodAgent.stagnationScore[state.eid] = summary.stagnationScore;
+        GodAgent.lastObservation[state.eid] = Date.now();
+
+        const textSummary = getWorldSummaryText(summary);
+        console.log(`[Tool] getWorldSummary: ${summary.agentCount} agents, tension=${(summary.narrativeArc.tension * 100).toFixed(0)}%`);
+
+        return {
+          success: true,
+          result: params.includeDetails === false ? {
+            tick: summary.tick,
+            agentCount: summary.agentCount,
+            roomCount: summary.roomCount,
+            narrativePhase: summary.narrativeArc.currentPhase,
+            tension: summary.narrativeArc.tension,
+            stagnation: summary.stagnationScore,
+            conflictCount: summary.activeConflicts.length,
+          } : {
+            ...summary,
+            textSummary,
+          },
+        };
+      },
+    }),
+
+    getNarrativeTension: tool({
+      description: "Get the current narrative tension level (0-1). High tension = drama/conflict, low = calm/stagnant.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getNarrativeTension: getTensionFn } = await import("./monitoring-system");
+        const recentEvents: string[] = state.memory.shortTerm
+          .filter(m => m.type === "observation")
+          .map(m => m.content)
+          .slice(-20);
+
+        const tension = getTensionFn(state.world, state.registry, recentEvents);
+        GodAgent.tension[state.eid] = tension;
+
+        console.log(`[Tool] getNarrativeTension: ${(tension * 100).toFixed(0)}%`);
+        return { success: true, result: { tension, percentage: `${(tension * 100).toFixed(0)}%` } };
+      },
+    }),
+
+    getSteeringRecommendations: tool({
+      description: "Analyze the simulation and get recommendations for narrative steering interventions.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getWorldSummary: getWorldSummaryFn, getSteeringRecommendations: getRecommendationsFn } = await import("./monitoring-system");
+        const recentEvents: string[] = state.memory.shortTerm
+          .filter(m => m.type === "observation")
+          .map(m => m.content)
+          .slice(-20);
+
+        const summary = getWorldSummaryFn(state.world, state.registry, recentEvents, state.tick);
+        const recommendations = getRecommendationsFn(summary);
+
+        console.log(`[Tool] getSteeringRecommendations: ${recommendations.length} suggestions`);
+        return {
+          success: true,
+          result: {
+            narrativePhase: summary.narrativeArc.currentPhase,
+            tension: summary.narrativeArc.tension,
+            stagnation: summary.stagnationScore,
+            recommendations: recommendations.map(r => ({
+              pattern: r.pattern,
+              description: r.description,
+              suggestedAction: r.suggestedAction,
+              priority: r.priority,
+            })),
+          },
+        };
+      },
+    }),
+
+    injectEnvironmentalEvent: tool({
+      description: "Inject an environmental event into a specific room. All agents in that room will perceive it.",
+      inputSchema: z.object({
+        roomName: z.string().describe("Name of the room to inject the event into"),
+        content: z.string().describe("What happens (e.g., 'A loud crash echoes from outside')"),
+        modality: z.enum(["visual", "auditory", "olfactory", "tactile", "cognitive"]).optional()
+          .describe("Sensory channel (default: visual)"),
+      }),
+      execute: async (params) => {
+        const { injectEnvironmentalEvent: injectFn } = await import("./monitoring-system");
+        const result = injectFn(
+          state.world,
+          state.registry,
+          params.roomName,
+          params.content,
+          params.modality as any || "visual"
+        );
+
+        if (result.success) {
+          GodAgent.interventionCount[state.eid] = (GodAgent.interventionCount[state.eid] || 0) + 1;
+          addMemory(state, "action", `Injected event into ${params.roomName}: ${params.content}`, {
+            importance: 7,
+            tags: ["intervention", "environmental"],
+          });
+        }
+
+        console.log(`[Tool] injectEnvironmentalEvent: ${params.roomName} - ${result.message}`);
+        return { success: result.success, result: result.message };
+      },
+    }),
+
+    injectIntuition: tool({
+      description: "Send an intuition/gut feeling to a specific agent via their cognitive sense.",
+      inputSchema: z.object({
+        agentName: z.string().describe("Name of the agent to send intuition to"),
+        content: z.string().describe("The intuitive feeling (e.g., 'You sense danger approaching')"),
+      }),
+      execute: async (params) => {
+        const { injectIntuition: injectFn } = await import("./monitoring-system");
+        const result = injectFn(state.world, state.registry, params.agentName, params.content);
+
+        if (result.success) {
+          GodAgent.interventionCount[state.eid] = (GodAgent.interventionCount[state.eid] || 0) + 1;
+          addMemory(state, "action", `Sent intuition to ${params.agentName}: ${params.content}`, {
+            importance: 6,
+            tags: ["intervention", "intuition"],
+          });
+        }
+
+        console.log(`[Tool] injectIntuition: ${params.agentName} - ${result.message}`);
+        return { success: result.success, result: result.message };
+      },
+    }),
+
+    broadcastAnnouncement: tool({
+      description: "Broadcast an announcement that all agents in the world will perceive.",
+      inputSchema: z.object({
+        content: z.string().describe("The announcement content"),
+        modality: z.enum(["visual", "auditory", "cognitive"]).optional()
+          .describe("Sensory channel (default: auditory)"),
+      }),
+      execute: async (params) => {
+        const { broadcastAnnouncement: broadcastFn } = await import("./monitoring-system");
+        const result = broadcastFn(
+          state.world,
+          state.registry,
+          params.content,
+          params.modality as any || "auditory"
+        );
+
+        if (result.success) {
+          GodAgent.interventionCount[state.eid] = (GodAgent.interventionCount[state.eid] || 0) + 1;
+          addMemory(state, "action", `Broadcast announcement: ${params.content}`, {
+            importance: 8,
+            tags: ["intervention", "broadcast"],
+          });
+        }
+
+        console.log(`[Tool] broadcastAnnouncement: ${result.message}`);
+        return { success: result.success, result: result.message };
+      },
+    }),
+
+    setNarrativeGoals: tool({
+      description: "Set narrative goals that guide your steering decisions.",
+      inputSchema: z.object({
+        goals: z.array(z.string()).describe("Array of narrative goals (e.g., ['Create romantic tension between Alice and Bob', 'Build toward a climactic confrontation'])"),
+      }),
+      execute: async (params) => {
+        GodAgent.narrativeGoals[state.eid] = JSON.stringify(params.goals);
+
+        addMemory(state, "decision", `Set narrative goals: ${params.goals.join(", ")}`, {
+          importance: 9,
+          tags: ["narrative", "goals"],
+        });
+
+        console.log(`[Tool] setNarrativeGoals: ${params.goals.length} goals set`);
+        return { success: true, result: { goals: params.goals } };
+      },
+    }),
+
+    getNarrativeGoals: tool({
+      description: "Get the current narrative goals.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const goalsJson = GodAgent.narrativeGoals[state.eid] || "[]";
+        const goals = JSON.parse(goalsJson);
+        return { success: true, result: { goals } };
+      },
+    }),
+
+    pauseAgent: tool({
+      description: "Temporarily pause an agent's cognition (they won't think or act).",
+      inputSchema: z.object({
+        agentName: z.string().describe("Name of the agent to pause"),
+      }),
+      execute: async (params) => {
+        const eid = state.registry.byName.get(params.agentName);
+        if (eid === undefined) {
+          return { success: false, result: null, error: `Agent not found: ${params.agentName}` };
+        }
+
+        const { Agent } = await import("../ecs/components");
+        Agent.active[eid] = false;
+
+        console.log(`[Tool] pauseAgent: ${params.agentName}`);
+        return { success: true, result: { agent: params.agentName, active: false } };
+      },
+    }),
+
+    resumeAgent: tool({
+      description: "Resume a paused agent's cognition.",
+      inputSchema: z.object({
+        agentName: z.string().describe("Name of the agent to resume"),
+      }),
+      execute: async (params) => {
+        const eid = state.registry.byName.get(params.agentName);
+        if (eid === undefined) {
+          return { success: false, result: null, error: `Agent not found: ${params.agentName}` };
+        }
+
+        const { Agent } = await import("../ecs/components");
+        Agent.active[eid] = true;
+
+        console.log(`[Tool] resumeAgent: ${params.agentName}`);
+        return { success: true, result: { agent: params.agentName, active: true } };
+      },
+    }),
+
+    modifyAgentMood: tool({
+      description: "Directly modify an agent's arousal/mood level to influence their behavior.",
+      inputSchema: z.object({
+        agentName: z.string().describe("Name of the agent"),
+        arousal: z.number().min(0).max(1).describe("New arousal level (0=drowsy, 1=agitated)"),
+        focus: z.string().optional().describe("What the agent should focus on"),
+      }),
+      execute: async (params) => {
+        const eid = state.registry.byName.get(params.agentName);
+        if (eid === undefined) {
+          return { success: false, result: null, error: `Agent not found: ${params.agentName}` };
+        }
+
+        const { Mind } = await import("../ecs/components");
+        Mind.arousal[eid] = params.arousal;
+        if (params.focus !== undefined) {
+          Mind.focus[eid] = params.focus;
+        }
+
+        GodAgent.interventionCount[state.eid] = (GodAgent.interventionCount[state.eid] || 0) + 1;
+
+        console.log(`[Tool] modifyAgentMood: ${params.agentName} arousal=${params.arousal}`);
+        return {
+          success: true,
+          result: {
+            agent: params.agentName,
+            arousal: params.arousal,
+            focus: params.focus || Mind.focus[eid],
+          },
+        };
+      },
+    }),
+
+    getInterventionStats: tool({
+      description: "Get statistics about GodAI interventions in this simulation.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const interventionCount = GodAgent.interventionCount[state.eid] || 0;
+        const lastObservation = GodAgent.lastObservation[state.eid] || 0;
+        const tension = GodAgent.tension[state.eid] || 0;
+        const stagnation = GodAgent.stagnationScore[state.eid] || 0;
+
+        return {
+          success: true,
+          result: {
+            interventionCount,
+            lastObservation: lastObservation > 0 ? new Date(lastObservation).toISOString() : "never",
+            currentTension: tension,
+            currentStagnation: stagnation,
+          },
+        };
+      },
+    }),
   };
+}
+
+// Helper function to interpolate template strings
+function interpolateTemplate(template: string, props: Record<string, string>): string {
+  return template.replace(/\{(\w+)\}/g, (_, key) => props[key] || `{${key}}`);
+}
+
+// Helper function to infer schema from values
+function inferSchema(values: Record<string, any>): Record<string, "number" | "string" | "boolean"> {
+  const schema: Record<string, "number" | "string" | "boolean"> = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (typeof value === "number") schema[key] = "number";
+    else if (typeof value === "boolean") schema[key] = "boolean";
+    else schema[key] = "string";
+  }
+  return schema;
+}
+
+// Design phase using the planner model with deep thinking
+export async function designSolution(
+  state: GodAgentState,
+  challenge: string
+): Promise<{ design: DesignDocument | null; reasoning: string }> {
+  console.log("\n[GodAgent] 🧠 Design Phase - Using Pro model with thinking...\n");
+
+  const designPrompt = `You are designing a simulation for an ECS (Entity Component System) engine.
+
+CRITICAL - STRUCTURE OF ARRAYS (SoA) DATA MODEL:
+All components use SoA - each property is an ARRAY indexed by entity ID.
+Access pattern: Component.property[entityId]
+Example: Health.current[eid] = 50;
+
+YOUR TASK: Design a complete solution for this challenge. Do NOT implement yet - just design.
+
+CHALLENGE:
+${challenge}
+
+OUTPUT FORMAT - Return a JSON design document with this exact structure:
+{
+  "summary": "Brief description of your solution approach",
+  "components": [
+    {
+      "name": "ComponentName",
+      "purpose": "What this component represents",
+      "properties": { "propertyName": "number|string|boolean", ... }
+    }
+  ],
+  "entities": [
+    {
+      "name": "EntityName",
+      "type": "producer|consumer|market|other",
+      "components": ["ComponentName1", "ComponentName2"],
+      "initialValues": { "ComponentName": { "property": value } }
+    }
+  ],
+  "systems": [
+    {
+      "name": "SystemName",
+      "purpose": "What this system does",
+      "frequency": 1,
+      "logic": "Pseudocode: FOR EACH entity WITH Component: read X, compute Y, write Z"
+    }
+  ],
+  "feedbackLoops": [
+    "Description of feedback loop 1: A affects B which affects C which affects A"
+  ],
+  "notes": "Any important design decisions or considerations"
+}
+
+DESIGN PRINCIPLES:
+1. Think through the FEEDBACK LOOPS first - what affects what?
+2. Design components to store the minimal state needed
+3. Systems should be focused - one clear responsibility each
+4. Use lowercase property names consistently
+5. Consider edge cases (what if supply is 0? what if price goes negative?)
+
+Return ONLY the JSON document, no markdown fences.`;
+
+  try {
+    const response = await generateText({
+      model: plannerModel,
+      prompt: designPrompt,
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: PLANNER_THINKING_LEVEL,
+          },
+        },
+      },
+    });
+
+    // Extract reasoning text from the reasoning array
+    let reasoningText = "";
+    if (response.reasoning && Array.isArray(response.reasoning)) {
+      reasoningText = response.reasoning
+        .map((r: any) => r.text || "")
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (reasoningText) {
+      console.log("[GodAgent] 💭 Thinking:", reasoningText.slice(0, 1000) + (reasoningText.length > 1000 ? "..." : ""));
+    }
+
+    let designText = response.text.trim();
+    // Remove markdown fences if present
+    if (designText.startsWith('```')) {
+      designText = designText.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    }
+
+    try {
+      const design = JSON.parse(designText) as DesignDocument;
+      console.log("[GodAgent] ✅ Design complete:");
+      console.log(`  - ${design.components?.length || 0} components`);
+      console.log(`  - ${design.entities?.length || 0} entities`);
+      console.log(`  - ${design.systems?.length || 0} systems`);
+      console.log(`  - ${design.feedbackLoops?.length || 0} feedback loops`);
+      return { design, reasoning: reasoningText };
+    } catch (parseError) {
+      console.error("[GodAgent] Failed to parse design JSON:", parseError);
+      console.log("[GodAgent] Raw response:", designText.slice(0, 500));
+      return { design: null, reasoning: designText };
+    }
+  } catch (error) {
+    console.error("[GodAgent] Design phase error:", error);
+    return { design: null, reasoning: `Error: ${error}` };
+  }
+}
+
+// Review the design against the original challenge requirements
+export async function reviewDesign(
+  design: DesignDocument,
+  challenge: string
+): Promise<{ issues: string[]; suggestions: string[]; approved: boolean }> {
+  console.log("\n[GodAgent] 🔍 Review Phase - Critiquing design...\n");
+
+  const reviewPrompt = `You are reviewing an ECS simulation design. Check if it fully addresses the challenge requirements.
+
+ORIGINAL CHALLENGE:
+${challenge}
+
+PROPOSED DESIGN:
+${JSON.stringify(design, null, 2)}
+
+REVIEW CHECKLIST - Only flag as issues if they will BREAK the simulation:
+1. CRITICAL: Are there enough entities? (e.g., if challenge asks for multiple creatures, there MUST be multiple)
+2. CRITICAL: Will the system logic actually work? (e.g., math errors, unreachable conditions)
+3. CRITICAL: Are there obvious bugs in the pseudocode logic?
+4. MINOR: Could be improved but will work as-is
+
+DO NOT flag as issues:
+- Design style preferences (e.g., "should use X pattern instead of Y")
+- Features that would be "nice to have" but aren't required
+- Alternative approaches that might be "better"
+- Theoretical concerns that won't affect basic functionality
+
+OUTPUT FORMAT - Return JSON:
+{
+  "issues": ["Only CRITICAL problems that will break the simulation", ...],
+  "suggestions": ["Minor improvements, optional", ...],
+  "approved": true/false (true if no critical issues)
+}
+
+Be CONSERVATIVE - only flag issues that will actually prevent the simulation from working.
+The design doesn't need to be perfect, just functional.
+Return ONLY the JSON, no markdown fences.`;
+
+  try {
+    const response = await generateText({
+      model: plannerModel,
+      prompt: reviewPrompt,
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: REVIEW_THINKING_LEVEL,
+          },
+        },
+      },
+    });
+
+    let reviewText = response.text.trim();
+    if (reviewText.startsWith('```')) {
+      reviewText = reviewText.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    }
+
+    try {
+      const review = JSON.parse(reviewText);
+      console.log(`[GodAgent] 📋 Review: ${review.approved ? '✅ Approved' : '❌ Issues found'}`);
+      if (review.issues?.length > 0) {
+        const issueTexts = review.issues.slice(0, 3).map((i: any) => typeof i === 'string' ? i : JSON.stringify(i));
+        console.log(`  Issues: ${issueTexts.join('; ')}`);
+      }
+      return {
+        issues: review.issues || [],
+        suggestions: review.suggestions || [],
+        approved: review.approved ?? true,
+      };
+    } catch (parseError) {
+      console.log("[GodAgent] Could not parse review, assuming approved");
+      return { issues: [], suggestions: [], approved: true };
+    }
+  } catch (error) {
+    console.error("[GodAgent] Review phase error:", error);
+    return { issues: [], suggestions: [], approved: true };
+  }
+}
+
+// Refine the design based on review feedback
+export async function refineDesign(
+  design: DesignDocument,
+  challenge: string,
+  issues: string[],
+  suggestions: string[]
+): Promise<DesignDocument> {
+  console.log("\n[GodAgent] 🔧 Refinement Phase - Fixing issues...\n");
+
+  const refinePrompt = `You are refining an ECS simulation design based on review feedback.
+
+ORIGINAL CHALLENGE:
+${challenge}
+
+CURRENT DESIGN:
+${JSON.stringify(design, null, 2)}
+
+ISSUES TO FIX (MUST address these):
+${issues.map((i, idx) => `${idx + 1}. ${i}`).join('\n')}
+
+SUGGESTIONS (address if possible):
+${suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
+
+OUTPUT: Return the COMPLETE refined design document (same JSON structure as input).
+Keep all the good parts of the original design, but fix the issues.
+Return ONLY the JSON, no markdown fences.`;
+
+  try {
+    const response = await generateText({
+      model: plannerModel,
+      prompt: refinePrompt,
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: PLANNER_THINKING_LEVEL,
+          },
+        },
+      },
+    });
+
+    let refinedText = response.text.trim();
+    if (refinedText.startsWith('```')) {
+      refinedText = refinedText.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    }
+
+    try {
+      const refinedDesign = JSON.parse(refinedText) as DesignDocument;
+      console.log("[GodAgent] ✅ Design refined:");
+      console.log(`  - ${refinedDesign.components?.length || 0} components`);
+      console.log(`  - ${refinedDesign.entities?.length || 0} entities`);
+      console.log(`  - ${refinedDesign.systems?.length || 0} systems`);
+      return refinedDesign;
+    } catch (parseError) {
+      console.log("[GodAgent] Could not parse refined design, keeping original");
+      return design;
+    }
+  } catch (error) {
+    console.error("[GodAgent] Refinement phase error:", error);
+    return design;
+  }
+}
+
+// Build minimal tools for design execution (reduced schema complexity)
+function buildExecutionTools(state: GodAgentState) {
+  return {
+    createComponent: tool({
+      description: "Create a new dynamic component with typed properties. Example: {name: 'Population', properties: {count: 'number', minThreshold: 'number'}}",
+      inputSchema: z.object({
+        name: z.string().describe("PascalCase name (e.g., Population, Consumer)"),
+        properties: z.record(z.string()).describe("Property name to type mapping, e.g. {count: 'number', name: 'string'}"),
+      }),
+      execute: async (params) => {
+        try {
+          // Validate and convert property types
+          const validTypes = ["number", "string", "boolean"];
+          const cleanedProps: Record<string, "number" | "string" | "boolean"> = {};
+          for (const [key, val] of Object.entries(params.properties || {})) {
+            const typeStr = String(val).toLowerCase();
+            if (validTypes.includes(typeStr)) {
+              cleanedProps[key] = typeStr as "number" | "string" | "boolean";
+            } else {
+              cleanedProps[key] = "number"; // Default to number
+            }
+          }
+          // If no properties provided, add a default 'value' property
+          if (Object.keys(cleanedProps).length === 0) {
+            cleanedProps["value"] = "number";
+          }
+          const def: ComponentDefinition = {
+            name: params.name,
+            description: `Dynamic component ${params.name}`,
+            properties: cleanedProps,
+          };
+          createDynamicComponent(def);
+          await saveComponentDefinition(def);
+          console.log(`  [Tool] createComponent: ${params.name} with ${Object.keys(cleanedProps).join(', ')}`);
+          return { success: true, result: { name: params.name, properties: cleanedProps } };
+        } catch (e) {
+          console.error(`  [Tool] createComponent error:`, e);
+          return { success: false, error: String(e) };
+        }
+      },
+    }),
+
+    createEntity: tool({
+      description: "Create a mechanical entity",
+      inputSchema: z.object({
+        name: z.string().describe("Unique name"),
+        description: z.string().optional(),
+      }),
+      execute: async (params) => {
+        const result = state.tools.createEntity(params);
+        console.log(`  [Tool] createEntity: ${params.name}`);
+        return result;
+      },
+    }),
+
+    setDynamicComponent: tool({
+      description: "Set dynamic component values on an entity",
+      inputSchema: z.object({
+        entityName: z.string().describe("Entity name"),
+        componentName: z.string().describe("Component name"),
+        values: z.record(z.any()).describe("Property values"),
+      }),
+      execute: async (params) => {
+        const eid = state.registry.nameToEid.get(params.entityName);
+        if (eid === undefined) {
+          return { success: false, error: `Entity not found: ${params.entityName}` };
+        }
+        const comp = getDynamicComponent(params.componentName);
+        if (!comp) {
+          return { success: false, error: `Component not found: ${params.componentName}` };
+        }
+        for (const [prop, val] of Object.entries(params.values)) {
+          if (comp[prop]) {
+            comp[prop][eid] = val;
+          }
+        }
+        console.log(`  [Tool] setDynamicComponent: ${params.entityName}.${params.componentName}`);
+        return { success: true, result: params.values };
+      },
+    }),
+
+    createFileSystem: tool({
+      description: "Create a new ECS system",
+      inputSchema: z.object({
+        name: z.string().describe("PascalCase name"),
+        description: z.string().describe("What it does"),
+        frequency: z.number().optional(),
+        code: z.string().describe("TypeScript code body for the run function"),
+      }),
+      execute: async (params) => {
+        try {
+          const filePath = await writeSystemFile({
+            name: params.name,
+            description: params.description,
+            frequency: params.frequency ?? 1,
+            code: params.code,
+          });
+          const loaded = await loadSystemFromFile(filePath);
+          if (loaded) {
+            state.fileSystems.push(loaded);
+          }
+          console.log(`  [Tool] createFileSystem: ${params.name}`);
+          return { success: true, result: { name: params.name, loaded: !!loaded } };
+        } catch (e) {
+          return { success: false, error: String(e) };
+        }
+      },
+    }),
+
+    activateFileSystem: tool({
+      description: "Activate a file-based system",
+      inputSchema: z.object({
+        systemName: z.string(),
+      }),
+      execute: async (params) => {
+        const sys = state.fileSystems.find(s => s.name === params.systemName);
+        if (sys) {
+          sys.active = true;
+          console.log(`  [Tool] activateFileSystem: ${params.systemName}`);
+          return { success: true, result: { activated: params.systemName } };
+        }
+        return { success: false, error: `System not found: ${params.systemName}` };
+      },
+    }),
+  };
+}
+
+// Execute a design document directly (no AI needed for execution)
+export async function executeDesign(
+  state: GodAgentState,
+  design: DesignDocument
+): Promise<ToolResult[]> {
+  console.log("\n[GodAgent] ⚡ Execution Phase - Direct implementation\n");
+
+  const actions: ToolResult[] = [];
+
+  // Step 1: Create all components
+  for (const comp of design.components || []) {
+    try {
+      const properties: Record<string, "number" | "string" | "boolean"> = {};
+      for (const [key, typeStr] of Object.entries(comp.properties || {})) {
+        const t = String(typeStr).toLowerCase();
+        if (["number", "string", "boolean"].includes(t)) {
+          properties[key] = t as "number" | "string" | "boolean";
+        } else {
+          properties[key] = "number";
+        }
+      }
+      // If no properties specified, add common ones based on component purpose
+      if (Object.keys(properties).length === 0) {
+        properties["value"] = "number";
+      }
+      const def: ComponentDefinition = {
+        name: comp.name,
+        description: comp.purpose || `Dynamic component ${comp.name}`,
+        properties,
+      };
+      createDynamicComponent(def);
+      await saveComponentDefinition(def);
+      console.log(`  [Exec] createComponent: ${comp.name} (${Object.keys(properties).join(', ')})`);
+      actions.push({ success: true, result: { name: comp.name } });
+    } catch (e) {
+      console.error(`  [Exec] createComponent failed: ${comp.name}`, e);
+      actions.push({ success: false, error: String(e) });
+    }
+  }
+
+  // Step 2: Create all entities and set initial dynamic component values
+  for (const ent of design.entities || []) {
+    try {
+      const result = state.tools.createEntity({ name: ent.name, description: `${ent.type} entity` });
+      console.log(`  [Exec] createEntity: ${ent.name}`);
+      actions.push(result);
+
+      // Set initial values on dynamic components for this entity
+      if (result.success && result.result?.entityId) {
+        const eid = result.result.entityId as number;
+        const nameLower = ent.name.toLowerCase();
+        const entType = ent.type?.toLowerCase() || "other";
+        const initLog: string[] = [];
+
+        // Initialize ALL dynamic components with sensible defaults
+        for (const compDef of design.components || []) {
+          const comp = getDynamicComponent(compDef.name);
+          if (!comp) continue;
+
+          for (const [prop, propType] of Object.entries(compDef.properties || {})) {
+            if (!comp[prop]) continue;
+            const propLower = prop.toLowerCase();
+
+            // Smart default based on property name and entity type
+            let defaultVal: number | string | boolean = 0;
+
+            // Population/count properties
+            if (propLower.includes("count") || propLower.includes("population") || propLower === "level") {
+              if (entType === "producer" || nameLower.includes("grass") || nameLower.includes("resource")) {
+                defaultVal = 1000;
+              } else if (nameLower.includes("rabbit") || nameLower.includes("prey") || entType === "consumer") {
+                defaultVal = 100;
+              } else if (nameLower.includes("fox") || nameLower.includes("predator")) {
+                defaultVal = 20;
+              } else {
+                defaultVal = 50;
+              }
+            }
+            // Capacity/max properties
+            else if (propLower.includes("capacity") || propLower.includes("max")) {
+              defaultVal = entType === "producer" ? 2000 : 500;
+            }
+            // Min/threshold properties
+            else if (propLower.includes("min") || propLower.includes("threshold")) {
+              defaultVal = entType === "producer" ? 10 : 5;
+            }
+            // Rate properties
+            else if (propLower.includes("rate") || propLower.includes("speed")) {
+              defaultVal = propLower.includes("growth") ? 0.1 :
+                           propLower.includes("decay") ? 0.05 :
+                           propLower.includes("death") || propLower.includes("starvation") ? 0.1 : 0.05;
+            }
+            // Need/hunger/safety/social properties (0-100 scale)
+            else if (propLower.includes("hunger") || propLower.includes("food")) {
+              defaultVal = 30; // Start somewhat hungry
+            }
+            else if (propLower.includes("safety") || propLower.includes("fear")) {
+              defaultVal = 70; // Start fairly safe
+            }
+            else if (propLower.includes("social") || propLower.includes("lonely")) {
+              defaultVal = 50; // Start neutral
+            }
+            // Trust/reputation/charisma (0-100 scale)
+            else if (propLower.includes("trust")) {
+              defaultVal = nameLower.includes("diplomat") ? 70 :
+                           nameLower.includes("skeptic") ? 30 : 50;
+            }
+            else if (propLower.includes("reputation") || propLower.includes("rep")) {
+              defaultVal = nameLower.includes("rival") ? 60 :
+                           nameLower.includes("follower") ? 30 : 50;
+            }
+            else if (propLower.includes("charisma")) {
+              defaultVal = nameLower.includes("diplomat") ? 80 : 50;
+            }
+            // Cooperativeness/competitiveness
+            else if (propLower.includes("cooperat")) {
+              defaultVal = nameLower.includes("diplomat") ? 0.8 :
+                           nameLower.includes("rival") ? 0.2 : 0.5;
+            }
+            else if (propLower.includes("competit")) {
+              defaultVal = nameLower.includes("rival") ? 0.8 :
+                           nameLower.includes("diplomat") ? 0.2 : 0.5;
+            }
+            // Supply/demand/price (economy)
+            else if (propLower.includes("supply")) {
+              defaultVal = entType === "producer" ? 100 : 0;
+            }
+            else if (propLower.includes("demand")) {
+              defaultVal = entType === "consumer" ? 80 : 0;
+            }
+            else if (propLower.includes("price")) {
+              defaultVal = 50;
+            }
+            // Efficiency
+            else if (propLower.includes("efficiency")) {
+              defaultVal = 0.5;
+            }
+            // Boolean flags
+            else if (propType === "boolean" || propLower.includes("active") || propLower.includes("enabled")) {
+              defaultVal = 1;
+            }
+            // State/behavior strings
+            else if (propType === "string" || propLower.includes("state") || propLower.includes("behavior") || propLower.includes("mode")) {
+              defaultVal = entType === "producer" ? "producing" :
+                           entType === "consumer" ? "idle" : "active";
+            }
+            // Generic number default
+            else if (propType === "number") {
+              defaultVal = 50;
+            }
+
+            comp[prop][eid] = defaultVal;
+            initLog.push(`${prop}=${typeof defaultVal === 'number' ? defaultVal.toFixed?.(0) ?? defaultVal : defaultVal}`);
+          }
+        }
+
+        // Also apply explicit initialValues from design if specified
+        if (ent.initialValues) {
+          for (const [compName, values] of Object.entries(ent.initialValues)) {
+            const comp = getDynamicComponent(compName);
+            if (comp && values) {
+              for (const [prop, val] of Object.entries(values as Record<string, any>)) {
+                if (comp[prop]) {
+                  comp[prop][eid] = val;
+                  initLog.push(`${prop}=${val} (explicit)`);
+                }
+              }
+            }
+          }
+        }
+
+        if (initLog.length > 0) {
+          console.log(`    [Init] ${ent.name}: ${initLog.slice(0, 6).join(', ')}${initLog.length > 6 ? '...' : ''}`);
+        }
+      }
+    } catch (e) {
+      console.error(`  [Exec] createEntity failed: ${ent.name}`, e);
+      actions.push({ success: false, error: String(e) });
+    }
+  }
+
+  // Step 3: Create all systems (use AI to generate the code)
+  for (const sys of design.systems || []) {
+    try {
+      // Use AI to generate the actual system code from the design logic
+      const systemCode = await generateSystemCode(sys, design);
+      const filePath = await writeSystemFile({
+        name: sys.name,
+        description: sys.purpose,
+        frequency: sys.frequency || 1,
+        code: systemCode,
+      });
+      const loaded = await loadSystemFromFile(filePath);
+      if (loaded) {
+        loaded.active = true;
+        state.fileSystems.push(loaded);
+        console.log(`  [Exec] createFileSystem: ${sys.name} (active)`);
+        actions.push({ success: true, result: { name: sys.name } });
+      } else {
+        console.error(`  [Exec] createFileSystem: ${sys.name} failed to load`);
+        actions.push({ success: false, error: "Failed to load system" });
+      }
+    } catch (e) {
+      console.error(`  [Exec] createFileSystem failed: ${sys.name}`, e);
+      actions.push({ success: false, error: String(e) });
+    }
+  }
+
+  console.log(`[GodAgent] Execution complete: ${actions.length} actions`);
+  return actions;
+}
+
+// Generate system code from design using AI
+async function generateSystemCode(
+  sys: { name: string; purpose: string; frequency: number; logic: string },
+  design: DesignDocument
+): Promise<string> {
+  const componentList = (design.components || []).map(c =>
+    `${c.name}: ${Object.entries(c.properties || {}).map(([k,v]) => `${k}(${v})`).join(', ') || 'value(number)'}`
+  ).join('\n');
+
+  const entityList = (design.entities || []).map(e =>
+    `${e.name} (${e.type}): components=[${e.components?.join(', ') || 'none'}]`
+  ).join('\n');
+
+  const prompt = `Generate TypeScript code for an ECS system. Return ONLY the code body (no function declaration, no imports).
+
+SYSTEM: ${sys.name}
+PURPOSE: ${sys.purpose}
+LOGIC: ${sys.logic || sys.purpose}
+
+DYNAMIC COMPONENTS (created for this simulation):
+${componentList}
+
+ENTITIES:
+${entityList}
+
+⚠️ CRITICAL RULES - READ CAREFULLY:
+
+1. The components listed above (${(design.components || []).map(c => c.name).join(', ')}) are DYNAMIC components.
+2. ONLY ctx.components.Name is available as a built-in component.
+3. NEVER write ctx.components.Population or ctx.components.Consumer - these don't exist!
+4. ALWAYS query by Name, then filter by checking dynamic data.
+
+CORRECT PATTERN:
+const Population = ctx.getDynamic("Population");
+const Consumer = ctx.getDynamic("Consumer");
+if (!Population || !Consumer) return;
+
+const { Name } = ctx.components;
+// Query by Name (built-in), then filter entities that have the dynamic data
+const entities = Array.from(ctx.query(world, [Name])).filter(eid =>
+  Population.count?.[eid] !== undefined
+);
+
+for (const eid of entities) {
+  const count = Population.count[eid] || 0;
+  Population.count[eid] = count + 1;
+}
+
+WRONG - DO NOT DO THIS:
+// ctx.components.Population - WRONG! Population is dynamic, not built-in!
+// ctx.query(world, [Population]) - WRONG! Dynamic components can't be queried!
+
+Return ONLY the code (no markdown, no explanation):`;
+
+  try {
+    const response = await generateText({
+      model: executorModel,
+      messages: [{ role: "user", content: prompt }],
+      maxTokens: 2000,
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: EXECUTOR_THINKING_LEVEL,
+          },
+        },
+      },
+    });
+
+    let code = response.text.trim();
+    // Remove markdown if present
+    if (code.startsWith('```')) {
+      code = code.replace(/```(?:typescript|ts|javascript|js)?\n?/g, '').replace(/```$/g, '').trim();
+    }
+    return code;
+  } catch (e) {
+    console.error(`Failed to generate code for ${sys.name}:`, e);
+    // Return a placeholder that logs
+    return `ctx.log("System ${sys.name} not yet implemented");`;
+  }
+}
+
+// Test the simulation and analyze health
+interface EntitySnapshot {
+  eid: number;
+  name: string;
+  components: Record<string, Record<string, unknown>>;
+}
+
+interface TickSnapshot {
+  tick: number;
+  entities: EntitySnapshot[];
+  fixes: string[];
+  errors: string[];
+}
+
+interface SimulationHealth {
+  healthy: boolean;
+  issues: string[];
+  valueChanges: Map<string, { min: number; max: number; changed: boolean }>;
+  systemErrors: string[];
+  simulationLog: TickSnapshot[];
+}
+
+async function testSimulationHealth(
+  state: GodAgentState,
+  testTicks: number = 10
+): Promise<SimulationHealth> {
+  const health: SimulationHealth = {
+    healthy: true,
+    issues: [],
+    valueChanges: new Map(),
+    systemErrors: [],
+    simulationLog: [],
+  };
+
+  // Collect initial values
+  const initialValues: Map<string, Map<number, number>> = new Map();
+  for (const compDef of listDynamicComponents()) {
+    const comp = getDynamicComponent(compDef.name);
+    if (!comp) continue;
+    for (const [prop, propType] of Object.entries(compDef.properties)) {
+      if (propType !== 'number') continue;
+      const key = `${compDef.name}.${prop}`;
+      const values = new Map<number, number>();
+      if (comp[prop]) {
+        for (let eid = 0; eid < (comp[prop].length || 100); eid++) {
+          if (comp[prop][eid] !== undefined && typeof comp[prop][eid] === 'number') {
+            values.set(eid, comp[prop][eid]);
+          }
+        }
+      }
+      initialValues.set(key, values);
+      health.valueChanges.set(key, { min: Infinity, max: -Infinity, changed: false });
+    }
+  }
+
+  // Helper to capture entity state snapshot
+  const captureSnapshot = (tick: number, fixes: string[], errors: string[]): TickSnapshot => {
+    const entities: EntitySnapshot[] = [];
+    const allEntities = query(state.world, [Name]);
+
+    for (const eid of allEntities) {
+      const name = Name.value[eid] || `Entity_${eid}`;
+      // Skip GodAI itself
+      if (name.toLowerCase().includes('god') || name.toLowerCase().includes('architect')) continue;
+
+      const components: Record<string, Record<string, unknown>> = {};
+
+      for (const compDef of listDynamicComponents()) {
+        const comp = getDynamicComponent(compDef.name);
+        if (!comp) continue;
+
+        // Check if entity has this component by checking if any property has a value
+        let hasComponent = false;
+        const compData: Record<string, unknown> = {};
+
+        for (const [prop, propType] of Object.entries(compDef.properties)) {
+          if (comp[prop] && comp[prop][eid] !== undefined) {
+            hasComponent = true;
+            compData[prop] = comp[prop][eid];
+          }
+        }
+
+        if (hasComponent) {
+          components[compDef.name] = compData;
+        }
+      }
+
+      if (Object.keys(components).length > 0) {
+        entities.push({ eid, name, components });
+      }
+    }
+
+    return { tick, entities, fixes, errors };
+  };
+
+  // Capture initial state
+  health.simulationLog.push(captureSnapshot(0, [], []));
+
+  // Run simulation with snapshots
+  for (let i = 0; i < testTicks; i++) {
+    const { fixes } = await tickWorldAsync(state, 1000);
+    const tickErrors: string[] = [];
+
+    if (fixes.failed.length > 0) {
+      health.systemErrors.push(...fixes.failed);
+      tickErrors.push(...fixes.failed);
+    }
+
+    // Capture snapshot every tick for detailed analysis
+    health.simulationLog.push(captureSnapshot(i + 1, fixes.fixed, tickErrors));
+  }
+
+  // Check for value changes
+  let anyValueChanged = false;
+  for (const compDef of listDynamicComponents()) {
+    const comp = getDynamicComponent(compDef.name);
+    if (!comp) continue;
+    for (const [prop, propType] of Object.entries(compDef.properties)) {
+      if (propType !== 'number') continue;
+      const key = `${compDef.name}.${prop}`;
+      const initial = initialValues.get(key);
+      const tracking = health.valueChanges.get(key);
+      if (!initial || !tracking || !comp[prop]) continue;
+
+      for (const [eid, initVal] of initial) {
+        const currentVal = comp[prop][eid];
+        if (currentVal !== undefined && typeof currentVal === 'number') {
+          tracking.min = Math.min(tracking.min, currentVal);
+          tracking.max = Math.max(tracking.max, currentVal);
+          if (Math.abs(currentVal - initVal) > 0.01) {
+            tracking.changed = true;
+            anyValueChanged = true;
+          }
+        }
+      }
+    }
+  }
+
+  // Analyze health
+  if (!anyValueChanged) {
+    health.healthy = false;
+    health.issues.push("No values changed during simulation - systems may not be updating data");
+  }
+
+  if (health.systemErrors.length > 0) {
+    health.healthy = false;
+    health.issues.push(`Systems with errors: ${health.systemErrors.join(', ')}`);
+  }
+
+  // Check for stuck values (all at 0 or 100)
+  for (const [key, tracking] of health.valueChanges) {
+    if (tracking.min === tracking.max && (tracking.min === 0 || tracking.min === 100)) {
+      health.issues.push(`${key} stuck at ${tracking.min}`);
+    }
+  }
+
+  return health;
+}
+
+// Format simulation log for LLM consumption
+function formatSimulationLog(log: TickSnapshot[]): string {
+  if (log.length === 0) return "No simulation data captured";
+
+  const lines: string[] = [];
+
+  // Show first tick (initial state), last tick, and a sample from the middle
+  const samplesToShow = [0];
+  if (log.length > 1) samplesToShow.push(Math.floor(log.length / 2));
+  if (log.length > 2) samplesToShow.push(log.length - 1);
+
+  for (const idx of samplesToShow) {
+    const snapshot = log[idx];
+    if (!snapshot) continue;
+
+    lines.push(`--- Tick ${snapshot.tick} ---`);
+
+    for (const entity of snapshot.entities) {
+      const compStrings: string[] = [];
+      for (const [compName, compData] of Object.entries(entity.components)) {
+        const values = Object.entries(compData)
+          .map(([k, v]) => `${k}=${typeof v === 'number' ? (v as number).toFixed(1) : v}`)
+          .join(', ');
+        compStrings.push(`${compName}(${values})`);
+      }
+      lines.push(`  ${entity.name}: ${compStrings.join(' | ')}`);
+    }
+
+    if (snapshot.fixes.length > 0) {
+      lines.push(`  [Auto-fixes: ${snapshot.fixes.join(', ')}]`);
+    }
+    if (snapshot.errors.length > 0) {
+      lines.push(`  [ERRORS: ${snapshot.errors.join(', ')}]`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+// Diagnose issues and suggest fixes
+async function diagnoseSimulationIssues(
+  state: GodAgentState,
+  design: DesignDocument,
+  challenge: string,
+  health: SimulationHealth
+): Promise<{ diagnosis: string; fixes: string[] }> {
+  console.log("\n[GodAgent] 🔬 Diagnosing simulation issues...\n");
+
+  const simulationOutput = formatSimulationLog(health.simulationLog);
+
+  const prompt = `You are diagnosing why an ECS simulation isn't working correctly.
+
+ORIGINAL CHALLENGE:
+${challenge}
+
+DESIGN:
+${JSON.stringify(design, null, 2)}
+
+SIMULATION OUTPUT (entity states at key ticks):
+${simulationOutput}
+
+OBSERVED ISSUES:
+${health.issues.map((i, idx) => `${idx + 1}. ${i}`).join('\n')}
+
+SYSTEM ERRORS:
+${health.systemErrors.length > 0 ? health.systemErrors.join('\n') : 'None'}
+
+VALUE CHANGES SUMMARY:
+${Array.from(health.valueChanges.entries())
+  .filter(([_, v]) => v.min !== Infinity)
+  .map(([k, v]) => `${k}: min=${v.min.toFixed(1)}, max=${v.max.toFixed(1)}, changed=${v.changed}`)
+  .join('\n')}
+
+Look at the actual simulation output to understand what's happening. Are values changing? Are they stuck? Are behaviors switching?
+
+Diagnose the root cause and suggest specific fixes.
+
+OUTPUT FORMAT - Return JSON:
+{
+  "diagnosis": "Brief explanation of what's wrong based on the simulation output",
+  "fixes": ["Specific fix 1", "Specific fix 2", ...]
+}
+
+Return ONLY the JSON, no markdown fences.`;
+
+  try {
+    const response = await generateText({
+      model: plannerModel,
+      prompt,
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: REVIEW_THINKING_LEVEL,
+          },
+        },
+      },
+    });
+
+    let text = response.text.trim();
+    if (text.startsWith('```')) {
+      text = text.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    }
+
+    const result = JSON.parse(text);
+    console.log(`[GodAgent] 🩺 Diagnosis: ${result.diagnosis}`);
+    return result;
+  } catch (error) {
+    console.error("[GodAgent] Diagnosis failed:", error);
+    return { diagnosis: "Could not diagnose", fixes: [] };
+  }
+}
+
+// Combined design + execute flow for complex challenges
+export async function godDesignAndExecute(
+  state: GodAgentState,
+  challenge: string,
+  options: {
+    skipReview?: boolean;
+    maxRefinements?: number;
+    maxIterations?: number;
+    testTicks?: number;
+  } = {}
+): Promise<{
+  design: DesignDocument | null;
+  reasoning: string;
+  actions: ToolResult[];
+}> {
+  const {
+    skipReview = !ENABLE_DESIGN_REVIEW,
+    maxRefinements = 2,
+    maxIterations = 3,  // Test and iterate up to N times
+    testTicks = 10,     // Run this many ticks per test
+  } = options;
+
+  // Phase 1: Design
+  let { design, reasoning } = await designSolution(state, challenge);
+
+  if (!design) {
+    console.log("[GodAgent] ❌ Design failed, falling back to direct execution");
+    const result = await godThink(state, challenge);
+    return { design: null, reasoning, actions: result.actions };
+  }
+
+  // Phase 2: Review & Refine (unless skipped)
+  if (!skipReview) {
+    let refinements = 0;
+    while (refinements < maxRefinements) {
+      const review = await reviewDesign(design, challenge);
+
+      if (review.approved && review.issues.length === 0) {
+        console.log("[GodAgent] ✅ Design approved after review");
+        break;
+      }
+
+      if (review.issues.length > 0 || review.suggestions.length > 0) {
+        design = await refineDesign(design, challenge, review.issues, review.suggestions);
+        refinements++;
+      } else {
+        break;
+      }
+    }
+  }
+
+  // Phase 3: Execute
+  let actions = await executeDesign(state, design);
+
+  // Phase 4: Test & Iterate (run simulation, check health, fix if needed)
+  if (maxIterations > 0 && testTicks > 0) {
+    for (let iteration = 0; iteration < maxIterations; iteration++) {
+      console.log(`\n[GodAgent] 🧪 Test Iteration ${iteration + 1}/${maxIterations} (${testTicks} ticks)...`);
+
+      const health = await testSimulationHealth(state, testTicks);
+
+      if (health.healthy) {
+        console.log("[GodAgent] ✅ Simulation is healthy - values changing, no errors");
+        break;
+      }
+
+      console.log(`[GodAgent] ⚠️ Issues found: ${health.issues.slice(0, 2).join('; ')}`);
+
+      // Diagnose and get fix suggestions
+      const { diagnosis, fixes } = await diagnoseSimulationIssues(state, design, challenge, health);
+
+      if (fixes.length === 0) {
+        console.log("[GodAgent] No fixes suggested, continuing...");
+        break;
+      }
+
+      // Refine design based on diagnosis
+      console.log(`[GodAgent] 🔧 Applying ${fixes.length} suggested fixes...`);
+      design = await refineDesign(design, challenge, fixes, []);
+
+      // Re-execute with refined design
+      // Clear old systems first
+      state.fileSystems = [];
+      actions = await executeDesign(state, design);
+    }
+  }
+
+  return { design, reasoning, actions };
 }
 
 export async function godThink(state: GodAgentState, prompt: string): Promise<{ thinking: string; actions: ToolResult[] }> {
@@ -1587,9 +4163,46 @@ export async function godCommand(state: GodAgentState, command: string): Promise
 
 export function tickWorld(state: GodAgentState, delta: number = 1000): Array<{ type: string; data: any; timestamp: number }> {
   state.tick++;
+  // Run baked systems from registry
   runSystems(state.world, state.systemRegistry, state.tick, delta);
   runAsyncSystems(state.world, state.systemRegistry, state.tick, delta);
+  // Run file-based systems (NeedsDecay, SeekNeeds, RandomWander, etc.)
+  if (state.fileSystems.length > 0) {
+    runLoadedSystems(state.world, state.fileSystems, state.systemRegistry, state.tick, delta);
+  }
+  // Run interventions - event-driven precondition→effect rules
+  runInterventions(state.world, state.interventionRegistry, state.tick);
   return consumeEvents(state.systemRegistry);
+}
+
+// Async version that also fixes runtime errors
+export async function tickWorldAsync(
+  state: GodAgentState,
+  delta: number = 1000
+): Promise<{
+  events: Array<{ type: string; data: any; timestamp: number }>;
+  fixes: { fixed: string[]; failed: string[] };
+}> {
+  const events = tickWorld(state, delta);
+
+  // Check for and fix any systems that errored
+  const systemsToFix = getSystemsNeedingFix();
+  let fixes = { fixed: [] as string[], failed: [] as string[] };
+
+  if (systemsToFix.length > 0) {
+    console.log(`[GodAgent] ${systemsToFix.length} system(s) need fixing...`);
+    fixes = await fixAllQueuedSystems(state.fileSystems);
+    if (fixes.fixed.length > 0) {
+      console.log(`[GodAgent] Fixed: ${fixes.fixed.join(', ')}`);
+      state.systemRegistry.logs.push(`[AutoFix] Fixed systems: ${fixes.fixed.join(', ')}`);
+    }
+    if (fixes.failed.length > 0) {
+      console.log(`[GodAgent] Failed to fix: ${fixes.failed.join(', ')}`);
+      state.systemRegistry.logs.push(`[AutoFix] Failed to fix: ${fixes.failed.join(', ')}`);
+    }
+  }
+
+  return { events, fixes };
 }
 
 export function getWorldState(state: GodAgentState): string {

@@ -1,0 +1,7 @@
+{
+  "name": "Regeneration",
+  "description": "Defines intrinsic growth for base resources (Grass)",
+  "properties": {
+    "rate": "number"
+  }
+}

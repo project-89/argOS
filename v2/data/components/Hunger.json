@@ -1,9 +1,0 @@
-{
-  "name": "Hunger",
-  "description": "Represents the hunger level of an agent",
-  "properties": {
-    "lastAte": "number",
-    "level": "number",
-    "metabolism": "number"
-  }
-}

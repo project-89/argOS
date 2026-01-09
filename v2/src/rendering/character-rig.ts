@@ -89,6 +89,11 @@ export function removeCharacterRig(entityId: number): void {
   }
 }
 
+export function clearAllCharacterRigs(): void {
+  characterRigs.clear();
+  rigsByName.clear();
+}
+
 export function directionFromFacing(facing: number): 'up' | 'down' | 'left' | 'right' {
   const normalized = ((facing % 360) + 360) % 360;
   if (normalized >= 315 || normalized < 45) return 'right';

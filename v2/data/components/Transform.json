@@ -1,0 +1,9 @@
+{
+  "name": "Transform",
+  "description": "Spatial hierarchy and physical location",
+  "properties": {
+    "x": "number",
+    "y": "number",
+    "parentId": "number"
+  }
+}

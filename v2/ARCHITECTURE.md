@@ -75,30 +75,44 @@ interface CognitiveEvent {
 ```
 
 ### Stimulus
-External or internal input to the cognitive system.
+External or internal input to the cognitive system. Stimuli are organized by **sensory modality**, reflecting how agents perceive their world.
 
 ```typescript
+type SensoryModality = 'visual' | 'auditory' | 'olfactory' | 'tactile' | 'cognitive';
+
 interface Stimulus {
-  id: string;
-  type: 'visual' | 'auditory' | 'proprioceptive' | 'interoceptive' | 'social' | 'memory' | 'thought';
+  modality: SensoryModality;   // The sense channel
+  type: string;                // Specific type within modality
   source: string;              // Where it came from
   content: string;             // The actual content
-  
-  // Temporal properties
+  intensity: number;           // How strong (0-1)
   timestamp: number;
-  duration: number;            // How long it lasts
-  decay: number;               // How fast it fades (0-1 per second)
-  
-  // Attention properties
-  salience: number;            // Intrinsic attention-grabbing quality
-  urgency: number;             // Time-sensitivity
-  novelty: number;             // How new/unexpected
-  
-  // Processing state
-  processed: boolean;
-  suppressedUntil?: number;    // Can be temporarily ignored
 }
 ```
+
+#### Sensory Modalities
+
+| Modality | What It Perceives | Examples |
+|----------|------------------|----------|
+| **visual** | Sight - appearances, movements, light | "You see a flickering torch", "Alice enters the room" |
+| **auditory** | Sound - speech, noises, ambient sounds | "Bob says 'Hello!'", "A fire crackles nearby" |
+| **olfactory** | Smell - scents, odors | "The aroma of cooking food", "A musty smell" |
+| **tactile** | Touch - temperature, texture, vibration | "A cold draft", "The rough stone wall" |
+| **cognitive** | Sixth sense - intuitions, affordances, danger | "You sense this door can be opened", "Something feels wrong" |
+
+#### Cognitive Sense (Sixth Sense)
+The cognitive modality represents meta-knowledge that agents have about their world:
+- **Affordances**: What actions are available on nearby objects/agents
+- **Danger Sense**: Awareness of threats or hostile entities
+- **Intuitions**: Gut feelings about situations
+- **Presence Awareness**: Sensing others nearby even without seeing them
+
+Agents can have enhanced or diminished senses via traits:
+- `blind` - Cannot receive visual stimuli
+- `deaf` - Cannot receive auditory stimuli
+- `keen_sight` - Enhanced visual perception
+- `intuitive` - Stronger cognitive/danger sense
+- `psychic` - Can sense thoughts and intentions
 
 ### Knowledge (Graph-Based)
 Knowledge is stored as a graph of entities and relations. The LLM can create new node types, edge types, and structures.

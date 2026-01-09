@@ -1,0 +1,11 @@
+{
+  "name": "ResourceMarket",
+  "description": "Stores the global state of a specific resource type (e.g., Food, Wood). Attached to singleton market entities.",
+  "properties": {
+    "resource_id": "number",
+    "current_price": "number",
+    "total_supply": "number",
+    "total_demand": "number",
+    "price_volatility": "number"
+  }
+}

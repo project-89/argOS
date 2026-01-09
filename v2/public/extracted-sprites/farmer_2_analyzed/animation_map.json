@@ -1,0 +1,79 @@
+{
+  "2": {
+    "direction": "down",
+    "animationType": "walk",
+    "description": "The character is walking toward the viewer.",
+    "frameCount": 10,
+    "startCol": 1
+  },
+  "6": {
+    "direction": "down",
+    "animationType": "walk",
+    "description": "A farmer character is walking towards the viewer.",
+    "frameCount": 70,
+    "startCol": 1
+  },
+  "10": {
+    "direction": "down",
+    "animationType": "walk",
+    "description": "The character is walking forward.",
+    "frameCount": 70,
+    "startCol": 1
+  },
+  "14": {
+    "direction": "right",
+    "animationType": "walk",
+    "description": "A farmer with a hat walking right.",
+    "frameCount": 106,
+    "startCol": 1
+  },
+  "18": {
+    "direction": "right",
+    "animationType": "walk",
+    "description": "The farmer character is walking and holding a tool.",
+    "frameCount": 70,
+    "startCol": 1
+  },
+  "22": {
+    "direction": "right",
+    "animationType": "action",
+    "description": "The farmer character is performing a farming action, possibly planting or harvesting crops.",
+    "frameCount": 107,
+    "startCol": 1
+  },
+  "26": {
+    "direction": "right",
+    "animationType": "action",
+    "description": "A farmer with a watering can walks to the right.",
+    "frameCount": 70,
+    "startCol": 1
+  },
+  "30": {
+    "direction": "right",
+    "animationType": "action",
+    "description": "Farmer with hat holding watering can spraying water.",
+    "frameCount": 167,
+    "startCol": 1
+  },
+  "34": {
+    "direction": "right",
+    "animationType": "action",
+    "description": "Farmer using a hoe",
+    "frameCount": 70,
+    "startCol": 1
+  },
+  "38": {
+    "direction": "right",
+    "animationType": "walk",
+    "description": "Farmer in a hat is walking while holding a shovel.",
+    "frameCount": 119,
+    "startCol": 1
+  },
+  "42": {
+    "direction": "right",
+    "animationType": "action",
+    "description": "The character is a farmer holding a scythe and is performing a harvesting action. ",
+    "frameCount": 70,
+    "startCol": 1
+  }
+}

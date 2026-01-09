@@ -1,0 +1,8 @@
+{
+  "name": "Location",
+  "description": "Tracks entity position. 0=SafeBurrow, 1=DangerFood, 2=OpenSocial.",
+  "properties": {
+    "zoneId": "number",
+    "ticksInZone": "number"
+  }
+}

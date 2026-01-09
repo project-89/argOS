@@ -1,0 +1,10 @@
+{
+  "name": "ProducerParams",
+  "description": "Defining characteristics of a resource producer",
+  "properties": {
+    "baseProductionRate": "number",
+    "currentProductionRate": "number",
+    "breakEvenPrice": "number",
+    "elasticity": "number"
+  }
+}

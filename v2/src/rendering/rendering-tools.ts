@@ -1,6 +1,6 @@
 import { addComponent, hasComponent, query } from 'bitecs';
 import type { World } from '../ecs/world';
-import { GridPosition, Name } from '../ecs/components';
+import { GridPosition, Name, CharacterRigConfig } from '../ecs/components';
 import { PixiSprite, AnimatedSprite, Camera, Tilemap } from './components';
 import { SpriteRegistry, type SpriteAtlas } from './sprite-registry';
 import type { EntityRegistry } from '../ecs/tools';
@@ -706,6 +706,14 @@ export function createRenderingTools(world: World, registry: EntityRegistry) {
           actionAtlases: params.actionAtlases,
           actionMappings: params.actionMappings,
         });
+
+        // Store rig config in component for persistence
+        if (!hasComponent(world, eid, CharacterRigConfig)) {
+          addComponent(world, eid, CharacterRigConfig);
+        }
+        CharacterRigConfig.baseAtlas[eid] = params.baseAtlas;
+        CharacterRigConfig.idleAnimation[eid] = 'idle';
+        CharacterRigConfig.currentDirection[eid] = 'down';
 
         setCharacterIdle(world, eid);
 

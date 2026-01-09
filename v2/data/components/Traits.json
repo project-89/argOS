@@ -1,0 +1,9 @@
+{
+  "name": "Traits",
+  "description": "Static weights influencing decision utility. Higher values make the creature prioritize that need sooner.",
+  "properties": {
+    "satietyPriority": "number",
+    "safetyPriority": "number",
+    "socialPriority": "number"
+  }
+}

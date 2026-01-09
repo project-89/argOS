@@ -1,0 +1,8 @@
+{
+  "name": "Health",
+  "description": "Health for ecosystem entities",
+  "properties": {
+    "max": "number",
+    "current": "number"
+  }
+}

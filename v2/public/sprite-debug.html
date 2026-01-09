@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sprite Debug Tool</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'SF Mono', monospace;
+      background: #1a1a2e;
+      color: #e0e0e8;
+      padding: 20px;
+    }
+    h1 { margin-bottom: 20px; color: #6366f1; }
+    .controls {
+      margin-bottom: 20px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: #12121a;
+      padding: 8px 12px;
+      border-radius: 4px;
+    }
+    label { color: #888; font-size: 0.85rem; }
+    input, select {
+      background: #0a0a0f;
+      border: 1px solid #333;
+      color: #e0e0e8;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+    input[type="number"] { width: 60px; }
+    button {
+      background: #6366f1;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover { background: #5558e3; }
+    .sprite-viewer {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .sprite-container {
+      position: relative;
+      background: #0a0a0f;
+      border: 2px solid #333;
+      overflow: auto;
+      max-width: 100%;
+    }
+    .sprite-image {
+      image-rendering: pixelated;
+      display: block;
+    }
+    .grid-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    .frame-preview {
+      background: #12121a;
+      border: 2px solid #333;
+      padding: 20px;
+      text-align: center;
+    }
+    .frame-canvas {
+      image-rendering: pixelated;
+      background: #333;
+      border: 1px solid #555;
+    }
+    .info {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: #888;
+    }
+    .animation-test {
+      margin-top: 20px;
+      background: #12121a;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    .animation-canvas {
+      image-rendering: pixelated;
+      background: #333;
+      border: 2px solid #6366f1;
+    }
+  </style>
+</head>
+<body>
+  <h1>Sprite Debug Tool</h1>
+
+  <div class="controls">
+    <div class="control-group">
+      <label>Sprite:</label>
+      <select id="sprite-select">
+        <option value="/32x32/Characters_32x32/Farmer_1_32x32.png">Farmer_1</option>
+        <option value="/32x32/Characters_32x32/Farmer_2_32x32.png">Farmer_2</option>
+        <option value="/32x32/Animals_32x32/Chickens_and_Roosters_32x32/Chicken_Brown_32x32.png">Chicken</option>
+        <option value="/32x32/Animals_32x32/Cows_32x32/Cow_32x32.png">Cow</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <label>Frame W:</label>
+      <input type="number" id="frame-width" value="32">
+    </div>
+    <div class="control-group">
+      <label>Frame H:</label>
+      <input type="number" id="frame-height" value="64">
+    </div>
+    <div class="control-group">
+      <label>Zoom:</label>
+      <input type="number" id="zoom" value="2" min="1" max="8">
+    </div>
+    <button onclick="loadSprite()">Load</button>
+    <button onclick="toggleGrid()">Toggle Grid</button>
+  </div>
+
+  <div class="sprite-viewer">
+    <div>
+      <h3>Full Spritesheet</h3>
+      <div class="sprite-container" id="sprite-container">
+        <img id="sprite-image" class="sprite-image" crossorigin="anonymous">
+        <canvas id="grid-overlay" class="grid-overlay"></canvas>
+      </div>
+      <div class="info" id="image-info"></div>
+    </div>
+
+    <div class="frame-preview">
+      <h3>Selected Frame</h3>
+      <canvas id="frame-canvas" class="frame-canvas" width="64" height="128"></canvas>
+      <div class="info" id="frame-info">Click on spritesheet to select frame</div>
+    </div>
+  </div>
+
+  <div class="animation-test">
+    <h3>Animation Test</h3>
+    <div class="controls">
+      <div class="control-group">
+        <label>Row:</label>
+        <input type="number" id="anim-row" value="0" min="0">
+      </div>
+      <div class="control-group">
+        <label>Start Col:</label>
+        <input type="number" id="anim-start" value="0" min="0">
+      </div>
+      <div class="control-group">
+        <label>Frames:</label>
+        <input type="number" id="anim-count" value="6" min="1">
+      </div>
+      <div class="control-group">
+        <label>FPS:</label>
+        <input type="number" id="anim-fps" value="8" min="1">
+      </div>
+      <button onclick="playAnimation()">Play</button>
+      <button onclick="stopAnimation()">Stop</button>
+    </div>
+    <canvas id="animation-canvas" class="animation-canvas" width="64" height="128"></canvas>
+    <div class="info" id="anim-info">Frame: 0</div>
+  </div>
+
+  <script>
+    let img = null;
+    let showGrid = true;
+    let animInterval = null;
+
+    function loadSprite() {
+      const select = document.getElementById('sprite-select');
+      const spriteImg = document.getElementById('sprite-image');
+      const zoom = parseInt(document.getElementById('zoom').value);
+
+      spriteImg.onload = () => {
+        img = spriteImg;
+        const frameW = parseInt(document.getElementById('frame-width').value);
+        const frameH = parseInt(document.getElementById('frame-height').value);
+        const cols = Math.floor(img.naturalWidth / frameW);
+        const rows = Math.floor(img.naturalHeight / frameH);
+
+        spriteImg.style.width = img.naturalWidth * zoom + 'px';
+        spriteImg.style.height = img.naturalHeight * zoom + 'px';
+
+        document.getElementById('image-info').textContent =
+          `Image: ${img.naturalWidth}x${img.naturalHeight}px | ` +
+          `Frame: ${frameW}x${frameH} | ` +
+          `Grid: ${cols}x${rows} = ${cols * rows} frames`;
+
+        drawGrid();
+      };
+
+      spriteImg.src = select.value;
+    }
+
+    function drawGrid() {
+      if (!img) return;
+
+      const zoom = parseInt(document.getElementById('zoom').value);
+      const frameW = parseInt(document.getElementById('frame-width').value);
+      const frameH = parseInt(document.getElementById('frame-height').value);
+      const canvas = document.getElementById('grid-overlay');
+      const ctx = canvas.getContext('2d');
+
+      canvas.width = img.naturalWidth * zoom;
+      canvas.height = img.naturalHeight * zoom;
+
+      if (!showGrid) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        return;
+      }
+
+      ctx.strokeStyle = 'rgba(255, 100, 100, 0.7)';
+      ctx.lineWidth = 1;
+
+      const cols = Math.floor(img.naturalWidth / frameW);
+      const rows = Math.floor(img.naturalHeight / frameH);
+
+      // Vertical lines
+      for (let c = 0; c <= cols; c++) {
+        ctx.beginPath();
+        ctx.moveTo(c * frameW * zoom, 0);
+        ctx.lineTo(c * frameW * zoom, canvas.height);
+        ctx.stroke();
+      }
+
+      // Horizontal lines
+      for (let r = 0; r <= rows; r++) {
+        ctx.beginPath();
+        ctx.moveTo(0, r * frameH * zoom);
+        ctx.lineTo(canvas.width, r * frameH * zoom);
+        ctx.stroke();
+      }
+
+      // Labels
+      ctx.font = '10px monospace';
+      ctx.fillStyle = 'yellow';
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          ctx.fillText(`${r},${c}`, c * frameW * zoom + 2, r * frameH * zoom + 12);
+        }
+      }
+    }
+
+    function toggleGrid() {
+      showGrid = !showGrid;
+      drawGrid();
+    }
+
+    document.getElementById('sprite-container').addEventListener('click', (e) => {
+      if (!img) return;
+
+      const rect = e.target.getBoundingClientRect();
+      const zoom = parseInt(document.getElementById('zoom').value);
+      const x = (e.clientX - rect.left) / zoom;
+      const y = (e.clientY - rect.top) / zoom;
+
+      const frameW = parseInt(document.getElementById('frame-width').value);
+      const frameH = parseInt(document.getElementById('frame-height').value);
+      const col = Math.floor(x / frameW);
+      const row = Math.floor(y / frameH);
+
+      showFrame(row, col);
+    });
+
+    function showFrame(row, col) {
+      if (!img) return;
+
+      const frameW = parseInt(document.getElementById('frame-width').value);
+      const frameH = parseInt(document.getElementById('frame-height').value);
+      const zoom = parseInt(document.getElementById('zoom').value);
+
+      const canvas = document.getElementById('frame-canvas');
+      canvas.width = frameW * zoom;
+      canvas.height = frameH * zoom;
+
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+
+      ctx.drawImage(
+        img,
+        col * frameW, row * frameH, frameW, frameH,
+        0, 0, frameW * zoom, frameH * zoom
+      );
+
+      document.getElementById('frame-info').textContent =
+        `Row: ${row}, Col: ${col} | Pixel: (${col * frameW}, ${row * frameH})`;
+    }
+
+    function playAnimation() {
+      stopAnimation();
+
+      if (!img) {
+        alert('Load a sprite first!');
+        return;
+      }
+
+      const row = parseInt(document.getElementById('anim-row').value);
+      const startCol = parseInt(document.getElementById('anim-start').value);
+      const frameCount = parseInt(document.getElementById('anim-count').value);
+      const fps = parseInt(document.getElementById('anim-fps').value);
+      const frameW = parseInt(document.getElementById('frame-width').value);
+      const frameH = parseInt(document.getElementById('frame-height').value);
+      const zoom = parseInt(document.getElementById('zoom').value);
+
+      const canvas = document.getElementById('animation-canvas');
+      canvas.width = frameW * zoom;
+      canvas.height = frameH * zoom;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+
+      let frameIndex = 0;
+
+      function drawFrame() {
+        const col = startCol + frameIndex;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(
+          img,
+          col * frameW, row * frameH, frameW, frameH,
+          0, 0, frameW * zoom, frameH * zoom
+        );
+
+        document.getElementById('anim-info').textContent =
+          `Frame: ${frameIndex} (col ${col}) | Row: ${row}`;
+
+        frameIndex = (frameIndex + 1) % frameCount;
+      }
+
+      drawFrame();
+      animInterval = setInterval(drawFrame, 1000 / fps);
+    }
+
+    function stopAnimation() {
+      if (animInterval) {
+        clearInterval(animInterval);
+        animInterval = null;
+      }
+    }
+
+    // Load default sprite on page load
+    window.onload = loadSprite;
+  </script>
+</body>
+</html>

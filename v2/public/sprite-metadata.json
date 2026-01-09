@@ -1,0 +1,82 @@
+{
+  "spritesheets": {
+    "farmer_1": {
+      "path": "32x32/Characters_32x32/Farmer_1_32x32.png",
+      "imageWidth": 768,
+      "imageHeight": 192,
+      "frameWidth": 32,
+      "frameHeight": 64,
+      "columns": 24,
+      "rows": 3,
+      "totalFrames": 72,
+      "characterType": "humanoid",
+      "note": "This spritesheet only has front-facing animations",
+      "animations": {
+        "idle": { "row": 0, "startCol": 0, "frameCount": 4, "frameRate": 4, "loop": true },
+        "walk": { "row": 1, "startCol": 0, "frameCount": 6, "frameRate": 8, "loop": true },
+        "action": { "row": 2, "startCol": 0, "frameCount": 6, "frameRate": 8, "loop": true }
+      }
+    },
+    "chicken_brown": {
+      "path": "32x32/Animals_32x32/Chickens_and_Roosters_32x32/Chicken_Brown_32x32.png",
+      "imageWidth": 768,
+      "imageHeight": 128,
+      "frameWidth": 32,
+      "frameHeight": 32,
+      "columns": 24,
+      "rows": 4,
+      "totalFrames": 96,
+      "characterType": "animal",
+      "animations": {
+        "idle_down": { "row": 0, "startCol": 0, "frameCount": 6, "frameRate": 4, "loop": true },
+        "idle_right": { "row": 0, "startCol": 6, "frameCount": 6, "frameRate": 4, "loop": true },
+        "idle_up": { "row": 0, "startCol": 12, "frameCount": 6, "frameRate": 4, "loop": true },
+        "idle_left": { "row": 0, "startCol": 18, "frameCount": 6, "frameRate": 4, "loop": true },
+        "walk_down": { "row": 1, "startCol": 0, "frameCount": 6, "frameRate": 6, "loop": true },
+        "walk_right": { "row": 1, "startCol": 6, "frameCount": 6, "frameRate": 6, "loop": true },
+        "walk_up": { "row": 1, "startCol": 12, "frameCount": 6, "frameRate": 6, "loop": true },
+        "walk_left": { "row": 1, "startCol": 18, "frameCount": 6, "frameRate": 6, "loop": true },
+        "peck_down": { "row": 2, "startCol": 0, "frameCount": 6, "frameRate": 8, "loop": true },
+        "peck_right": { "row": 2, "startCol": 6, "frameCount": 6, "frameRate": 8, "loop": true },
+        "peck_up": { "row": 2, "startCol": 12, "frameCount": 6, "frameRate": 8, "loop": true },
+        "peck_left": { "row": 2, "startCol": 18, "frameCount": 6, "frameRate": 8, "loop": true }
+      }
+    },
+    "cow": {
+      "path": "32x32/Animals_32x32/Cows_32x32/Cow_32x32.png",
+      "imageWidth": 2304,
+      "imageHeight": 384,
+      "frameWidth": 64,
+      "frameHeight": 64,
+      "columns": 36,
+      "rows": 6,
+      "totalFrames": 216,
+      "characterType": "animal",
+      "animations": {
+        "idle_down": { "row": 0, "startCol": 0, "frameCount": 6, "frameRate": 4, "loop": true },
+        "idle_right": { "row": 0, "startCol": 6, "frameCount": 6, "frameRate": 4, "loop": true },
+        "idle_up": { "row": 0, "startCol": 12, "frameCount": 6, "frameRate": 4, "loop": true },
+        "idle_left": { "row": 0, "startCol": 18, "frameCount": 6, "frameRate": 4, "loop": true },
+        "walk_down": { "row": 1, "startCol": 0, "frameCount": 6, "frameRate": 6, "loop": true },
+        "walk_right": { "row": 1, "startCol": 6, "frameCount": 6, "frameRate": 6, "loop": true },
+        "walk_up": { "row": 1, "startCol": 12, "frameCount": 6, "frameRate": 6, "loop": true },
+        "walk_left": { "row": 1, "startCol": 18, "frameCount": 6, "frameRate": 6, "loop": true },
+        "graze_down": { "row": 2, "startCol": 0, "frameCount": 6, "frameRate": 4, "loop": true },
+        "graze_right": { "row": 2, "startCol": 6, "frameCount": 6, "frameRate": 4, "loop": true },
+        "graze_up": { "row": 2, "startCol": 12, "frameCount": 6, "frameRate": 4, "loop": true },
+        "graze_left": { "row": 2, "startCol": 18, "frameCount": 6, "frameRate": 4, "loop": true }
+      }
+    },
+    "terrain": {
+      "path": "32x32/1_Terrains_32x32.png",
+      "imageWidth": 1024,
+      "imageHeight": 736,
+      "frameWidth": 32,
+      "frameHeight": 32,
+      "columns": 32,
+      "rows": 23,
+      "totalFrames": 736,
+      "tileType": "terrain"
+    }
+  }
+}

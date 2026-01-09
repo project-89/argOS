@@ -1,0 +1,978 @@
+{
+  "tilesetId": "terrain_32x32",
+  "imagePath": "/Users/parzival/workspace/oneirocom/project89/argos/v2/public/32x32/1_Terrains_32x32.png",
+  "tileWidth": 32,
+  "tileHeight": 32,
+  "columns": 8,
+  "rows": 6,
+  "tiles": [
+    {
+      "id": "terrain_32x32_grass_full",
+      "name": "grass_full",
+      "category": "terrain",
+      "description": "Full grass tile",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "nature",
+        "ground"
+      ],
+      "gridPosition": {
+        "col": 0,
+        "row": 0
+      },
+      "pixelPosition": {
+        "x": 0,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dirt_full",
+      "name": "dirt_full",
+      "category": "terrain",
+      "description": "Full dirt tile",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "dirt",
+        "ground",
+        "earth"
+      ],
+      "gridPosition": {
+        "col": 1,
+        "row": 0
+      },
+      "pixelPosition": {
+        "x": 32,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_grass_dirt_transition_top",
+      "name": "grass_dirt_transition_top",
+      "category": "transition",
+      "description": "Grass to dirt transition - grass on top",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "dirt",
+        "transition",
+        "ground"
+      ],
+      "gridPosition": {
+        "col": 0,
+        "row": 1
+      },
+      "pixelPosition": {
+        "x": 0,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_grass_dirt_transition_right",
+      "name": "grass_dirt_transition_right",
+      "category": "transition",
+      "description": "Grass to dirt transition - grass on right",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "dirt",
+        "transition",
+        "ground"
+      ],
+      "gridPosition": {
+        "col": 1,
+        "row": 1
+      },
+      "pixelPosition": {
+        "x": 32,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_water_full",
+      "name": "water_full",
+      "category": "water",
+      "description": "Full water tile",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "water",
+        "lake",
+        "liquid"
+      ],
+      "gridPosition": {
+        "col": 2,
+        "row": 0
+      },
+      "pixelPosition": {
+        "x": 64,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_grass_water_transition_top",
+      "name": "grass_water_transition_top",
+      "category": "transition",
+      "description": "Grass to water transition - grass on top",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "grass",
+        "water",
+        "transition"
+      ],
+      "gridPosition": {
+        "col": 2,
+        "row": 1
+      },
+      "pixelPosition": {
+        "x": 64,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_water_edge_top",
+      "name": "water_edge_top",
+      "category": "water",
+      "description": "Water edge - top",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "water",
+        "edge"
+      ],
+      "gridPosition": {
+        "col": 3,
+        "row": 0
+      },
+      "pixelPosition": {
+        "x": 96,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_water_edge_right",
+      "name": "water_edge_right",
+      "category": "water",
+      "description": "Water edge - right",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "water",
+        "edge"
+      ],
+      "gridPosition": {
+        "col": 3,
+        "row": 1
+      },
+      "pixelPosition": {
+        "x": 96,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_water_edge_bottom",
+      "name": "water_edge_bottom",
+      "category": "water",
+      "description": "Water edge - bottom",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "water",
+        "edge"
+      ],
+      "gridPosition": {
+        "col": 4,
+        "row": 0
+      },
+      "pixelPosition": {
+        "x": 128,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_water_edge_left",
+      "name": "water_edge_left",
+      "category": "water",
+      "description": "Water edge - left",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "water",
+        "edge"
+      ],
+      "gridPosition": {
+        "col": 4,
+        "row": 1
+      },
+      "pixelPosition": {
+        "x": 128,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_water_corner_top_left",
+      "name": "water_corner_top_left",
+      "category": "water",
+      "description": "Water corner - top left",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "water",
+        "corner"
+      ],
+      "gridPosition": {
+        "col": 5,
+        "row": 0
+      },
+      "pixelPosition": {
+        "x": 160,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_water_corner_top_right",
+      "name": "water_corner_top_right",
+      "category": "water",
+      "description": "Water corner - top right",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "water",
+        "corner"
+      ],
+      "gridPosition": {
+        "col": 5,
+        "row": 1
+      },
+      "pixelPosition": {
+        "x": 160,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_water_corner_bottom_left",
+      "name": "water_corner_bottom_left",
+      "category": "water",
+      "description": "Water corner - bottom left",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "water",
+        "corner"
+      ],
+      "gridPosition": {
+        "col": 6,
+        "row": 0
+      },
+      "pixelPosition": {
+        "x": 192,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_water_corner_bottom_right",
+      "name": "water_corner_bottom_right",
+      "category": "water",
+      "description": "Water corner - bottom right",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "water",
+        "corner"
+      ],
+      "gridPosition": {
+        "col": 6,
+        "row": 1
+      },
+      "pixelPosition": {
+        "x": 192,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_sand_full",
+      "name": "sand_full",
+      "category": "terrain",
+      "description": "Full sand tile",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "sand",
+        "beach",
+        "desert"
+      ],
+      "gridPosition": {
+        "col": 0,
+        "row": 2
+      },
+      "pixelPosition": {
+        "x": 0,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_sand_water_transition_top",
+      "name": "sand_water_transition_top",
+      "category": "transition",
+      "description": "Sand to water transition - sand on top",
+      "walkable": true,
+      "solid": false,
+      "liquid": true,
+      "tags": [
+        "sand",
+        "water",
+        "transition"
+      ],
+      "gridPosition": {
+        "col": 1,
+        "row": 2
+      },
+      "pixelPosition": {
+        "x": 32,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_sand_island",
+      "name": "sand_island",
+      "category": "terrain",
+      "description": "Small sand island surrounded by water",
+      "walkable": true,
+      "solid": false,
+      "liquid": true,
+      "tags": [
+        "sand",
+        "island",
+        "water"
+      ],
+      "gridPosition": {
+        "col": 2,
+        "row": 2
+      },
+      "pixelPosition": {
+        "x": 64,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_sand_water_concave",
+      "name": "sand_water_concave",
+      "category": "water",
+      "description": "concave shape of water with sand",
+      "walkable": false,
+      "solid": true,
+      "liquid": true,
+      "tags": [
+        "sand",
+        "water",
+        "concave"
+      ],
+      "gridPosition": {
+        "col": 3,
+        "row": 2
+      },
+      "pixelPosition": {
+        "x": 96,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_sand_full_wavy",
+      "name": "sand_full_wavy",
+      "category": "terrain",
+      "description": "full sand with waves",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "sand",
+        "waves",
+        "beach"
+      ],
+      "gridPosition": {
+        "col": 4,
+        "row": 2
+      },
+      "pixelPosition": {
+        "x": 128,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_sand_wavy_edge",
+      "name": "sand_wavy_edge",
+      "category": "terrain",
+      "description": "Edge of sand with waves",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "sand",
+        "waves",
+        "edge"
+      ],
+      "gridPosition": {
+        "col": 5,
+        "row": 2
+      },
+      "pixelPosition": {
+        "x": 160,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_tilled_soil_full",
+      "name": "tilled_soil_full",
+      "category": "terrain",
+      "description": "full tilled soil",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "soil",
+        "tilled",
+        "farm"
+      ],
+      "gridPosition": {
+        "col": 0,
+        "row": 3
+      },
+      "pixelPosition": {
+        "x": 0,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_grass_tilled_transition_top",
+      "name": "grass_tilled_transition_top",
+      "category": "transition",
+      "description": "Grass to tilled transition - grass on top",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "tilled",
+        "transition"
+      ],
+      "gridPosition": {
+        "col": 1,
+        "row": 3
+      },
+      "pixelPosition": {
+        "x": 32,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_grass_tilled_4way",
+      "name": "grass_tilled_4way",
+      "category": "transition",
+      "description": "Cross road of tilled soil, grass around",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "tilled",
+        "4way"
+      ],
+      "gridPosition": {
+        "col": 2,
+        "row": 3
+      },
+      "pixelPosition": {
+        "x": 64,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_grass_tilled_transition_vertical",
+      "name": "grass_tilled_transition_vertical",
+      "category": "transition",
+      "description": "Vertical connection of tilled soil",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "tilled",
+        "vertical"
+      ],
+      "gridPosition": {
+        "col": 3,
+        "row": 3
+      },
+      "pixelPosition": {
+        "x": 96,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_grass_tilled_horizontal",
+      "name": "grass_tilled_horizontal",
+      "category": "transition",
+      "description": "Horizontal connection of tilled soil",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "tilled",
+        "horizontal"
+      ],
+      "gridPosition": {
+        "col": 4,
+        "row": 3
+      },
+      "pixelPosition": {
+        "x": 128,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_grass_tilled_3way",
+      "name": "grass_tilled_3way",
+      "category": "transition",
+      "description": "Three way of tilled soil",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "tilled",
+        "3way"
+      ],
+      "gridPosition": {
+        "col": 5,
+        "row": 3
+      },
+      "pixelPosition": {
+        "x": 160,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dirt_full",
+      "name": "dirt_full",
+      "category": "terrain",
+      "description": "Full dirt tile",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "dirt",
+        "ground",
+        "earth"
+      ],
+      "gridPosition": {
+        "col": 0,
+        "row": 4
+      },
+      "pixelPosition": {
+        "x": 0,
+        "y": 128,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_grass_dirt_transition_top",
+      "name": "grass_dirt_transition_top",
+      "category": "transition",
+      "description": "Grass to dirt transition - grass on top",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "dirt",
+        "transition",
+        "ground"
+      ],
+      "gridPosition": {
+        "col": 1,
+        "row": 4
+      },
+      "pixelPosition": {
+        "x": 32,
+        "y": 128,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dirt_crossroad",
+      "name": "dirt_crossroad",
+      "category": "path",
+      "description": "Cross road of dirt on grass",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "dirt",
+        "path",
+        "crossroad"
+      ],
+      "gridPosition": {
+        "col": 2,
+        "row": 4
+      },
+      "pixelPosition": {
+        "x": 64,
+        "y": 128,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dirt_vertical_connector",
+      "name": "dirt_vertical_connector",
+      "category": "path",
+      "description": "Vertical connection of dirt",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "dirt",
+        "path",
+        "vertical"
+      ],
+      "gridPosition": {
+        "col": 3,
+        "row": 4
+      },
+      "pixelPosition": {
+        "x": 96,
+        "y": 128,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dirt_horizontal_connector",
+      "name": "dirt_horizontal_connector",
+      "category": "path",
+      "description": "Horizontal connection of dirt",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "dirt",
+        "path",
+        "horizontal"
+      ],
+      "gridPosition": {
+        "col": 4,
+        "row": 4
+      },
+      "pixelPosition": {
+        "x": 128,
+        "y": 128,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dirt_3way_connector",
+      "name": "dirt_3way_connector",
+      "category": "path",
+      "description": "Three way of dirt",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "dirt",
+        "path",
+        "3way"
+      ],
+      "gridPosition": {
+        "col": 5,
+        "row": 4
+      },
+      "pixelPosition": {
+        "x": 160,
+        "y": 128,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dark_grass",
+      "name": "dark_grass",
+      "category": "terrain",
+      "description": "Full dark grass tile",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "nature",
+        "dark"
+      ],
+      "gridPosition": {
+        "col": 0,
+        "row": 5
+      },
+      "pixelPosition": {
+        "x": 0,
+        "y": 160,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dark_grass_transition",
+      "name": "dark_grass_transition",
+      "category": "transition",
+      "description": "Dark grass transition on grass",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "transition",
+        "dark"
+      ],
+      "gridPosition": {
+        "col": 1,
+        "row": 5
+      },
+      "pixelPosition": {
+        "x": 32,
+        "y": 160,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dark_grass_crossroad",
+      "name": "dark_grass_crossroad",
+      "category": "terrain",
+      "description": "crossroad of dark grass",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "crossroad",
+        "dark"
+      ],
+      "gridPosition": {
+        "col": 2,
+        "row": 5
+      },
+      "pixelPosition": {
+        "x": 64,
+        "y": 160,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dark_grass_vertical",
+      "name": "dark_grass_vertical",
+      "category": "transition",
+      "description": "Vertical dark grass",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "vertical",
+        "dark"
+      ],
+      "gridPosition": {
+        "col": 3,
+        "row": 5
+      },
+      "pixelPosition": {
+        "x": 96,
+        "y": 160,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dark_grass_mound",
+      "name": "dark_grass_mound",
+      "category": "terrain",
+      "description": "Mound of dark grass",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "mound",
+        "dark"
+      ],
+      "gridPosition": {
+        "col": 4,
+        "row": 5
+      },
+      "pixelPosition": {
+        "x": 128,
+        "y": 160,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    },
+    {
+      "id": "terrain_32x32_dark_grass_bush",
+      "name": "dark_grass_bush",
+      "category": "terrain",
+      "description": "Bushes of dark grass",
+      "walkable": true,
+      "solid": false,
+      "tags": [
+        "grass",
+        "bush",
+        "dark"
+      ],
+      "gridPosition": {
+        "col": 5,
+        "row": 5
+      },
+      "pixelPosition": {
+        "x": 160,
+        "y": 160,
+        "width": 32,
+        "height": 32
+      },
+      "autotileType": "none"
+    }
+  ],
+  "categories": {
+    "terrain": [
+      "terrain_32x32_grass_full",
+      "terrain_32x32_dirt_full",
+      "terrain_32x32_sand_full",
+      "terrain_32x32_sand_island",
+      "terrain_32x32_sand_full_wavy",
+      "terrain_32x32_sand_wavy_edge",
+      "terrain_32x32_tilled_soil_full",
+      "terrain_32x32_dirt_full",
+      "terrain_32x32_dark_grass",
+      "terrain_32x32_dark_grass_crossroad",
+      "terrain_32x32_dark_grass_mound",
+      "terrain_32x32_dark_grass_bush"
+    ],
+    "transition": [
+      "terrain_32x32_grass_dirt_transition_top",
+      "terrain_32x32_grass_dirt_transition_right",
+      "terrain_32x32_grass_water_transition_top",
+      "terrain_32x32_sand_water_transition_top",
+      "terrain_32x32_grass_tilled_transition_top",
+      "terrain_32x32_grass_tilled_4way",
+      "terrain_32x32_grass_tilled_transition_vertical",
+      "terrain_32x32_grass_tilled_horizontal",
+      "terrain_32x32_grass_tilled_3way",
+      "terrain_32x32_grass_dirt_transition_top",
+      "terrain_32x32_dark_grass_transition",
+      "terrain_32x32_dark_grass_vertical"
+    ],
+    "water": [
+      "terrain_32x32_water_full",
+      "terrain_32x32_water_edge_top",
+      "terrain_32x32_water_edge_right",
+      "terrain_32x32_water_edge_bottom",
+      "terrain_32x32_water_edge_left",
+      "terrain_32x32_water_corner_top_left",
+      "terrain_32x32_water_corner_top_right",
+      "terrain_32x32_water_corner_bottom_left",
+      "terrain_32x32_water_corner_bottom_right",
+      "terrain_32x32_sand_water_concave"
+    ],
+    "path": [
+      "terrain_32x32_dirt_crossroad",
+      "terrain_32x32_dirt_vertical_connector",
+      "terrain_32x32_dirt_horizontal_connector",
+      "terrain_32x32_dirt_3way_connector"
+    ]
+  }
+}

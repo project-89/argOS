@@ -1,0 +1,9 @@
+{
+  "name": "ObjectState",
+  "description": "Physical condition and availability of objects",
+  "properties": {
+    "durability": "number",
+    "maxDurability": "number",
+    "isOpen": "boolean"
+  }
+}

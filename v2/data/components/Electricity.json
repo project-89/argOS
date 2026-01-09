@@ -1,8 +1,0 @@
-{
-  "name": "Electricity",
-  "description": "Electrical state and voltage",
-  "properties": {
-    "voltage": "number",
-    "powered": "boolean"
-  }
-}
