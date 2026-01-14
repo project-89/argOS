@@ -26,6 +26,9 @@ import type {
   SocialState,
 } from "./types";
 
+// Re-export types for convenience
+export type { SpiritState, SpiritDefinition, SpiritDomain } from "./types";
+
 // =============================================================================
 // SPIRIT COMPONENT
 // =============================================================================
@@ -170,6 +173,62 @@ export function createSpirit(
 export function setGodAgent(registry: SpiritRegistry, godAgentEid: number): void {
   registry.godAgentEid = godAgentEid;
   console.log(`[Spirit] GodAI registered as supreme being (eid: ${godAgentEid})`);
+}
+
+/**
+ * Add a subordinate spirit to a superior
+ */
+export function addSubordinate(registry: SpiritRegistry, superiorEid: number, subordinateEid: number): void {
+  const subordinate = registry.spirits.get(subordinateEid);
+
+  if (!subordinate) {
+    console.error(`[Spirit] Cannot add subordinate: subordinate ${subordinateEid} not found`);
+    return;
+  }
+
+  // Special case: superior is GodAI (not a spirit, but the supreme being)
+  if (superiorEid === registry.godAgentEid) {
+    subordinate.superiorEid = superiorEid;
+    setDynamicComponentValue(
+      "Spirit",
+      subordinateEid,
+      "superiorEid",
+      superiorEid.toString()
+    );
+    return;
+  }
+
+  // Normal case: superior is another spirit
+  const superior = registry.spirits.get(superiorEid);
+  if (!superior) {
+    console.error(`[Spirit] Cannot add subordinate: superior ${superiorEid} not found`);
+    return;
+  }
+
+  // Avoid duplicates
+  if (superior.subordinateEids.includes(subordinateEid)) {
+    return;
+  }
+
+  superior.subordinateEids.push(subordinateEid);
+  subordinate.superiorEid = superiorEid;
+
+  // Update component
+  setDynamicComponentValue(
+    "Spirit",
+    superiorEid,
+    "subordinateEids",
+    JSON.stringify(superior.subordinateEids)
+  );
+
+  setDynamicComponentValue(
+    "Spirit",
+    subordinateEid,
+    "superiorEid",
+    String(superiorEid)
+  );
+
+  console.log(`[Spirit] Added ${subordinate.definition.name} as subordinate of ${superior.definition.name}`);
 }
 
 // =============================================================================

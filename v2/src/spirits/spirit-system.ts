@@ -21,6 +21,11 @@ import {
 import { runSpiritCognition, getSpiritSummary as getCognitionSummary } from "./spirit-cognition";
 import { NarratorDefinition } from "./narrator-spirit";
 import { ConsistencySpiritDefinition } from "./consistency-spirit";
+import { initializeSpiritMessaging } from "./spirit-messaging";
+import { createDynamicSpirit, type CreateSpiritConfig } from "./spirit-factory";
+import { createWorldCrafterSpirit } from "./world-crafter-spirit";
+import { createStewardSpirit } from "./steward-spirit";
+import { createLawgiverSpirit } from "./rules-spirit";
 
 // =============================================================================
 // SPIRIT SYSTEM STATE
@@ -33,6 +38,8 @@ export interface SpiritSystemState {
   lastTick: number;
   actionBuffer: ActionSnapshot[];
   godAgentCallback?: (messages: DivineMessage[]) => Promise<void>;
+  /** Global context from GodAgent - injected into all spirit prompts */
+  globalContext?: string;
 }
 
 let systemState: SpiritSystemState | null = null;
@@ -116,6 +123,23 @@ export function setGodAgentCallback(callback: (messages: DivineMessage[]) => Pro
   if (systemState) {
     systemState.godAgentCallback = callback;
   }
+}
+
+/**
+ * Set global context from GodAgent - this is injected into all spirit prompts
+ * Should be called before each spirit tick with updated context
+ */
+export function setGlobalContext(context: string): void {
+  if (systemState) {
+    systemState.globalContext = context;
+  }
+}
+
+/**
+ * Get current global context
+ */
+export function getGlobalContext(): string | undefined {
+  return systemState?.globalContext;
 }
 
 // =============================================================================
@@ -210,7 +234,8 @@ export async function tickSpiritSystem(
         world,
         entityRegistry,
         systemState.registry,
-        systemState.actionBuffer
+        systemState.actionBuffer,
+        systemState.globalContext  // Pass global context to spirit cognition
       );
 
       // Collect story prose from narrative spirits
@@ -300,6 +325,10 @@ export function createStandardHierarchy(godAgentEid: number): void {
     throw new Error("Spirit system not initialized");
   }
 
+  // Initialize the message router with the registry
+  initializeSpiritMessaging(systemState.registry);
+  console.log("[SpiritSystem] Message router initialized");
+
   // Set GodAI
   setGodAgent(systemState.registry, godAgentEid);
 
@@ -307,6 +336,7 @@ export function createStandardHierarchy(godAgentEid: number): void {
   const existingNarrator = systemState.registry.byName.get("The Narrator");
   if (!existingNarrator) {
     createSpirit(systemState.registry, NarratorDefinition);
+    console.log("[SpiritSystem] Narrator spirit created");
   }
 
   // Create Consistency Spirit (The Arbiter)
@@ -316,9 +346,76 @@ export function createStandardHierarchy(godAgentEid: number): void {
     console.log("[SpiritSystem] Consistency spirit (The Arbiter) created");
   }
 
+  // Create Artificer Spirit (The Tinker) - maintains and repairs systems
+  const existingArtificer = systemState.registry.byName.get("The Tinker");
+  if (!existingArtificer) {
+    const artificerConfig: CreateSpiritConfig = {
+      name: "The Tinker",
+      title: "Master Artificer",
+      description: "Guardian of system health and maintenance. Monitors all simulation systems, detects errors, and performs repairs to keep the world running smoothly.",
+      type: "artificer",
+      domain: "guardian",
+      rank: "archangel",
+      observationInterval: 60000, // Every 60 seconds
+      artificerConfig: {
+        inspectionInterval: 60000,
+        maxErrorsBeforeDisable: 20,
+        autoFixEnabled: true,
+        ignoreSystems: ["StimulusEmission", "MindDecay"],
+      },
+    };
+    createDynamicSpirit(systemState.registry, artificerConfig);
+    console.log("[SpiritSystem] Artificer spirit (The Tinker) created");
+  }
+
+  // Create Architect Spirit (The Weaver) - designs new systems
+  const existingArchitect = systemState.registry.byName.get("The Weaver");
+  if (!existingArchitect) {
+    const architectConfig: CreateSpiritConfig = {
+      name: "The Weaver",
+      title: "Master Architect",
+      description: "Creator of new systems and components. Observes simulation needs and proposes new behavioral patterns, entities, and rules to enrich the world.",
+      type: "architect",
+      domain: "narrative",
+      rank: "archangel",
+      observationInterval: 120000, // Every 2 minutes
+      architectConfig: {
+        canProposeSystems: true,
+        canProposeComponents: true,
+        canProposeEntities: true,
+        canProposeRules: false, // Require approval for rules
+        canExecuteDirectly: false, // Always require GodAI approval
+        proposalApproval: "godai",
+        maxProposalsPerCycle: 3,
+      },
+    };
+    createDynamicSpirit(systemState.registry, architectConfig);
+    console.log("[SpiritSystem] Architect spirit (The Weaver) created");
+  }
+
+  // Create The Crafter spirit (World Materializer)
+  const existingCrafter = systemState.registry.byName.get("The Crafter");
+  if (!existingCrafter) {
+    createWorldCrafterSpirit(systemState.registry);
+    console.log("[SpiritSystem] World Crafter spirit (The Crafter) created");
+  }
+
+  // Create The Steward spirit (Room Population & Maintenance)
+  const existingSteward = systemState.registry.byName.get("The Steward");
+  if (!existingSteward) {
+    createStewardSpirit(systemState.registry);
+    console.log("[SpiritSystem] Steward spirit (The Steward) created");
+  }
+
+  // Create The Lawgiver spirit (Deterministic Rules)
+  const existingLawgiver = systemState.registry.byName.get("The Lawgiver");
+  if (!existingLawgiver) {
+    createLawgiverSpirit(systemState.registry);
+    console.log("[SpiritSystem] Lawgiver spirit (The Lawgiver) created");
+  }
+
   // Future: Add other archangels here
   // - Sociologist (social domain)
-  // - Ecologist (ecology domain)
   // - Economist (economy domain)
 
   console.log("[SpiritSystem] Standard hierarchy created:");

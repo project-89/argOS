@@ -3,6 +3,44 @@
 > **Companion to ARCHITECTURE.md** - This document covers how GodAI builds simulations.
 > ARCHITECTURE.md covers how individual agents think.
 
+## Quick Start
+
+```typescript
+import { createSimulation } from "./src/index";
+
+// Create a simulation with the unified API
+const sim = await createSimulation({
+  name: "Village Life",
+  preset: "slice-of-life",
+  agents: [
+    { name: "Ada", role: "baker", startRoom: "Bakery" },
+    { name: "Bob", role: "farmer", startRoom: "Farm" }
+  ],
+  rooms: [
+    { name: "Bakery", description: "Warm and smells of fresh bread" },
+    { name: "Farm", description: "Rolling fields of wheat" }
+  ]
+});
+
+// Control the simulation
+await sim.start();    // Start the simulation loop
+sim.pause();          // Pause
+sim.resume();         // Resume
+await sim.step();     // Run single tick
+sim.stop();           // Stop completely
+
+// Interact with the simulation
+await sim.command("Create a thunderstorm");
+sim.broadcast("Bakery", "A customer enters looking for bread");
+sim.stimulate("Ada", "You notice Bob looking tired");
+
+// Get state
+console.log(sim.getState());
+console.log(sim.getStats());
+```
+
+---
+
 ## 1. Overview
 
 ArgOS is a **Linguistic Simulation Engine** - a platform where AI agents autonomously build and run simulations using an Entity-Component-System (ECS) architecture. The key insight is that the ECS serves as a **programmable substrate** that a "GodAI" can read from and write to, creating emergent simulations from natural language descriptions.
@@ -54,7 +92,8 @@ ArgOS is a **Linguistic Simulation Engine** - a platform where AI agents autonom
 │  - Description templates                                        │
 │                                                                 │
 │  Status: ✅ IMPLEMENTED (schema.ts, object-manager.ts)          │
-│          ⚠️  NOT YET EXPOSED AS GODAI TOOLS                     │
+│          ✅ EXPOSED AS GODAI TOOLS (spawn, defineObjectType,    │
+│             defineAffordance, listObjectTypes, getObjectTraits) │
 └──────────────────────────────┬──────────────────────────────────┘
                                │ instantiates into
 ┌──────────────────────────────▼──────────────────────────────────┐
@@ -76,7 +115,7 @@ ArgOS is a **Linguistic Simulation Engine** - a platform where AI agents autonom
 │  - State machine transitions                                    │
 │                                                                 │
 │  Status: ✅ IMPLEMENTED (rules-engine.ts)                       │
-│          ⚠️  NOT YET EXPOSED AS GODAI TOOLS                     │
+│          ✅ EXPOSED AS GODAI TOOLS (defineRule, listRules)      │
 └──────────────────────────────┬──────────────────────────────────┘
                                │ executes via
 ┌──────────────────────────────▼──────────────────────────────────┐
@@ -132,15 +171,20 @@ ArgOS is a **Linguistic Simulation Engine** - a platform where AI agents autonom
 
 **Spirit Management Tools** - See **Section 13.7** for the 7 spirit hierarchy tools (`getSpiritHierarchy`, `getSpiritReports`, `sendDirectiveToSpirit`, etc.)
 
-### 3.2 Planned Tools (To Integrate)
+### 3.2 WorldSchema & Rules Tools (Implemented)
 
-| Tool | Purpose | Source |
+| Tool | Purpose | Status |
 |------|---------|--------|
-| `spawn` | Instantiate from WorldSchema prefab | ObjectManager |
-| `defineObjectType` | Add new prefab to schema | WorldSchema |
-| `defineAffordance` | Add new action type | WorldSchema |
-| `defineRule` | Add declarative rule | RulesEngine |
-| `describeEntity` | Set/update entity description | TextRenderer |
+| `spawn` | Instantiate from WorldSchema prefab | ✅ |
+| `defineObjectType` | Add new prefab to schema | ✅ |
+| `defineAffordance` | Add new action type | ✅ |
+| `defineRule` | Add declarative rule | ✅ |
+| `listObjectTypes` | Query available object types | ✅ |
+| `listAffordances` | Query available affordances | ✅ |
+| `listRules` | Query defined rules | ✅ |
+| `getObjectTraits` | Get traits of spawned object | ✅ |
+| `getAvailableActions` | Get affordances for entity | ✅ |
+| `transitionObjectState` | Change object state | ✅ |
 
 ### 3.3 Two-Tier Execution Model
 
@@ -157,7 +201,7 @@ User Prompt: "Create a medieval village with trading NPCs"
 │  4. Designs systems and rules                               │
 │  5. Outputs structured DesignDocument                       │
 │                                                             │
-│  Model: gemini-2.5-pro with extended thinking               │
+│  Model: gemini-3-pro-preview with extended thinking         │
 └──────────────────────────────┬──────────────────────────────┘
                                │ DesignDocument
                                ▼
@@ -170,7 +214,7 @@ User Prompt: "Create a medieval village with trading NPCs"
 │  4. Bakes systems                                           │
 │  5. Sets up initial state                                   │
 │                                                             │
-│  Model: gemini-2.0-flash (fast, cheap)                      │
+│  Model: gemini-3-flash-preview (fast, cheap)                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -234,12 +278,12 @@ GodAI → spawn("torch") → WorldSchema lookup → ECS entity with:
                                               - Description template
 ```
 
-### 4.3 Integration Requirements
+### 4.3 Integration Status ✅ COMPLETE
 
-1. **Add `spawn` tool to GodAI** - Wraps ObjectManager.spawn()
-2. **Add `defineObjectType` tool** - Extends WorldSchema at runtime
-3. **Add `defineAffordance` tool** - Adds new actions to schema
-4. **Wire TextRenderer to cognition** - Agents perceive via rendered text
+1. ~~**Add `spawn` tool to GodAI**~~ ✅ - Wraps ObjectManager.spawn()
+2. ~~**Add `defineObjectType` tool**~~ ✅ - Extends WorldSchema at runtime
+3. ~~**Add `defineAffordance` tool**~~ ✅ - Adds new actions to schema
+4. ~~**Wire TextRenderer to cognition**~~ ✅ - Agents perceive via rendered text (sensory system)
 
 ---
 
@@ -326,13 +370,13 @@ This section details how agent cognition fits into the world-building architectu
 | **Memory** | Episodic + semantic memories | ✅ Implemented | `knowledge-graph.ts` - episodic/semantic/procedural types |
 | **Beliefs** | Facts about the world | ✅ Implemented | SPO triples with confidence scores |
 | **Impressions** | Opinions of others | ✅ Implemented | Trait-based with valence/confidence |
-| **Reflection** | Periodic higher-order thoughts | ⚠️ Partial | Knowledge extraction exists, no scheduled reflection |
-| **Plans** | Hierarchical plans with steps | ❌ Missing | Goal component exists, no Plan component |
-| **Goal Pursuit** | Goals → Plans → Actions | ⚠️ Partial | Goals exist but not used in thinking |
-| **Daily Schedule** | Time-based routines | ❌ Missing | No schedule component |
-| **Movement** | Spatial navigation | ⚠️ Partial | Action type exists, not implemented |
-| **Environment Interaction** | Object affordances | ⚠️ Partial | Object system exists, not wired to cognition |
-| **Identity/Personality** | Consistent character | ✅ Implemented | Agent.role, systemPrompt, Description, Personality |
+| **Reflection** | Periodic higher-order thoughts | ✅ Implemented | `reflection-system.ts` - triggers when importance threshold exceeded |
+| **Plans** | Hierarchical plans with steps | ✅ Implemented | `planning-system.ts` - LLM decomposes goals into steps |
+| **Goal Pursuit** | Goals → Plans → Actions | ✅ Implemented | Goals wired to `buildAgentContext()`, prompt instructs to pursue |
+| **Daily Schedule** | Time-based routines | ✅ Implemented | `schedule-system.ts` - Schedule component with activities |
+| **Movement** | Spatial navigation | ✅ Implemented | Room-based + grid-based movement in `executeActions()` |
+| **Environment Interaction** | Object affordances | ✅ Implemented | Affordance system wired via `interact` action + sensory system |
+| **Identity/Personality** | Consistent character | ✅ Implemented | Agent.role, systemPrompt, Description, Personality (Big Five) |
 | **Conversation** | Natural dialogue | ✅ Implemented | ConversationTurn tracking, speech actions |
 
 ### 6.2 Current Cognition Components
@@ -415,7 +459,7 @@ This section details how agent cognition fits into the world-building architectu
 │                              ▼                                  │
 │  3. THINK (LLM)                                                 │
 │     ┌─────────────────────────────────────────────────────────┐ │
-│     │ agentThink() → gemini-2.5-flash                         │ │
+│     │ agentThink() → gemini-3-flash-preview                    │ │
 │     │ Input: context + conversation history + prompt          │ │
 │     │ Output: { innerThought, action }                        │ │
 │     │                                                         │ │
@@ -449,125 +493,92 @@ This section details how agent cognition fits into the world-building architectu
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.4 Identified Gaps & Solutions
+### 6.4 Implemented Features & Remaining Gaps
 
-#### Gap 1: Goals Not Used in Thinking
+#### ✅ Goals Wired to Thinking (IMPLEMENTED)
 
-**Problem:** `Goal` component exists with `HasGoal` relation, and `ctx.cognitive.createGoal()` API exists, but `agentThink()` doesn't read goals.
-
-**Solution:** Update `buildAgentContext()` to include active goals:
+Goals are now included in `buildAgentContext()`:
 ```typescript
-// Add to buildAgentContext()
 const goalTargets = getRelationTargets(world, eid, HasGoal);
 const activeGoals = goalTargets
-  .filter(gid => Goal.status[gid] === "active")
-  .map(gid => ({
-    description: Goal.description[gid],
-    priority: Goal.priority[gid],
-    progress: Goal.progress[gid]
-  }));
+  .filter(gid => hasComponent(world, gid, Goal) && Goal.status[gid] === "active")
+  .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0))
+  .slice(0, 5);
 ```
 
-#### Gap 2: No Plan Component
+Agent prompt includes: "Consider your active goals when deciding what to do."
 
-**Problem:** Generative Agents decomposes goals into plans with steps.
+#### ✅ Personality Wired to Context (IMPLEMENTED)
 
-**Solution:** Add Plan component and system:
+Big Five personality traits are included with natural language formatting:
 ```typescript
-// New component
-export const Plan = {
-  goalEid: [] as number[],        // Links to Goal entity
-  steps: [] as string[],          // JSON array of step descriptions
-  currentStep: [] as number[],
-  status: [] as string[],         // active, completed, failed
-};
-
-// GodAI can bake a PlanningSystem that:
-// 1. Finds goals without plans
-// 2. Generates steps via LLM
-// 3. Tracks progress
-```
-
-#### Gap 3: Movement Not Implemented
-
-**Problem:** `move` action type exists in `AgentAction` interface but `executeActions()` doesn't handle it.
-
-**Solution:** Wire to pathfinding:
-```typescript
-// In executeActions()
-case "move":
-  if (action.target) {
-    const destRoom = findRoomByName(world, action.target);
-    if (destRoom !== undefined) {
-      removeComponent(world, eid, OccupiesRoom(rooms[0]));
-      addComponent(world, eid, OccupiesRoom(destRoom));
-      broadcastToRoom(world, rooms[0], {
-        type: "departure",
-        content: `${name} leaves toward ${action.target}`,
-        source: name,
-      }, eid);
-    }
-  }
-  break;
-```
-
-#### Gap 4: Personality Not Used
-
-**Problem:** `Personality` component (Big Five) exists but isn't included in `buildAgentContext()`.
-
-**Solution:** Include personality in context:
-```typescript
-const personality = hasComponent(world, eid, Personality) ? {
-  openness: Personality.openness[eid],
-  conscientiousness: Personality.conscientiousness[eid],
-  extraversion: Personality.extraversion[eid],
-  agreeableness: Personality.agreeableness[eid],
-  neuroticism: Personality.neuroticism[eid],
+const personalityTraits = hasComponent(world, eid, Personality) ? {
+  openness, conscientiousness, extraversion, agreeableness, neuroticism
 } : null;
 
-// Add to prompt: "PERSONALITY TRAITS: {traits}"
+// Formatted as: "curious and creative, outgoing and energetic, cooperative and trusting"
 ```
 
-#### Gap 5: No Reflection Scheduling
+#### ✅ Movement Implemented (IMPLEMENTED)
 
-**Problem:** Generative Agents triggered reflection when importance threshold exceeded.
+Full movement support in `executeActions()`:
+- **Room-based movement**: Finds destination room, removes from current, adds to new, broadcasts departure/arrival
+- **Grid-based movement**: Uses `setMovementTarget()` for pathfinding
+- **Random wandering**: Falls back to random grid movement if no valid target
 
-**Solution:** Add reflection system:
+#### ✅ Planning System (IMPLEMENTED)
+
+Goals now decompose into step-by-step plans via LLM:
 ```typescript
-// Bake this system via GodAI
-function ReflectionSystem(world, ctx) {
-  for (const eid of ctx.query(world, [Agent, Mind])) {
-    const memories = ctx.cognitive.getMemories(world, eid);
-    const totalImportance = memories.reduce((sum, m) => sum + m.data.importance, 0);
+// src/cognition/planning-system.ts
+export const Plan = {
+  goalEid: [] as number[],
+  steps: [] as string[],       // JSON array of PlanStep objects
+  currentStep: [] as number[],
+  status: [] as string[],      // "active", "completed", "failed"
+};
 
-    if (totalImportance > REFLECTION_THRESHOLD) {
-      // Trigger reflection via LLM
-      // Creates higher-level memory synthesizing recent experiences
-    }
-  }
-}
+// Generate plans automatically
+await runPlanningSystem(world);
+
+// Get suggested action from plan
+const nextStep = getNextPlannedAction(world, agentEid);
 ```
 
-#### Gap 6: TextRenderer Not Wired
+#### ✅ Reflection System (IMPLEMENTED)
 
-**Problem:** `text-renderer.ts` exists but agents don't perceive via rendered text.
-
-**Solution:** Replace raw stimuli with rendered perception:
+Triggers higher-order thinking when importance threshold exceeded:
 ```typescript
-// In cognition-system.ts, before cognition cycle
-for (const eid of activeAgents) {
-  const rooms = getRelationTargets(world, eid, OccupiesRoom);
-  if (rooms.length > 0) {
-    const perception = renderPerception(eid, rooms[0], {
-      includeAffordances: true
-    });
-    addPerception(world, eid, {
-      type: "room_observation",
-      content: perception,
-      source: "self",
-    });
-  }
-}
+// src/cognition/reflection-system.ts
+export const ReflectionState = {
+  importanceAccum: [] as number[],      // Accumulated since last reflection
+  reflectionThreshold: [] as number[],  // Default 100
+  insights: [] as string[],             // Recent realizations
+};
+
+// Accumulate importance from experiences
+accumulateImportance(world, agentEid, 5);
+
+// Check and trigger reflection if threshold exceeded
+await maybeReflect(world, agentEid);
+```
+
+#### ✅ Schedule System (IMPLEMENTED)
+
+Agents have daily routines with time-based activities:
+```typescript
+// src/cognition/schedule-system.ts
+export const Schedule = {
+  activities: [] as string[],         // JSON array of ScheduledActivity
+  currentActivity: [] as string[],    // What agent should be doing now
+  flexibility: [] as number[],        // 0-1, how strictly to follow
+};
+
+// Initialize with default or LLM-generated schedule
+await initializeAllSchedules(world, true);
+
+// Get current activity based on world time
+const activity = getCurrentActivity(world, agentEid);
 ```
 
 ### 6.5 GodAI Cognition Extensions
@@ -615,27 +626,37 @@ Rich persona generation available via `persona.ts`:
 
 ### 6.6 Cognition Integration Roadmap
 
-#### Phase 1: Complete Basic Cognition
-- [ ] Wire goals into `buildAgentContext()`
-- [ ] Wire personality into `buildAgentContext()`
-- [ ] Implement `move` action
-- [ ] Wire `TextRenderer` to perception
+#### Phase 1: Complete Basic Cognition ✅ COMPLETE
+- [x] Wire goals into `buildAgentContext()`
+- [x] Wire personality into `buildAgentContext()`
+- [x] Implement `move` action (room-based + grid-based)
+- [x] Wire sensory system to perception (5 modalities)
+- [x] Wire affordances to interact action
 
-#### Phase 2: Enhanced Memory
-- [ ] Add reflection scheduling system
-- [ ] Add memory consolidation (short-term → long-term)
-- [ ] Add forgetting curves
+#### Phase 2: Enhanced Memory ✅ COMPLETE
+- [x] Add reflection scheduling system (`reflection-system.ts`)
+- [x] Importance threshold-based reflection triggers
+- [x] Add memory consolidation (`memory-consolidation.ts` - Ebbinghaus forgetting curves)
+- [x] Add forgetting curves (retention = e^(-t/S) based on stability)
 
-#### Phase 3: Planning
-- [ ] Add `Plan` component
-- [ ] Bake `PlanningSystem`
-- [ ] Goal → Plan decomposition via LLM
+#### Phase 3: Planning ✅ COMPLETE
+- [x] Add `Plan` component
+- [x] Bake `PlanningSystem` (`planning-system.ts`)
+- [x] Goal → Plan decomposition via LLM
 
-#### Phase 4: Full Generative Agents Parity
-- [ ] Daily schedule component
-- [ ] Time awareness in cognition
-- [ ] Location preference learning
-- [ ] Relationship depth tracking
+#### Phase 4: Full Generative Agents Parity ✅ COMPLETE
+- [x] Daily schedule component (`schedule-system.ts`)
+- [x] Time awareness in cognition (activities based on hour)
+- [x] Location preference in schedules
+- [x] Schedule adaptation system (`schedule-adaptation.ts` - needs/goals/social override)
+- [x] Belief revision system (`belief-revision.ts` - confidence decay, contradiction resolution)
+
+#### Phase 5: Unified API ✅ COMPLETE
+- [x] Single entry point (`src/index.ts`)
+- [x] `createSimulation()` - main API with sensible defaults
+- [x] `createSimulationFromPrompt()` - natural language to simulation
+- [x] `createVillageSimulation()` - quick test helper
+- [x] Re-exports for advanced usage
 
 ---
 
@@ -766,7 +787,7 @@ This allows agents to know what actions are available without explicitly examini
 │  NPC Agents (via createAgent)                               │
 │  - Each has Agent + Mind components                         │
 │  - Cognition system processes all agents each tick          │
-│  - LLM-based thinking (gemini-2.5-flash)                    │
+│  - LLM-based thinking (gemini-3-flash-preview)              │
 │  - Actions: speak, observe, think, interact, wait           │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -894,11 +915,11 @@ bakeNewSystem("HeatTransfer", {
 
 ## 10. Integration Roadmap
 
-### Phase 1: Connect WorldSchema to GodAI (Priority)
-- [ ] Add `spawn` tool - instantiate from prefab
-- [ ] Add `defineObjectType` tool - extend schema
-- [ ] Add `defineAffordance` tool - add actions
-- [ ] Add `defineRule` tool - add reactive rules
+### Phase 1: Connect WorldSchema to GodAI ✅ COMPLETE
+- [x] Add `spawn` tool - instantiate from prefab
+- [x] Add `defineObjectType` tool - extend schema
+- [x] Add `defineAffordance` tool - add actions
+- [x] Add `defineRule` tool - add reactive rules
 
 ### Phase 2: Wire TextRenderer to Cognition ✅ COMPLETE
 - [x] Agent perception uses TextRenderer.renderPerception()
@@ -964,29 +985,48 @@ src/
 │   ├── agent-mind.ts      # Agent LLM processing
 │   ├── cognition-system.ts # Agent tick processing
 │   ├── sensory-system.ts  # Sensory perception processing
-│   └── knowledge-graph.ts # Memory/knowledge
+│   ├── knowledge-graph.ts # Memory/knowledge
+│   ├── planning-system.ts # Goal → Plan decomposition ✅ NEW
+│   ├── reflection-system.ts # Higher-order thought synthesis ✅ NEW
+│   └── schedule-system.ts # Time-based routines ✅ NEW
 ├── spirits/
 │   ├── index.ts           # Module exports
 │   ├── types.ts           # Spirit types and interfaces
-│   ├── spirit-registry.ts # Hierarchy management & messaging
+│   ├── spirit-registry.ts # Hierarchy management
 │   ├── spirit-cognition.ts # Spirit LLM processing loop
 │   ├── spirit-system.ts   # ECS ticker for spirits
+│   ├── spirit-messaging.ts # Inter-spirit communication & capability routing ✅ ENHANCED
+│   ├── spirit-factory.ts  # Dynamic spirit creation at runtime ✅ NEW
+│   ├── spirit-tools.ts    # Domain-specific tool sets for spirit types ✅ NEW
 │   ├── narrator-spirit.ts # The Narrator archangel definition
-│   ├── consistency-spirit.ts # The Arbiter - validates & routes reports ✅ NEW
-│   ├── agent-daemon.ts    # Personal agent daemons (protection + challenge) ✅ NEW
+│   ├── consistency-spirit.ts # The Arbiter - validates & routes reports
+│   ├── agent-daemon.ts    # Personal agent daemons: mini-narrator with memory & arc tracking ✅ UPDATED
+│   ├── artificer-spirit.ts # System maintenance & repair spirit ✅ NEW
+│   ├── system-watcher.ts  # System monitoring & anomaly detection ✅ NEW
+│   ├── architect-spirit.ts # System design & proposals ✅ NEW
+│   ├── world-crafter-spirit.ts # Entity materialization & world evolution ✅ NEW
 │   └── story-templates.ts # Story arc templates (3-act, mystery, etc.)
 ├── introspection/
 │   └── introspection.ts   # Dynamic registries & event buffer ✅ NEW
+├── runtime/
+│   ├── simulation-loop.ts # Dual-loop runtime (fast ECS + slow AI) ✅ NEW
+│   └── async-task-queue.ts # Priority-based background AI task queue ✅ NEW
 ├── llm/
 │   └── config.ts          # Centralized LLM model config (LOCKED) ✅ NEW
 ├── systems/
 │   └── ambient-stimulus-system.ts # Periodic stimulus emission
+├── __tests__/
+│   ├── daemon-memory-arc.test.ts # Daemon memory & arc unit tests (37 tests) ✅ NEW
+│   └── ...                        # Other unit tests
 └── behavioral-tests/
     ├── challenge-01-economy.ts     # Economy simulation test
     ├── challenge-02-predator-prey.ts # Ecosystem test
     ├── 03-introspection-stress.ts  # Introspection system stress test ✅ NEW
     ├── 04-spirit-godai-integration.ts # Spirit → GodAI integration test ✅ NEW
-    └── 05-daemon-routing-integration.ts # Daemon & routing test ✅ NEW
+    ├── 05-daemon-routing-integration.ts # Daemon & routing test ✅ NEW
+    ├── 05-world-crafter-test.ts    # World Crafter entity materialization & evolution test ✅ NEW
+    ├── 08-dual-loop-integration.ts # Dual-loop runtime integration test ✅ NEW
+    └── 13-daemon-mini-narrator.ts  # Daemon mini-narrator behavioral test (26 tests) ✅ NEW
 ```
 
 ---
@@ -1171,44 +1211,48 @@ inspired by emanationist/Kabbalistic cosmology. Spirits report up to GodAI while
 ### 13.1 Hierarchy Structure (Updated)
 
 ```
-                         ┌─────────────────┐
-                         │     GODAI       │  Supreme Being
-                         │  (The Creator)  │  Designs world, creates spirits
-                         └────────┬────────┘
-                                  │ commands / receives growth recommendations
-                    ┌─────────────┴─────────────┐
-                    │                           │
-         ┌──────────▼──────────┐       ┌────────▼────────┐
-         │    THE ARBITER      │       │    NARRATOR     │  Archangels
-         │   (Consistency)     │       │   (Narrative)   │  Domain Managers
-         │  Routes reports,    │◄──────│   Story pacing  │
-         │  validates actions  │       │   Plot threads  │
-         └──────────┬──────────┘       └─────────────────┘
-                    │
-                    │ receives daemon reports
-                    │
-    ┌───────────────┼───────────────┬───────────────┐
-    │               │               │               │
-┌───▼────┐    ┌────▼────┐    ┌─────▼────┐    ┌────▼────┐
-│ Alice  │    │  Bob    │    │ Charlie  │    │ Diana   │  Agent Daemons
-│ Daemon │    │ Daemon  │    │ Daemon   │    │ Daemon  │  Personal Guardians
-└────────┘    └─────────┘    └──────────┘    └─────────┘  + Challengers
-    │               │               │               │
-    ▼               ▼               ▼               ▼
- (watch)        (watch)         (watch)         (watch)
-    │               │               │               │
-┌───▼────┐    ┌────▼────┐    ┌─────▼────┐    ┌────▼────┐
-│ Alice  │    │  Bob    │    │ Charlie  │    │ Diana   │  NPC Agents
-│  NPC   │    │  NPC    │    │   NPC    │    │  NPC    │  (in simulation)
-└────────┘    └─────────┘    └──────────┘    └─────────┘
+                              ┌─────────────────┐
+                              │     GODAI       │  Supreme Being
+                              │  (The Creator)  │  Designs world, delegates room creation
+                              └────────┬────────┘
+                                       │ commands / delegates / receives reports
+     ┌──────────────────┬──────────────┼──────────────┬──────────────────┐
+     │                  │              │              │                  │
+┌────▼─────┐     ┌──────▼──────┐ ┌─────▼─────┐ ┌─────▼─────┐   ┌────────▼────────┐
+│THE ARBITER│    │  NARRATOR   │ │THE CRAFTER│ │THE STEWARD│   │   THE WEAVER    │
+│(Consistency)   │ (Narrative) │ │ (Ecology) │ │  (Locale) │   │   (Architect)   │
+│Routes reports │ │Story pacing│ │Materializes│ │Populates  │   │Creates systems  │
+│validates      │ │Plot threads│ │entities   │ │rooms with │   │Receives proposals│
+└─────┬─────┘   └─────────────┘ │evolves    │ │entities   │   └─────────────────┘
+      │                          │world      │ └──────┬────┘            ▲
+      │ receives daemon reports  └─────┬─────┘        │                 │
+      │                                 │             │ requests       │
+      │                                 │ evolution   │ systems        │
+┌─────┴─────┬───────────┬───────────┐  │ proposals   └─────────────────┘
+│           │           │           │   │
+┌───▼────┐ ┌───▼────┐ ┌────▼────┐ ┌────▼────┐
+│ Alice  │ │  Bob   │ │ Charlie │ │ Diana   │  Agent Daemons
+│ Daemon │ │ Daemon │ │ Daemon  │ │ Daemon  │  (Personal guardians)
+└────────┘ └────────┘ └─────────┘ └─────────┘
+    │          │           │           │
+    ▼          ▼           ▼           ▼
+ (watch)    (watch)     (watch)     (watch)
+    │          │           │           │
+┌───▼────┐ ┌───▼────┐ ┌────▼────┐ ┌────▼────┐
+│ Alice  │ │  Bob   │ │ Charlie │ │ Diana   │  NPC Agents
+│  NPC   │ │  NPC   │ │   NPC   │ │  NPC    │  (in simulation)
+└────────┘ └────────┘ └─────────┘ └─────────┘
 ```
 
 **Key Features of the Updated Hierarchy:**
-1. **GodAI** receives growth recommendations (not just concerns) for world expansion
+1. **GodAI** receives growth recommendations AND delegates room creation to The Steward
 2. **The Arbiter** (ConsistencySpirit) is the central hub for routing all daemon reports
 3. **Agent Daemons** serve dual purpose: protection AND growth challenges
 4. **The Narrator** receives narrative-domain issues from The Arbiter
-5. Future spirits (Sociologist, Ecologist, etc.) will receive their domain-specific issues
+5. **The Crafter** materializes entities and proposes world evolution when resource gaps emerge
+6. **The Steward** populates rooms with appropriate entities, ensuring descriptions match reality ✅ NEW
+7. **The Weaver** (Architect) receives proposals from The Crafter AND system requests from The Steward
+8. Future spirits (Sociologist, Economist, etc.) will receive their domain-specific issues
 
 ### 13.2 Spirit Types
 
@@ -1219,16 +1263,154 @@ inspired by emanationist/Kabbalistic cosmology. Spirits report up to GodAI while
 | **Daemon** | Task-specific | Observe, whisper to agents, report to superior |
 | **Agent Daemon** | Personal guardian | Watch individual agent, whisper guidance AND challenge |
 
-### 13.2.1 Agent Daemons (Personal Guardian Spirits) ✅ NEW
+### 13.2.1 Agent Daemons (Personal Guardian Spirits) ✅ UPDATED
 
-Each agent in the simulation has a personal daemon that serves a **dual purpose**:
+Each agent in the simulation has a personal daemon that serves as a **mini-narrator** - maintaining rich memory tracking and personal story arcs for their NPC.
 
-**Protection Mode (Guidance Whispers):**
+**Core Responsibilities:**
+1. **Protection Mode** - Guidance whispers when agent is struggling
+2. **Growth Mode** - Challenge whispers to push development
+3. **Memory Tracking** - Comprehensive memory of agent's experiences ✅ NEW
+4. **Personal Arc Management** - Track individual narrative arc progression ✅ NEW
+5. **Self-Resolution** - Auto-generate nudges when arcs stagnate ✅ NEW
+
+#### Daemon Memory System ✅ NEW
+
+Each daemon maintains a comprehensive memory of their agent's journey:
+
+```typescript
+interface DaemonMemory {
+  // Recent thoughts (what the agent has been thinking)
+  recentThoughts: ThoughtSummary[];     // Last 20 thoughts with topics/emotions
+
+  // Key memories (important events and experiences)
+  keyMemories: MemoryEntry[];           // Up to 50 significant memories
+
+  // Active plans (what the agent is trying to accomplish)
+  activePlans: PlanEntry[];             // Goals, steps, progress
+
+  // Relationship changes (social dynamics)
+  relationshipHistory: RelationshipChange[];  // Bonds formed/broken
+
+  // Character moments (pivotal experiences)
+  characterMoments: CharacterMoment[];  // Growth, revelation, tragedy, humor
+
+  lastPruning: number;                  // Automatic memory cleanup
+}
+
+interface ThoughtSummary {
+  tick: number;
+  focus: string;        // What they were thinking about
+  emotion?: string;     // Emotional coloring
+  significance: number; // 0-1, how important
+}
+
+interface MemoryEntry {
+  tick: number;
+  type: "action" | "dialogue" | "observation" | "reflection";
+  summary: string;
+  participants: string[];
+  emotionalWeight: number;  // -1 to 1 (negative to positive)
+  narrativeImportance: number; // 0-1
+}
+```
+
+**Memory Functions:**
+| Function | Purpose |
+|----------|---------|
+| `recordThought()` | Track agent's inner thoughts |
+| `recordMemory()` | Store significant experiences |
+| `recordPlan()` | Track goal-oriented intentions |
+| `updatePlanStatus()` | Mark plans as progressed/completed/abandoned |
+| `recordRelationshipChange()` | Track social bond changes |
+| `recordCharacterMoment()` | Capture pivotal character moments |
+| `getMemorySummary()` | Generate narrative-ready memory summary |
+| `pruneMemory()` | Automatic cleanup of old/low-significance memories |
+
+#### Personal Narrative Arc ✅ NEW
+
+Each daemon tracks a **personal story arc** for their agent:
+
+```typescript
+interface DaemonNarrativeArc {
+  theme: string;          // "redemption", "love lost", "coming of age"
+  status: ArcStatus;      // dormant → setup → rising → crisis → climax → falling → resolution
+  drivingGoal: string;    // What the agent is striving toward
+  tension: number;        // 0-1, current dramatic tension
+  desiredResolution: string;  // How the arc should ideally resolve
+
+  stakes: {
+    toGain: string;       // What's at stake if they succeed
+    toLose: string;       // What's at stake if they fail
+  };
+
+  completedBeats: string[];   // Story beats achieved
+  upcomingBeats: string[];    // Anticipated story beats
+
+  // Stagnation detection
+  ticksSinceProgress: number;
+  stagnationThreshold: number;  // Default 10 ticks
+  needsSelfResolution: boolean;
+  selfResolutionAttempts: number;
+
+  previousArcs: CompletedArc[];  // History of completed arcs
+}
+
+type ArcStatus = "dormant" | "setup" | "rising" | "crisis" | "climax" | "falling" | "resolution";
+```
+
+**Arc Management Functions:**
+| Function | Purpose |
+|----------|---------|
+| `startNarrativeArc()` | Begin a new arc with theme and goals |
+| `progressNarrativeArc()` | Advance arc status and complete beats |
+| `increaseTension()` / `decreaseTension()` | Adjust dramatic tension |
+| `checkArcStagnation()` | Detect when arc is stuck |
+| `attemptSelfResolution()` | Generate intervention nudge |
+| `completeNarrativeArc()` | Archive completed arc with outcome |
+| `getArcSummary()` | Generate narrative-ready arc summary |
+
+#### Self-Resolution Mechanism ✅ NEW
+
+When an arc stagnates (no progress for `stagnationThreshold` ticks), the daemon can auto-generate nudges:
+
+```typescript
+// Detection
+checkArcStagnation(daemonState);  // Sets needsSelfResolution = true if stagnant
+
+// Self-resolution attempt
+const nudge = attemptSelfResolution(daemonState);
+// Returns: { type: "nudge", content: "Something needs to change..." }
+
+// The daemon can:
+// 1. Whisper an internal nudge to the agent
+// 2. Report to The Arbiter for external intervention
+// 3. Escalate to Narrator for narrative-level resolution
+```
+
+**Self-Resolution Flow:**
+```
+Arc stagnates (10+ ticks without progress)
+         │
+         ▼
+checkArcStagnation() → needsSelfResolution = true
+         │
+         ▼
+attemptSelfResolution() → generates nudge
+         │
+         ├──► Internal whisper to agent (cognitive stimulus)
+         ├──► Report to Arbiter (if still stuck)
+         └──► Escalate to Narrator (major intervention needed)
+```
+
+#### Protection Mode (Guidance Whispers)
+
 - Detects concerns: stuck agents, low arousal, high arousal, danger, goal drift
 - Sends gentle guidance via cognitive stimuli ("inner voice")
 - Reports urgent concerns to higher spirits (The Arbiter)
 
-**Growth Mode (Challenge Whispers):**
+#### Growth Mode (Challenge Whispers)
+
 - Detects growth opportunities: too comfortable, ready for challenge, stagnating, needs conflict
 - Sends provocative challenges via cognitive stimuli to push growth
 - Reports growth opportunities to GodAI for world-level challenge creation
@@ -1262,6 +1444,23 @@ type GrowthOpportunity = {
 | `ambition` | Whisper of greater things | "You were meant for greater things" |
 | `curiosity` | Hint at mysteries | "What lies beyond?" |
 | `restlessness` | Create need to change | "Something is wrong. You need to move." |
+
+#### Integration with observeAgent()
+
+The `observeAgent()` function integrates memory and arc tracking:
+
+```typescript
+// During agent observation, the daemon:
+observeAgent(daemonState, ecsSnapshot);
+
+// 1. Records significant thoughts (if agent is thinking)
+// 2. Records memories from recent actions
+// 3. Updates relationship tracking from social interactions
+// 4. Checks for character moments (growth, revelation, etc.)
+// 5. Progresses narrative arc based on activity
+// 6. Checks for arc stagnation
+// 7. Generates self-resolution nudges if needed
+```
 
 ### 13.2.2 The Arbiter (ConsistencySpirit) ✅ NEW
 
@@ -1298,33 +1497,483 @@ Narrator       GodAI     Sociologist
 (narrative)  (mechanical)  (social)
 ```
 
-### 13.3 Spirit Domains
+### 13.2.3 The Artificer Spirit (System Maintenance) ✅ NEW
 
-- **guardian**: The Arbiter - validates consistency, routes reports ✅ NEW
-- **narrative**: Plot threads, dramatic tension, pacing, story beats
-- **social**: Relationships, factions, conflicts, social dynamics
-- **ecology**: Environment, weather, resources, space
-- **economy**: Trade, markets, resource flows
-- **watcher**: Watches over specific NPCs (via Agent Daemons) ✅ NEW
-- **locale**: Manages specific locations
+The Artificer is a specialized spirit responsible for **maintaining and repairing the simulation's systems**. While GodAI creates systems, the Artificer keeps them running smoothly.
 
-### 13.4 Message Protocol (DivineMessage)
+#### Core Responsibilities
 
-Spirits communicate via structured messages:
+1. **System Inspection** - Patrol all active systems, checking for errors, stagnation, and performance
+2. **Error Tracking** - Maintain logs of system errors with frequency and severity tracking
+3. **Auto-Repair** - Use AI to fix broken system code when possible
+4. **Health Reporting** - Generate system health summaries for GodAI
+5. **Emergency Disable** - Shut down critically broken systems to prevent cascading failures
+
+#### Artificer Configuration
 
 ```typescript
-interface DivineMessage {
-  id: string;
+interface ArtificerConfig {
+  inspectionInterval: number;     // How often to run inspection cycles (ms)
+  maxErrorsBeforeDisable: number; // Errors before auto-disabling (default: 20)
+  autoFixEnabled: boolean;        // Whether to auto-fix simple issues
+  ignoreSystems: string[];        // Core systems to leave alone
+}
+```
+
+#### System Diagnosis
+
+```typescript
+interface SystemDiagnosis {
+  systemName: string;
+  status: "healthy" | "warning" | "critical" | "dead";
+  issues: SystemIssue[];
+  metrics: {
+    executionCount: number;
+    errorCount: number;
+    lastRun: number;
+    frequency: number;
+    active: boolean;
+  };
+  recommendation: "none" | "monitor" | "repair" | "disable" | "investigate";
+}
+
+interface SystemIssue {
+  type: "error" | "stagnation" | "performance" | "logic" | "missing_dependency";
+  severity: "low" | "medium" | "high" | "critical";
+  description: string;
+  suggestedFix?: string;
+  autoFixable: boolean;
+}
+```
+
+#### Repair Actions
+
+| Action Type | Description |
+|-------------|-------------|
+| `fix_code` | Use AI to modify system code to fix errors |
+| `restart` | Reactivate a system after fixing |
+| `disable` | Deactivate critically broken systems |
+| `modify_frequency` | Adjust system tick rate |
+| `clear_errors` | Clear error log after investigation |
+
+#### Tool-Based Cognition ✅ NEW
+
+The Artificer operates in **tool-based mode** where the AI decides what actions to take:
+
+```typescript
+const tools = createArtificerTools(world, systemRegistry);
+// Available tools: listSystems, inspectSystem, getSystemCode, repairSystem,
+//                  enableSystem, disableSystem, clearSystemErrors,
+//                  adjustSystemFrequency, reportToGodAI
+```
+
+### 13.2.4 The Crafter Spirit (World Materializer) ✅ NEW
+
+**The Crafter** is an archangel of the ecology domain responsible for **materializing entities that agents need** and **triggering world evolution** when resource gaps emerge.
+
+#### Core Responsibilities
+
+1. **Failed Interaction Detection** - Monitors when agents try to interact with non-existent items
+2. **Entity Materialization** - Creates contextually appropriate entities (not wish-granting)
+3. **Resource Gap Tracking** - Tracks what resources agents can't find
+4. **Evolution Proposals** - Proposes new merchants, sources, and systems when gaps accumulate
+5. **Supply Chain Awareness** - Knows where resources come from and directs agents there
+
+#### Resource Modes
+
+The Crafter operates differently based on the simulation's resource mode:
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `abundance` | Always creates items | Story-focused, no resource management |
+| `balanced` | Creates if no source exists, records gaps | Default - prevents starvation while tracking gaps |
+| `scarcity` | Blocks duplicates, records gaps | Survival simulations - forces gameplay |
+
+```typescript
+// Set simulation resource mode
+setSimulationContext({
+  resourceMode: "balanced",  // "abundance" | "balanced" | "scarcity"
+  hasEconomy: true,
+  hasMerchants: true
+});
+
+// Register resource sources (The Crafter directs agents here)
+registerResourceSource("flour", "Miller's Shop");
+registerResourceSource("iron", "Deep Rock Mine");
+```
+
+#### Failed Interaction Flow
+
+```
+Agent tries: "pickup flour" in Bakery
+         │
+         ▼
+┌────────────────────────────────────────────────────────────────┐
+│ THE CRAFTER observes failed interaction                        │
+│                                                                 │
+│ 1. Check resource mode:                                        │
+│    - abundance → Always create                                  │
+│    - balanced → Create if no source, record gap                │
+│    - scarcity → Block, record gap                              │
+│                                                                 │
+│ 2. Check if item was already created in this room              │
+│    - Yes + source exists → "Get more from Miller's Shop"       │
+│    - Yes + no source → Create (balanced) or block (scarcity)  │
+│    - No → Create (during setup phase)                          │
+│                                                                 │
+│ 3. If creating, generate contextually appropriate entity:      │
+│    - "flour" in Bakery → "Sack of Fine Flour" with Item comp   │
+│    - Request system from Weaver if needed (e.g., CookingSystem)│
+│                                                                 │
+│ 4. Record gap if resource has no supply chain                  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+#### Evolution Proposals
+
+When resource gaps accumulate (3+ occurrences), The Crafter generates evolution proposals:
+
+```typescript
+interface EvolutionProposal {
+  type: "merchant" | "resource_source" | "crafting_recipe" | "trade_route" | "system";
+  addressesGaps: string[];        // Resources this would provide
+  proposal: {
+    entityName: string;           // "Old Tom's Goods"
+    entityType: string;           // "Merchant"
+    location: string;             // "near Village Bakery"
+    description: string;
+    resources: string[];
+  };
+  status: "pending" | "sent_to_weaver" | "approved" | "created";
+}
+```
+
+**Resource Category Mapping:**
+
+| Resource | Category | Proposal Type | Entity Type |
+|----------|----------|---------------|-------------|
+| flour, bread | food_supplies | merchant | Bakery/Merchant |
+| wheat, vegetables | food_supplies | resource_source | Farm |
+| iron, coal | metalwork | resource_source | Mine |
+| herbs, medicine | medicine | resource_source | Herb Garden |
+| wood | materials | resource_source | Lumber Mill |
+| leather, cloth | materials | merchant | Tanner/Textile Merchant |
+
+#### Self-Evolving World Pipeline
+
+```
+Resource gaps accumulate (3+ occurrences)
+         │
+         ▼
+┌────────────────────────────────────┐
+│ analyzeGapsAndProposeEvolution()   │
+│ Groups gaps by category:            │
+│ - food_supplies: flour(5x), bread(2x)
+│ - metalwork: iron(3x)              │
+└────────────────┬───────────────────┘
+                 │
+                 ▼
+┌────────────────────────────────────┐
+│ Generate Evolution Proposal:        │
+│ "Create a Merchant that sells flour,│
+│  bread. Agents like Baker have been│
+│  searching for these repeatedly."  │
+└────────────────┬───────────────────┘
+                 │
+                 ▼
+┌────────────────────────────────────┐
+│ sendEvolutionProposalsToWeaver()   │
+│ The Weaver reviews and approves    │
+└────────────────┬───────────────────┘
+                 │
+                 ▼
+┌────────────────────────────────────┐
+│ executeEvolutionProposal()         │
+│ - Creates new NPC/location          │
+│ - Registers as resource source      │
+│ - Resolves related gaps             │
+└────────────────────────────────────┘
+         │
+         ▼
+World has evolved: "The Trading Post" now provides flour
+Agents are directed there instead of receiving free items
+```
+
+#### Integration with Cognition System
+
+Failed interactions are captured in the cognition system:
+
+```typescript
+// In cognition-system.ts - when agent action fails
+if (targetEid === undefined) {
+  recordFailedInteraction(
+    agentName,
+    agentEid,
+    roomName,
+    "pickup",  // or "interact", "examine"
+    targetName,
+    originalContent
+  );
+}
+```
+
+#### Key Functions
+
+| Function | Purpose |
+|----------|---------|
+| `recordFailedInteraction()` | Capture when agent can't find something |
+| `evaluateCreationDecision()` | Decide if item should be created |
+| `generateEntityForInteraction()` | AI-generate contextual entity spec |
+| `recordResourceGap()` | Track resource that has no supply chain |
+| `analyzeGapsAndProposeEvolution()` | Generate evolution proposals from gaps |
+| `executeEvolutionProposal()` | Create the entity and register as source |
+| `generateResourceGapReport()` | Summary of unresolved gaps for GodAI |
+
+#### Constraint System
+
+Prevents wish-granting with these constraints:
+
+1. **Setup Phase Window** - First 5 minutes per room allows free creation
+2. **Max Items Per Room** - 10 items during setup, then requires sources
+3. **Luxury Item Blocking** - Gold, gems, magic items always blocked
+4. **Duplicate Tracking** - Room inventory history prevents infinite materialization
+5. **Source Awareness** - If a source exists, directs agent there instead
+
+### 13.2.5 System Watcher Spirits ✅ NEW
+
+System Watchers observe specific systems and report on their behavior. They provide **read-only monitoring** without intervention capabilities.
+
+```typescript
+interface WatchConfig {
+  targetSystems?: string[];         // Systems to watch
+  targetComponents?: string[];      // Component types to monitor
+  watchPatterns?: string[];         // Patterns: "stagnation", "conflict", etc.
+  alertThresholds?: Record<string, number>;  // When to alert
+}
+
+interface WatcherReport {
+  watcherName: string;
   timestamp: number;
-  from: number;        // Spirit entity ID
-  to: number;          // Target spirit entity ID
-  type: MessageType;   // "report" | "directive" | "alert" | "broadcast"
-  domain: SpiritDomain;
-  priority: MessagePriority;  // "low" | "normal" | "high" | "urgent"
+  systemObservations: SystemObservation[];
+  overallHealth: "healthy" | "warning" | "critical";
+  recommendations: string[];
+  requiresIntervention: boolean;
+}
+```
+
+**Anomaly Detection:**
+- **Stagnation**: System hasn't run in expected time
+- **Performance**: Execution time degradation
+- **Error**: Recent errors in error log
+- **Overload**: Processing too many entities
+
+**Pattern Detection:**
+- **Cyclic**: Repeating behavior patterns
+- **Trending**: Entity counts increasing
+- **Declining**: Entity counts decreasing
+- **Emergent**: Unexpected new behaviors
+
+### 13.2.6 The Steward Spirit (Room Populator) ✅ NEW
+
+**The Steward** is an archangel of the locale domain responsible for **populating rooms with appropriate entities** and **ensuring description-entity coherence**.
+
+#### The Core Problem
+
+Without The Steward, room descriptions are evocative but not grounded:
+```
+Room: "Village Bakery"
+Description: "A rustic bakery with flour sacks and a stone oven"
+
+Agent perceives: "I should find flour here"
+Reality: No flour entity exists in ECS
+Result: Failed interaction → Crafter spawns flour reactively
+```
+
+#### The Solution: Grounded Creation
+
+The Steward ensures rooms have actual entities matching their descriptions:
+```
+GodAI: "Create a bakery for Martha"
+        │
+        ▼
+The Steward receives delegation
+        │
+        ▼
+Generates entity manifest:
+- flour_sack (resource, quantity: 50)
+- stone_oven (station)
+- bread_dough (craftable)
+- yeast_jar (consumable)
+- kneading_table (furniture)
+        │
+        ▼
+Creates entities in room
+        │
+        ▼
+Generates grounded description:
+"A rustic bakery with flour sacks against the wall,
+ a stone oven radiating heat, and a kneading table
+ covered in flour dust."
+```
+
+#### Room Type Templates
+
+The Steward uses templates as guidance for common room types:
+
+```typescript
+const ROOM_TEMPLATES = {
+  bakery: {
+    coreItems: ["flour_sack", "yeast_jar", "salt_box", "bread_basket"],
+    stations: ["stone_oven", "kneading_table", "proofing_shelf"],
+    ambience: { smells: ["fresh bread", "yeast"], sounds: ["fire crackling"] }
+  },
+  blacksmith: {
+    coreItems: ["iron_ingot", "coal_pile", "hammer", "tongs"],
+    stations: ["forge", "anvil", "bellows", "quench_barrel"],
+    ambience: { smells: ["hot metal", "coal smoke"], sounds: ["hammer on metal"] }
+  },
+  // ... tavern, herbalist, library, etc.
+};
+```
+
+#### Key Functions
+
+| Function | Purpose |
+|----------|---------|
+| `requestRoomPopulation()` | Queue room for population by The Steward |
+| `generateRoomPopulation()` | AI-generate entities for a room context |
+| `sendSystemRequestsToWeaver()` | Request new systems/components if needed |
+| `checkRoomNeeds()` | Check if room needs replenishment |
+| `runStewardCycle()` | Main cycle - process pending room requests |
+
+#### Integration with GodAI Tools
+
+```typescript
+// Preferred: Create room AND queue for population
+tools.createAndPopulateRoom({
+  name: "Martha's Bakery",
+  roomType: "bakery",
+  context: {
+    worldTheme: "medieval fantasy",
+    economyLevel: "modest",
+    inhabitants: ["Martha the Baker"]
+  }
+});
+
+// Room created with placeholder description
+// The Steward generates entities on next tick
+// Description is updated to match actual entities
+```
+
+#### Upward Requests to The Weaver
+
+When populating rooms, The Steward may discover missing systems:
+```typescript
+// The Steward realizes the bakery needs a BakingSystem
+{
+  type: "system",
+  name: "BakingSystem",
+  reason: "The stone_oven station requires a system to handle baking actions"
+}
+```
+
+These requests are sent to The Weaver for implementation.
+
+### 13.3 Spirit Domains
+
+- **guardian**: The Arbiter - validates consistency, routes reports
+- **narrative**: Plot threads, dramatic tension, pacing, story beats
+- **social**: Relationships, factions, conflicts, social dynamics
+- **ecology**: Environment, weather, resources, space, entity materialization
+  - **The Crafter** - Materializes entities, tracks resource gaps, proposes world evolution
+- **economy**: Trade, markets, resource flows
+- **watcher**: Watches over specific NPCs (via Agent Daemons)
+- **locale**: Manages specific locations
+  - **The Steward** - Populates rooms with entities, ensures description-entity coherence ✅ NEW
+
+### 13.4 Spirit Messaging System ✅ ENHANCED
+
+A complete messaging infrastructure for spirit-to-spirit communication.
+
+#### Message Types
+
+```typescript
+interface SpiritMessage {
+  id: string;
+  type: MessageType;        // "report" | "directive" | "request" | "response" | "alert" | "broadcast" | "query" | "status"
+  from: number;             // Sender spirit EID
+  fromName: string;
+  to: number | "godai" | "broadcast";
+  toName?: string;
+  domain?: string;          // For domain-scoped broadcasts
   subject: string;
   content: string;
-  requiresResponse: boolean;
+  data?: any;               // Structured payload
+  priority: MessagePriority;
+  correlationId?: string;   // Links responses to requests
+  requiresResponse?: boolean;
+  responseDeadline?: number;
 }
+```
+
+#### Message Flow
+
+```
+Reports: Spirit → Superior → GodAI (upward)
+Directives: GodAI → Archangels → Angels → Daemons (downward)
+Requests: Any spirit → Any spirit (with authority check)
+Broadcasts: Spirit → All spirits in domain/hierarchy
+```
+
+#### Key Functions
+
+| Function | Description |
+|----------|-------------|
+| `spiritReport()` | Report to superior (upward communication) |
+| `spiritDirective()` | Send command to subordinate (downward) |
+| `spiritQuery()` | Query another spirit (async with timeout) |
+| `spiritRespond()` | Respond to a query/request |
+| `spiritAlert()` | Broadcast urgent alert |
+| `spiritSubscribe()` | Subscribe to events from other spirits |
+| `spiritEmit()` | Emit event to subscribers |
+
+#### Capability-Based Routing ✅ NEW
+
+Spirits can register **capabilities** (services they provide), allowing intelligent message routing:
+
+```typescript
+type SpiritCapability =
+  | "system_maintenance"    // Artificer
+  | "system_design"         // Architect
+  | "monitoring"            // Watcher
+  | "agent_control"         // Manager
+  | "narrative_control"     // Narrator
+  | "social_dynamics"       // Sociologist
+  | "environment"           // Ecologist
+  | "visual";               // Renderer
+
+// Register a capability
+registerSpiritCapability(spirit, "system_maintenance", priority, description);
+
+// Route message to capability handler (auto-finds best handler)
+routeToCapability(fromSpirit, "system_maintenance", "Help needed", "System X broken");
+
+// Request from capability with async response
+const response = await requestFromCapability(fromSpirit, "narrative_control", "Status", "What's happening?");
+```
+
+**Routing Flow:**
+```
+Spirit needs help
+       │
+       ▼
+routeToCapability("system_maintenance", ...)
+       │
+       ▼
+Find best handler (highest priority)
+       │
+       ▼
+Message delivered to: The Artificer
 ```
 
 ### 13.5 The Narrator Spirit
@@ -1390,7 +2039,102 @@ GodAI has these tools for managing spirits:
 | `getNarratorState` | Get the Narrator's narrative analysis |
 | `tickSpirits` | Force an immediate spirit cognition cycle |
 
-### 13.8 Integration with Simulation
+### 13.8 Domain-Specific Spirit Tools ✅ NEW
+
+Instead of giving spirits access to all 80+ GodAI tools, each spirit type gets a **focused set of 5-15 tools** relevant to their domain. This:
+- Reduces cognitive load on the LLM
+- Prevents spirits from overstepping their authority
+- Creates clear separation of concerns
+
+#### Tool Sets by Spirit Type
+
+| Spirit Type | Tool Set | Example Tools |
+|-------------|----------|---------------|
+| **Artificer** | System maintenance | `listSystems`, `inspectSystem`, `getSystemCode`, `repairSystem`, `enableSystem`, `disableSystem`, `clearSystemErrors`, `adjustSystemFrequency`, `reportToGodAI` |
+| **Architect** | System creation | `listSystems`, `proposeSystem`, `bakeSystem`, `inspectSystemDesign`, `proposeComponent` |
+| **Watcher** | Observation only | `queryAgents`, `getSystemHealth`, `inspectSystem`, `reportObservation` |
+| **Manager** | Coordination | `queryAgents`, `modifyAgentMood`, `injectStimulus`, `sendDirective` |
+
+#### Tool Set Creation
+
+```typescript
+import { getToolsForSpiritType, createArtificerTools, createManagerTools } from "./spirit-tools";
+
+// Get tools based on spirit type
+const tools = getToolsForSpiritType("artificer", world, systemRegistry);
+
+// Or create specific tool sets directly
+const artificerTools = createArtificerTools(world, systemRegistry);
+const managerTools = createManagerTools(world, systemRegistry);
+```
+
+#### Example: Artificer Tools
+
+```typescript
+const artificerTools = {
+  listSystems: tool({ /* List all systems and status */ }),
+  inspectSystem: tool({ /* Detailed system info including code */ }),
+  getSystemCode: tool({ /* Full source code for analysis */ }),
+  repairSystem: tool({ /* AI-powered code fixing */ }),
+  enableSystem: tool({ /* Activate a system */ }),
+  disableSystem: tool({ /* Deactivate broken systems */ }),
+  clearSystemErrors: tool({ /* Clear error log */ }),
+  adjustSystemFrequency: tool({ /* Change tick rate */ }),
+  reportToGodAI: tool({ /* Escalate issues */ }),
+};
+```
+
+### 13.9 Spirit Factory System ✅ NEW
+
+The Spirit Factory enables **dynamic spirit creation** at runtime, allowing GodAI and high-ranking spirits to spawn new spirits as needed.
+
+#### Spirit Types
+
+| Type | Role | Can Intervene | Intervention Types |
+|------|------|---------------|-------------------|
+| `watcher` | Observe and report | No | None |
+| `manager` | Coordinate subordinates | Yes | `inject_stimulus`, `modify_mood`, `send_directive` |
+| `architect` | Design new systems | Yes | `propose_system`, `propose_component`, `propose_entity` |
+| `coordinator` | Meta-manage spirit groups | Yes | `send_directive`, `reassign_subordinate`, `create_subordinate` |
+| `artificer` | Maintain systems | Yes | `inspect_system`, `repair_system`, `disable_system`, `enable_system` |
+
+#### Spirit Creation
+
+```typescript
+const watcher = createDynamicSpirit(registry, {
+  name: "EconomyWatcher",
+  type: "watcher",
+  domain: "economy",
+  rank: "angel",
+  superiorEid: economistSpirit.eid,
+  watchConfig: {
+    targetSystems: ["MarketPricing", "ResourceDistribution"],
+    watchPatterns: ["stagnation", "imbalance"],
+  },
+  observationInterval: 30000,
+});
+```
+
+#### Proposal System
+
+Architect spirits can propose new systems, components, or entities:
+
+```typescript
+const proposal = submitProposal(
+  architectEid,
+  "system",
+  "WeatherCycles",
+  "A system that creates seasonal weather patterns",
+  { frequency: 60000, logic: "..." },
+  "Players asked for more environmental variety"
+);
+
+// Proposals are reviewed and can be approved/rejected
+approveProposal(proposal.id, godAgentEid);
+rejectProposal(proposal.id, "Too complex for current simulation");
+```
+
+### 13.10 Integration with Simulation
 
 ```typescript
 // Initialize spirit system with simulation
@@ -1406,7 +2150,7 @@ startSpiritSystem();
 await tickSpiritSystem(world, entityRegistry);
 ```
 
-### 13.9 Story Arc Templates
+### 13.11 Story Arc Templates
 
 The Narrator can follow pre-defined story templates that guide narrative structure. Templates define:
 
@@ -1454,9 +2198,9 @@ const interventions = getTemplateInterventions({ includeAllSources: true });
 
 ---
 
-## 14. Dynamic Spirit Creation (Design) 🔮 PROPOSED
+## 14. Dynamic Spirit Creation ✅ IMPLEMENTED
 
-This section explores how GodAI could dynamically create new spirits to manage emerging complexity.
+This section describes how GodAI dynamically creates new spirits to manage emerging complexity.
 
 ### 14.1 Vision: Self-Expanding Hierarchy
 
@@ -1624,16 +2368,25 @@ The ultimate vision is a self-organizing hierarchy:
 4. **Reduced GodAI Load**: Lower spirits handle routine observation/steering
 5. **Richer World**: More eyes watching = more opportunities discovered
 
-### 14.7 Implementation Roadmap
+### 14.7 Implementation Status
 
-| Phase | Feature | Priority |
-|-------|---------|----------|
-| 1 | `createSystemWatcher` tool | High |
-| 2 | System Watcher cognition loop | High |
-| 3 | `createArchitectSpirit` tool | Medium |
-| 4 | Proposal/approval workflow | Medium |
-| 5 | `createCoordinatorSpirit` tool | Low |
-| 6 | Self-organization rules | Low |
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1 | `createDynamicSpirit` tool (watcher/architect) | ✅ COMPLETE |
+| 2 | System Watcher cognition loop | ✅ COMPLETE |
+| 3 | Architect Spirit with proposals | ✅ COMPLETE |
+| 4 | Proposal/approval workflow | ✅ COMPLETE |
+| 5 | Non-blocking system baking | ✅ COMPLETE |
+| 6 | `createCoordinatorSpirit` tool | Planned |
+| 7 | Self-organization rules | Planned |
+
+**Implemented in:**
+- `src/spirits/spirit-factory.ts` - Dynamic spirit creation
+- `src/spirits/system-watcher.ts` - System monitoring
+- `src/spirits/architect-spirit.ts` - System proposals and baking
+- `src/spirits/world-crafter-spirit.ts` - Entity materialization and world evolution
+- `src/spirits/steward-spirit.ts` - Room population and grounded entity creation ✅ NEW
+- `src/runtime/async-task-queue.ts` - Non-blocking AI operations
 
 ---
 
@@ -1699,6 +2452,192 @@ function getIntrospectionContext(world: World): IntrospectionContext {
     detectedPatterns: detectPatterns(),
   };
 }
+```
+
+---
+
+## 16. Dual-Loop Runtime Architecture ✅ IMPLEMENTED
+
+The simulation runs two separate loops to keep deterministic ECS systems running fast while AI operations process in the background.
+
+### 16.1 Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     DUAL-LOOP RUNTIME                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                 FAST ECS LOOP (20Hz)                      │  │
+│  │                                                           │  │
+│  │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   │  │
+│  │  │ Needs   │   │ Health  │   │ Arousal │   │ Status  │   │  │
+│  │  │ Decay   │   │ Regen   │   │ Decay   │   │ Logger  │   │  │
+│  │  └─────────┘   └─────────┘   └─────────┘   └─────────┘   │  │
+│  │                                                           │  │
+│  │  • Runs every 50ms (configurable)                        │  │
+│  │  • Deterministic systems only                            │  │
+│  │  • No LLM calls, no network                              │  │
+│  │  • Target: <5ms tick time                                │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                 SLOW AI LOOP (Background)                 │  │
+│  │                                                           │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │  │
+│  │  │   Watcher   │  │  Architect  │  │   GodAI     │       │  │
+│  │  │  Cognition  │  │  Cognition  │  │  Approval   │       │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘       │  │
+│  │                                                           │  │
+│  │  ┌─────────────────────────────────────────────┐         │  │
+│  │  │         SYSTEM BAKING (QUEUED)              │         │  │
+│  │  │  • Design phase (Pro model)                 │         │  │
+│  │  │  • Code generation (Flash model)            │         │  │
+│  │  │  • Review & fix loops                       │         │  │
+│  │  │  • Registration on completion               │         │  │
+│  │  └─────────────────────────────────────────────┘         │  │
+│  │                                                           │  │
+│  │  • Runs in async task queue                              │  │
+│  │  • Max 3 concurrent AI operations                        │  │
+│  │  • Never blocks fast loop                                │  │
+│  │  • Priority: critical > high > normal > low              │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 16.2 Key Insight: Why Two Loops?
+
+**Problem:** AI operations (LLM calls, system baking) take 1-30 seconds. Running them synchronously blocks the entire simulation.
+
+**Solution:** Separate concerns:
+1. **Fast Loop** - Deterministic systems run at high frequency (20Hz default)
+2. **Slow Loop** - AI operations run in background, results merged when ready
+
+### 16.3 Async Task Queue
+
+Background AI operations are managed by a priority-based task queue:
+
+```typescript
+interface TaskPriority {
+  critical: 0;  // Urgent interventions
+  high: 1;      // Approvals, responses
+  normal: 2;    // Regular cognition
+  low: 3;       // Background analysis
+}
+
+// Queue a task (non-blocking)
+queueTask("SystemBaking:MarketExchange", async () => {
+  return await bakeSystem(world, systemRegistry, spec);
+}, {
+  priority: "normal",
+  onComplete: (result) => {
+    console.log(`Baked: ${result.system.name}`);
+  },
+});
+```
+
+**Queue Features:**
+- Priority-based execution (critical first)
+- Configurable max concurrency (default: 3)
+- Execution time tracking
+- Failure handling and retry support
+
+### 16.4 Fast System Registration
+
+```typescript
+// Register a fast (deterministic) system
+registerFastSystem(simulation, {
+  name: "NeedsDecay",
+  frequency: 2,  // Run every 2 ticks
+  execute: (world, delta, tick) => {
+    const agents = query(world, [Agent, Needs]);
+    for (const eid of agents) {
+      Needs.hunger[eid] += 0.01;
+      Needs.energy[eid] -= 0.005;
+    }
+  },
+});
+```
+
+### 16.5 AI Operation Registration
+
+```typescript
+// Register an AI operation (runs in background)
+registerAIOperation(simulation, {
+  name: "WatcherCognition",
+  interval: 60,  // Every 60 ticks (3 seconds at 20Hz)
+  lastRun: 0,
+  execute: async () => {
+    // This runs in background, doesn't block ECS
+    const report = await runWatcherCognition(world, ...);
+    return report;
+  },
+});
+```
+
+### 16.6 Non-Blocking System Baking
+
+System baking now happens entirely in the background:
+
+```typescript
+// Queue baking for all approved proposals (non-blocking)
+queueAllApprovedProposals(world, systemRegistry, (completed, total, name) => {
+  console.log(`Baking progress: ${completed}/${total} (${name})`);
+});
+
+// Or queue a single system
+queueSystemBaking(world, systemRegistry, spec, (success, name) => {
+  if (success) console.log(`✓ Baked and registered: ${name}`);
+});
+```
+
+**Baking Pipeline:**
+1. **Design** (gemini-3-pro-preview) - Architecture, documentation
+2. **Build** (gemini-3-flash-preview) - Code generation
+3. **Review** (gemini-3-flash-preview) - Error checking
+4. **Fix** (gemini-3-flash-preview) - Repair if needed (max 3 attempts)
+5. **Register** - Add to system registry on success
+
+### 16.7 Performance Results
+
+From integration test (`08-dual-loop-integration.ts`):
+
+```
+📊 SIMULATION STATS:
+  Total ticks: 1179
+  Runtime: 60.0s
+  Avg tick time: 0.02ms
+  Slow ticks: 0
+  Target tick time: 50ms (20Hz)
+
+🤖 AI TASK QUEUE:
+  Pending: 0
+  Running: 0
+  Completed: 15
+  Failed: 0
+  Avg execution time: 4200ms
+```
+
+**Key Metrics:**
+- Zero slow ticks despite heavy AI processing
+- AI operations completed without blocking
+- Full propose → approve → bake → register cycle working
+- Baked systems (e.g., MarketExchangeSystem) successfully running
+
+### 16.8 Configuration
+
+```typescript
+const simulation = createSimulation(world, systemRegistry, spiritRegistry, {
+  ecsTickRate: 20,            // 20 Hz - very fast
+  ecsMaxTickTime: 50,         // Warn if tick exceeds 50ms
+  aiProcessInterval: 500,     // Check AI tasks every 500ms
+  watcherTickInterval: 60,    // Watcher cognition every 3 seconds
+  architectTickInterval: 100, // Architect cognition every 5 seconds
+  approvalTickInterval: 120,  // GodAI approval every 6 seconds
+  logTickStats: true,         // Log performance stats
+  logInterval: 40,            // Log every 2 seconds
+});
 ```
 
 ---

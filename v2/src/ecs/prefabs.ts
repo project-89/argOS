@@ -8,7 +8,7 @@ import {
   onGet,
 } from "bitecs";
 import type { World } from "./world";
-import { Name, Description, Agent, Mind, Room, PhysicalObject, StimulusSource, GodAgent, Position } from "./components";
+import { Name, Description, Agent, Mind, Room, PhysicalObject, StimulusSource, GodAgent, Position, GridPosition, Needs, Health, Inventory } from "./components";
 import { OccupiesRoom, BelongsTo } from "./relations";
 import {
   getDynamicComponent,
@@ -106,17 +106,23 @@ export function initializePrefabs(world: World): void {
   addComponent(world, AgentPrefab, Description);
   addComponent(world, AgentPrefab, Agent);
   addComponent(world, AgentPrefab, Mind);
+  addComponent(world, AgentPrefab, GridPosition);
+  addComponent(world, AgentPrefab, Needs);
+  addComponent(world, AgentPrefab, Health);
+  addComponent(world, AgentPrefab, Inventory);
 
   RoomPrefab = addPrefab(world);
   addComponent(world, RoomPrefab, Name);
   addComponent(world, RoomPrefab, Description);
   addComponent(world, RoomPrefab, Room);
   addComponent(world, RoomPrefab, Position);
+  addComponent(world, RoomPrefab, GridPosition); // For movement system targeting
 
   ObjectPrefab = addPrefab(world);
   addComponent(world, ObjectPrefab, Name);
   addComponent(world, ObjectPrefab, Description);
   addComponent(world, ObjectPrefab, PhysicalObject);
+  addComponent(world, ObjectPrefab, GridPosition); // For movement system targeting
 
   StimulusSourcePrefab = addPrefab(world);
   addComponent(world, StimulusSourcePrefab, Name);
@@ -136,6 +142,8 @@ export function createAgentEntity(
     systemPrompt: string;
     description?: string;
     roomId?: number;
+    /** Initial grid position (x, y) - defaults to random 0-20 */
+    gridPosition?: { x: number; y: number };
   }
 ): number {
   const eid = addEntity(world);
@@ -150,6 +158,29 @@ export function createAgentEntity(
   Mind.arousal[eid] = 0.5;
   Mind.focus[eid] = "";
   Mind.lastUpdate[eid] = Date.now();
+
+  // Initialize GridPosition for movement system
+  GridPosition.x[eid] = config.gridPosition?.x ?? Math.floor(Math.random() * 20);
+  GridPosition.y[eid] = config.gridPosition?.y ?? Math.floor(Math.random() * 20);
+  GridPosition.facing[eid] = "south";
+
+  // Initialize Needs for hunger/energy systems
+  Needs.hunger[eid] = 0;      // 0 = not hungry, increases over time
+  Needs.energy[eid] = 100;    // 100 = full energy, decreases over time
+  Needs.social[eid] = 0;      // 0 = socially satisfied
+  Needs.comfort[eid] = 100;   // 100 = comfortable
+
+  // Initialize Health for survival systems
+  Health.current[eid] = 100;
+  Health.max[eid] = 100;
+  Health.regenRate[eid] = 0.1;
+  Health.lastDamage[eid] = 0;
+
+  // Initialize Inventory for item interactions
+  Inventory.items[eid] = JSON.stringify([]);
+  Inventory.maxSlots[eid] = 10;
+  Inventory.weight[eid] = 0;
+  Inventory.maxWeight[eid] = 50;
 
   // Set default agent traits for affordance system
   // Agents are talkable, observable, and attackable by default
@@ -212,6 +243,13 @@ export function createRoomEntity(
   Position.x[eid] = config.x ?? 50 + col * 200;
   Position.y[eid] = config.y ?? 50 + row * 200;
   Position.z[eid] = 0;
+
+  // Set GridPosition for movement system (agents can move toward rooms)
+  // GridPosition uses smaller scale coordinates (10-unit grid)
+  GridPosition.x[eid] = Math.floor((config.x ?? 50 + col * 200) / 20);
+  GridPosition.y[eid] = Math.floor((config.y ?? 50 + row * 200) / 20);
+  GridPosition.facing[eid] = "center";
+
   roomPositionCounter++;
 
   return eid;
@@ -227,6 +265,7 @@ export function createObjectEntity(
     portable?: boolean;
     roomId?: number;
     traits?: string[];
+    gridPosition?: { x: number; y: number };
   }
 ): number {
   const eid = addEntity(world);
@@ -251,6 +290,25 @@ export function createObjectEntity(
 
   if (config.roomId !== undefined) {
     addComponent(world, eid, OccupiesRoom(config.roomId));
+    // Inherit GridPosition from room if not specified
+    if (!config.gridPosition && GridPosition.x[config.roomId] !== undefined) {
+      // Place near the room's center with small offset
+      GridPosition.x[eid] = GridPosition.x[config.roomId] + Math.floor(Math.random() * 3) - 1;
+      GridPosition.y[eid] = GridPosition.y[config.roomId] + Math.floor(Math.random() * 3) - 1;
+      GridPosition.facing[eid] = "south";
+    }
+  }
+
+  // Set explicit GridPosition if provided
+  if (config.gridPosition) {
+    GridPosition.x[eid] = config.gridPosition.x;
+    GridPosition.y[eid] = config.gridPosition.y;
+    GridPosition.facing[eid] = "south";
+  } else if (GridPosition.x[eid] === undefined) {
+    // Fallback to random position
+    GridPosition.x[eid] = Math.floor(Math.random() * 20);
+    GridPosition.y[eid] = Math.floor(Math.random() * 20);
+    GridPosition.facing[eid] = "south";
   }
 
   return eid;

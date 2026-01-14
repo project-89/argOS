@@ -128,10 +128,21 @@ export interface SystemContext {
   cognitive: CognitiveContext;
 }
 
+export interface SystemError {
+  systemName: string;
+  error: string;
+  timestamp: number;
+  errorCount: number;
+  lastCode?: string;
+  context?: string;
+}
+
 export interface SystemRegistry {
   systems: Map<string, SystemDefinition>;
   events: Array<{ type: string; data: any; timestamp: number }>;
   logs: string[];
+  errors: SystemError[];
+  errorCounts: Map<string, number>;  // Track error frequency per system
 }
 
 export function createSystemRegistry(): SystemRegistry {
@@ -139,7 +150,59 @@ export function createSystemRegistry(): SystemRegistry {
     systems: new Map(),
     events: [],
     logs: [],
+    errors: [],
+    errorCounts: new Map(),
   };
+}
+
+/**
+ * Report a system error for GodAI to handle
+ */
+export function reportSystemError(
+  registry: SystemRegistry,
+  systemName: string,
+  error: string,
+  context?: string
+): void {
+  const currentCount = (registry.errorCounts.get(systemName) || 0) + 1;
+  registry.errorCounts.set(systemName, currentCount);
+
+  const system = registry.systems.get(systemName);
+
+  const errorReport: SystemError = {
+    systemName,
+    error,
+    timestamp: Date.now(),
+    errorCount: currentCount,
+    lastCode: system?.code,
+    context,
+  };
+
+  registry.errors.push(errorReport);
+
+  // Auto-disable systems that fail repeatedly (>3 times)
+  if (currentCount >= 3 && system) {
+    console.warn(`[SystemRegistry] Auto-disabling ${systemName} after ${currentCount} errors`);
+    system.active = false;
+  }
+
+  console.error(`[SystemError] ${systemName} (${currentCount}x): ${error}`);
+}
+
+/**
+ * Get pending system errors for GodAI to review
+ */
+export function consumeSystemErrors(registry: SystemRegistry): SystemError[] {
+  const errors = [...registry.errors];
+  registry.errors = [];
+  return errors;
+}
+
+/**
+ * Clear error count for a system (after it's been fixed)
+ */
+export function clearSystemErrorCount(registry: SystemRegistry, systemName: string): void {
+  registry.errorCounts.set(systemName, 0);
 }
 
 export function registerSystem(registry: SystemRegistry, definition: SystemDefinition): void {
@@ -355,7 +418,8 @@ export function runSystems(world: World, registry: SystemRegistry, tick: number,
         system.lastRun = now;
       }
     } catch (error) {
-      context.log(`Error in system ${system.name}: ${error}`);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      reportSystemError(registry, system.name, errorMsg, `tick=${tick}`);
     }
   }
 }
@@ -373,13 +437,14 @@ export function runAsyncSystems(world: World, registry: SystemRegistry, tick: nu
     if (system.compiledFn) {
       system.running = true;
       system.lastRun = now;
-      
+
       Promise.resolve(system.compiledFn(world, context))
         .then(() => {
           system.running = false;
         })
         .catch((error) => {
-          context.log(`Error in async system ${system.name}: ${error}`);
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          reportSystemError(registry, system.name, errorMsg, `async, tick=${tick}`);
           system.running = false;
         });
     }

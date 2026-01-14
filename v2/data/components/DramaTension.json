@@ -1,0 +1,8 @@
+{
+  "name": "DramaTension",
+  "description": "Tracks social tension and conflict levels",
+  "properties": {
+    "level": "number",
+    "source": "string"
+  }
+}

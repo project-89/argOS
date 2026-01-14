@@ -1,0 +1,9 @@
+{
+  "name": "WeatherCondition",
+  "description": "Atmospheric conditions in a room",
+  "properties": {
+    "cloudCover": "number",
+    "stormIntensity": "number",
+    "windSpeed": "number"
+  }
+}

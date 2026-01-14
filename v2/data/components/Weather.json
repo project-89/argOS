@@ -1,0 +1,9 @@
+{
+  "name": "Weather",
+  "description": "Atmospheric conditions for the village.",
+  "properties": {
+    "temperature": "number",
+    "stormImpending": "boolean",
+    "cloudCover": "number"
+  }
+}

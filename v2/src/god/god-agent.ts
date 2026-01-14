@@ -1,9 +1,15 @@
 import { generateText, tool, stepCountIs } from "ai";
 import { google } from "@ai-sdk/google";
-import { z } from 'zod/v3';
+import { z } from "zod/v3";
 import { query } from "bitecs";
 import type { World } from "../ecs/world";
-import { createEcsTools, createEntityRegistry, type EntityRegistry, type EcsTools, type ToolResult } from "../ecs/tools";
+import {
+  createEcsTools,
+  createEntityRegistry,
+  type EntityRegistry,
+  type EcsTools,
+  type ToolResult,
+} from "../ecs/tools";
 import { createGodAgentEntity } from "../ecs/prefabs";
 import { GodAgent, Name, Description, Agent, Mind } from "../ecs/components";
 import { AllComponents } from "../ecs/components";
@@ -32,7 +38,7 @@ import {
   updateSystemFile,
   getSystemsNeedingFix,
   fixAllQueuedSystems,
-  type LoadedSystem
+  type LoadedSystem,
 } from "../systems/system-loader";
 import {
   createDynamicComponent,
@@ -44,7 +50,10 @@ import {
   getAllDynamicComponentValuesForEntity,
   type ComponentDefinition,
 } from "../ecs/dynamic-components";
-import { createRenderingTools, type RenderingTools } from "../rendering/rendering-tools";
+import {
+  createRenderingTools,
+  type RenderingTools,
+} from "../rendering/rendering-tools";
 import {
   createInterventionRegistry,
   registerIntervention,
@@ -94,10 +103,38 @@ import {
   type SimulationMetadata,
   type SimulationInstance,
 } from "../persistence/simulation-manager";
+import { writeSystemToDir, loadSystemsFromDir } from "../systems/system-loader";
 import {
-  writeSystemToDir,
-  loadSystemsFromDir,
-} from "../systems/system-loader";
+  createGlobalState,
+  updateSimulationTime,
+  generateSpiritContext,
+  getStateSummary,
+  switchPreset,
+  setTension,
+  setAtmosphere,
+  canPerformAction,
+  recordAction,
+  type GlobalSimulationState,
+  type SimulationPreset,
+  PRESET_SLICE_OF_LIFE,
+  PRESET_CHAOS,
+  PRESET_DRAMATIC,
+  PRESET_SLOW_BURN,
+  PRESET_MURDER_MYSTERY,
+  PRESET_CORPORATE,
+} from "../simulation/global-state";
+
+// Re-export simulation presets and types for easy access
+export {
+  PRESET_SLICE_OF_LIFE,
+  PRESET_CHAOS,
+  PRESET_DRAMATIC,
+  PRESET_SLOW_BURN,
+  PRESET_MURDER_MYSTERY,
+  PRESET_CORPORATE,
+  type GlobalSimulationState,
+  type SimulationPreset,
+} from "../simulation/global-state";
 
 // Multi-model architecture - LOCKED MODELS from centralized config
 // See src/llm/config.ts for model definitions - DO NOT CHANGE HERE
@@ -111,7 +148,7 @@ const REVIEW_THINKING_LEVEL = THINKING_LEVELS.REVIEW;
 const EXECUTOR_THINKING_LEVEL = THINKING_LEVELS.EXECUTOR;
 
 // Environment variable to control review phase (default: enabled)
-const ENABLE_DESIGN_REVIEW = process.env.SKIP_DESIGN_REVIEW !== 'true';
+const ENABLE_DESIGN_REVIEW = process.env.SKIP_DESIGN_REVIEW !== "true";
 
 export interface DesignDocument {
   summary: string;
@@ -164,6 +201,77 @@ export interface MemoryEntry {
   tags: string[];
 }
 
+/**
+ * NarrativeVision - God's top-down control over story direction
+ * This is what makes a "chill harvest festival" different from "murder mystery"
+ */
+export interface NarrativeVision {
+  // Genre shapes everything - pacing, tone, what's "interesting"
+  genre:
+    | "romance"
+    | "drama"
+    | "horror"
+    | "comedy"
+    | "slice-of-life"
+    | "mystery"
+    | "action"
+    | "tragedy";
+
+  // Subgenre for more nuance
+  subgenre?: string; // "cozy mystery", "dark comedy", "slow burn romance"
+
+  // Current tension target (what we're AIMING for, not what emergent events create)
+  targetTension: number; // 0-1
+  tensionDirection: "building" | "releasing" | "stable";
+
+  // Focus - whose story is this right now?
+  focusCharacters: string[]; // The characters the narrator should follow
+  focusLocation?: string; // Where the "camera" is pointed
+
+  // Current narrative beat we're working toward
+  currentBeat?: string; // "first meeting", "misunderstanding", "confession"
+  nextBeat?: string; // What's coming next
+
+  // Constraints for all spirits/daemons
+  moodConstraints: {
+    allowConflict: boolean; // false = redirect conflicts to grumbling
+    allowViolence: boolean; // false = no combat escalation
+    allowRomance: boolean; // true = allow romantic tension
+    maxDramaLevel: number; // 0-1, caps how dramatic things can get
+    preferredMood: string; // "festive", "tense", "melancholic", "hopeful"
+  };
+
+  // Pacing control
+  pacing: "slow" | "moderate" | "fast";
+
+  // What makes this genre "interesting"
+  interestingElements: string[]; // ["longing glances", "misunderstandings", "near-misses"] for romance
+}
+
+/**
+ * Default narrative vision - slice-of-life, moderate pace
+ */
+export const DEFAULT_NARRATIVE_VISION: NarrativeVision = {
+  genre: "slice-of-life",
+  targetTension: 0.3,
+  tensionDirection: "stable",
+  focusCharacters: [],
+  moodConstraints: {
+    allowConflict: true,
+    allowViolence: false,
+    allowRomance: true,
+    maxDramaLevel: 0.5,
+    preferredMood: "peaceful",
+  },
+  pacing: "moderate",
+  interestingElements: [
+    "daily routines",
+    "small discoveries",
+    "quiet moments",
+    "gentle humor",
+  ],
+};
+
 export interface GodAgentState {
   eid: number;
   world: World;
@@ -174,7 +282,10 @@ export interface GodAgentState {
   worldSchema: WorldSchema;
   tools: EcsTools;
   renderingTools: RenderingTools;
-  conversationHistory: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+  conversationHistory: Array<{
+    role: "user" | "assistant" | "system";
+    content: string;
+  }>;
   thinkingLog: string[];
   tick: number;
   fileSystems: LoadedSystem[];
@@ -184,6 +295,10 @@ export interface GodAgentState {
     plans: Plan[];
     activePlan: string | null;
   };
+  // Top-down narrative control
+  narrativeVision: NarrativeVision;
+  // Global simulation state - pacing, mood, directives, time scaling
+  globalState: GlobalSimulationState;
   // Persistence - automatically saves if attached
   simulation?: SimulationInstance;
 }
@@ -192,20 +307,51 @@ export interface GodAgentConfig {
   name: string;
   worldName: string;
   narrative?: string;
+  /** Initial narrative vision - sets genre, tension, focus, constraints */
+  narrativeVision?: Partial<NarrativeVision>;
+  /**
+   * Simulation preset - sets global pacing, mood, and directives
+   * Options: "slice-of-life" | "chaos" | "dramatic" | "slow-burn" | "murder-mystery" | "corporate"
+   * Default: "slice-of-life"
+   */
+  preset?:
+    | "slice-of-life"
+    | "chaos"
+    | "dramatic"
+    | "slow-burn"
+    | "murder-mystery"
+    | "corporate";
+  /** Custom time scale (1.0 = real time, 60.0 = 1 min real = 1 hour sim) */
+  timeScale?: number;
   /** Enable automatic persistence - creates a simulation folder for this run */
-  persistence?: boolean | {
-    /** Simulation name (defaults to worldName) */
-    name?: string;
-    /** Auto-save every N ticks (default: 50) */
-    autosaveInterval?: number;
-    /** Create snapshot every N ticks (default: 200) */
-    snapshotInterval?: number;
-    /** Max snapshots to keep (default: 10) */
-    maxSnapshots?: number;
-  };
+  persistence?:
+    | boolean
+    | {
+        /** Simulation name (defaults to worldName) */
+        name?: string;
+        /** Auto-save every N ticks (default: 50) */
+        autosaveInterval?: number;
+        /** Create snapshot every N ticks (default: 200) */
+        snapshotInterval?: number;
+        /** Max snapshots to keep (default: 10) */
+        maxSnapshots?: number;
+      };
 }
 
-export function createGodAgent(world: World, config: GodAgentConfig): GodAgentState {
+// Map preset names to preset objects
+const PRESET_MAP: Record<string, SimulationPreset> = {
+  "slice-of-life": PRESET_SLICE_OF_LIFE,
+  chaos: PRESET_CHAOS,
+  dramatic: PRESET_DRAMATIC,
+  "slow-burn": PRESET_SLOW_BURN,
+  "murder-mystery": PRESET_MURDER_MYSTERY,
+  corporate: PRESET_CORPORATE,
+};
+
+export function createGodAgent(
+  world: World,
+  config: GodAgentConfig
+): GodAgentState {
   const registry = createEntityRegistry();
   const systemRegistry = createSystemRegistry();
   const tools = createEcsTools(world, registry);
@@ -217,12 +363,29 @@ export function createGodAgent(world: World, config: GodAgentConfig): GodAgentSt
     narrative: config.narrative,
   });
 
-  systemRegistry.systems.set("StimulusEmission", createStimulusEmissionSystem());
+  systemRegistry.systems.set(
+    "StimulusEmission",
+    createStimulusEmissionSystem()
+  );
   systemRegistry.systems.set("MindDecay", createMindDecaySystem());
 
   const interventionRegistry = createInterventionRegistry();
   const propositionRegistry = createPropositionRegistry();
   const worldSchema = new WorldSchema(); // Each god agent gets its own schema instance
+
+  // Initialize global simulation state with selected preset
+  const presetKey = config.preset || "slice-of-life";
+  const preset = PRESET_MAP[presetKey] || PRESET_SLICE_OF_LIFE;
+  const globalState = createGlobalState(preset);
+
+  // Apply custom time scale if provided
+  if (config.timeScale !== undefined) {
+    globalState.time.timeScale = config.timeScale;
+  }
+
+  console.log(
+    `[GodAgent] Initialized with preset: ${preset.name} (time scale: ${globalState.time.timeScale}x)`
+  );
 
   return {
     eid,
@@ -244,6 +407,15 @@ export function createGodAgent(world: World, config: GodAgentConfig): GodAgentSt
       plans: [],
       activePlan: null,
     },
+    narrativeVision: {
+      ...DEFAULT_NARRATIVE_VISION,
+      ...(config.narrativeVision || {}),
+      moodConstraints: {
+        ...DEFAULT_NARRATIVE_VISION.moodConstraints,
+        ...(config.narrativeVision?.moodConstraints || {}),
+      },
+    },
+    globalState,
     // simulation will be attached by initializeGodAgentWithPersistence
   };
 }
@@ -260,7 +432,8 @@ export async function createGodAgentWithPersistence(
 
   // Create simulation if persistence is enabled
   if (config.persistence) {
-    const persistConfig = typeof config.persistence === 'object' ? config.persistence : {};
+    const persistConfig =
+      typeof config.persistence === "object" ? config.persistence : {};
 
     const simulation = await createSimulation({
       name: persistConfig.name || config.worldName,
@@ -282,7 +455,10 @@ export async function createGodAgentWithPersistence(
 /**
  * Attach an existing simulation to a GodAgent state
  */
-export function attachSimulation(state: GodAgentState, simulation: SimulationInstance): void {
+export function attachSimulation(
+  state: GodAgentState,
+  simulation: SimulationInstance
+): void {
   state.simulation = simulation;
   setCurrentSimulation(simulation);
   console.log(`[GodAgent] Attached simulation: ${simulation.id}`);
@@ -296,10 +472,14 @@ function generateId(): string {
 }
 
 export function addMemory(
-  state: GodAgentState, 
-  type: MemoryEntry["type"], 
-  content: string, 
-  options: { importance?: number; relatedEntities?: string[]; tags?: string[] } = {}
+  state: GodAgentState,
+  type: MemoryEntry["type"],
+  content: string,
+  options: {
+    importance?: number;
+    relatedEntities?: string[];
+    tags?: string[];
+  } = {}
 ): MemoryEntry {
   const entry: MemoryEntry = {
     id: generateId(),
@@ -310,9 +490,9 @@ export function addMemory(
     relatedEntities: options.relatedEntities ?? [],
     tags: options.tags ?? [],
   };
-  
+
   state.memory.shortTerm.push(entry);
-  
+
   if (state.memory.shortTerm.length > SHORT_TERM_LIMIT) {
     const evicted = state.memory.shortTerm.shift()!;
     if (evicted.importance >= 7) {
@@ -323,25 +503,159 @@ export function addMemory(
       }
     }
   }
-  
+
   return entry;
 }
 
 export function searchMemory(
   state: GodAgentState,
-  query: { type?: MemoryEntry["type"]; tags?: string[]; entityName?: string; minImportance?: number }
+  query: {
+    type?: MemoryEntry["type"];
+    tags?: string[];
+    entityName?: string;
+    minImportance?: number;
+  }
 ): MemoryEntry[] {
   const all = [...state.memory.shortTerm, ...state.memory.longTerm];
-  return all.filter(m => {
+  return all.filter((m) => {
     if (query.type && m.type !== query.type) return false;
     if (query.minImportance && m.importance < query.minImportance) return false;
-    if (query.entityName && !m.relatedEntities.includes(query.entityName)) return false;
-    if (query.tags && !query.tags.some(t => m.tags.includes(t))) return false;
+    if (query.entityName && !m.relatedEntities.includes(query.entityName))
+      return false;
+    if (query.tags && !query.tags.some((t) => m.tags.includes(t))) return false;
     return true;
   });
 }
 
-export function createPlan(state: GodAgentState, goal: string, steps: string[]): Plan {
+// =============================================================================
+// GLOBAL STATE MANAGEMENT
+// =============================================================================
+
+/**
+ * Update the global simulation time (call every tick)
+ */
+export function updateGlobalTime(state: GodAgentState, deltaMs: number): void {
+  updateSimulationTime(state.globalState, deltaMs);
+}
+
+/**
+ * Get the current spirit context string (to inject into all spirit prompts)
+ */
+export function getSpiritContext(state: GodAgentState): string {
+  return generateSpiritContext(state.globalState);
+}
+
+/**
+ * Get a summary of the current global state
+ */
+export function getGlobalStateSummary(state: GodAgentState): string {
+  return getStateSummary(state.globalState);
+}
+
+/**
+ * Check if an action type can be performed (respects pacing cooldowns)
+ */
+export function canDoGlobalAction(
+  state: GodAgentState,
+  actionType: "intervention" | "systemBake" | "drama"
+): boolean {
+  return canPerformAction(state.globalState, actionType);
+}
+
+/**
+ * Record that an action was performed (for pacing cooldowns)
+ */
+export function logGlobalAction(
+  state: GodAgentState,
+  actionType: "intervention" | "systemBake" | "drama"
+): void {
+  recordAction(state.globalState, actionType);
+}
+
+/**
+ * Change the global tension level
+ */
+export function setGlobalTension(state: GodAgentState, tension: number): void {
+  setTension(state.globalState, tension);
+  console.log(
+    `[GodAgent] Global tension set to ${(tension * 100).toFixed(0)}%`
+  );
+}
+
+/**
+ * Change the global atmosphere
+ */
+export function setGlobalAtmosphere(
+  state: GodAgentState,
+  atmosphere:
+    | "peaceful"
+    | "tense"
+    | "chaotic"
+    | "mysterious"
+    | "festive"
+    | "somber"
+): void {
+  setAtmosphere(state.globalState, atmosphere);
+  console.log(`[GodAgent] Global atmosphere set to ${atmosphere}`);
+}
+
+/**
+ * Switch to a different simulation preset
+ */
+export function changePreset(
+  state: GodAgentState,
+  presetName:
+    | "slice-of-life"
+    | "chaos"
+    | "dramatic"
+    | "slow-burn"
+    | "murder-mystery"
+    | "corporate"
+): void {
+  const preset = PRESET_MAP[presetName];
+  if (preset) {
+    switchPreset(state.globalState, preset);
+    console.log(`[GodAgent] Switched to preset: ${preset.name}`);
+  } else {
+    console.warn(`[GodAgent] Unknown preset: ${presetName}`);
+  }
+}
+
+/**
+ * Set custom global directives (pins context across all spirits)
+ */
+export function setGlobalDirectives(
+  state: GodAgentState,
+  directives: Partial<GlobalSimulationState["directives"]>
+): void {
+  Object.assign(state.globalState.directives, directives);
+  console.log(`[GodAgent] Global directives updated`);
+}
+
+/**
+ * Add to the global narrative focus
+ */
+export function setNarrativeFocus(state: GodAgentState, focus: string[]): void {
+  state.globalState.directives.narrativeFocus = focus;
+  console.log(`[GodAgent] Narrative focus set to: ${focus.join(", ")}`);
+}
+
+/**
+ * Set forbidden actions globally
+ */
+export function setForbiddenActions(
+  state: GodAgentState,
+  actions: string[]
+): void {
+  state.globalState.directives.forbiddenActions = actions;
+  console.log(`[GodAgent] Forbidden actions: ${actions.join(", ")}`);
+}
+
+export function createPlan(
+  state: GodAgentState,
+  goal: string,
+  steps: string[]
+): Plan {
   const plan: Plan = {
     id: generateId(),
     goal,
@@ -354,82 +668,92 @@ export function createPlan(state: GodAgentState, goal: string, steps: string[]):
     status: "active",
     createdAt: Date.now(),
   };
-  
+
   state.memory.plans.push(plan);
   state.memory.activePlan = plan.id;
-  
-  addMemory(state, "decision", `Created plan: ${goal}`, { 
-    importance: 8, 
-    tags: ["plan", "created"] 
+
+  addMemory(state, "decision", `Created plan: ${goal}`, {
+    importance: 8,
+    tags: ["plan", "created"],
   });
-  
+
   return plan;
 }
 
 export function getActivePlan(state: GodAgentState): Plan | null {
   if (!state.memory.activePlan) return null;
-  return state.memory.plans.find(p => p.id === state.memory.activePlan) ?? null;
+  return (
+    state.memory.plans.find((p) => p.id === state.memory.activePlan) ?? null
+  );
 }
 
-export function advancePlan(state: GodAgentState, result?: string): PlanStep | null {
+export function advancePlan(
+  state: GodAgentState,
+  result?: string
+): PlanStep | null {
   const plan = getActivePlan(state);
   if (!plan) return null;
-  
-  const currentStep = plan.steps.find(s => s.status === "in_progress");
+
+  const currentStep = plan.steps.find((s) => s.status === "in_progress");
   if (currentStep) {
     currentStep.status = "completed";
     currentStep.result = result;
     currentStep.completedAt = Date.now();
-    
+
     addMemory(state, "action", `Completed step: ${currentStep.description}`, {
       importance: 6,
       tags: ["plan", "step-completed"],
     });
   }
-  
-  const nextStep = plan.steps.find(s => s.status === "pending");
+
+  const nextStep = plan.steps.find((s) => s.status === "pending");
   if (nextStep) {
     nextStep.status = "in_progress";
     return nextStep;
   }
-  
+
   plan.status = "completed";
   plan.completedAt = Date.now();
   state.memory.activePlan = null;
-  
+
   addMemory(state, "decision", `Completed plan: ${plan.goal}`, {
     importance: 9,
     tags: ["plan", "completed"],
   });
-  
+
   return null;
 }
 
 export function failPlanStep(state: GodAgentState, reason: string): void {
   const plan = getActivePlan(state);
   if (!plan) return;
-  
-  const currentStep = plan.steps.find(s => s.status === "in_progress");
+
+  const currentStep = plan.steps.find((s) => s.status === "in_progress");
   if (currentStep) {
     currentStep.status = "failed";
     currentStep.result = reason;
     currentStep.completedAt = Date.now();
-    
-    addMemory(state, "observation", `Step failed: ${currentStep.description} - ${reason}`, {
-      importance: 8,
-      tags: ["plan", "step-failed"],
-    });
+
+    addMemory(
+      state,
+      "observation",
+      `Step failed: ${currentStep.description} - ${reason}`,
+      {
+        importance: 8,
+        tags: ["plan", "step-failed"],
+      }
+    );
   }
 }
 
 export function abandonPlan(state: GodAgentState, reason: string): void {
   const plan = getActivePlan(state);
   if (!plan) return;
-  
+
   plan.status = "abandoned";
   plan.completedAt = Date.now();
   state.memory.activePlan = null;
-  
+
   addMemory(state, "decision", `Abandoned plan: ${plan.goal} - ${reason}`, {
     importance: 7,
     tags: ["plan", "abandoned"],
@@ -439,37 +763,46 @@ export function abandonPlan(state: GodAgentState, reason: string): void {
 function formatMemoryForPrompt(state: GodAgentState): string {
   const recentMemories = state.memory.shortTerm.slice(-10);
   const importantMemories = state.memory.longTerm
-    .filter(m => m.importance >= 8)
+    .filter((m) => m.importance >= 8)
     .slice(-5);
-  
+
   const lines: string[] = [];
-  
+
   if (importantMemories.length > 0) {
     lines.push("IMPORTANT MEMORIES:");
     for (const m of importantMemories) {
       lines.push(`  [${m.type}] ${m.content}`);
     }
   }
-  
+
   if (recentMemories.length > 0) {
     lines.push("\nRECENT ACTIVITY:");
     for (const m of recentMemories) {
       lines.push(`  [${m.type}] ${m.content}`);
     }
   }
-  
+
   const activePlan = getActivePlan(state);
   if (activePlan) {
     lines.push("\nACTIVE PLAN:");
     lines.push(`  Goal: ${activePlan.goal}`);
     for (const step of activePlan.steps) {
-      const status = step.status === "completed" ? "✓" : 
-                     step.status === "in_progress" ? "►" :
-                     step.status === "failed" ? "✗" : "○";
-      lines.push(`  ${status} ${step.description}${step.result ? ` (${step.result})` : ""}`);
+      const status =
+        step.status === "completed"
+          ? "✓"
+          : step.status === "in_progress"
+          ? "►"
+          : step.status === "failed"
+          ? "✗"
+          : "○";
+      lines.push(
+        `  ${status} ${step.description}${
+          step.result ? ` (${step.result})` : ""
+        }`
+      );
     }
   }
-  
+
   return lines.join("\n");
 }
 
@@ -477,15 +810,20 @@ function buildCurrentWorldContext(state: GodAgentState): string {
   const lines: string[] = [];
 
   // List existing entities
-  const entities = state.tools.listEntities().result as Array<{ name: string; id: number }>;
-  if (entities.length > 1) { // More than just the GodAgent
+  const entities = state.tools.listEntities().result as Array<{
+    name: string;
+    id: number;
+  }>;
+  if (entities.length > 1) {
+    // More than just the GodAgent
     lines.push(`Entities (${entities.length}):`);
     for (const e of entities.slice(0, 20)) {
       if (!e.name.includes("GodAgent") && !e.name.includes("Architect")) {
         lines.push(`  - ${e.name}`);
       }
     }
-    if (entities.length > 20) lines.push(`  ... and ${entities.length - 20} more`);
+    if (entities.length > 20)
+      lines.push(`  ... and ${entities.length - 20} more`);
   }
 
   // List dynamic components
@@ -501,7 +839,9 @@ function buildCurrentWorldContext(state: GodAgentState): string {
   if (state.fileSystems.length > 0) {
     lines.push(`\nFile Systems (${state.fileSystems.length}):`);
     for (const s of state.fileSystems.slice(0, 10)) {
-      lines.push(`  - ${s.name} (${s.active ? 'active' : 'inactive'}): ${s.description}`);
+      lines.push(
+        `  - ${s.name} (${s.active ? "active" : "inactive"}): ${s.description}`
+      );
     }
   }
 
@@ -514,7 +854,9 @@ function buildCurrentWorldContext(state: GodAgentState): string {
     }
   }
 
-  return lines.length > 0 ? lines.join("\n") : "World is empty - ready to build!";
+  return lines.length > 0
+    ? lines.join("\n")
+    : "World is empty - ready to build!";
 }
 
 function buildSystemPrompt(state: GodAgentState): string {
@@ -657,16 +999,26 @@ You can compose entities with ANY combination of components using these tools:
 This lets you build ANY entity type from primitives, not just the predefined createAgent/createRoom/etc.
 
 AVAILABLE RELATIONS:
-${Object.keys(AllRelations).map(r => `- ${r}`).join("\n")}
+${Object.keys(AllRelations)
+  .map((r) => `- ${r}`)
+  .join("\n")}
 
 AVAILABLE SYSTEMS:
-${systems.map(s => `- ${s.name} (${s.active ? 'ACTIVE' : 'inactive'}, ${s.frequency}ms): ${s.description}`).join("\n")}
+${systems
+  .map(
+    (s) =>
+      `- ${s.name} (${s.active ? "ACTIVE" : "inactive"}, ${s.frequency}ms): ${
+        s.description
+      }`
+  )
+  .join("\n")}
 
 PRE-BUILT SYSTEMS (can activate/deactivate as needed):
 - TimeProgression: Advances world time (dawn/morning/evening/night), updates room ambience. Good for social/narrative sims.
 - SocialDynamics: Adjusts agent arousal based on who else is in the room. Good for social sims.
 - NarrativeEvents: Random atmospheric events ("thunder rumbles", "dog barks"). Good for immersive narrative.
 - RelationshipEvolution: Strengthens relationships between agents in same room over time.
+- StuckAgentRecovery: Detects agents frozen in same position/focus for too long and nudges them with stimuli. Prevents "living statue" bugs.
 
 These are designed for SOCIAL simulations. For MECHANICAL simulations (cells, neurons, physics), 
 you should DEACTIVATE these and bake custom systems instead.
@@ -779,7 +1131,10 @@ The WorldSchema provides a trait-based object system for rich interactive worlds
 
 OBJECT TYPES (Prefabs):
 Pre-defined templates with traits and states. Use spawn() to create instances.
-Available types: ${state.worldSchema.getAllObjectTypes().map(t => t.name).join(", ")}
+Available types: ${state.worldSchema
+    .getAllObjectTypes()
+    .map((t) => t.name)
+    .join(", ")}
 
 To spawn from a type:
   spawn({ type: "bed", name: "Guest Bed", properties: { adjective: "creaky", material: "oak" }, roomName: "Bedroom" })
@@ -827,7 +1182,11 @@ When you spawn("rabbit", "Rabbit 1"), it gets all those components with real dat
 
 AFFORDANCES (for interaction):
 Actions that can be performed on objects. When an agent uses an affordance, the EFFECTS execute and modify REAL game state!
-Available: ${state.worldSchema.getAllAffordances().slice(0, 10).map(a => a.name).join(", ")}...
+Available: ${state.worldSchema
+    .getAllAffordances()
+    .slice(0, 10)
+    .map((a) => a.name)
+    .join(", ")}...
 
 AFFORDANCE EFFECT TYPES:
 - modify_component: Change component data (e.g., { type: "modify_component", target: "actor", modifications: [{ component: "Health", property: "current", operation: "subtract", value: 10 }] })
@@ -876,13 +1235,22 @@ function buildTools(state: GodAgentState) {
 
   return {
     createAgent: tool({
-      description: "Create a new cognitive agent entity with a name, role, system prompt, and optional room placement",
+      description:
+        "Create a new cognitive agent entity with a name, role, system prompt, and optional room placement",
       inputSchema: z.object({
         name: z.string().describe("Unique name for the agent"),
         role: z.string().describe("The agent's role/personality description"),
-        systemPrompt: z.string().describe("Instructions defining how the agent thinks and behaves"),
-        description: z.string().optional().describe("Physical or contextual description"),
-        roomName: z.string().optional().describe("Name of room to place agent in"),
+        systemPrompt: z
+          .string()
+          .describe("Instructions defining how the agent thinks and behaves"),
+        description: z
+          .string()
+          .optional()
+          .describe("Physical or contextual description"),
+        roomName: z
+          .string()
+          .optional()
+          .describe("Name of room to place agent in"),
       }),
       execute: async (params) => {
         const result = state.tools.createAgent(params);
@@ -892,13 +1260,28 @@ function buildTools(state: GodAgentState) {
     }),
 
     createEntity: tool({
-      description: "Create a mechanical entity driven by systems (NOT cognitive). Use for cells, neurons, particles, planets - things that don't think but respond to systems.",
+      description:
+        "Create a mechanical entity driven by systems (NOT cognitive). Use for cells, neurons, particles, planets - things that don't think but respond to systems.",
       inputSchema: z.object({
         name: z.string().describe("Unique name for the entity"),
-        description: z.string().optional().describe("Description of the entity"),
-        roomName: z.string().optional().describe("Name of room to place entity in"),
-        initialArousal: z.number().optional().describe("Initial arousal/energy level (0-1)"),
-        mode: z.string().optional().describe("Initial mode state (e.g., 'resting', 'active', 'refractory')"),
+        description: z
+          .string()
+          .optional()
+          .describe("Description of the entity"),
+        roomName: z
+          .string()
+          .optional()
+          .describe("Name of room to place entity in"),
+        initialArousal: z
+          .number()
+          .optional()
+          .describe("Initial arousal/energy level (0-1)"),
+        mode: z
+          .string()
+          .optional()
+          .describe(
+            "Initial mode state (e.g., 'resting', 'active', 'refractory')"
+          ),
       }),
       execute: async (params) => {
         const result = state.tools.createEntity(params);
@@ -908,12 +1291,16 @@ function buildTools(state: GodAgentState) {
     }),
 
     createRoom: tool({
-      description: "Create a new room/location entity",
+      description:
+        "Create an EMPTY room/location entity. Use createAndPopulateRoom instead for furnished rooms.",
       inputSchema: z.object({
         name: z.string().describe("Unique name for the room"),
         description: z.string().optional().describe("Description of the room"),
         capacity: z.number().optional().describe("Maximum occupancy"),
-        ambience: z.string().optional().describe("The mood/atmosphere of the room"),
+        ambience: z
+          .string()
+          .optional()
+          .describe("The mood/atmosphere of the room"),
       }),
       execute: async (params) => {
         const result = state.tools.createRoom(params);
@@ -922,15 +1309,76 @@ function buildTools(state: GodAgentState) {
       },
     }),
 
+    createAndPopulateRoom: tool({
+      description:
+        "PREFERRED: Create a room AND delegate to The Steward to populate it with appropriate entities (furniture, tools, resources). This ensures the room description matches actual entities - agents will only perceive things that exist.",
+      inputSchema: z.object({
+        name: z.string().describe("Unique name for the room"),
+        roomType: z
+          .string()
+          .describe(
+            "Type of room: bakery, blacksmith, tavern, library, herbalist, bedroom, etc."
+          ),
+        description: z
+          .string()
+          .optional()
+          .describe("Optional description hint"),
+        capacity: z.number().optional().describe("Maximum occupancy"),
+        ambience: z.string().optional().describe("The mood/atmosphere"),
+        context: z
+          .object({
+            worldTheme: z
+              .string()
+              .optional()
+              .describe("e.g., 'medieval fantasy', 'cyberpunk'"),
+            economyLevel: z
+              .enum(["poor", "modest", "prosperous", "wealthy"])
+              .optional(),
+            primaryFunction: z
+              .string()
+              .optional()
+              .describe("What the room is for"),
+            inhabitants: z
+              .array(z.string())
+              .optional()
+              .describe("Who will use this room"),
+          })
+          .optional(),
+        constraints: z
+          .object({
+            maxItems: z.number().optional().describe("Limit number of items"),
+            requiredItems: z
+              .array(z.string())
+              .optional()
+              .describe("Must include these"),
+            budgetLevel: z.enum(["sparse", "normal", "abundant"]).optional(),
+          })
+          .optional(),
+      }),
+      execute: async (params) => {
+        const result = state.tools.createAndPopulateRoom(params);
+        console.log(
+          `[Tool] createAndPopulateRoom: ${params.name} (${params.roomType}) - queued for The Steward`
+        );
+        return result;
+      },
+    }),
+
     createObject: tool({
       description: "Create a physical object entity",
       inputSchema: z.object({
         name: z.string().describe("Unique name for the object"),
-        description: z.string().optional().describe("Description of the object"),
+        description: z
+          .string()
+          .optional()
+          .describe("Description of the object"),
         material: z.string().optional().describe("What the object is made of"),
         weight: z.number().optional().describe("Weight in kg"),
         portable: z.boolean().optional().describe("Can the object be moved"),
-        roomName: z.string().optional().describe("Name of room to place object in"),
+        roomName: z
+          .string()
+          .optional()
+          .describe("Name of room to place object in"),
       }),
       execute: async (params) => {
         const result = state.tools.createObject(params);
@@ -940,13 +1388,24 @@ function buildTools(state: GodAgentState) {
     }),
 
     createStimulusSource: tool({
-      description: "Create an entity that periodically emits stimuli to nearby agents",
+      description:
+        "Create an entity that periodically emits stimuli to nearby agents",
       inputSchema: z.object({
         name: z.string().describe("Unique name"),
-        stimulusType: z.string().describe("Type: auditory, visual, environmental, etc."),
-        template: z.string().describe("The content/description of the stimulus"),
-        interval: z.number().optional().describe("Milliseconds between emissions"),
-        roomName: z.string().optional().describe("Room where this source is located"),
+        stimulusType: z
+          .string()
+          .describe("Type: auditory, visual, environmental, etc."),
+        template: z
+          .string()
+          .describe("The content/description of the stimulus"),
+        interval: z
+          .number()
+          .optional()
+          .describe("Milliseconds between emissions"),
+        roomName: z
+          .string()
+          .optional()
+          .describe("Room where this source is located"),
       }),
       execute: async (params) => {
         const result = state.tools.createStimulusSource(params);
@@ -964,13 +1423,16 @@ function buildTools(state: GodAgentState) {
       }),
       execute: async (params) => {
         const result = state.tools.addRelation(params);
-        console.log(`[Tool] addRelation: ${params.subjectName} --[${params.relationName}]--> ${params.targetName}`);
+        console.log(
+          `[Tool] addRelation: ${params.subjectName} --[${params.relationName}]--> ${params.targetName}`
+        );
         return result;
       },
     }),
 
     setComponentValues: tool({
-      description: "Update component values on an entity (component must already be attached)",
+      description:
+        "Update component values on an entity (component must already be attached)",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
         componentName: z.enum(componentNames).describe("Component to update"),
@@ -978,21 +1440,29 @@ function buildTools(state: GodAgentState) {
       }),
       execute: async (params) => {
         const result = state.tools.setComponentValues(params);
-        console.log(`[Tool] setComponentValues: ${params.entityName}.${params.componentName}`);
+        console.log(
+          `[Tool] setComponentValues: ${params.entityName}.${params.componentName}`
+        );
         return result;
       },
     }),
 
     addComponent: tool({
-      description: "Add a built-in component to an entity (can also set initial values)",
+      description:
+        "Add a built-in component to an entity (can also set initial values)",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
         componentName: z.enum(componentNames).describe("Component to add"),
-        values: z.record(z.any()).optional().describe("Optional initial values to set"),
+        values: z
+          .record(z.any())
+          .optional()
+          .describe("Optional initial values to set"),
       }),
       execute: async (params) => {
         const result = state.tools.addComponent(params);
-        console.log(`[Tool] addComponent: ${params.entityName} += ${params.componentName}`);
+        console.log(
+          `[Tool] addComponent: ${params.entityName} += ${params.componentName}`
+        );
         return result;
       },
     }),
@@ -1005,7 +1475,9 @@ function buildTools(state: GodAgentState) {
       }),
       execute: async (params) => {
         const result = state.tools.removeComponentFromEntity(params);
-        console.log(`[Tool] removeComponent: ${params.entityName} -= ${params.componentName}`);
+        console.log(
+          `[Tool] removeComponent: ${params.entityName} -= ${params.componentName}`
+        );
         return result;
       },
     }),
@@ -1013,12 +1485,22 @@ function buildTools(state: GodAgentState) {
     queryEntities: tool({
       description: "Query for entities with specific components",
       inputSchema: z.object({
-        componentNames: z.array(z.string()).optional().describe("Required components"),
-        notComponentNames: z.array(z.string()).optional().describe("Excluded components"),
+        componentNames: z
+          .array(z.string())
+          .optional()
+          .describe("Required components"),
+        notComponentNames: z
+          .array(z.string())
+          .optional()
+          .describe("Excluded components"),
       }),
       execute: async (params) => {
         const result = state.tools.queryEntities(params);
-        console.log(`[Tool] queryEntities: ${(result.result as any[])?.length ?? 0} results`);
+        console.log(
+          `[Tool] queryEntities: ${
+            (result.result as any[])?.length ?? 0
+          } results`
+        );
         return result;
       },
     }),
@@ -1028,7 +1510,11 @@ function buildTools(state: GodAgentState) {
       inputSchema: z.object({}),
       execute: async () => {
         const result = state.tools.listEntities();
-        console.log(`[Tool] listEntities: ${(result.result as any[])?.length ?? 0} entities`);
+        console.log(
+          `[Tool] listEntities: ${
+            (result.result as any[])?.length ?? 0
+          } entities`
+        );
         return result;
       },
     }),
@@ -1038,23 +1524,39 @@ function buildTools(state: GodAgentState) {
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
         componentName: z.enum(componentNames).describe("Component to read"),
-        properties: z.array(z.string()).optional().describe("Specific properties to get"),
+        properties: z
+          .array(z.string())
+          .optional()
+          .describe("Specific properties to get"),
       }),
       execute: async (params) => {
         const result = state.tools.getComponentValues(params);
-        console.log(`[Tool] getComponentValues: ${params.entityName}.${params.componentName}`);
+        console.log(
+          `[Tool] getComponentValues: ${params.entityName}.${params.componentName}`
+        );
         return result;
       },
     }),
 
     bakeNewSystem: tool({
-      description: "Design and create a new system that runs periodically in the world. Describe what the system should do and it will be designed, built, tested, and made available for activation. Retries automatically on failure.",
+      description:
+        "Design and create a new system that runs periodically in the world. Describe what the system should do and it will be designed, built, tested, and made available for activation. Retries automatically on failure.",
       inputSchema: z.object({
-        description: z.string().describe("Natural language description of what the system should do, what it reacts to, and what effects it has"),
+        description: z
+          .string()
+          .describe(
+            "Natural language description of what the system should do, what it reacts to, and what effects it has"
+          ),
       }),
       execute: async (params) => {
-        console.log(`[Tool] bakeNewSystem: "${params.description.slice(0, 100)}..."`);
-        const result = await bakeSystem(params.description, state.world, state.systemRegistry);
+        console.log(
+          `[Tool] bakeNewSystem: "${params.description.slice(0, 100)}..."`
+        );
+        const result = await bakeSystem(
+          params.description,
+          state.world,
+          state.systemRegistry
+        );
         if (result.success && result.system) {
           state.systemRegistry.systems.set(result.system.name, result.system);
           return {
@@ -1072,14 +1574,26 @@ function buildTools(state: GodAgentState) {
     }),
 
     modifyBakedSystem: tool({
-      description: "Modify an existing baked (in-memory) system using natural language. Describe what changes you want to make.",
+      description:
+        "Modify an existing baked (in-memory) system using natural language. Describe what changes you want to make.",
       inputSchema: z.object({
         systemName: z.string().describe("Name of the baked system to modify"),
-        modification: z.string().describe("Natural language description of how to change the system"),
+        modification: z
+          .string()
+          .describe("Natural language description of how to change the system"),
       }),
       execute: async (params) => {
-        console.log(`[Tool] modifyBakedSystem: ${params.systemName} - "${params.modification.slice(0, 100)}..."`);
-        const result = await modifySystem(params.systemName, params.modification, state.world, state.systemRegistry);
+        console.log(
+          `[Tool] modifyBakedSystem: ${
+            params.systemName
+          } - "${params.modification.slice(0, 100)}..."`
+        );
+        const result = await modifySystem(
+          params.systemName,
+          params.modification,
+          state.world,
+          state.systemRegistry
+        );
         if (result.success) {
           return {
             success: true,
@@ -1100,7 +1614,7 @@ function buildTools(state: GodAgentState) {
         const systems = listSystems(state.systemRegistry);
         return {
           success: true,
-          result: systems.map(s => ({
+          result: systems.map((s) => ({
             name: s.name,
             description: s.description,
             frequency: s.frequency,
@@ -1111,7 +1625,8 @@ function buildTools(state: GodAgentState) {
     }),
 
     activateSystem: tool({
-      description: "Activate a system so it runs periodically. Works for both baked systems and file-based systems.",
+      description:
+        "Activate a system so it runs periodically. Works for both baked systems and file-based systems.",
       inputSchema: z.object({
         systemName: z.string().describe("Name of the system to activate"),
       }),
@@ -1120,19 +1635,24 @@ function buildTools(state: GodAgentState) {
         let success = activateSystem(state.systemRegistry, params.systemName);
 
         // Also check file-based systems
-        const fileSystem = state.fileSystems.find(s => s.name === params.systemName);
+        const fileSystem = state.fileSystems.find(
+          (s) => s.name === params.systemName
+        );
         if (fileSystem) {
           fileSystem.active = true;
           success = true;
         }
 
-        console.log(`[Tool] activateSystem: ${params.systemName} -> ${success}`);
+        console.log(
+          `[Tool] activateSystem: ${params.systemName} -> ${success}`
+        );
         return { success, result: { activated: params.systemName } };
       },
     }),
 
     deactivateSystem: tool({
-      description: "Deactivate a system so it stops running. Works for both baked systems and file-based systems.",
+      description:
+        "Deactivate a system so it stops running. Works for both baked systems and file-based systems.",
       inputSchema: z.object({
         systemName: z.string().describe("Name of the system to deactivate"),
       }),
@@ -1141,13 +1661,17 @@ function buildTools(state: GodAgentState) {
         let success = deactivateSystem(state.systemRegistry, params.systemName);
 
         // Also check file-based systems
-        const fileSystem = state.fileSystems.find(s => s.name === params.systemName);
+        const fileSystem = state.fileSystems.find(
+          (s) => s.name === params.systemName
+        );
         if (fileSystem) {
           fileSystem.active = false;
           success = true;
         }
 
-        console.log(`[Tool] deactivateSystem: ${params.systemName} -> ${success}`);
+        console.log(
+          `[Tool] deactivateSystem: ${params.systemName} -> ${success}`
+        );
         return { success, result: { deactivated: params.systemName } };
       },
     }),
@@ -1213,10 +1737,23 @@ WRONG - DO NOT DO THIS:
 RIGHT - DO THIS INSTEAD:
 // const entities = ctx.query(world, [Name]).filter(eid => ctx.hasDynamic(eid, "Temperature"));`,
       inputSchema: z.object({
-        name: z.string().describe("PascalCase name for the system (e.g., 'NeedsDecay', 'SeekFood')"),
+        name: z
+          .string()
+          .describe(
+            "PascalCase name for the system (e.g., 'NeedsDecay', 'SeekFood')"
+          ),
         description: z.string().describe("What the system does"),
-        frequency: z.number().optional().describe("How often to run (1=every tick, 5=every 5 ticks). Default 1"),
-        code: z.string().describe("The TypeScript code for the system body (inside the run function)"),
+        frequency: z
+          .number()
+          .optional()
+          .describe(
+            "How often to run (1=every tick, 5=every 5 ticks). Default 1"
+          ),
+        code: z
+          .string()
+          .describe(
+            "The TypeScript code for the system body (inside the run function)"
+          ),
       }),
       execute: async (params) => {
         try {
@@ -1231,13 +1768,13 @@ RIGHT - DO THIS INSTEAD:
             state.fileSystems.push(loaded);
           }
           console.log(`[Tool] createSystem: ${params.name} -> ${filePath}`);
-          return { 
-            success: true, 
-            result: { 
-              name: params.name, 
+          return {
+            success: true,
+            result: {
+              name: params.name,
               filePath,
               loaded: !!loaded,
-            } 
+            },
           };
         } catch (error) {
           console.error(`[Tool] createSystem failed:`, error);
@@ -1254,10 +1791,23 @@ Do NOT include imports, exports, or function declarations - just the code that g
 
 Use getSystemCode first to see the current system implementation before modifying.`,
       inputSchema: z.object({
-        systemName: z.string().describe("PascalCase name of the system to modify"),
-        description: z.string().optional().describe("New description (keeps old if not provided)"),
-        frequency: z.number().optional().describe("New frequency (keeps old if not provided)"),
-        code: z.string().optional().describe("New code body ONLY - just the code inside the run function, no imports/exports"),
+        systemName: z
+          .string()
+          .describe("PascalCase name of the system to modify"),
+        description: z
+          .string()
+          .optional()
+          .describe("New description (keeps old if not provided)"),
+        frequency: z
+          .number()
+          .optional()
+          .describe("New frequency (keeps old if not provided)"),
+        code: z
+          .string()
+          .optional()
+          .describe(
+            "New code body ONLY - just the code inside the run function, no imports/exports"
+          ),
       }),
       execute: async (params) => {
         try {
@@ -1267,16 +1817,25 @@ Use getSystemCode first to see the current system implementation before modifyin
             code: params.code,
           });
           if (!updated) {
-            return { success: false, result: null, error: `System not found: ${params.systemName}` };
+            return {
+              success: false,
+              result: null,
+              error: `System not found: ${params.systemName}`,
+            };
           }
-          const idx = state.fileSystems.findIndex(s => s.name === params.systemName);
+          const idx = state.fileSystems.findIndex(
+            (s) => s.name === params.systemName
+          );
           if (idx >= 0) {
             state.fileSystems[idx] = updated;
           } else {
             state.fileSystems.push(updated);
           }
           console.log(`[Tool] modifyFileSystem: ${params.systemName}`);
-          return { success: true, result: { name: params.systemName, updated: true } };
+          return {
+            success: true,
+            result: { name: params.systemName, updated: true },
+          };
         } catch (error) {
           return { success: false, result: null, error: String(error) };
         }
@@ -1286,12 +1845,16 @@ Use getSystemCode first to see the current system implementation before modifyin
     deleteSystem: tool({
       description: "Delete a file-based system",
       inputSchema: z.object({
-        systemName: z.string().describe("PascalCase name of the system to delete"),
+        systemName: z
+          .string()
+          .describe("PascalCase name of the system to delete"),
       }),
       execute: async (params) => {
         const deleted = await deleteSystemFile(params.systemName);
         if (deleted) {
-          state.fileSystems = state.fileSystems.filter(s => s.name !== params.systemName);
+          state.fileSystems = state.fileSystems.filter(
+            (s) => s.name !== params.systemName
+          );
         }
         console.log(`[Tool] deleteSystem: ${params.systemName} -> ${deleted}`);
         return { success: deleted, result: { deleted: params.systemName } };
@@ -1299,14 +1862,19 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     getSystemCode: tool({
-      description: "Get the source code of a file-based system to review or modify it",
+      description:
+        "Get the source code of a file-based system to review or modify it",
       inputSchema: z.object({
         systemName: z.string().describe("PascalCase name of the system"),
       }),
       execute: async (params) => {
         const source = await getSystemSource(params.systemName);
         if (!source) {
-          return { success: false, result: null, error: `System not found: ${params.systemName}` };
+          return {
+            success: false,
+            result: null,
+            error: `System not found: ${params.systemName}`,
+          };
         }
         return { success: true, result: { name: params.systemName, source } };
       },
@@ -1318,7 +1886,7 @@ Use getSystemCode first to see the current system implementation before modifyin
       execute: async () => {
         return {
           success: true,
-          result: state.fileSystems.map(s => ({
+          result: state.fileSystems.map((s) => ({
             name: s.name,
             description: s.description,
             frequency: s.frequency,
@@ -1329,11 +1897,18 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     createComponent: tool({
-      description: "Create a new custom component type that can be attached to entities",
+      description:
+        "Create a new custom component type that can be attached to entities",
       inputSchema: z.object({
-        name: z.string().describe("PascalCase name for the component (e.g., 'Temperature', 'Mood')"),
+        name: z
+          .string()
+          .describe(
+            "PascalCase name for the component (e.g., 'Temperature', 'Mood')"
+          ),
         description: z.string().describe("What this component represents"),
-        properties: z.record(z.enum(["number", "string", "boolean"])).describe("Property names and their types"),
+        properties: z
+          .record(z.enum(["number", "string", "boolean"]))
+          .describe("Property names and their types"),
       }),
       execute: async (params) => {
         try {
@@ -1345,7 +1920,13 @@ Use getSystemCode first to see the current system implementation before modifyin
           createDynamicComponent(def);
           await saveComponentDefinition(def);
           console.log(`[Tool] createComponent: ${params.name}`);
-          return { success: true, result: { name: params.name, properties: Object.keys(params.properties) } };
+          return {
+            success: true,
+            result: {
+              name: params.name,
+              properties: Object.keys(params.properties),
+            },
+          };
         } catch (error) {
           return { success: false, result: null, error: String(error) };
         }
@@ -1362,49 +1943,95 @@ Use getSystemCode first to see the current system implementation before modifyin
       execute: async (params) => {
         const eid = state.registry.byName.get(params.entityName);
         if (eid === undefined) {
-          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Entity not found: ${params.entityName}`,
+          };
         }
         const component = getDynamicComponent(params.componentName);
         if (!component) {
-          return { success: false, result: null, error: `Dynamic component not found: ${params.componentName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Dynamic component not found: ${params.componentName}`,
+          };
         }
         for (const [key, value] of Object.entries(params.values)) {
           setDynamicComponentValue(params.componentName, eid, key, value);
         }
-        console.log(`[Tool] setDynamicComponent: ${params.entityName}.${params.componentName}`);
-        return { success: true, result: { entity: params.entityName, component: params.componentName, values: params.values } };
+        console.log(
+          `[Tool] setDynamicComponent: ${params.entityName}.${params.componentName}`
+        );
+        return {
+          success: true,
+          result: {
+            entity: params.entityName,
+            component: params.componentName,
+            values: params.values,
+          },
+        };
       },
     }),
 
     getDynamicComponentValues: tool({
-      description: "Get the current values of a dynamic (custom) component for an entity. Use this to read back component state after systems have modified it.",
+      description:
+        "Get the current values of a dynamic (custom) component for an entity. Use this to read back component state after systems have modified it.",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
-        componentName: z.string().optional().describe("Name of specific component (omit to get all dynamic components)"),
+        componentName: z
+          .string()
+          .optional()
+          .describe(
+            "Name of specific component (omit to get all dynamic components)"
+          ),
       }),
       execute: async (params) => {
         const eid = state.registry.byName.get(params.entityName);
         if (eid === undefined) {
-          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Entity not found: ${params.entityName}`,
+          };
         }
-        
+
         if (params.componentName) {
           const values = getDynamicComponentValues(params.componentName, eid);
           if (!values) {
-            return { success: false, result: null, error: `Component not found or not set: ${params.componentName}` };
+            return {
+              success: false,
+              result: null,
+              error: `Component not found or not set: ${params.componentName}`,
+            };
           }
-          console.log(`[Tool] getDynamicComponentValues: ${params.entityName}.${params.componentName}`);
-          return { success: true, result: { entity: params.entityName, component: params.componentName, values } };
+          console.log(
+            `[Tool] getDynamicComponentValues: ${params.entityName}.${params.componentName}`
+          );
+          return {
+            success: true,
+            result: {
+              entity: params.entityName,
+              component: params.componentName,
+              values,
+            },
+          };
         } else {
           const allValues = getAllDynamicComponentValuesForEntity(eid);
-          console.log(`[Tool] getDynamicComponentValues: ${params.entityName} (all components)`);
-          return { success: true, result: { entity: params.entityName, components: allValues } };
+          console.log(
+            `[Tool] getDynamicComponentValues: ${params.entityName} (all components)`
+          );
+          return {
+            success: true,
+            result: { entity: params.entityName, components: allValues },
+          };
         }
       },
     }),
 
     listComponents: tool({
-      description: "List all available components (both built-in and custom/dynamic)",
+      description:
+        "List all available components (both built-in and custom/dynamic)",
       inputSchema: z.object({}),
       execute: async () => {
         const builtIn = Object.keys(AllComponents);
@@ -1413,23 +2040,33 @@ Use getSystemCode first to see the current system implementation before modifyin
           success: true,
           result: {
             builtIn,
-            dynamic: dynamic.map(d => ({ name: d.name, description: d.description, properties: d.properties })),
+            dynamic: dynamic.map((d) => ({
+              name: d.name,
+              description: d.description,
+              properties: d.properties,
+            })),
           },
         };
       },
     }),
 
     createWorldMap: tool({
-      description: "Create a grid-based ASCII world map for agents to move around in",
+      description:
+        "Create a grid-based ASCII world map for agents to move around in",
       inputSchema: z.object({
         name: z.string().describe("Unique name for the map"),
         width: z.number().describe("Width of the map in tiles"),
         height: z.number().describe("Height of the map in tiles"),
-        fill: z.string().optional().describe("Character to fill map with (default '.')"),
+        fill: z
+          .string()
+          .optional()
+          .describe("Character to fill map with (default '.')"),
       }),
       execute: async (params) => {
         const result = state.tools.createWorldMap(params);
-        console.log(`[Tool] createWorldMap: ${params.name} (${params.width}x${params.height})`);
+        console.log(
+          `[Tool] createWorldMap: ${params.name} (${params.width}x${params.height})`
+        );
         return result;
       },
     }),
@@ -1447,7 +2084,9 @@ Use getSystemCode first to see the current system implementation before modifyin
       }),
       execute: async (params) => {
         const result = state.tools.drawRoom(params);
-        console.log(`[Tool] drawRoom: at (${params.x},${params.y}) size ${params.width}x${params.height}`);
+        console.log(
+          `[Tool] drawRoom: at (${params.x},${params.y}) size ${params.width}x${params.height}`
+        );
         return result;
       },
     }),
@@ -1478,7 +2117,9 @@ Use getSystemCode first to see the current system implementation before modifyin
       }),
       execute: async (params) => {
         const result = state.tools.drawPath(params);
-        console.log(`[Tool] drawPath: (${params.x1},${params.y1}) to (${params.x2},${params.y2})`);
+        console.log(
+          `[Tool] drawPath: (${params.x1},${params.y1}) to (${params.x2},${params.y2})`
+        );
         return result;
       },
     }),
@@ -1495,7 +2136,9 @@ Use getSystemCode first to see the current system implementation before modifyin
       }),
       execute: async (params) => {
         const result = state.tools.fillArea(params);
-        console.log(`[Tool] fillArea: (${params.x},${params.y}) ${params.width}x${params.height} with '${params.char}'`);
+        console.log(
+          `[Tool] fillArea: (${params.x},${params.y}) ${params.width}x${params.height} with '${params.char}'`
+        );
         return result;
       },
     }),
@@ -1510,39 +2153,52 @@ Use getSystemCode first to see the current system implementation before modifyin
       }),
       execute: async (params) => {
         const result = state.tools.setTile(params);
-        console.log(`[Tool] setTile: (${params.x},${params.y}) = '${params.char}'`);
+        console.log(
+          `[Tool] setTile: (${params.x},${params.y}) = '${params.char}'`
+        );
         return result;
       },
     }),
 
     placeEntityOnGrid: tool({
-      description: "Place an agent or entity on the ASCII grid map at a walkable position",
+      description:
+        "Place an agent or entity on the ASCII grid map at a walkable position",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the agent/entity to place"),
         mapName: z.string().describe("Name of the map"),
         x: z.number().describe("X coordinate (must be walkable)"),
         y: z.number().describe("Y coordinate (must be walkable)"),
         char: z.string().optional().describe("Display character (default '@')"),
-        color: z.string().optional().describe("Display color (default '#ff6666')"),
+        color: z
+          .string()
+          .optional()
+          .describe("Display color (default '#ff6666')"),
         facing: z.string().optional().describe("Initial facing direction"),
       }),
       execute: async (params) => {
         const result = state.tools.placeEntityOnGrid(params);
-        console.log(`[Tool] placeEntityOnGrid: ${params.entityName} at (${params.x},${params.y})`);
+        console.log(
+          `[Tool] placeEntityOnGrid: ${params.entityName} at (${params.x},${params.y})`
+        );
         return result;
       },
     }),
 
     moveEntityOnGrid: tool({
-      description: "Move an entity one tile in a direction (north/south/east/west)",
+      description:
+        "Move an entity one tile in a direction (north/south/east/west)",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity to move"),
         mapName: z.string().describe("Name of the map"),
-        direction: z.enum(["north", "south", "east", "west"]).describe("Direction to move"),
+        direction: z
+          .enum(["north", "south", "east", "west"])
+          .describe("Direction to move"),
       }),
       execute: async (params) => {
         const result = state.tools.moveEntityOnGrid(params);
-        console.log(`[Tool] moveEntityOnGrid: ${params.entityName} ${params.direction}`);
+        console.log(
+          `[Tool] moveEntityOnGrid: ${params.entityName} ${params.direction}`
+        );
         return result;
       },
     }),
@@ -1556,13 +2212,16 @@ Use getSystemCode first to see the current system implementation before modifyin
       }),
       execute: async (params) => {
         const result = state.tools.setEntitySprite(params);
-        console.log(`[Tool] setEntitySprite: ${params.entityName} = '${params.char}'`);
+        console.log(
+          `[Tool] setEntitySprite: ${params.entityName} = '${params.char}'`
+        );
         return result;
       },
     }),
 
     getEntityPosition: tool({
-      description: "Get the current grid position of an entity. Returns x, y coordinates and facing direction.",
+      description:
+        "Get the current grid position of an entity. Returns x, y coordinates and facing direction.",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
       }),
@@ -1574,7 +2233,8 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     getEntitiesAtPosition: tool({
-      description: "Get all entities at a specific grid position. Useful for checking what's at a location.",
+      description:
+        "Get all entities at a specific grid position. Useful for checking what's at a location.",
       inputSchema: z.object({
         x: z.number().describe("X coordinate"),
         y: z.number().describe("Y coordinate"),
@@ -1587,7 +2247,8 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     getEntitiesInRadius: tool({
-      description: "Get all entities within a radius of a position. Useful for area effects and proximity checks.",
+      description:
+        "Get all entities within a radius of a position. Useful for area effects and proximity checks.",
       inputSchema: z.object({
         x: z.number().describe("Center X coordinate"),
         y: z.number().describe("Center Y coordinate"),
@@ -1595,35 +2256,47 @@ Use getSystemCode first to see the current system implementation before modifyin
       }),
       execute: async (params) => {
         const result = state.tools.getEntitiesInRadius(params);
-        console.log(`[Tool] getEntitiesInRadius: (${params.x}, ${params.y}) r=${params.radius}`);
+        console.log(
+          `[Tool] getEntitiesInRadius: (${params.x}, ${params.y}) r=${params.radius}`
+        );
         return result;
       },
     }),
 
     checkCollision: tool({
-      description: "Check if an entity can move in a direction. Returns whether the tile is walkable and any entities that would be collided with.",
+      description:
+        "Check if an entity can move in a direction. Returns whether the tile is walkable and any entities that would be collided with.",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity to check"),
         mapName: z.string().describe("Name of the map"),
-        direction: z.enum(["north", "south", "east", "west"]).describe("Direction to check"),
+        direction: z
+          .enum(["north", "south", "east", "west"])
+          .describe("Direction to check"),
       }),
       execute: async (params) => {
         const result = state.tools.checkCollision(params);
-        console.log(`[Tool] checkCollision: ${params.entityName} ${params.direction}`);
+        console.log(
+          `[Tool] checkCollision: ${params.entityName} ${params.direction}`
+        );
         return result;
       },
     }),
 
     makePlan: tool({
-      description: "Create a multi-step plan for achieving a complex goal. Use this to break down large tasks into manageable steps.",
+      description:
+        "Create a multi-step plan for achieving a complex goal. Use this to break down large tasks into manageable steps.",
       inputSchema: z.object({
         goal: z.string().describe("The overall goal to achieve"),
-        steps: z.array(z.string()).describe("List of steps to accomplish the goal"),
+        steps: z
+          .array(z.string())
+          .describe("List of steps to accomplish the goal"),
       }),
       execute: async (params) => {
         const plan = createPlan(state, params.goal, params.steps);
         const firstStep = advancePlan(state);
-        console.log(`[Tool] makePlan: "${params.goal}" (${params.steps.length} steps)`);
+        console.log(
+          `[Tool] makePlan: "${params.goal}" (${params.steps.length} steps)`
+        );
         return {
           success: true,
           result: {
@@ -1637,20 +2310,27 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     advancePlanStep: tool({
-      description: "Mark the current plan step as complete and advance to the next step. Call this after completing each step of your plan.",
+      description:
+        "Mark the current plan step as complete and advance to the next step. Call this after completing each step of your plan.",
       inputSchema: z.object({
-        result: z.string().optional().describe("Summary of what was accomplished in this step"),
+        result: z
+          .string()
+          .optional()
+          .describe("Summary of what was accomplished in this step"),
       }),
       execute: async (params) => {
         const nextStep = advancePlan(state, params.result);
         const plan = getActivePlan(state);
-        console.log(`[Tool] advancePlanStep: ${nextStep?.description ?? "Plan complete"}`);
+        console.log(
+          `[Tool] advancePlanStep: ${nextStep?.description ?? "Plan complete"}`
+        );
         return {
           success: true,
           result: {
             planComplete: !plan,
             currentStep: nextStep?.description ?? null,
-            stepsRemaining: plan?.steps.filter(s => s.status === "pending").length ?? 0,
+            stepsRemaining:
+              plan?.steps.filter((s) => s.status === "pending").length ?? 0,
           },
         };
       },
@@ -1669,12 +2349,13 @@ Use getSystemCode first to see the current system implementation before modifyin
           result: {
             hasActivePlan: true,
             goal: plan.goal,
-            steps: plan.steps.map(s => ({
+            steps: plan.steps.map((s) => ({
               description: s.description,
               status: s.status,
               result: s.result,
             })),
-            completed: plan.steps.filter(s => s.status === "completed").length,
+            completed: plan.steps.filter((s) => s.status === "completed")
+              .length,
             total: plan.steps.length,
           },
         };
@@ -1682,25 +2363,43 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     abandonCurrentPlan: tool({
-      description: "Abandon the current plan if it's no longer relevant or achievable",
+      description:
+        "Abandon the current plan if it's no longer relevant or achievable",
       inputSchema: z.object({
         reason: z.string().describe("Why the plan is being abandoned"),
       }),
       execute: async (params) => {
         abandonPlan(state, params.reason);
         console.log(`[Tool] abandonCurrentPlan: ${params.reason}`);
-        return { success: true, result: { abandoned: true, reason: params.reason } };
+        return {
+          success: true,
+          result: { abandoned: true, reason: params.reason },
+        };
       },
     }),
 
     recordMemory: tool({
-      description: "Record an important observation, decision, or reflection for future reference",
+      description:
+        "Record an important observation, decision, or reflection for future reference",
       inputSchema: z.object({
-        type: z.enum(["action", "observation", "decision", "reflection"]).describe("Type of memory"),
+        type: z
+          .enum(["action", "observation", "decision", "reflection"])
+          .describe("Type of memory"),
         content: z.string().describe("What to remember"),
-        importance: z.number().min(1).max(10).optional().describe("How important (1-10, 7+ persists to long-term)"),
-        relatedEntities: z.array(z.string()).optional().describe("Names of entities this relates to"),
-        tags: z.array(z.string()).optional().describe("Tags for categorization"),
+        importance: z
+          .number()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe("How important (1-10, 7+ persists to long-term)"),
+        relatedEntities: z
+          .array(z.string())
+          .optional()
+          .describe("Names of entities this relates to"),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe("Tags for categorization"),
       }),
       execute: async (params) => {
         const memory = addMemory(state, params.type, params.content, {
@@ -1708,7 +2407,12 @@ Use getSystemCode first to see the current system implementation before modifyin
           relatedEntities: params.relatedEntities,
           tags: params.tags,
         });
-        console.log(`[Tool] recordMemory: [${params.type}] ${params.content.slice(0, 50)}...`);
+        console.log(
+          `[Tool] recordMemory: [${params.type}] ${params.content.slice(
+            0,
+            50
+          )}...`
+        );
         return { success: true, result: { memoryId: memory.id, stored: true } };
       },
     }),
@@ -1716,17 +2420,26 @@ Use getSystemCode first to see the current system implementation before modifyin
     searchMemories: tool({
       description: "Search your memories for relevant past information",
       inputSchema: z.object({
-        type: z.enum(["action", "observation", "decision", "reflection"]).optional().describe("Filter by memory type"),
-        entityName: z.string().optional().describe("Filter by related entity name"),
+        type: z
+          .enum(["action", "observation", "decision", "reflection"])
+          .optional()
+          .describe("Filter by memory type"),
+        entityName: z
+          .string()
+          .optional()
+          .describe("Filter by related entity name"),
         tags: z.array(z.string()).optional().describe("Filter by tags"),
-        minImportance: z.number().optional().describe("Minimum importance level"),
+        minImportance: z
+          .number()
+          .optional()
+          .describe("Minimum importance level"),
       }),
       execute: async (params) => {
         const memories = searchMemory(state, params);
         console.log(`[Tool] searchMemories: found ${memories.length} memories`);
         return {
           success: true,
-          result: memories.slice(0, 20).map(m => ({
+          result: memories.slice(0, 20).map((m) => ({
             type: m.type,
             content: m.content,
             importance: m.importance,
@@ -1739,7 +2452,8 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     reflect: tool({
-      description: "Take a moment to reflect on the current state and record insights. Use this to consolidate learnings.",
+      description:
+        "Take a moment to reflect on the current state and record insights. Use this to consolidate learnings.",
       inputSchema: z.object({
         reflection: z.string().describe("Your reflection or insight"),
       }),
@@ -1749,14 +2463,21 @@ Use getSystemCode first to see the current system implementation before modifyin
           tags: ["reflection", "insight"],
         });
         console.log(`[Tool] reflect: ${params.reflection.slice(0, 50)}...`);
-        return { success: true, result: { recorded: true, memoryId: memory.id } };
+        return {
+          success: true,
+          result: { recorded: true, memoryId: memory.id },
+        };
       },
     }),
 
     listAvailableSprites: tool({
-      description: "List available sprite assets. Can filter by tag or search term.",
+      description:
+        "List available sprite assets. Can filter by tag or search term.",
       inputSchema: z.object({
-        tag: z.string().optional().describe("Filter by tag (e.g., 'character', 'animal', 'crop')"),
+        tag: z
+          .string()
+          .optional()
+          .describe("Filter by tag (e.g., 'character', 'animal', 'crop')"),
         search: z.string().optional().describe("Search term to find sprites"),
       }),
       execute: async (params) => {
@@ -1767,7 +2488,8 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     getAvailableCharacters: tool({
-      description: "List all available character sprites with their animations (walk, idle, actions)",
+      description:
+        "List all available character sprites with their animations (walk, idle, actions)",
       inputSchema: z.object({}),
       execute: async () => {
         const result = state.renderingTools.getAvailableCharacters();
@@ -1777,16 +2499,29 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     setupCharacterRig: tool({
-      description: "Set up a character rig for an NPC that maps actions to animations. Once set up, the NPC's actions will automatically trigger appropriate animations.",
+      description:
+        "Set up a character rig for an NPC that maps actions to animations. Once set up, the NPC's actions will automatically trigger appropriate animations.",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity to set up"),
-        baseAtlas: z.string().describe("Base sprite atlas ID (e.g., 'farmer_1')"),
-        actionAtlases: z.record(z.string()).optional().describe("Map action names to atlas IDs for action-specific sprites"),
-        actionMappings: z.record(z.object({
-          animation: z.string(),
-          loop: z.boolean().optional(),
-          speed: z.number().optional(),
-        })).optional().describe("Map action names to animation config"),
+        baseAtlas: z
+          .string()
+          .describe("Base sprite atlas ID (e.g., 'farmer_1')"),
+        actionAtlases: z
+          .record(z.string())
+          .optional()
+          .describe(
+            "Map action names to atlas IDs for action-specific sprites"
+          ),
+        actionMappings: z
+          .record(
+            z.object({
+              animation: z.string(),
+              loop: z.boolean().optional(),
+              speed: z.number().optional(),
+            })
+          )
+          .optional()
+          .describe("Map action names to animation config"),
       }),
       execute: async (params) => {
         const result = state.renderingTools.setupCharacterRig(params);
@@ -1796,17 +2531,31 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     triggerCharacterAction: tool({
-      description: "Trigger an action animation on a character with a rig. The character will play the mapped animation.",
+      description:
+        "Trigger an action animation on a character with a rig. The character will play the mapped animation.",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the character"),
-        action: z.string().describe("Action to trigger (e.g., 'walk', 'chop', 'idle')"),
-        direction: z.enum(["up", "down", "left", "right"]).optional().describe("Direction to face"),
-        targetX: z.number().optional().describe("Target X position (auto-calculates direction)"),
-        targetY: z.number().optional().describe("Target Y position (auto-calculates direction)"),
+        action: z
+          .string()
+          .describe("Action to trigger (e.g., 'walk', 'chop', 'idle')"),
+        direction: z
+          .enum(["up", "down", "left", "right"])
+          .optional()
+          .describe("Direction to face"),
+        targetX: z
+          .number()
+          .optional()
+          .describe("Target X position (auto-calculates direction)"),
+        targetY: z
+          .number()
+          .optional()
+          .describe("Target Y position (auto-calculates direction)"),
       }),
       execute: async (params) => {
         const result = state.renderingTools.triggerCharacterAction(params);
-        console.log(`[Tool] triggerCharacterAction: ${params.entityName} -> ${params.action}`);
+        console.log(
+          `[Tool] triggerCharacterAction: ${params.entityName} -> ${params.action}`
+        );
         return result;
       },
     }),
@@ -1834,13 +2583,19 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     setEntityPixiSprite: tool({
-      description: "Assign a sprite from the registry to an entity for Pixi.js rendering",
+      description:
+        "Assign a sprite from the registry to an entity for Pixi.js rendering",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
-        spriteName: z.string().describe("Sprite name (atlasId:frameId or just frameId)"),
+        spriteName: z
+          .string()
+          .describe("Sprite name (atlasId:frameId or just frameId)"),
         scaleX: z.number().optional().describe("X scale (default 1)"),
         scaleY: z.number().optional().describe("Y scale (default 1)"),
-        tint: z.number().optional().describe("Color tint as hex (e.g., 0xff0000 for red)"),
+        tint: z
+          .number()
+          .optional()
+          .describe("Color tint as hex (e.g., 0xff0000 for red)"),
         alpha: z.number().optional().describe("Opacity 0-1"),
         zIndex: z.number().optional().describe("Draw order"),
       }),
@@ -1856,7 +2611,9 @@ Use getSystemCode first to see the current system implementation before modifyin
             zIndex: params.zIndex,
           },
         });
-        console.log(`[Tool] setEntityPixiSprite: ${params.entityName} -> ${params.spriteName}`);
+        console.log(
+          `[Tool] setEntityPixiSprite: ${params.entityName} -> ${params.spriteName}`
+        );
         return result;
       },
     }),
@@ -1866,7 +2623,9 @@ Use getSystemCode first to see the current system implementation before modifyin
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
         atlasId: z.string().describe("Atlas containing the animation"),
-        animationId: z.string().describe("Animation ID (e.g., 'walk_down', 'chop_left')"),
+        animationId: z
+          .string()
+          .describe("Animation ID (e.g., 'walk_down', 'chop_left')"),
         speed: z.number().optional().describe("Playback speed multiplier"),
         loop: z.boolean().optional().describe("Whether to loop"),
       }),
@@ -1877,13 +2636,16 @@ Use getSystemCode first to see the current system implementation before modifyin
           animationId: params.animationId,
           options: { speed: params.speed, loop: params.loop },
         });
-        console.log(`[Tool] setEntityAnimation: ${params.entityName} -> ${params.animationId}`);
+        console.log(
+          `[Tool] setEntityAnimation: ${params.entityName} -> ${params.animationId}`
+        );
         return result;
       },
     }),
 
     listAnimations: tool({
-      description: "List available animations, optionally filtered by atlas or tag",
+      description:
+        "List available animations, optionally filtered by atlas or tag",
       inputSchema: z.object({
         atlasId: z.string().optional().describe("Filter by atlas ID"),
         tag: z.string().optional().describe("Filter by tag"),
@@ -1896,7 +2658,8 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     describeEntityAppearance: tool({
-      description: "Get detailed info about an entity's current visual state (sprite, animation, position)",
+      description:
+        "Get detailed info about an entity's current visual state (sprite, animation, position)",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
       }),
@@ -1908,7 +2671,8 @@ Use getSystemCode first to see the current system implementation before modifyin
     }),
 
     getVisibleEntities: tool({
-      description: "Get entities visible from a viewer's position within a radius",
+      description:
+        "Get entities visible from a viewer's position within a radius",
       inputSchema: z.object({
         viewerName: z.string().describe("Name of the viewing entity"),
         radius: z.number().optional().describe("View radius (default 10)"),
@@ -1953,26 +2717,73 @@ EXAMPLE - Auto-heal:
       inputSchema: z.object({
         name: z.string().describe("Unique name for the intervention"),
         description: z.string().describe("What this intervention does"),
-        conditions: z.array(z.object({
-          targetEntity: z.string().describe("Entity name, '*' for all, or '@Component' for all with component"),
-          component: z.string().describe("Component to check (built-in or dynamic)"),
-          property: z.string().describe("Property to check"),
-          operator: z.enum([">", "<", ">=", "<=", "==", "!=", "contains", "exists"]),
-          value: z.any().optional().describe("Value to compare (not needed for 'exists')"),
-        })),
-        effects: z.array(z.object({
-          type: z.enum(["setComponent", "setDynamic", "log", "emit"]).describe("Effect type"),
-          targetEntity: z.string().describe("Entity name or '$target' for triggering entity"),
-          component: z.string().optional().describe("Component to modify (for set effects)"),
-          property: z.string().optional().describe("Property to set"),
-          value: z.any().optional().describe("Value to set (use '$current + N' for relative)"),
-          message: z.string().optional().describe("For log: message (use $name, $value)"),
-          eventType: z.string().optional().describe("For emit: event type"),
-          eventData: z.record(z.any()).optional().describe("For emit: event data"),
-        })),
-        repeatable: z.boolean().optional().describe("Fire multiple times? (default true)"),
-        cooldown: z.number().optional().describe("Ticks between firings (default 1)"),
-        priority: z.number().optional().describe("Higher = checked first (default 5)"),
+        conditions: z.array(
+          z.object({
+            targetEntity: z
+              .string()
+              .describe(
+                "Entity name, '*' for all, or '@Component' for all with component"
+              ),
+            component: z
+              .string()
+              .describe("Component to check (built-in or dynamic)"),
+            property: z.string().describe("Property to check"),
+            operator: z.enum([
+              ">",
+              "<",
+              ">=",
+              "<=",
+              "==",
+              "!=",
+              "contains",
+              "exists",
+            ]),
+            value: z
+              .any()
+              .optional()
+              .describe("Value to compare (not needed for 'exists')"),
+          })
+        ),
+        effects: z.array(
+          z.object({
+            type: z
+              .enum(["setComponent", "setDynamic", "log", "emit"])
+              .describe("Effect type"),
+            targetEntity: z
+              .string()
+              .describe("Entity name or '$target' for triggering entity"),
+            component: z
+              .string()
+              .optional()
+              .describe("Component to modify (for set effects)"),
+            property: z.string().optional().describe("Property to set"),
+            value: z
+              .any()
+              .optional()
+              .describe("Value to set (use '$current + N' for relative)"),
+            message: z
+              .string()
+              .optional()
+              .describe("For log: message (use $name, $value)"),
+            eventType: z.string().optional().describe("For emit: event type"),
+            eventData: z
+              .record(z.any())
+              .optional()
+              .describe("For emit: event data"),
+          })
+        ),
+        repeatable: z
+          .boolean()
+          .optional()
+          .describe("Fire multiple times? (default true)"),
+        cooldown: z
+          .number()
+          .optional()
+          .describe("Ticks between firings (default 1)"),
+        priority: z
+          .number()
+          .optional()
+          .describe("Higher = checked first (default 5)"),
         active: z.boolean().optional().describe("Start active? (default true)"),
       }),
       execute: async (params) => {
@@ -1988,7 +2799,14 @@ EXAMPLE - Auto-heal:
         };
         registerIntervention(state.interventionRegistry, definition);
         console.log(`[Tool] createIntervention: ${params.name}`);
-        return { success: true, result: { name: params.name, conditions: params.conditions.length, effects: params.effects.length } };
+        return {
+          success: true,
+          result: {
+            name: params.name,
+            conditions: params.conditions.length,
+            effects: params.effects.length,
+          },
+        };
       },
     }),
 
@@ -1999,7 +2817,7 @@ EXAMPLE - Auto-heal:
         const interventions = listInterventions(state.interventionRegistry);
         return {
           success: true,
-          result: interventions.map(i => ({
+          result: interventions.map((i) => ({
             name: i.name,
             description: i.description,
             conditions: i.conditions.length,
@@ -2019,8 +2837,13 @@ EXAMPLE - Auto-heal:
         name: z.string().describe("Name of the intervention"),
       }),
       execute: async (params) => {
-        const success = activateIntervention(state.interventionRegistry, params.name);
-        console.log(`[Tool] activateIntervention: ${params.name} -> ${success}`);
+        const success = activateIntervention(
+          state.interventionRegistry,
+          params.name
+        );
+        console.log(
+          `[Tool] activateIntervention: ${params.name} -> ${success}`
+        );
         return { success, result: { activated: params.name } };
       },
     }),
@@ -2031,8 +2854,13 @@ EXAMPLE - Auto-heal:
         name: z.string().describe("Name of the intervention"),
       }),
       execute: async (params) => {
-        const success = deactivateIntervention(state.interventionRegistry, params.name);
-        console.log(`[Tool] deactivateIntervention: ${params.name} -> ${success}`);
+        const success = deactivateIntervention(
+          state.interventionRegistry,
+          params.name
+        );
+        console.log(
+          `[Tool] deactivateIntervention: ${params.name} -> ${success}`
+        );
         return { success, result: { deactivated: params.name } };
       },
     }),
@@ -2043,7 +2871,10 @@ EXAMPLE - Auto-heal:
         name: z.string().describe("Name of the intervention to remove"),
       }),
       execute: async (params) => {
-        const success = unregisterIntervention(state.interventionRegistry, params.name);
+        const success = unregisterIntervention(
+          state.interventionRegistry,
+          params.name
+        );
         console.log(`[Tool] removeIntervention: ${params.name} -> ${success}`);
         return { success, result: { removed: params.name } };
       },
@@ -2052,28 +2883,40 @@ EXAMPLE - Auto-heal:
     getInterventionLogs: tool({
       description: "Get recent logs from intervention executions",
       inputSchema: z.object({
-        limit: z.number().optional().describe("Max logs to return (default 20)"),
+        limit: z
+          .number()
+          .optional()
+          .describe("Max logs to return (default 20)"),
       }),
       execute: async (params) => {
         const limit = params.limit ?? 20;
         const logs = state.interventionRegistry.logs.slice(-limit);
-        return { success: true, result: { logs, total: state.interventionRegistry.logs.length } };
+        return {
+          success: true,
+          result: { logs, total: state.interventionRegistry.logs.length },
+        };
       },
     }),
 
     getInterventionEvents: tool({
       description: "Get events emitted by interventions",
       inputSchema: z.object({
-        limit: z.number().optional().describe("Max events to return (default 20)"),
+        limit: z
+          .number()
+          .optional()
+          .describe("Max events to return (default 20)"),
         eventType: z.string().optional().describe("Filter by event type"),
       }),
       execute: async (params) => {
         const limit = params.limit ?? 20;
         let events = state.interventionRegistry.events;
         if (params.eventType) {
-          events = events.filter(e => e.type === params.eventType);
+          events = events.filter((e) => e.type === params.eventType);
         }
-        return { success: true, result: { events: events.slice(-limit), total: events.length } };
+        return {
+          success: true,
+          result: { events: events.slice(-limit), total: events.length },
+        };
       },
     }),
 
@@ -2114,19 +2957,39 @@ EXAMPLE - Temperature in range:
       inputSchema: z.object({
         name: z.string().describe("Unique name for the proposition"),
         claim: z.string().describe("Natural language claim being validated"),
-        target: z.string().describe("Entity name, '*' for all, or '@Component' for all with component"),
-        checks: z.array(z.object({
-          component: z.string().describe("Component to check"),
-          property: z.string().describe("Property to check"),
-          operator: z.enum([">", "<", ">=", "<=", "==", "!=", "contains", "exists", "in_range"]),
-          value: z.any().optional().describe("Value for comparison"),
-          min: z.number().optional().describe("Min for in_range"),
-          max: z.number().optional().describe("Max for in_range"),
-          weight: z.number().describe("Weight 0-1 for this check"),
-          description: z.string().describe("What this check validates"),
-        })),
+        target: z
+          .string()
+          .describe(
+            "Entity name, '*' for all, or '@Component' for all with component"
+          ),
+        checks: z.array(
+          z.object({
+            component: z.string().describe("Component to check"),
+            property: z.string().describe("Property to check"),
+            operator: z.enum([
+              ">",
+              "<",
+              ">=",
+              "<=",
+              "==",
+              "!=",
+              "contains",
+              "exists",
+              "in_range",
+            ]),
+            value: z.any().optional().describe("Value for comparison"),
+            min: z.number().optional().describe("Min for in_range"),
+            max: z.number().optional().describe("Max for in_range"),
+            weight: z.number().describe("Weight 0-1 for this check"),
+            description: z.string().describe("What this check validates"),
+          })
+        ),
         passThreshold: z.number().describe("Minimum score (0-9) to pass"),
-        category: z.string().describe("Category for grouping (e.g., 'agent_health', 'simulation_health')"),
+        category: z
+          .string()
+          .describe(
+            "Category for grouping (e.g., 'agent_health', 'simulation_health')"
+          ),
       }),
       execute: async (params) => {
         const definition: PropositionDefinition = {
@@ -2139,7 +3002,14 @@ EXAMPLE - Temperature in range:
         };
         registerProposition(state.propositionRegistry, definition);
         console.log(`[Tool] createProposition: ${params.name}`);
-        return { success: true, result: { name: params.name, checks: params.checks.length, category: params.category } };
+        return {
+          success: true,
+          result: {
+            name: params.name,
+            checks: params.checks.length,
+            category: params.category,
+          },
+        };
       },
     }),
 
@@ -2150,7 +3020,7 @@ EXAMPLE - Temperature in range:
         const propositions = listPropositions(state.propositionRegistry);
         return {
           success: true,
-          result: propositions.map(p => ({
+          result: propositions.map((p) => ({
             name: p.name,
             claim: p.claim,
             target: p.target,
@@ -2163,16 +3033,25 @@ EXAMPLE - Temperature in range:
     }),
 
     evaluatePropositionTool: tool({
-      description: "Evaluate a specific proposition against the world and get detailed results",
+      description:
+        "Evaluate a specific proposition against the world and get detailed results",
       inputSchema: z.object({
-        propositionName: z.string().describe("Name of the proposition to evaluate"),
+        propositionName: z
+          .string()
+          .describe("Name of the proposition to evaluate"),
       }),
       execute: async (params) => {
-        const results = evaluateProposition(state.world, state.propositionRegistry, params.propositionName);
-        console.log(`[Tool] evaluateProposition: ${params.propositionName} -> ${results.length} results`);
+        const results = evaluateProposition(
+          state.world,
+          state.propositionRegistry,
+          params.propositionName
+        );
+        console.log(
+          `[Tool] evaluateProposition: ${params.propositionName} -> ${results.length} results`
+        );
         return {
           success: true,
-          result: results.map(r => ({
+          result: results.map((r) => ({
             target: r.target,
             passed: r.passed,
             score: r.score,
@@ -2186,30 +3065,46 @@ EXAMPLE - Temperature in range:
       description: "Evaluate all propositions and get a summary",
       inputSchema: z.object({}),
       execute: async () => {
-        const allResults = evaluateAllPropositions(state.world, state.propositionRegistry);
-        const summary: Record<string, { passed: number; failed: number; avgScore: number }> = {};
+        const allResults = evaluateAllPropositions(
+          state.world,
+          state.propositionRegistry
+        );
+        const summary: Record<
+          string,
+          { passed: number; failed: number; avgScore: number }
+        > = {};
 
         for (const [name, results] of allResults) {
-          const passed = results.filter(r => r.passed).length;
-          const avgScore = results.length > 0
-            ? results.reduce((sum, r) => sum + r.score, 0) / results.length
-            : 0;
-          summary[name] = { passed, failed: results.length - passed, avgScore: Math.round(avgScore * 10) / 10 };
+          const passed = results.filter((r) => r.passed).length;
+          const avgScore =
+            results.length > 0
+              ? results.reduce((sum, r) => sum + r.score, 0) / results.length
+              : 0;
+          summary[name] = {
+            passed,
+            failed: results.length - passed,
+            avgScore: Math.round(avgScore * 10) / 10,
+          };
         }
 
-        console.log(`[Tool] evaluateAllPropositions: ${allResults.size} propositions evaluated`);
+        console.log(
+          `[Tool] evaluateAllPropositions: ${allResults.size} propositions evaluated`
+        );
         return { success: true, result: summary };
       },
     }),
 
     getValidationReport: tool({
-      description: "Get a category-level validation report showing overall health of the simulation",
+      description:
+        "Get a category-level validation report showing overall health of the simulation",
       inputSchema: z.object({}),
       execute: async () => {
         // First evaluate all propositions to update scores
         evaluateAllPropositions(state.world, state.propositionRegistry);
         const report = getCategoryReport(state.propositionRegistry);
-        console.log(`[Tool] getValidationReport: ${Object.keys(report).length} categories`);
+        console.log(
+          `[Tool] getValidationReport: ${Object.keys(report).length} categories`
+        );
         return { success: true, result: report };
       },
     }),
@@ -2217,7 +3112,10 @@ EXAMPLE - Temperature in range:
     getPropositionHistoryTool: tool({
       description: "Get historical proposition evaluation results",
       inputSchema: z.object({
-        propositionName: z.string().optional().describe("Filter by proposition name"),
+        propositionName: z
+          .string()
+          .optional()
+          .describe("Filter by proposition name"),
         targetEntity: z.string().optional().describe("Filter by entity name"),
         category: z.string().optional().describe("Filter by category"),
         passedOnly: z.boolean().optional().describe("Only show passed results"),
@@ -2225,10 +3123,13 @@ EXAMPLE - Temperature in range:
         limit: z.number().optional().describe("Max results to return"),
       }),
       execute: async (params) => {
-        const history = getPropositionHistory(state.propositionRegistry, params);
+        const history = getPropositionHistory(
+          state.propositionRegistry,
+          params
+        );
         return {
           success: true,
-          result: history.map(r => ({
+          result: history.map((r) => ({
             proposition: r.proposition,
             target: r.target,
             passed: r.passed,
@@ -2245,7 +3146,10 @@ EXAMPLE - Temperature in range:
         name: z.string().describe("Name of the proposition to remove"),
       }),
       execute: async (params) => {
-        const success = unregisterProposition(state.propositionRegistry, params.name);
+        const success = unregisterProposition(
+          state.propositionRegistry,
+          params.name
+        );
         console.log(`[Tool] removeProposition: ${params.name} -> ${success}`);
         return { success, result: { removed: params.name } };
       },
@@ -2276,23 +3180,43 @@ spawn({
 Available base types: bed, chair, table, chest, door, torch, food_item, npc, room
 Custom types defined via defineObjectType can include defaultComponents for systems.`,
       inputSchema: z.object({
-        type: z.string().describe("Object type name (e.g., 'bed', 'chest', 'rabbit')"),
+        type: z
+          .string()
+          .describe("Object type name (e.g., 'bed', 'chest', 'rabbit')"),
         name: z.string().describe("Unique name for this instance"),
-        properties: z.record(z.string()).optional().describe("Template properties like {adjective, material}"),
+        properties: z
+          .record(z.string())
+          .optional()
+          .describe("Template properties like {adjective, material}"),
         roomName: z.string().optional().describe("Room to place the entity in"),
-        state: z.string().optional().describe("Initial state (uses defaultState if not provided)"),
-        componentOverrides: z.record(z.record(z.any())).optional().describe("Override component values: { ComponentName: { prop: value } }"),
+        state: z
+          .string()
+          .optional()
+          .describe("Initial state (uses defaultState if not provided)"),
+        componentOverrides: z
+          .record(z.record(z.any()))
+          .optional()
+          .describe(
+            "Override component values: { ComponentName: { prop: value } }"
+          ),
       }),
       execute: async (params) => {
         const objectType = state.worldSchema.getObjectType(params.type);
         if (!objectType) {
-          return { success: false, result: null, error: `Unknown object type: ${params.type}. Use listObjectTypes to see available types.` };
+          return {
+            success: false,
+            result: null,
+            error: `Unknown object type: ${params.type}. Use listObjectTypes to see available types.`,
+          };
         }
 
         // Create the entity
         const createResult = state.tools.createEntity({
           name: params.name,
-          description: interpolateTemplate(objectType.description, params.properties || {}),
+          description: interpolateTemplate(
+            objectType.description,
+            params.properties || {}
+          ),
         });
 
         if (!createResult.success) {
@@ -2301,7 +3225,11 @@ Custom types defined via defineObjectType can include defaultComponents for syst
 
         const eid = state.registry.byName.get(params.name);
         if (eid === undefined) {
-          return { success: false, result: null, error: "Entity was created but not found in registry" };
+          return {
+            success: false,
+            result: null,
+            error: "Entity was created but not found in registry",
+          };
         }
 
         // Determine initial state
@@ -2313,7 +3241,8 @@ Custom types defined via defineObjectType can include defaultComponents for syst
         if (!ObjectMeta) {
           createDynamicComponent({
             name: "ObjectMeta",
-            description: "Metadata for spawned objects including type and state",
+            description:
+              "Metadata for spawned objects including type and state",
             properties: { type: "string", state: "string", traits: "string" },
           });
         }
@@ -2323,13 +3252,18 @@ Custom types defined via defineObjectType can include defaultComponents for syst
         // Combine base traits with state-specific traits (using Set to dedupe)
         const traitSet = new Set(objectType.traits);
         if (stateData?.traits) {
-          stateData.traits.forEach(t => traitSet.add(t));
+          stateData.traits.forEach((t) => traitSet.add(t));
         }
         if (stateData?.blockedTraits) {
-          stateData.blockedTraits.forEach(t => traitSet.delete(t));
+          stateData.blockedTraits.forEach((t) => traitSet.delete(t));
         }
         const allTraits = Array.from(traitSet);
-        setDynamicComponentValue("ObjectMeta", eid, "traits", allTraits.join(","));
+        setDynamicComponentValue(
+          "ObjectMeta",
+          eid,
+          "traits",
+          allTraits.join(",")
+        );
 
         // === NEW: Create defaultComponents from object type ===
         const createdComponents: string[] = [];
@@ -2350,7 +3284,8 @@ Custom types defined via defineObjectType can include defaultComponents for syst
 
             if (comp) {
               // Merge default values with any overrides
-              const overrides = params.componentOverrides?.[compSpec.name] || {};
+              const overrides =
+                params.componentOverrides?.[compSpec.name] || {};
               const finalValues = { ...compSpec.values, ...overrides };
 
               // Set each property value
@@ -2364,7 +3299,9 @@ Custom types defined via defineObjectType can include defaultComponents for syst
 
         // Apply any additional component overrides not in defaultComponents
         if (params.componentOverrides) {
-          for (const [compName, values] of Object.entries(params.componentOverrides)) {
+          for (const [compName, values] of Object.entries(
+            params.componentOverrides
+          )) {
             if (!createdComponents.includes(compName)) {
               // Check if component exists
               let comp = getDynamicComponent(compName);
@@ -2393,7 +3330,15 @@ Custom types defined via defineObjectType can include defaultComponents for syst
           });
         }
 
-        console.log(`[Tool] spawn: ${params.name} (${params.type}) in state ${initialState}${createdComponents.length ? ` with [${createdComponents.join(", ")}]` : ""}`);
+        console.log(
+          `[Tool] spawn: ${params.name} (${
+            params.type
+          }) in state ${initialState}${
+            createdComponents.length
+              ? ` with [${createdComponents.join(", ")}]`
+              : ""
+          }`
+        );
         return {
           success: true,
           result: {
@@ -2402,7 +3347,10 @@ Custom types defined via defineObjectType can include defaultComponents for syst
             state: initialState,
             traits: allTraits,
             components: createdComponents,
-            description: interpolateTemplate(objectType.description, params.properties || {}),
+            description: interpolateTemplate(
+              objectType.description,
+              params.properties || {}
+            ),
           },
         };
       },
@@ -2446,23 +3394,54 @@ defineObjectType({
 When you spawn a "rabbit", it will automatically have Health, Energy, Movement, Diet components with data!
 Systems can then query: "for (const eid of query(world, [Health, Energy])) { ... }"`,
       inputSchema: z.object({
-        name: z.string().describe("Unique name for this object type (lowercase)"),
-        description: z.string().describe("Description template - use {property} for interpolation"),
-        traits: z.array(z.string()).describe("Traits for affordance system (what actions can be done)"),
-        states: z.record(z.object({
-          description: z.string(),
-          traits: z.array(z.string()).optional(),
-          blockedTraits: z.array(z.string()).optional(),
-        })).describe("Possible states and their configurations"),
+        name: z
+          .string()
+          .describe("Unique name for this object type (lowercase)"),
+        description: z
+          .string()
+          .describe("Description template - use {property} for interpolation"),
+        traits: z
+          .array(z.string())
+          .describe("Traits for affordance system (what actions can be done)"),
+        states: z
+          .record(
+            z.object({
+              description: z.string(),
+              traits: z.array(z.string()).optional(),
+              blockedTraits: z.array(z.string()).optional(),
+            })
+          )
+          .describe("Possible states and their configurations"),
         defaultState: z.string().describe("State when first spawned"),
-        isContainer: z.boolean().optional().describe("Can this contain other objects?"),
-        containerCapacity: z.number().optional().describe("How many items can it hold?"),
-        category: z.string().optional().describe("Category (creature, furniture, item, etc)"),
-        defaultComponents: z.array(z.object({
-          name: z.string().describe("Component name (will be created if doesn't exist)"),
-          values: z.record(z.any()).describe("Default property values"),
-          schema: z.record(z.enum(["number", "string", "boolean"])).optional().describe("Property types (inferred if not provided)"),
-        })).optional().describe("Components to add when spawned - THIS IS HOW ENTITIES PARTICIPATE IN SYSTEMS"),
+        isContainer: z
+          .boolean()
+          .optional()
+          .describe("Can this contain other objects?"),
+        containerCapacity: z
+          .number()
+          .optional()
+          .describe("How many items can it hold?"),
+        category: z
+          .string()
+          .optional()
+          .describe("Category (creature, furniture, item, etc)"),
+        defaultComponents: z
+          .array(
+            z.object({
+              name: z
+                .string()
+                .describe("Component name (will be created if doesn't exist)"),
+              values: z.record(z.any()).describe("Default property values"),
+              schema: z
+                .record(z.enum(["number", "string", "boolean"]))
+                .optional()
+                .describe("Property types (inferred if not provided)"),
+            })
+          )
+          .optional()
+          .describe(
+            "Components to add when spawned - THIS IS HOW ENTITIES PARTICIPATE IN SYSTEMS"
+          ),
       }),
       execute: async (params) => {
         const def: ObjectTypeDefinition = {
@@ -2474,7 +3453,7 @@ Systems can then query: "for (const eid of query(world, [Health, Energy])) { ...
           isContainer: params.isContainer,
           containerCapacity: params.containerCapacity,
           category: params.category,
-          defaultComponents: params.defaultComponents?.map(c => ({
+          defaultComponents: params.defaultComponents?.map((c) => ({
             name: c.name,
             values: c.values,
             schema: c.schema,
@@ -2482,15 +3461,23 @@ Systems can then query: "for (const eid of query(world, [Health, Energy])) { ...
           })),
         };
         state.worldSchema.defineObjectType(def);
-        console.log(`[Tool] defineObjectType: ${params.name}${params.defaultComponents ? ` with components [${params.defaultComponents.map(c => c.name).join(", ")}]` : ""}`);
+        console.log(
+          `[Tool] defineObjectType: ${params.name}${
+            params.defaultComponents
+              ? ` with components [${params.defaultComponents
+                  .map((c) => c.name)
+                  .join(", ")}]`
+              : ""
+          }`
+        );
         return {
           success: true,
           result: {
             defined: params.name,
             traits: params.traits,
             states: Object.keys(params.states),
-            components: params.defaultComponents?.map(c => c.name) || [],
-          }
+            components: params.defaultComponents?.map((c) => c.name) || [],
+          },
         };
       },
     }),
@@ -2524,30 +3511,83 @@ defineAffordance({
 })`,
       inputSchema: z.object({
         name: z.string().describe("Unique name for this affordance"),
-        requires: z.array(z.string()).describe("Traits the object must have to allow this action"),
-        blockedBy: z.array(z.string()).optional().describe("Traits that prevent this action"),
-        actorRequires: z.array(z.string()).optional().describe("Traits the actor must have"),
-        duration: z.number().optional().describe("How long the action takes (0 = instant)"),
-        effects: z.array(z.object({
-          type: z.enum([
-            "modify_component", "set_state", "add_trait", "remove_trait",
-            "destroy", "spawn", "emit_stimulus", "transfer", "add_relation", "remove_relation"
-          ]).describe("Effect type"),
-          target: z.string().optional().describe("'actor', 'target', 'nearby', or entity name"),
-          modifications: z.array(z.object({
-            component: z.string(),
-            property: z.string(),
-            operation: z.enum(["set", "add", "subtract", "multiply"]),
-            value: z.union([z.number(), z.string(), z.boolean()]),
-          })).optional().describe("For modify_component"),
-          state: z.string().optional().describe("For set_state"),
-          trait: z.string().optional().describe("For add_trait/remove_trait"),
-          stimulusType: z.string().optional().describe("For emit_stimulus"),
-          stimulusContent: z.string().optional().describe("For emit_stimulus (supports {actor.name}, {target.name})"),
-          chance: z.number().optional().describe("Probability 0-1 (default 1)"),
-        })).optional().describe("Effects to execute when affordance is used - STRONGLY RECOMMENDED"),
-        transitions: z.record(z.string()).optional().describe("Legacy state transitions (use effects instead)"),
-        descriptionTemplate: z.string().optional().describe("Perception text template for nearby agents"),
+        requires: z
+          .array(z.string())
+          .describe("Traits the object must have to allow this action"),
+        blockedBy: z
+          .array(z.string())
+          .optional()
+          .describe("Traits that prevent this action"),
+        actorRequires: z
+          .array(z.string())
+          .optional()
+          .describe("Traits the actor must have"),
+        duration: z
+          .number()
+          .optional()
+          .describe("How long the action takes (0 = instant)"),
+        effects: z
+          .array(
+            z.object({
+              type: z
+                .enum([
+                  "modify_component",
+                  "set_state",
+                  "add_trait",
+                  "remove_trait",
+                  "destroy",
+                  "spawn",
+                  "emit_stimulus",
+                  "transfer",
+                  "add_relation",
+                  "remove_relation",
+                ])
+                .describe("Effect type"),
+              target: z
+                .string()
+                .optional()
+                .describe("'actor', 'target', 'nearby', or entity name"),
+              modifications: z
+                .array(
+                  z.object({
+                    component: z.string(),
+                    property: z.string(),
+                    operation: z.enum(["set", "add", "subtract", "multiply"]),
+                    value: z.union([z.number(), z.string(), z.boolean()]),
+                  })
+                )
+                .optional()
+                .describe("For modify_component"),
+              state: z.string().optional().describe("For set_state"),
+              trait: z
+                .string()
+                .optional()
+                .describe("For add_trait/remove_trait"),
+              stimulusType: z.string().optional().describe("For emit_stimulus"),
+              stimulusContent: z
+                .string()
+                .optional()
+                .describe(
+                  "For emit_stimulus (supports {actor.name}, {target.name})"
+                ),
+              chance: z
+                .number()
+                .optional()
+                .describe("Probability 0-1 (default 1)"),
+            })
+          )
+          .optional()
+          .describe(
+            "Effects to execute when affordance is used - STRONGLY RECOMMENDED"
+          ),
+        transitions: z
+          .record(z.string())
+          .optional()
+          .describe("Legacy state transitions (use effects instead)"),
+        descriptionTemplate: z
+          .string()
+          .optional()
+          .describe("Perception text template for nearby agents"),
       }),
       execute: async (params) => {
         const def: AffordanceDefinition = {
@@ -2561,8 +3601,19 @@ defineAffordance({
           descriptionTemplate: params.descriptionTemplate,
         };
         state.worldSchema.defineAffordance(def);
-        console.log(`[Tool] defineAffordance: ${params.name} (${params.effects?.length || 0} effects)`);
-        return { success: true, result: { defined: params.name, requires: params.requires, effectCount: params.effects?.length || 0 } };
+        console.log(
+          `[Tool] defineAffordance: ${params.name} (${
+            params.effects?.length || 0
+          } effects)`
+        );
+        return {
+          success: true,
+          result: {
+            defined: params.name,
+            requires: params.requires,
+            effectCount: params.effects?.length || 0,
+          },
+        };
       },
     }),
 
@@ -2583,24 +3634,38 @@ defineRule({
         name: z.string().describe("Unique name for this rule"),
         description: z.string().describe("What this rule does"),
         when: z.object({
-          event: z.string().describe("Event that triggers check (tick, value_change, etc)"),
-          condition: z.object({
-            has: z.array(z.string()).optional().describe("Required traits"),
-            not: z.array(z.string()).optional().describe("Traits that must be absent"),
-            inState: z.string().optional().describe("Required state"),
-            expression: z.string().optional().describe("Custom expression"),
-          }).optional(),
+          event: z
+            .string()
+            .describe("Event that triggers check (tick, value_change, etc)"),
+          condition: z
+            .object({
+              has: z.array(z.string()).optional().describe("Required traits"),
+              not: z
+                .array(z.string())
+                .optional()
+                .describe("Traits that must be absent"),
+              inState: z.string().optional().describe("Required state"),
+              expression: z.string().optional().describe("Custom expression"),
+            })
+            .optional(),
         }),
-        then: z.array(z.object({
-          action: z.string().describe("Action to perform"),
-          target: z.string().optional().describe("self, source, nearby, or entity name"),
-          query: z.object({
-            radius: z.number().optional(),
-            has: z.array(z.string()).optional(),
-            not: z.array(z.string()).optional(),
-          }).optional(),
-          params: z.record(z.any()).optional(),
-        })),
+        then: z.array(
+          z.object({
+            action: z.string().describe("Action to perform"),
+            target: z
+              .string()
+              .optional()
+              .describe("self, source, nearby, or entity name"),
+            query: z
+              .object({
+                radius: z.number().optional(),
+                has: z.array(z.string()).optional(),
+                not: z.array(z.string()).optional(),
+              })
+              .optional(),
+            params: z.record(z.any()).optional(),
+          })
+        ),
         priority: z.number().optional().describe("Higher = runs first"),
         enabled: z.boolean().optional().describe("Is rule active?"),
       }),
@@ -2615,12 +3680,16 @@ defineRule({
         };
         state.worldSchema.defineRule(def);
         console.log(`[Tool] defineRule: ${params.name}`);
-        return { success: true, result: { defined: params.name, priority: params.priority ?? 0 } };
+        return {
+          success: true,
+          result: { defined: params.name, priority: params.priority ?? 0 },
+        };
       },
     }),
 
     listObjectTypes: tool({
-      description: "List all defined object types (prefabs) that can be spawned",
+      description:
+        "List all defined object types (prefabs) that can be spawned",
       inputSchema: z.object({
         category: z.string().optional().describe("Filter by category"),
       }),
@@ -2630,7 +3699,7 @@ defineRule({
           : state.worldSchema.getAllObjectTypes();
         return {
           success: true,
-          result: types.map(t => ({
+          result: types.map((t) => ({
             name: t.name,
             description: t.description,
             traits: t.traits,
@@ -2643,13 +3712,14 @@ defineRule({
     }),
 
     listAffordances: tool({
-      description: "List all defined affordances (actions that can be performed on objects)",
+      description:
+        "List all defined affordances (actions that can be performed on objects)",
       inputSchema: z.object({}),
       execute: async () => {
         const affordances = state.worldSchema.getAllAffordances();
         return {
           success: true,
-          result: affordances.map(a => ({
+          result: affordances.map((a) => ({
             name: a.name,
             requires: a.requires,
             blockedBy: a.blockedBy,
@@ -2670,7 +3740,7 @@ defineRule({
           : Array.from(state.worldSchema["rules"].values());
         return {
           success: true,
-          result: rules.map(r => ({
+          result: rules.map((r) => ({
             name: r.name,
             description: r.description,
             event: r.when.event,
@@ -2682,14 +3752,19 @@ defineRule({
     }),
 
     getObjectTraits: tool({
-      description: "Get the current traits of a spawned object (considering its state)",
+      description:
+        "Get the current traits of a spawned object (considering its state)",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
       }),
       execute: async (params) => {
         const eid = state.registry.byName.get(params.entityName);
         if (eid === undefined) {
-          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Entity not found: ${params.entityName}`,
+          };
         }
         const traitsStr = getDynamicComponentValues("ObjectMeta", eid)?.traits;
         const traits = traitsStr ? traitsStr.split(",") : [];
@@ -2715,7 +3790,11 @@ defineRule({
       execute: async (params) => {
         const eid = state.registry.byName.get(params.entityName);
         if (eid === undefined) {
-          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Entity not found: ${params.entityName}`,
+          };
         }
         const traitsStr = getDynamicComponentValues("ObjectMeta", eid)?.traits;
         const traits = new Set(traitsStr ? traitsStr.split(",") : []);
@@ -2723,9 +3802,9 @@ defineRule({
         const availableActions: string[] = [];
         for (const aff of state.worldSchema.getAllAffordances()) {
           // Check if all required traits are present
-          const hasRequired = aff.requires.every(t => traits.has(t));
+          const hasRequired = aff.requires.every((t) => traits.has(t));
           // Check if no blocking traits are present
-          const notBlocked = !aff.blockedBy?.some(t => traits.has(t));
+          const notBlocked = !aff.blockedBy?.some((t) => traits.has(t));
           if (hasRequired && notBlocked) {
             availableActions.push(aff.name);
           }
@@ -2750,22 +3829,40 @@ defineRule({
       execute: async (params) => {
         const eid = state.registry.byName.get(params.entityName);
         if (eid === undefined) {
-          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Entity not found: ${params.entityName}`,
+          };
         }
 
         const objectType = getDynamicComponentValues("ObjectMeta", eid)?.type;
         if (!objectType) {
-          return { success: false, result: null, error: `Entity ${params.entityName} has no ObjectMeta (not spawned from object type)` };
+          return {
+            success: false,
+            result: null,
+            error: `Entity ${params.entityName} has no ObjectMeta (not spawned from object type)`,
+          };
         }
 
         const typeDef = state.worldSchema.getObjectType(objectType);
         if (!typeDef) {
-          return { success: false, result: null, error: `Object type not found: ${objectType}` };
+          return {
+            success: false,
+            result: null,
+            error: `Object type not found: ${objectType}`,
+          };
         }
 
         const newStateData = typeDef.states[params.newState];
         if (!newStateData) {
-          return { success: false, result: null, error: `State not found: ${params.newState}. Available: ${Object.keys(typeDef.states).join(", ")}` };
+          return {
+            success: false,
+            result: null,
+            error: `State not found: ${
+              params.newState
+            }. Available: ${Object.keys(typeDef.states).join(", ")}`,
+          };
         }
 
         // Update state
@@ -2774,15 +3871,22 @@ defineRule({
         // Recalculate traits (using Set to dedupe)
         const traitSet = new Set(typeDef.traits);
         if (newStateData.traits) {
-          newStateData.traits.forEach(t => traitSet.add(t));
+          newStateData.traits.forEach((t) => traitSet.add(t));
         }
         if (newStateData.blockedTraits) {
-          newStateData.blockedTraits.forEach(t => traitSet.delete(t));
+          newStateData.blockedTraits.forEach((t) => traitSet.delete(t));
         }
         const allTraits = Array.from(traitSet);
-        setDynamicComponentValue("ObjectMeta", eid, "traits", allTraits.join(","));
+        setDynamicComponentValue(
+          "ObjectMeta",
+          eid,
+          "traits",
+          allTraits.join(",")
+        );
 
-        console.log(`[Tool] transitionObjectState: ${params.entityName} -> ${params.newState}`);
+        console.log(
+          `[Tool] transitionObjectState: ${params.entityName} -> ${params.newState}`
+        );
         return {
           success: true,
           result: {
@@ -2812,7 +3916,11 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
       execute: async (params) => {
         const eid = state.registry.byName.get(params.entityName);
         if (eid === undefined) {
-          return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Entity not found: ${params.entityName}`,
+          };
         }
 
         // Update the Description component
@@ -2833,18 +3941,28 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
     // Tools for observing world state and steering the narrative
 
     getWorldSummary: tool({
-      description: "Get a comprehensive summary of the current world state including agents, rooms, conflicts, and narrative tension. Use this to understand the simulation state before deciding on interventions.",
+      description:
+        "Get a comprehensive summary of the current world state including agents, rooms, conflicts, and narrative tension. Use this to understand the simulation state before deciding on interventions.",
       inputSchema: z.object({
-        includeDetails: z.boolean().optional().describe("Include full agent and room details (default: true)"),
+        includeDetails: z
+          .boolean()
+          .optional()
+          .describe("Include full agent and room details (default: true)"),
       }),
       execute: async (params) => {
-        const { getWorldSummary: getWorldSummaryFn, getWorldSummaryText } = await import("./monitoring-system");
+        const { getWorldSummary: getWorldSummaryFn, getWorldSummaryText } =
+          await import("./monitoring-system");
         const recentEvents: string[] = state.memory.shortTerm
-          .filter(m => m.type === "observation" || m.type === "action")
-          .map(m => m.content)
+          .filter((m) => m.type === "observation" || m.type === "action")
+          .map((m) => m.content)
           .slice(-20);
 
-        const summary = getWorldSummaryFn(state.world, state.registry, recentEvents, state.tick);
+        const summary = getWorldSummaryFn(
+          state.world,
+          state.registry,
+          recentEvents,
+          state.tick
+        );
 
         // Update GodAgent component with current values
         GodAgent.tension[state.eid] = summary.narrativeArc.tension;
@@ -2852,65 +3970,91 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
         GodAgent.lastObservation[state.eid] = Date.now();
 
         const textSummary = getWorldSummaryText(summary);
-        console.log(`[Tool] getWorldSummary: ${summary.agentCount} agents, tension=${(summary.narrativeArc.tension * 100).toFixed(0)}%`);
+        console.log(
+          `[Tool] getWorldSummary: ${summary.agentCount} agents, tension=${(
+            summary.narrativeArc.tension * 100
+          ).toFixed(0)}%`
+        );
 
         return {
           success: true,
-          result: params.includeDetails === false ? {
-            tick: summary.tick,
-            agentCount: summary.agentCount,
-            roomCount: summary.roomCount,
-            narrativePhase: summary.narrativeArc.currentPhase,
-            tension: summary.narrativeArc.tension,
-            stagnation: summary.stagnationScore,
-            conflictCount: summary.activeConflicts.length,
-          } : {
-            ...summary,
-            textSummary,
-          },
+          result:
+            params.includeDetails === false
+              ? {
+                  tick: summary.tick,
+                  agentCount: summary.agentCount,
+                  roomCount: summary.roomCount,
+                  narrativePhase: summary.narrativeArc.currentPhase,
+                  tension: summary.narrativeArc.tension,
+                  stagnation: summary.stagnationScore,
+                  conflictCount: summary.activeConflicts.length,
+                }
+              : {
+                  ...summary,
+                  textSummary,
+                },
         };
       },
     }),
 
     getNarrativeTension: tool({
-      description: "Get the current narrative tension level (0-1). High tension = drama/conflict, low = calm/stagnant.",
+      description:
+        "Get the current narrative tension level (0-1). High tension = drama/conflict, low = calm/stagnant.",
       inputSchema: z.object({}),
       execute: async () => {
-        const { getNarrativeTension: getTensionFn } = await import("./monitoring-system");
+        const { getNarrativeTension: getTensionFn } = await import(
+          "./monitoring-system"
+        );
         const recentEvents: string[] = state.memory.shortTerm
-          .filter(m => m.type === "observation")
-          .map(m => m.content)
+          .filter((m) => m.type === "observation")
+          .map((m) => m.content)
           .slice(-20);
 
         const tension = getTensionFn(state.world, state.registry, recentEvents);
         GodAgent.tension[state.eid] = tension;
 
-        console.log(`[Tool] getNarrativeTension: ${(tension * 100).toFixed(0)}%`);
-        return { success: true, result: { tension, percentage: `${(tension * 100).toFixed(0)}%` } };
+        console.log(
+          `[Tool] getNarrativeTension: ${(tension * 100).toFixed(0)}%`
+        );
+        return {
+          success: true,
+          result: { tension, percentage: `${(tension * 100).toFixed(0)}%` },
+        };
       },
     }),
 
     getSteeringRecommendations: tool({
-      description: "Analyze the simulation and get recommendations for narrative steering interventions.",
+      description:
+        "Analyze the simulation and get recommendations for narrative steering interventions.",
       inputSchema: z.object({}),
       execute: async () => {
-        const { getWorldSummary: getWorldSummaryFn, getSteeringRecommendations: getRecommendationsFn } = await import("./monitoring-system");
+        const {
+          getWorldSummary: getWorldSummaryFn,
+          getSteeringRecommendations: getRecommendationsFn,
+        } = await import("./monitoring-system");
         const recentEvents: string[] = state.memory.shortTerm
-          .filter(m => m.type === "observation")
-          .map(m => m.content)
+          .filter((m) => m.type === "observation")
+          .map((m) => m.content)
           .slice(-20);
 
-        const summary = getWorldSummaryFn(state.world, state.registry, recentEvents, state.tick);
+        const summary = getWorldSummaryFn(
+          state.world,
+          state.registry,
+          recentEvents,
+          state.tick
+        );
         const recommendations = getRecommendationsFn(summary);
 
-        console.log(`[Tool] getSteeringRecommendations: ${recommendations.length} suggestions`);
+        console.log(
+          `[Tool] getSteeringRecommendations: ${recommendations.length} suggestions`
+        );
         return {
           success: true,
           result: {
             narrativePhase: summary.narrativeArc.currentPhase,
             tension: summary.narrativeArc.tension,
             stagnation: summary.stagnationScore,
-            recommendations: recommendations.map(r => ({
+            recommendations: recommendations.map((r) => ({
               pattern: r.pattern,
               description: r.description,
               suggestedAction: r.suggestedAction,
@@ -2922,81 +4066,131 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
     }),
 
     injectEnvironmentalEvent: tool({
-      description: "Inject an environmental event into a specific room. All agents in that room will perceive it.",
+      description:
+        "Inject an environmental event into a specific room. All agents in that room will perceive it.",
       inputSchema: z.object({
-        roomName: z.string().describe("Name of the room to inject the event into"),
-        content: z.string().describe("What happens (e.g., 'A loud crash echoes from outside')"),
-        modality: z.enum(["visual", "auditory", "olfactory", "tactile", "cognitive"]).optional()
+        roomName: z
+          .string()
+          .describe("Name of the room to inject the event into"),
+        content: z
+          .string()
+          .describe("What happens (e.g., 'A loud crash echoes from outside')"),
+        modality: z
+          .enum(["visual", "auditory", "olfactory", "tactile", "cognitive"])
+          .optional()
           .describe("Sensory channel (default: visual)"),
       }),
       execute: async (params) => {
-        const { injectEnvironmentalEvent: injectFn } = await import("./monitoring-system");
+        const { injectEnvironmentalEvent: injectFn } = await import(
+          "./monitoring-system"
+        );
         const result = injectFn(
           state.world,
           state.registry,
           params.roomName,
           params.content,
-          params.modality as any || "visual"
+          (params.modality as any) || "visual"
         );
 
         if (result.success) {
-          GodAgent.interventionCount[state.eid] = (GodAgent.interventionCount[state.eid] || 0) + 1;
-          addMemory(state, "action", `Injected event into ${params.roomName}: ${params.content}`, {
-            importance: 7,
-            tags: ["intervention", "environmental"],
-          });
+          GodAgent.interventionCount[state.eid] =
+            (GodAgent.interventionCount[state.eid] || 0) + 1;
+          addMemory(
+            state,
+            "action",
+            `Injected event into ${params.roomName}: ${params.content}`,
+            {
+              importance: 7,
+              tags: ["intervention", "environmental"],
+            }
+          );
         }
 
-        console.log(`[Tool] injectEnvironmentalEvent: ${params.roomName} - ${result.message}`);
+        console.log(
+          `[Tool] injectEnvironmentalEvent: ${params.roomName} - ${result.message}`
+        );
         return { success: result.success, result: result.message };
       },
     }),
 
     injectIntuition: tool({
-      description: "Send an intuition/gut feeling to a specific agent via their cognitive sense.",
+      description:
+        "Send an intuition/gut feeling to a specific agent via their cognitive sense.",
       inputSchema: z.object({
-        agentName: z.string().describe("Name of the agent to send intuition to"),
-        content: z.string().describe("The intuitive feeling (e.g., 'You sense danger approaching')"),
+        agentName: z
+          .string()
+          .describe("Name of the agent to send intuition to"),
+        content: z
+          .string()
+          .describe(
+            "The intuitive feeling (e.g., 'You sense danger approaching')"
+          ),
       }),
       execute: async (params) => {
-        const { injectIntuition: injectFn } = await import("./monitoring-system");
-        const result = injectFn(state.world, state.registry, params.agentName, params.content);
+        const { injectIntuition: injectFn } = await import(
+          "./monitoring-system"
+        );
+        const result = injectFn(
+          state.world,
+          state.registry,
+          params.agentName,
+          params.content
+        );
 
         if (result.success) {
-          GodAgent.interventionCount[state.eid] = (GodAgent.interventionCount[state.eid] || 0) + 1;
-          addMemory(state, "action", `Sent intuition to ${params.agentName}: ${params.content}`, {
-            importance: 6,
-            tags: ["intervention", "intuition"],
-          });
+          GodAgent.interventionCount[state.eid] =
+            (GodAgent.interventionCount[state.eid] || 0) + 1;
+          addMemory(
+            state,
+            "action",
+            `Sent intuition to ${params.agentName}: ${params.content}`,
+            {
+              importance: 6,
+              tags: ["intervention", "intuition"],
+            }
+          );
         }
 
-        console.log(`[Tool] injectIntuition: ${params.agentName} - ${result.message}`);
+        console.log(
+          `[Tool] injectIntuition: ${params.agentName} - ${result.message}`
+        );
         return { success: result.success, result: result.message };
       },
     }),
 
     broadcastAnnouncement: tool({
-      description: "Broadcast an announcement that all agents in the world will perceive.",
+      description:
+        "Broadcast an announcement that all agents in the world will perceive.",
       inputSchema: z.object({
         content: z.string().describe("The announcement content"),
-        modality: z.enum(["visual", "auditory", "cognitive"]).optional()
+        modality: z
+          .enum(["visual", "auditory", "cognitive"])
+          .optional()
           .describe("Sensory channel (default: auditory)"),
       }),
       execute: async (params) => {
-        const { broadcastAnnouncement: broadcastFn } = await import("./monitoring-system");
+        const { broadcastAnnouncement: broadcastFn } = await import(
+          "./monitoring-system"
+        );
         const result = broadcastFn(
           state.world,
           state.registry,
           params.content,
-          params.modality as any || "auditory"
+          (params.modality as any) || "auditory"
         );
 
         if (result.success) {
-          GodAgent.interventionCount[state.eid] = (GodAgent.interventionCount[state.eid] || 0) + 1;
-          addMemory(state, "action", `Broadcast announcement: ${params.content}`, {
-            importance: 8,
-            tags: ["intervention", "broadcast"],
-          });
+          GodAgent.interventionCount[state.eid] =
+            (GodAgent.interventionCount[state.eid] || 0) + 1;
+          addMemory(
+            state,
+            "action",
+            `Broadcast announcement: ${params.content}`,
+            {
+              importance: 8,
+              tags: ["intervention", "broadcast"],
+            }
+          );
         }
 
         console.log(`[Tool] broadcastAnnouncement: ${result.message}`);
@@ -3007,17 +4201,28 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
     setNarrativeGoals: tool({
       description: "Set narrative goals that guide your steering decisions.",
       inputSchema: z.object({
-        goals: z.array(z.string()).describe("Array of narrative goals (e.g., ['Create romantic tension between Alice and Bob', 'Build toward a climactic confrontation'])"),
+        goals: z
+          .array(z.string())
+          .describe(
+            "Array of narrative goals (e.g., ['Create romantic tension between Alice and Bob', 'Build toward a climactic confrontation'])"
+          ),
       }),
       execute: async (params) => {
         GodAgent.narrativeGoals[state.eid] = JSON.stringify(params.goals);
 
-        addMemory(state, "decision", `Set narrative goals: ${params.goals.join(", ")}`, {
-          importance: 9,
-          tags: ["narrative", "goals"],
-        });
+        addMemory(
+          state,
+          "decision",
+          `Set narrative goals: ${params.goals.join(", ")}`,
+          {
+            importance: 9,
+            tags: ["narrative", "goals"],
+          }
+        );
 
-        console.log(`[Tool] setNarrativeGoals: ${params.goals.length} goals set`);
+        console.log(
+          `[Tool] setNarrativeGoals: ${params.goals.length} goals set`
+        );
         return { success: true, result: { goals: params.goals } };
       },
     }),
@@ -3033,21 +4238,29 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
     }),
 
     pauseAgent: tool({
-      description: "Temporarily pause an agent's cognition (they won't think or act).",
+      description:
+        "Temporarily pause an agent's cognition (they won't think or act).",
       inputSchema: z.object({
         agentName: z.string().describe("Name of the agent to pause"),
       }),
       execute: async (params) => {
         const eid = state.registry.byName.get(params.agentName);
         if (eid === undefined) {
-          return { success: false, result: null, error: `Agent not found: ${params.agentName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Agent not found: ${params.agentName}`,
+          };
         }
 
         const { Agent } = await import("../ecs/components");
         Agent.active[eid] = false;
 
         console.log(`[Tool] pauseAgent: ${params.agentName}`);
-        return { success: true, result: { agent: params.agentName, active: false } };
+        return {
+          success: true,
+          result: { agent: params.agentName, active: false },
+        };
       },
     }),
 
@@ -3059,28 +4272,44 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
       execute: async (params) => {
         const eid = state.registry.byName.get(params.agentName);
         if (eid === undefined) {
-          return { success: false, result: null, error: `Agent not found: ${params.agentName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Agent not found: ${params.agentName}`,
+          };
         }
 
         const { Agent } = await import("../ecs/components");
         Agent.active[eid] = true;
 
         console.log(`[Tool] resumeAgent: ${params.agentName}`);
-        return { success: true, result: { agent: params.agentName, active: true } };
+        return {
+          success: true,
+          result: { agent: params.agentName, active: true },
+        };
       },
     }),
 
     modifyAgentMood: tool({
-      description: "Directly modify an agent's arousal/mood level to influence their behavior.",
+      description:
+        "Directly modify an agent's arousal/mood level to influence their behavior.",
       inputSchema: z.object({
         agentName: z.string().describe("Name of the agent"),
-        arousal: z.number().min(0).max(1).describe("New arousal level (0=drowsy, 1=agitated)"),
+        arousal: z
+          .number()
+          .min(0)
+          .max(1)
+          .describe("New arousal level (0=drowsy, 1=agitated)"),
         focus: z.string().optional().describe("What the agent should focus on"),
       }),
       execute: async (params) => {
         const eid = state.registry.byName.get(params.agentName);
         if (eid === undefined) {
-          return { success: false, result: null, error: `Agent not found: ${params.agentName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Agent not found: ${params.agentName}`,
+          };
         }
 
         const { Mind } = await import("../ecs/components");
@@ -3089,9 +4318,12 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
           Mind.focus[eid] = params.focus;
         }
 
-        GodAgent.interventionCount[state.eid] = (GodAgent.interventionCount[state.eid] || 0) + 1;
+        GodAgent.interventionCount[state.eid] =
+          (GodAgent.interventionCount[state.eid] || 0) + 1;
 
-        console.log(`[Tool] modifyAgentMood: ${params.agentName} arousal=${params.arousal}`);
+        console.log(
+          `[Tool] modifyAgentMood: ${params.agentName} arousal=${params.arousal}`
+        );
         return {
           success: true,
           result: {
@@ -3104,7 +4336,8 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
     }),
 
     getInterventionStats: tool({
-      description: "Get statistics about GodAI interventions in this simulation.",
+      description:
+        "Get statistics about GodAI interventions in this simulation.",
       inputSchema: z.object({}),
       execute: async () => {
         const interventionCount = GodAgent.interventionCount[state.eid] || 0;
@@ -3116,7 +4349,10 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
           success: true,
           result: {
             interventionCount,
-            lastObservation: lastObservation > 0 ? new Date(lastObservation).toISOString() : "never",
+            lastObservation:
+              lastObservation > 0
+                ? new Date(lastObservation).toISOString()
+                : "never",
             currentTension: tension,
             currentStagnation: stagnation,
           },
@@ -3128,17 +4364,23 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
     // Tools for managing the celestial hierarchy of AI spirits
 
     getSpiritHierarchy: tool({
-      description: "View the current spirit hierarchy - the celestial agents watching over different domains of the simulation.",
+      description:
+        "View the current spirit hierarchy - the celestial agents watching over different domains of the simulation.",
       inputSchema: z.object({}),
       execute: async () => {
-        const { getSpiritSystemState, getSpiritSystemDebugInfo, getSystemSummary } = await import("../spirits");
+        const {
+          getSpiritSystemState,
+          getSpiritSystemDebugInfo,
+          getSystemSummary,
+        } = await import("../spirits");
         const systemState = getSpiritSystemState();
 
         if (!systemState) {
           return {
             success: false,
             result: null,
-            error: "Spirit system not initialized. Call initializeSpiritSystem first.",
+            error:
+              "Spirit system not initialized. Call initializeSpiritSystem first.",
           };
         }
 
@@ -3157,14 +4399,21 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
     }),
 
     getSpiritReports: tool({
-      description: "Get reports from spirits that have observed the simulation. Spirits report narrative developments, conflicts, stagnation, and other significant events.",
+      description:
+        "Get reports from spirits that have observed the simulation. Spirits report narrative developments, conflicts, stagnation, and other significant events.",
       inputSchema: z.object({}),
       execute: async () => {
-        const { getSpiritSystemState, getMessagesForGodAI } = await import("../spirits");
+        const { getSpiritSystemState, getMessagesForGodAI } = await import(
+          "../spirits"
+        );
         const systemState = getSpiritSystemState();
 
         if (!systemState) {
-          return { success: false, result: null, error: "Spirit system not initialized" };
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
         }
 
         const messages = getMessagesForGodAI(systemState.registry);
@@ -3174,7 +4423,7 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
           success: true,
           result: {
             messageCount: messages.length,
-            messages: messages.map(m => ({
+            messages: messages.map((m) => ({
               from: m.from,
               type: m.type,
               priority: m.priority,
@@ -3188,40 +4437,67 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
     }),
 
     sendDirectiveToSpirit: tool({
-      description: "Send a directive to a spirit, commanding them to take specific action.",
+      description:
+        "Send a directive to a spirit, commanding them to take specific action.",
       inputSchema: z.object({
-        spiritName: z.string().describe("Name of the spirit to command (e.g., 'The Narrator')"),
+        spiritName: z
+          .string()
+          .describe("Name of the spirit to command (e.g., 'The Narrator')"),
         directive: z.string().describe("What you want the spirit to do"),
-        priority: z.enum(["low", "normal", "high", "urgent"]).optional().describe("Directive priority"),
+        priority: z
+          .enum(["low", "normal", "high", "urgent"])
+          .optional()
+          .describe("Directive priority"),
       }),
       execute: async (params) => {
-        const { getSpiritSystemState, getSpiritByName, sendDirective } = await import("../spirits");
+        const { getSpiritSystemState, getSpiritByName, sendDirective } =
+          await import("../spirits");
         const systemState = getSpiritSystemState();
 
         if (!systemState) {
-          return { success: false, result: null, error: "Spirit system not initialized" };
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
         }
 
         const spirit = getSpiritByName(systemState.registry, params.spiritName);
         if (!spirit) {
-          return { success: false, result: null, error: `Spirit not found: ${params.spiritName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Spirit not found: ${params.spiritName}`,
+          };
         }
 
-        const directive = sendDirective(systemState.registry, state.eid, spirit.eid, {
-          type: "intervene",
-          description: params.directive,
-          action: {
-            type: "custom",
-            parameters: { directive: params.directive },
-          },
-        });
+        const directive = sendDirective(
+          systemState.registry,
+          state.eid,
+          spirit.eid,
+          {
+            type: "intervene",
+            description: params.directive,
+            action: {
+              type: "custom",
+              parameters: { directive: params.directive },
+            },
+          }
+        );
 
-        addMemory(state, "action", `Sent directive to ${params.spiritName}: ${params.directive}`, {
-          importance: 7,
-          tags: ["spirit", "directive"],
-        });
+        addMemory(
+          state,
+          "action",
+          `Sent directive to ${params.spiritName}: ${params.directive}`,
+          {
+            importance: 7,
+            tags: ["spirit", "directive"],
+          }
+        );
 
-        console.log(`[Tool] sendDirectiveToSpirit: ${params.spiritName} - ${params.directive}`);
+        console.log(
+          `[Tool] sendDirectiveToSpirit: ${params.spiritName} - ${params.directive}`
+        );
         return {
           success: true,
           result: {
@@ -3234,23 +4510,51 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
     }),
 
     createSpirit: tool({
-      description: "Create a new spirit to watch over a specific domain or entity. Spirits observe the ECS and report to you.",
+      description:
+        "Create a new spirit to watch over a specific domain or entity. Spirits observe the ECS and report to you.",
       inputSchema: z.object({
-        name: z.string().describe("Name for the spirit (e.g., 'Guardian of Alice')"),
-        domain: z.enum(["narrative", "social", "ecology", "economy", "guardian", "locale"])
+        name: z
+          .string()
+          .describe("Name for the spirit (e.g., 'Guardian of Alice')"),
+        domain: z
+          .enum([
+            "narrative",
+            "social",
+            "ecology",
+            "economy",
+            "guardian",
+            "locale",
+          ])
           .describe("Domain the spirit manages"),
-        rank: z.enum(["archangel", "angel", "daemon"]).describe("Spirit rank in hierarchy"),
+        rank: z
+          .enum(["archangel", "angel", "daemon"])
+          .describe("Spirit rank in hierarchy"),
         description: z.string().describe("What this spirit watches and does"),
-        watchEntities: z.array(z.string()).optional().describe("Specific entity names to watch"),
-        watchRooms: z.array(z.string()).optional().describe("Specific room names to watch"),
-        observationInterval: z.number().optional().describe("Milliseconds between observations (default: 30000)"),
+        watchEntities: z
+          .array(z.string())
+          .optional()
+          .describe("Specific entity names to watch"),
+        watchRooms: z
+          .array(z.string())
+          .optional()
+          .describe("Specific room names to watch"),
+        observationInterval: z
+          .number()
+          .optional()
+          .describe("Milliseconds between observations (default: 30000)"),
       }),
       execute: async (params) => {
-        const { getSpiritSystemState, createNewSpirit } = await import("../spirits");
+        const { getSpiritSystemState, createNewSpirit } = await import(
+          "../spirits"
+        );
         const systemState = getSpiritSystemState();
 
         if (!systemState) {
-          return { success: false, result: null, error: "Spirit system not initialized" };
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
         }
 
         const definition = {
@@ -3268,7 +4572,7 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
           canModifyMood: params.rank === "archangel",
           canCreateEntities: false,
           canBakeSystems: false,
-          model: params.rank === "archangel" ? "flash" : "flash" as const,
+          model: params.rank === "archangel" ? "flash" : ("flash" as const),
           observationInterval: params.observationInterval || 30000,
           systemPrompt: `You are ${params.name}, a ${params.rank} spirit of the ${params.domain} domain.
 ${params.description}
@@ -3281,13 +4585,22 @@ Always respond with valid JSON.`,
         const spirit = createNewSpirit(definition, state.eid);
 
         if (!spirit) {
-          return { success: false, result: null, error: "Failed to create spirit" };
+          return {
+            success: false,
+            result: null,
+            error: "Failed to create spirit",
+          };
         }
 
-        addMemory(state, "action", `Created spirit: ${params.name} (${params.domain} ${params.rank})`, {
-          importance: 8,
-          tags: ["spirit", "creation"],
-        });
+        addMemory(
+          state,
+          "action",
+          `Created spirit: ${params.name} (${params.domain} ${params.rank})`,
+          {
+            importance: 8,
+            tags: ["spirit", "creation"],
+          }
+        );
 
         console.log(`[Tool] createSpirit: ${params.name}`);
         return {
@@ -3306,31 +4619,46 @@ Always respond with valid JSON.`,
       description: "Get recent observations from a specific spirit.",
       inputSchema: z.object({
         spiritName: z.string().describe("Name of the spirit"),
-        limit: z.number().optional().describe("Max observations to return (default: 10)"),
+        limit: z
+          .number()
+          .optional()
+          .describe("Max observations to return (default: 10)"),
       }),
       execute: async (params) => {
-        const { getSpiritSystemState, getSpiritByName } = await import("../spirits");
+        const { getSpiritSystemState, getSpiritByName } = await import(
+          "../spirits"
+        );
         const systemState = getSpiritSystemState();
 
         if (!systemState) {
-          return { success: false, result: null, error: "Spirit system not initialized" };
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
         }
 
         const spirit = getSpiritByName(systemState.registry, params.spiritName);
         if (!spirit) {
-          return { success: false, result: null, error: `Spirit not found: ${params.spiritName}` };
+          return {
+            success: false,
+            result: null,
+            error: `Spirit not found: ${params.spiritName}`,
+          };
         }
 
         const limit = params.limit || 10;
         const observations = spirit.observations.slice(-limit);
 
-        console.log(`[Tool] getSpiritObservations: ${params.spiritName} - ${observations.length} obs`);
+        console.log(
+          `[Tool] getSpiritObservations: ${params.spiritName} - ${observations.length} obs`
+        );
         return {
           success: true,
           result: {
             spirit: params.spiritName,
             observationCount: spirit.observations.length,
-            recent: observations.map(o => ({
+            recent: observations.map((o) => ({
               type: o.type,
               content: o.content,
               entities: o.entities,
@@ -3343,19 +4671,30 @@ Always respond with valid JSON.`,
     }),
 
     getNarratorState: tool({
-      description: "Get the Narrator spirit's current understanding of the narrative - plot threads, tension, character arcs.",
+      description:
+        "Get the Narrator spirit's current understanding of the narrative - plot threads, tension, character arcs.",
       inputSchema: z.object({}),
       execute: async () => {
-        const { getSpiritSystemState, getSpiritByName } = await import("../spirits");
+        const { getSpiritSystemState, getSpiritByName } = await import(
+          "../spirits"
+        );
         const systemState = getSpiritSystemState();
 
         if (!systemState) {
-          return { success: false, result: null, error: "Spirit system not initialized" };
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
         }
 
         const narrator = getSpiritByName(systemState.registry, "The Narrator");
         if (!narrator) {
-          return { success: false, result: null, error: "Narrator spirit not found" };
+          return {
+            success: false,
+            result: null,
+            error: "Narrator spirit not found",
+          };
         }
 
         if (!narrator.narrativeState) {
@@ -3385,14 +4724,21 @@ Always respond with valid JSON.`,
     }),
 
     tickSpirits: tool({
-      description: "Manually trigger a spirit observation cycle. Normally spirits run on their own schedule, but this forces an immediate cycle.",
+      description:
+        "Manually trigger a spirit observation cycle. Normally spirits run on their own schedule, but this forces an immediate cycle.",
       inputSchema: z.object({}),
       execute: async () => {
-        const { getSpiritSystemState, tickSpiritSystem } = await import("../spirits");
+        const { getSpiritSystemState, tickSpiritSystem } = await import(
+          "../spirits"
+        );
         const systemState = getSpiritSystemState();
 
         if (!systemState) {
-          return { success: false, result: null, error: "Spirit system not initialized" };
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
         }
 
         // Force the tick by resetting lastTick
@@ -3400,7 +4746,9 @@ Always respond with valid JSON.`,
 
         const result = await tickSpiritSystem(state.world, state.registry);
 
-        console.log(`[Tool] tickSpirits: ${result.spiritsProcessed} spirits processed`);
+        console.log(
+          `[Tool] tickSpirits: ${result.spiritsProcessed} spirits processed`
+        );
         return {
           success: true,
           result: {
@@ -3469,9 +4817,17 @@ Templates: "classic_three_act", "mystery", "slice_of_life", "conflict"`,
             name: template.name,
             genre: template.genre,
             description: template.description,
-            acts: template.acts.map(a => ({ number: a.number, name: a.name, purpose: a.purpose })),
-            requiredRoles: template.requiredRoles.map(r => r.role),
-            keyBeats: template.keyBeats.map(b => ({ id: b.id, name: b.name, phase: b.phase })),
+            acts: template.acts.map((a) => ({
+              number: a.number,
+              name: a.name,
+              purpose: a.purpose,
+            })),
+            requiredRoles: template.requiredRoles.map((r) => r.role),
+            keyBeats: template.keyBeats.map((b) => ({
+              id: b.id,
+              name: b.name,
+              phase: b.phase,
+            })),
             themes: template.themes,
           },
         };
@@ -3479,7 +4835,8 @@ Templates: "classic_three_act", "mystery", "slice_of_life", "conflict"`,
     }),
 
     getStoryTemplateStatus: tool({
-      description: "Get the current status of the active story template including alignment, next expected beat, and recommendations.",
+      description:
+        "Get the current status of the active story template including alignment, next expected beat, and recommendations.",
       inputSchema: z.object({}),
       execute: async () => {
         const {
@@ -3497,7 +4854,8 @@ Templates: "classic_three_act", "mystery", "slice_of_life", "conflict"`,
             success: true,
             result: {
               templateActive: false,
-              message: "No story template is currently active. Use setStoryTemplate to activate one.",
+              message:
+                "No story template is currently active. Use setStoryTemplate to activate one.",
             },
           };
         }
@@ -3517,14 +4875,18 @@ Templates: "classic_three_act", "mystery", "slice_of_life", "conflict"`,
             result: {
               templateActive: true,
               templateName: template.name,
-              message: "Narrator has not yet analyzed the narrative. Wait for spirit tick or call tickSpirits.",
+              message:
+                "Narrator has not yet analyzed the narrative. Wait for spirit tick or call tickSpirits.",
             },
           };
         }
 
         const eventCount = narrator.observations.length;
-        const lastObservation = narrator.observations[narrator.observations.length - 1];
-        const ticksSinceLastEvent = lastObservation ? Date.now() - lastObservation.timestamp : 0;
+        const lastObservation =
+          narrator.observations[narrator.observations.length - 1];
+        const ticksSinceLastEvent = lastObservation
+          ? Date.now() - lastObservation.timestamp
+          : 0;
 
         const report = generateNarrativeReport(
           narrator.narrativeState,
@@ -3551,7 +4913,9 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
         beatId: z.string().describe("ID of the beat to mark as completed"),
       }),
       execute: async (params) => {
-        const { markBeatCompleted, getActiveTemplate } = await import("../spirits");
+        const { markBeatCompleted, getActiveTemplate } = await import(
+          "../spirits"
+        );
 
         const template = getActiveTemplate();
         if (!template) {
@@ -3563,13 +4927,20 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
         }
 
         // Verify beat exists in template
-        const beat = [...template.keyBeats, ...template.optionalBeats].find(b => b.id === params.beatId);
+        const beat = [...template.keyBeats, ...template.optionalBeats].find(
+          (b) => b.id === params.beatId
+        );
         if (!beat) {
-          const availableBeats = [...template.keyBeats, ...template.optionalBeats].map(b => b.id);
+          const availableBeats = [
+            ...template.keyBeats,
+            ...template.optionalBeats,
+          ].map((b) => b.id);
           return {
             success: false,
             result: null,
-            error: `Beat not found: ${params.beatId}. Available beats: ${availableBeats.join(", ")}`,
+            error: `Beat not found: ${
+              params.beatId
+            }. Available beats: ${availableBeats.join(", ")}`,
           };
         }
 
@@ -3590,9 +4961,15 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
     }),
 
     getTemplateInterventions: tool({
-      description: "Get suggested interventions based on the current story state and active template. Useful when the story is stagnating or deviating from the template.",
+      description:
+        "Get suggested interventions based on the current story state and active template. Useful when the story is stagnating or deviating from the template.",
       inputSchema: z.object({
-        includeAllSources: z.boolean().optional().describe("Include phase-based and stagnation suggestions in addition to template suggestions"),
+        includeAllSources: z
+          .boolean()
+          .optional()
+          .describe(
+            "Include phase-based and stagnation suggestions in addition to template suggestions"
+          ),
       }),
       execute: async (params) => {
         const {
@@ -3605,7 +4982,11 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
 
         const systemState = getSpiritSystemState();
         if (!systemState) {
-          return { success: false, result: null, error: "Spirit system not initialized" };
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
         }
 
         const narrator = getSpiritByName(systemState.registry, "The Narrator");
@@ -3618,20 +4999,33 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
         }
 
         // Collect agent info for targeting
-        const agents: { name: string; location: string; mood: string; arousal: number }[] = [];
+        const agents: {
+          name: string;
+          location: string;
+          mood: string;
+          arousal: number;
+        }[] = [];
         for (const [name, eid] of state.registry.byName) {
           if (Agent.active[eid]) {
             agents.push({
               name,
               location: "", // Would need room lookup
-              mood: Mind.arousal[eid] > 0.7 ? "excited" : Mind.arousal[eid] < 0.3 ? "calm" : "alert",
+              mood:
+                Mind.arousal[eid] > 0.7
+                  ? "excited"
+                  : Mind.arousal[eid] < 0.3
+                  ? "calm"
+                  : "alert",
               arousal: Mind.arousal[eid],
             });
           }
         }
 
-        const lastObservation = narrator.observations[narrator.observations.length - 1];
-        const ticksSinceLastEvent = lastObservation ? Date.now() - lastObservation.timestamp : 60000;
+        const lastObservation =
+          narrator.observations[narrator.observations.length - 1];
+        const ticksSinceLastEvent = lastObservation
+          ? Date.now() - lastObservation.timestamp
+          : 60000;
 
         let suggestions;
         if (params.includeAllSources) {
@@ -3646,14 +5040,15 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
             return {
               success: false,
               result: null,
-              error: "No story template active. Use setStoryTemplate or set includeAllSources=true for phase-based suggestions.",
+              error:
+                "No story template active. Use setStoryTemplate or set includeAllSources=true for phase-based suggestions.",
             };
           }
           suggestions = getTemplateInterventions(
             narrator.narrativeState.tension,
             narrator.narrativeState.currentPhase,
             ticksSinceLastEvent
-          ).map(s => ({
+          ).map((s) => ({
             type: s.type,
             target: agents[0]?.name || "room",
             content: s.templates[0],
@@ -3662,7 +5057,9 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
           }));
         }
 
-        console.log(`[Tool] getTemplateInterventions: ${suggestions.length} suggestions`);
+        console.log(
+          `[Tool] getTemplateInterventions: ${suggestions.length} suggestions`
+        );
         return {
           success: true,
           result: {
@@ -3676,10 +5073,13 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
     }),
 
     suggestCharacterRoles: tool({
-      description: "Get suggestions for assigning template character roles to agents in the simulation.",
+      description:
+        "Get suggestions for assigning template character roles to agents in the simulation.",
       inputSchema: z.object({}),
       execute: async () => {
-        const { getActiveTemplate, getRoleSuggestions } = await import("../spirits");
+        const { getActiveTemplate, getRoleSuggestions } = await import(
+          "../spirits"
+        );
 
         const template = getActiveTemplate();
         if (!template) {
@@ -3691,7 +5091,8 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
         }
 
         // Collect agent info
-        const agents: { name: string; traits: string[]; arousal: number }[] = [];
+        const agents: { name: string; traits: string[]; arousal: number }[] =
+          [];
         for (const [name, eid] of state.registry.byName) {
           if (Agent.active[eid]) {
             agents.push({
@@ -3709,17 +5110,597 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
           success: true,
           result: {
             templateName: template.name,
-            requiredRoles: template.requiredRoles.map(r => ({
+            requiredRoles: template.requiredRoles.map((r) => ({
               role: r.role,
               description: r.description,
               arcType: r.arcType,
             })),
-            optionalRoles: template.optionalRoles.map(r => ({
+            optionalRoles: template.optionalRoles.map((r) => ({
               role: r.role,
               description: r.description,
               arcType: r.arcType,
             })),
             suggestions,
+          },
+        };
+      },
+    }),
+
+    // ============ DYNAMIC SPIRIT CREATION TOOLS ============
+    // Tools for creating spirits that can watch systems and architect new ones
+
+    createSystemWatcher: tool({
+      description: `Create a spirit that watches specific systems and reports on their behavior.
+System watchers monitor:
+- System execution frequency and performance
+- Anomalies (stagnation, errors, performance degradation)
+- Patterns (trending entity counts, cyclic behavior)
+
+Example: Create a weather watcher to monitor a WeatherSystem you baked.`,
+      inputSchema: z.object({
+        name: z
+          .string()
+          .describe("Name for the watcher spirit (e.g., 'Zephyros')"),
+        domain: z
+          .enum([
+            "narrative",
+            "social",
+            "ecology",
+            "economy",
+            "guardian",
+            "locale",
+          ])
+          .describe("Domain the watcher belongs to"),
+        targetSystems: z
+          .array(z.string())
+          .describe(
+            "System names to watch (e.g., ['WeatherSystem', 'TemperatureSystem'])"
+          ),
+        watchPatterns: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Patterns to look for (e.g., ['stagnation', 'performance', 'errors'])"
+          ),
+        observationInterval: z
+          .number()
+          .optional()
+          .describe("Ms between observations (default: 30000)"),
+        superiorName: z
+          .string()
+          .optional()
+          .describe("Name of superior spirit (default: The Arbiter)"),
+      }),
+      execute: async (params) => {
+        const { createDynamicSpirit } = await import(
+          "../spirits/spirit-factory"
+        );
+        const { createSystemWatcherConfig } = await import(
+          "../spirits/system-watcher"
+        );
+        const { getSpiritSystemState, getSpiritByName } = await import(
+          "../spirits"
+        );
+
+        const systemState = getSpiritSystemState();
+        if (!systemState) {
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
+        }
+
+        // Find superior
+        let superiorEid: number | undefined;
+        if (params.superiorName) {
+          const superior = getSpiritByName(
+            systemState.registry,
+            params.superiorName
+          );
+          superiorEid = superior?.eid;
+        } else {
+          // Default to The Arbiter
+          const arbiter = getSpiritByName(systemState.registry, "The Arbiter");
+          superiorEid = arbiter?.eid;
+        }
+
+        const config: CreateSpiritConfig = {
+          name: params.name,
+          title: `The ${params.name}`,
+          type: "watcher",
+          domain: params.domain as any,
+          rank: "angel",
+          superiorEid,
+          watchConfig: createSystemWatcherConfig(
+            params.targetSystems,
+            params.watchPatterns
+          ),
+          observationInterval: params.observationInterval || 30000,
+          customPrompt: `You watch these systems: ${params.targetSystems.join(
+            ", "
+          )}
+Report anomalies, performance issues, and opportunities for improvement.`,
+        };
+
+        const spirit = createDynamicSpirit(systemState.registry, config);
+
+        if (!spirit) {
+          return {
+            success: false,
+            result: null,
+            error: "Failed to create system watcher",
+          };
+        }
+
+        addMemory(
+          state,
+          "action",
+          `Created system watcher: ${
+            params.name
+          } watching ${params.targetSystems.join(", ")}`,
+          {
+            importance: 8,
+            tags: ["spirit", "watcher", "creation"],
+          }
+        );
+
+        console.log(
+          `[Tool] createSystemWatcher: ${
+            params.name
+          } watching ${params.targetSystems.join(", ")}`
+        );
+        return {
+          success: true,
+          result: {
+            name: params.name,
+            type: "watcher",
+            domain: params.domain,
+            targetSystems: params.targetSystems,
+            eid: spirit.eid,
+          },
+        };
+      },
+    }),
+
+    createArchitectSpirit: tool({
+      description: `Create an architect spirit that can DESIGN and PROPOSE new systems, components, and entities.
+Architects observe the simulation and propose enhancements:
+- New SYSTEMS for behaviors the world lacks
+- New COMPONENTS for data the world needs
+- New ENTITIES for richness and variety
+- New RULES for emergent behavior
+
+Proposals require approval (by you or a superior spirit) before execution.
+Example: Create a QuestArchitect to design quests when agents need objectives.`,
+      inputSchema: z.object({
+        name: z
+          .string()
+          .describe("Name for the architect (e.g., 'The Questmaster')"),
+        domain: z
+          .enum([
+            "narrative",
+            "social",
+            "ecology",
+            "economy",
+            "guardian",
+            "locale",
+          ])
+          .describe("Domain the architect specializes in"),
+        canProposeSystems: z
+          .boolean()
+          .optional()
+          .describe("Can propose new systems (default: true)"),
+        canProposeComponents: z
+          .boolean()
+          .optional()
+          .describe("Can propose new components (default: true)"),
+        canProposeEntities: z
+          .boolean()
+          .optional()
+          .describe("Can propose new entities (default: true)"),
+        canProposeRules: z
+          .boolean()
+          .optional()
+          .describe("Can propose new rules (default: false)"),
+        canExecuteDirectly: z
+          .boolean()
+          .optional()
+          .describe("Can execute without approval (DANGEROUS, default: false)"),
+        approvalRequired: z
+          .enum(["auto", "superior", "godai"])
+          .optional()
+          .describe("Who approves proposals (default: godai)"),
+        superiorName: z.string().optional().describe("Name of superior spirit"),
+        specialization: z
+          .string()
+          .optional()
+          .describe(
+            "What the architect specializes in (e.g., 'quest design', 'weather systems')"
+          ),
+      }),
+      execute: async (params) => {
+        const { createDynamicSpirit } = await import(
+          "../spirits/spirit-factory"
+        );
+        const { createArchitectConfig } = await import(
+          "../spirits/architect-spirit"
+        );
+        const { getSpiritSystemState, getSpiritByName } = await import(
+          "../spirits"
+        );
+
+        const systemState = getSpiritSystemState();
+        if (!systemState) {
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
+        }
+
+        // Find superior
+        let superiorEid: number | undefined;
+        if (params.superiorName) {
+          const superior = getSpiritByName(
+            systemState.registry,
+            params.superiorName
+          );
+          superiorEid = superior?.eid;
+        }
+
+        const architectConfig = createArchitectConfig({
+          canProposeSystems: params.canProposeSystems ?? true,
+          canProposeComponents: params.canProposeComponents ?? true,
+          canProposeEntities: params.canProposeEntities ?? true,
+          canProposeRules: params.canProposeRules ?? false,
+          canExecuteDirectly: params.canExecuteDirectly ?? false,
+          approvalRequired: params.approvalRequired ?? "godai",
+        });
+
+        const config: CreateSpiritConfig = {
+          name: params.name,
+          title: params.name,
+          type: "architect",
+          domain: params.domain as any,
+          rank: "angel",
+          superiorEid,
+          architectConfig,
+          observationInterval: 60000, // Architects think slower, propose less frequently
+          customPrompt: params.specialization
+            ? `You specialize in: ${params.specialization}`
+            : undefined,
+        };
+
+        const spirit = createDynamicSpirit(systemState.registry, config);
+
+        if (!spirit) {
+          return {
+            success: false,
+            result: null,
+            error: "Failed to create architect spirit",
+          };
+        }
+
+        addMemory(
+          state,
+          "action",
+          `Created architect spirit: ${params.name} (${params.domain} domain)`,
+          {
+            importance: 9,
+            tags: ["spirit", "architect", "creation"],
+          }
+        );
+
+        console.log(
+          `[Tool] createArchitectSpirit: ${params.name} (${params.domain})`
+        );
+        return {
+          success: true,
+          result: {
+            name: params.name,
+            type: "architect",
+            domain: params.domain,
+            capabilities: {
+              canProposeSystems: architectConfig.canProposeSystems,
+              canProposeComponents: architectConfig.canProposeComponents,
+              canProposeEntities: architectConfig.canProposeEntities,
+              canProposeRules: architectConfig.canProposeRules,
+              canExecuteDirectly: architectConfig.canExecuteDirectly,
+            },
+            eid: spirit.eid,
+          },
+        };
+      },
+    }),
+
+    getSpiritProposals: tool({
+      description:
+        "Get pending proposals from architect spirits. Review these and approve/reject them.",
+      inputSchema: z.object({
+        status: z
+          .enum(["pending", "approved", "rejected", "all"])
+          .optional()
+          .describe("Filter by status (default: pending)"),
+      }),
+      execute: async (params) => {
+        const { getPendingProposals, getApprovedProposals, getFactoryState } =
+          await import("../spirits/spirit-factory");
+
+        const status = params.status || "pending";
+        let proposals;
+
+        if (status === "pending") {
+          proposals = getPendingProposals();
+        } else if (status === "approved") {
+          proposals = getApprovedProposals();
+        } else if (status === "all") {
+          proposals = getFactoryState().pendingProposals;
+        } else {
+          proposals = getFactoryState().pendingProposals.filter(
+            (p) => p.status === status
+          );
+        }
+
+        console.log(`[Tool] getSpiritProposals: ${proposals.length} ${status}`);
+        return {
+          success: true,
+          result: {
+            count: proposals.length,
+            proposals: proposals.map((p) => ({
+              id: p.id,
+              type: p.type,
+              name: p.name,
+              description: p.description,
+              fromSpirit: p.fromSpiritName,
+              rationale: p.rationale,
+              status: p.status,
+              specification: p.specification,
+            })),
+          },
+        };
+      },
+    }),
+
+    approveProposal: tool({
+      description:
+        "Approve a proposal from an architect spirit. The proposal will be executed.",
+      inputSchema: z.object({
+        proposalId: z.string().describe("ID of the proposal to approve"),
+      }),
+      execute: async (params) => {
+        const { approveProposal } = await import("../spirits/spirit-factory");
+
+        const success = approveProposal(params.proposalId, state.eid);
+
+        if (!success) {
+          return {
+            success: false,
+            result: null,
+            error: `Failed to approve proposal: ${params.proposalId} (not found or already processed)`,
+          };
+        }
+
+        addMemory(
+          state,
+          "action",
+          `Approved spirit proposal: ${params.proposalId}`,
+          {
+            importance: 7,
+            tags: ["spirit", "proposal", "approval"],
+          }
+        );
+
+        console.log(`[Tool] approveProposal: ${params.proposalId}`);
+        return {
+          success: true,
+          result: { proposalId: params.proposalId, status: "approved" },
+        };
+      },
+    }),
+
+    rejectProposal: tool({
+      description: "Reject a proposal from an architect spirit with a reason.",
+      inputSchema: z.object({
+        proposalId: z.string().describe("ID of the proposal to reject"),
+        reason: z
+          .string()
+          .describe("Reason for rejection (feedback to the architect)"),
+      }),
+      execute: async (params) => {
+        const { rejectProposal } = await import("../spirits/spirit-factory");
+
+        const success = rejectProposal(params.proposalId, params.reason);
+
+        if (!success) {
+          return {
+            success: false,
+            result: null,
+            error: `Failed to reject proposal: ${params.proposalId}`,
+          };
+        }
+
+        console.log(`[Tool] rejectProposal: ${params.proposalId}`);
+        return {
+          success: true,
+          result: {
+            proposalId: params.proposalId,
+            status: "rejected",
+            reason: params.reason,
+          },
+        };
+      },
+    }),
+
+    getSpiritFactorySummary: tool({
+      description:
+        "Get a summary of all dynamically created spirits and their activities.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const { getFactorySummary, getSpiritsByType, getPendingProposals } =
+          await import("../spirits/spirit-factory");
+
+        const summary = getFactorySummary();
+        const watchers = getSpiritsByType("watcher");
+        const architects = getSpiritsByType("architect");
+        const pendingProposals = getPendingProposals();
+
+        console.log("[Tool] getSpiritFactorySummary");
+        return {
+          success: true,
+          result: {
+            summary,
+            watchers: watchers.map((w) => ({
+              name: w.definition.name,
+              domain: w.definition.domain,
+              targetSystems: w.watchConfig?.targetSystems || [],
+            })),
+            architects: architects.map((a) => ({
+              name: a.definition.name,
+              domain: a.definition.domain,
+              proposalCount: a.proposals?.length || 0,
+            })),
+            pendingProposals: pendingProposals.length,
+          },
+        };
+      },
+    }),
+
+    runArchitectCognition: tool({
+      description:
+        "Manually trigger cognition for an architect spirit. The architect will observe, identify needs, and create proposals.",
+      inputSchema: z.object({
+        architectName: z.string().describe("Name of the architect spirit"),
+      }),
+      execute: async (params) => {
+        const { getSpiritsByType, getDynamicSpirit } = await import(
+          "../spirits/spirit-factory"
+        );
+        const { runArchitectCognition } = await import(
+          "../spirits/architect-spirit"
+        );
+        const { getSpiritSystemState, getSpiritByName } = await import(
+          "../spirits"
+        );
+
+        const systemState = getSpiritSystemState();
+        if (!systemState) {
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
+        }
+
+        // Find the architect by name
+        const architects = getSpiritsByType("architect");
+        const architect = architects.find(
+          (a) => a.definition.name === params.architectName
+        );
+
+        if (!architect) {
+          return {
+            success: false,
+            result: null,
+            error: `Architect not found: ${
+              params.architectName
+            }. Available: ${architects
+              .map((a) => a.definition.name)
+              .join(", ")}`,
+          };
+        }
+
+        const proposals = await runArchitectCognition(
+          state.world,
+          state.systemRegistry,
+          systemState.registry,
+          architect
+        );
+
+        console.log(
+          `[Tool] runArchitectCognition: ${params.architectName} created ${proposals.length} proposals`
+        );
+        return {
+          success: true,
+          result: {
+            architect: params.architectName,
+            proposalsCreated: proposals.length,
+            proposals: proposals.map((p) => ({
+              id: p.id,
+              type: p.type,
+              name: p.name,
+              description: p.description,
+              status: p.status,
+            })),
+          },
+        };
+      },
+    }),
+
+    runSystemWatcherCognition: tool({
+      description:
+        "Manually trigger cognition for a system watcher spirit. The watcher will observe systems and report issues.",
+      inputSchema: z.object({
+        watcherName: z.string().describe("Name of the watcher spirit"),
+      }),
+      execute: async (params) => {
+        const { getSpiritsByType } = await import("../spirits/spirit-factory");
+        const { runWatcherCognition } = await import(
+          "../spirits/system-watcher"
+        );
+        const { getSpiritSystemState } = await import("../spirits");
+
+        const systemState = getSpiritSystemState();
+        if (!systemState) {
+          return {
+            success: false,
+            result: null,
+            error: "Spirit system not initialized",
+          };
+        }
+
+        const watchers = getSpiritsByType("watcher");
+        const watcher = watchers.find(
+          (w) => w.definition.name === params.watcherName
+        );
+
+        if (!watcher) {
+          return {
+            success: false,
+            result: null,
+            error: `Watcher not found: ${
+              params.watcherName
+            }. Available: ${watchers.map((w) => w.definition.name).join(", ")}`,
+          };
+        }
+
+        const report = await runWatcherCognition(
+          state.world,
+          state.systemRegistry,
+          systemState.registry,
+          watcher
+        );
+
+        if (!report) {
+          return {
+            success: false,
+            result: null,
+            error: "Watcher cognition failed",
+          };
+        }
+
+        console.log(
+          `[Tool] runSystemWatcherCognition: ${params.watcherName} - ${report.overallHealth}`
+        );
+        return {
+          success: true,
+          result: {
+            watcher: params.watcherName,
+            health: report.overallHealth,
+            systemsObserved: report.systemObservations.length,
+            anomalies: report.systemObservations.flatMap((o) => o.anomalies)
+              .length,
+            recommendations: report.recommendations,
           },
         };
       },
@@ -3742,11 +5723,28 @@ Each simulation gets:
 Returns the simulation ID for use with other persistence tools.`,
       parameters: z.object({
         name: z.string().describe("Human-readable name for the simulation"),
-        description: z.string().optional().describe("Description of what this simulation is about"),
-        storyTemplate: z.string().optional().describe("Story template to use (e.g., 'classic_three_act')"),
-        autosaveInterval: z.number().optional().describe("Auto-save every N ticks (0 to disable, default: 50)"),
-        snapshotInterval: z.number().optional().describe("Create snapshot every N ticks (0 to disable, default: 200)"),
-        maxSnapshots: z.number().optional().describe("Maximum snapshots to keep (default: 10)"),
+        description: z
+          .string()
+          .optional()
+          .describe("Description of what this simulation is about"),
+        storyTemplate: z
+          .string()
+          .optional()
+          .describe("Story template to use (e.g., 'classic_three_act')"),
+        autosaveInterval: z
+          .number()
+          .optional()
+          .describe("Auto-save every N ticks (0 to disable, default: 50)"),
+        snapshotInterval: z
+          .number()
+          .optional()
+          .describe(
+            "Create snapshot every N ticks (0 to disable, default: 200)"
+          ),
+        maxSnapshots: z
+          .number()
+          .optional()
+          .describe("Maximum snapshots to keep (default: 10)"),
       }),
       execute: async (params) => {
         try {
@@ -3762,7 +5760,9 @@ Returns the simulation ID for use with other persistence tools.`,
           const simulation = await createSimulation(config);
           setCurrentSimulation(simulation);
 
-          console.log(`[Tool] createNewSimulation: ${params.name} (${simulation.id})`);
+          console.log(
+            `[Tool] createNewSimulation: ${params.name} (${simulation.id})`
+          );
           return {
             success: true,
             result: {
@@ -3791,7 +5791,9 @@ Returns the simulation ID for use with other persistence tools.`,
           const simulations = await listSimulations();
           const current = getCurrentSimulation();
 
-          console.log(`[Tool] listAllSimulations: Found ${simulations.length} simulations`);
+          console.log(
+            `[Tool] listAllSimulations: Found ${simulations.length} simulations`
+          );
           return {
             success: true,
             result: {
@@ -3820,7 +5822,8 @@ Returns the simulation ID for use with other persistence tools.`,
     }),
 
     loadExistingSimulation: tool({
-      description: "Load an existing simulation by ID. This sets it as the current simulation.",
+      description:
+        "Load an existing simulation by ID. This sets it as the current simulation.",
       parameters: z.object({
         simulationId: z.string().describe("The simulation ID to load"),
       }),
@@ -3829,7 +5832,9 @@ Returns the simulation ID for use with other persistence tools.`,
           const simulation = await loadSimulation(params.simulationId);
           setCurrentSimulation(simulation);
 
-          console.log(`[Tool] loadExistingSimulation: ${simulation.name} (${simulation.id})`);
+          console.log(
+            `[Tool] loadExistingSimulation: ${simulation.name} (${simulation.id})`
+          );
           return {
             success: true,
             result: {
@@ -3851,9 +5856,13 @@ Returns the simulation ID for use with other persistence tools.`,
     }),
 
     saveCurrentSimulation: tool({
-      description: "Save the current simulation state (world, spirits, systems). Requires an active simulation.",
+      description:
+        "Save the current simulation state (world, spirits, systems). Requires an active simulation.",
       parameters: z.object({
-        includeSnapshot: z.boolean().optional().describe("Also create a full snapshot (default: false)"),
+        includeSnapshot: z
+          .boolean()
+          .optional()
+          .describe("Also create a full snapshot (default: false)"),
       }),
       execute: async (params) => {
         const simulation = getCurrentSimulation();
@@ -3861,7 +5870,8 @@ Returns the simulation ID for use with other persistence tools.`,
           return {
             success: false,
             result: null,
-            error: "No active simulation. Use createNewSimulation or loadExistingSimulation first.",
+            error:
+              "No active simulation. Use createNewSimulation or loadExistingSimulation first.",
           };
         }
 
@@ -3892,16 +5902,25 @@ Returns the simulation ID for use with other persistence tools.`,
     }),
 
     getSimulationStatus: tool({
-      description: "Get the current simulation status including paths and save info.",
+      description:
+        "Get the current simulation status including paths and save info.",
       parameters: z.object({}),
-      execute: async () => {
+      execute: async (): Promise<
+        | {
+            success: boolean;
+            result: { hasActiveSimulation: boolean; message: string } | null;
+            error?: undefined;
+          }
+        | { success: boolean; result: null; error: string }
+      > => {
         const simulation = getCurrentSimulation();
         if (!simulation) {
           return {
             success: true,
             result: {
               hasActiveSimulation: false,
-              message: "No active simulation. Use createNewSimulation or loadExistingSimulation.",
+              message:
+                "No active simulation. Use createNewSimulation or loadExistingSimulation.",
             },
           };
         }
@@ -3952,26 +5971,35 @@ Returns the simulation ID for use with other persistence tools.`,
           return {
             success: false,
             result: null,
-            error: "No active simulation. Use createNewSimulation or loadExistingSimulation first.",
+            error:
+              "No active simulation. Use createNewSimulation or loadExistingSimulation first.",
           };
         }
 
         simulation.appendNarrative(params.text);
-        console.log(`[Tool] appendToNarrative: ${params.text.substring(0, 50)}...`);
+        console.log(
+          `[Tool] appendToNarrative: ${params.text.substring(0, 50)}...`
+        );
 
         return {
           success: true,
           result: {
-            message: "Narrative appended. Will be flushed to disk on next save.",
+            message:
+              "Narrative appended. Will be flushed to disk on next save.",
           },
         };
       },
     }),
 
     logSimulationEvent: tool({
-      description: "Log a structured event to the current simulation's event log.",
+      description:
+        "Log a structured event to the current simulation's event log.",
       parameters: z.object({
-        type: z.string().describe("Event type (e.g., 'agent_action', 'system_run', 'intervention')"),
+        type: z
+          .string()
+          .describe(
+            "Event type (e.g., 'agent_action', 'system_run', 'intervention')"
+          ),
         data: z.any().describe("Event data payload"),
       }),
       execute: async (params) => {
@@ -3980,7 +6008,8 @@ Returns the simulation ID for use with other persistence tools.`,
           return {
             success: false,
             result: null,
-            error: "No active simulation. Use createNewSimulation or loadExistingSimulation first.",
+            error:
+              "No active simulation. Use createNewSimulation or loadExistingSimulation first.",
           };
         }
 
@@ -4040,12 +6069,17 @@ Returns the simulation ID for use with other persistence tools.`,
 }
 
 // Helper function to interpolate template strings
-function interpolateTemplate(template: string, props: Record<string, string>): string {
+function interpolateTemplate(
+  template: string,
+  props: Record<string, string>
+): string {
   return template.replace(/\{(\w+)\}/g, (_, key) => props[key] || `{${key}}`);
 }
 
 // Helper function to infer schema from values
-function inferSchema(values: Record<string, any>): Record<string, "number" | "string" | "boolean"> {
+function inferSchema(
+  values: Record<string, any>
+): Record<string, "number" | "string" | "boolean"> {
   const schema: Record<string, "number" | "string" | "boolean"> = {};
   for (const [key, value] of Object.entries(values)) {
     if (typeof value === "number") schema[key] = "number";
@@ -4060,7 +6094,9 @@ export async function designSolution(
   state: GodAgentState,
   challenge: string
 ): Promise<{ design: DesignDocument | null; reasoning: string }> {
-  console.log("\n[GodAgent] 🧠 Design Phase - Using Pro model with thinking...\n");
+  console.log(
+    "\n[GodAgent] 🧠 Design Phase - Using Pro model with thinking...\n"
+  );
 
   const designPrompt = `You are designing a simulation for an ECS (Entity Component System) engine.
 
@@ -4138,13 +6174,20 @@ Return ONLY the JSON document, no markdown fences.`;
         .join("\n");
     }
     if (reasoningText) {
-      console.log("[GodAgent] 💭 Thinking:", reasoningText.slice(0, 1000) + (reasoningText.length > 1000 ? "..." : ""));
+      console.log(
+        "[GodAgent] 💭 Thinking:",
+        reasoningText.slice(0, 1000) +
+          (reasoningText.length > 1000 ? "..." : "")
+      );
     }
 
     let designText = response.text.trim();
     // Remove markdown fences if present
-    if (designText.startsWith('```')) {
-      designText = designText.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    if (designText.startsWith("```")) {
+      designText = designText
+        .replace(/```json?\n?/g, "")
+        .replace(/```$/g, "")
+        .trim();
     }
 
     try {
@@ -4219,16 +6262,25 @@ Return ONLY the JSON, no markdown fences.`;
     });
 
     let reviewText = response.text.trim();
-    if (reviewText.startsWith('```')) {
-      reviewText = reviewText.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    if (reviewText.startsWith("```")) {
+      reviewText = reviewText
+        .replace(/```json?\n?/g, "")
+        .replace(/```$/g, "")
+        .trim();
     }
 
     try {
       const review = JSON.parse(reviewText);
-      console.log(`[GodAgent] 📋 Review: ${review.approved ? '✅ Approved' : '❌ Issues found'}`);
+      console.log(
+        `[GodAgent] 📋 Review: ${
+          review.approved ? "✅ Approved" : "❌ Issues found"
+        }`
+      );
       if (review.issues?.length > 0) {
-        const issueTexts = review.issues.slice(0, 3).map((i: any) => typeof i === 'string' ? i : JSON.stringify(i));
-        console.log(`  Issues: ${issueTexts.join('; ')}`);
+        const issueTexts = review.issues
+          .slice(0, 3)
+          .map((i: any) => (typeof i === "string" ? i : JSON.stringify(i)));
+        console.log(`  Issues: ${issueTexts.join("; ")}`);
       }
       return {
         issues: review.issues || [],
@@ -4263,10 +6315,10 @@ CURRENT DESIGN:
 ${JSON.stringify(design, null, 2)}
 
 ISSUES TO FIX (MUST address these):
-${issues.map((i, idx) => `${idx + 1}. ${i}`).join('\n')}
+${issues.map((i, idx) => `${idx + 1}. ${i}`).join("\n")}
 
 SUGGESTIONS (address if possible):
-${suggestions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}
+${suggestions.map((s, idx) => `${idx + 1}. ${s}`).join("\n")}
 
 OUTPUT: Return the COMPLETE refined design document (same JSON structure as input).
 Keep all the good parts of the original design, but fix the issues.
@@ -4287,8 +6339,11 @@ Return ONLY the JSON, no markdown fences.`;
     });
 
     let refinedText = response.text.trim();
-    if (refinedText.startsWith('```')) {
-      refinedText = refinedText.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    if (refinedText.startsWith("```")) {
+      refinedText = refinedText
+        .replace(/```json?\n?/g, "")
+        .replace(/```$/g, "")
+        .trim();
     }
 
     try {
@@ -4299,7 +6354,9 @@ Return ONLY the JSON, no markdown fences.`;
       console.log(`  - ${refinedDesign.systems?.length || 0} systems`);
       return refinedDesign;
     } catch (parseError) {
-      console.log("[GodAgent] Could not parse refined design, keeping original");
+      console.log(
+        "[GodAgent] Could not parse refined design, keeping original"
+      );
       return design;
     }
   } catch (error) {
@@ -4312,16 +6369,24 @@ Return ONLY the JSON, no markdown fences.`;
 function buildExecutionTools(state: GodAgentState) {
   return {
     createComponent: tool({
-      description: "Create a new dynamic component with typed properties. Example: {name: 'Population', properties: {count: 'number', minThreshold: 'number'}}",
+      description:
+        "Create a new dynamic component with typed properties. Example: {name: 'Population', properties: {count: 'number', minThreshold: 'number'}}",
       inputSchema: z.object({
-        name: z.string().describe("PascalCase name (e.g., Population, Consumer)"),
-        properties: z.record(z.string()).describe("Property name to type mapping, e.g. {count: 'number', name: 'string'}"),
+        name: z
+          .string()
+          .describe("PascalCase name (e.g., Population, Consumer)"),
+        properties: z
+          .record(z.string())
+          .describe(
+            "Property name to type mapping, e.g. {count: 'number', name: 'string'}"
+          ),
       }),
       execute: async (params) => {
         try {
           // Validate and convert property types
           const validTypes = ["number", "string", "boolean"];
-          const cleanedProps: Record<string, "number" | "string" | "boolean"> = {};
+          const cleanedProps: Record<string, "number" | "string" | "boolean"> =
+            {};
           for (const [key, val] of Object.entries(params.properties || {})) {
             const typeStr = String(val).toLowerCase();
             if (validTypes.includes(typeStr)) {
@@ -4341,8 +6406,15 @@ function buildExecutionTools(state: GodAgentState) {
           };
           createDynamicComponent(def);
           await saveComponentDefinition(def);
-          console.log(`  [Tool] createComponent: ${params.name} with ${Object.keys(cleanedProps).join(', ')}`);
-          return { success: true, result: { name: params.name, properties: cleanedProps } };
+          console.log(
+            `  [Tool] createComponent: ${params.name} with ${Object.keys(
+              cleanedProps
+            ).join(", ")}`
+          );
+          return {
+            success: true,
+            result: { name: params.name, properties: cleanedProps },
+          };
         } catch (e) {
           console.error(`  [Tool] createComponent error:`, e);
           return { success: false, error: String(e) };
@@ -4373,18 +6445,26 @@ function buildExecutionTools(state: GodAgentState) {
       execute: async (params) => {
         const eid = state.registry.nameToEid.get(params.entityName);
         if (eid === undefined) {
-          return { success: false, error: `Entity not found: ${params.entityName}` };
+          return {
+            success: false,
+            error: `Entity not found: ${params.entityName}`,
+          };
         }
         const comp = getDynamicComponent(params.componentName);
         if (!comp) {
-          return { success: false, error: `Component not found: ${params.componentName}` };
+          return {
+            success: false,
+            error: `Component not found: ${params.componentName}`,
+          };
         }
         for (const [prop, val] of Object.entries(params.values)) {
           if (comp[prop]) {
             comp[prop][eid] = val;
           }
         }
-        console.log(`  [Tool] setDynamicComponent: ${params.entityName}.${params.componentName}`);
+        console.log(
+          `  [Tool] setDynamicComponent: ${params.entityName}.${params.componentName}`
+        );
         return { success: true, result: params.values };
       },
     }),
@@ -4410,7 +6490,10 @@ function buildExecutionTools(state: GodAgentState) {
             state.fileSystems.push(loaded);
           }
           console.log(`  [Tool] createFileSystem: ${params.name}`);
-          return { success: true, result: { name: params.name, loaded: !!loaded } };
+          return {
+            success: true,
+            result: { name: params.name, loaded: !!loaded },
+          };
         } catch (e) {
           return { success: false, error: String(e) };
         }
@@ -4423,13 +6506,16 @@ function buildExecutionTools(state: GodAgentState) {
         systemName: z.string(),
       }),
       execute: async (params) => {
-        const sys = state.fileSystems.find(s => s.name === params.systemName);
+        const sys = state.fileSystems.find((s) => s.name === params.systemName);
         if (sys) {
           sys.active = true;
           console.log(`  [Tool] activateFileSystem: ${params.systemName}`);
           return { success: true, result: { activated: params.systemName } };
         }
-        return { success: false, error: `System not found: ${params.systemName}` };
+        return {
+          success: false,
+          error: `System not found: ${params.systemName}`,
+        };
       },
     }),
   };
@@ -4467,7 +6553,11 @@ export async function executeDesign(
       };
       createDynamicComponent(def);
       await saveComponentDefinition(def);
-      console.log(`  [Exec] createComponent: ${comp.name} (${Object.keys(properties).join(', ')})`);
+      console.log(
+        `  [Exec] createComponent: ${comp.name} (${Object.keys(properties).join(
+          ", "
+        )})`
+      );
       actions.push({ success: true, result: { name: comp.name } });
     } catch (e) {
       console.error(`  [Exec] createComponent failed: ${comp.name}`, e);
@@ -4478,7 +6568,10 @@ export async function executeDesign(
   // Step 2: Create all entities and set initial dynamic component values
   for (const ent of design.entities || []) {
     try {
-      const result = state.tools.createEntity({ name: ent.name, description: `${ent.type} entity` });
+      const result = state.tools.createEntity({
+        name: ent.name,
+        description: `${ent.type} entity`,
+      });
       console.log(`  [Exec] createEntity: ${ent.name}`);
       actions.push(result);
 
@@ -4494,7 +6587,9 @@ export async function executeDesign(
           const comp = getDynamicComponent(compDef.name);
           if (!comp) continue;
 
-          for (const [prop, propType] of Object.entries(compDef.properties || {})) {
+          for (const [prop, propType] of Object.entries(
+            compDef.properties || {}
+          )) {
             if (!comp[prop]) continue;
             const propLower = prop.toLowerCase();
 
@@ -4502,70 +6597,116 @@ export async function executeDesign(
             let defaultVal: number | string | boolean = 0;
 
             // Population/count properties
-            if (propLower.includes("count") || propLower.includes("population") || propLower === "level") {
-              if (entType === "producer" || nameLower.includes("grass") || nameLower.includes("resource")) {
+            if (
+              propLower.includes("count") ||
+              propLower.includes("population") ||
+              propLower === "level"
+            ) {
+              if (
+                entType === "producer" ||
+                nameLower.includes("grass") ||
+                nameLower.includes("resource")
+              ) {
                 defaultVal = 1000;
-              } else if (nameLower.includes("rabbit") || nameLower.includes("prey") || entType === "consumer") {
+              } else if (
+                nameLower.includes("rabbit") ||
+                nameLower.includes("prey") ||
+                entType === "consumer"
+              ) {
                 defaultVal = 100;
-              } else if (nameLower.includes("fox") || nameLower.includes("predator")) {
+              } else if (
+                nameLower.includes("fox") ||
+                nameLower.includes("predator")
+              ) {
                 defaultVal = 20;
               } else {
                 defaultVal = 50;
               }
             }
             // Capacity/max properties
-            else if (propLower.includes("capacity") || propLower.includes("max")) {
+            else if (
+              propLower.includes("capacity") ||
+              propLower.includes("max")
+            ) {
               defaultVal = entType === "producer" ? 2000 : 500;
             }
             // Min/threshold properties
-            else if (propLower.includes("min") || propLower.includes("threshold")) {
+            else if (
+              propLower.includes("min") ||
+              propLower.includes("threshold")
+            ) {
               defaultVal = entType === "producer" ? 10 : 5;
             }
             // Rate properties
-            else if (propLower.includes("rate") || propLower.includes("speed")) {
-              defaultVal = propLower.includes("growth") ? 0.1 :
-                           propLower.includes("decay") ? 0.05 :
-                           propLower.includes("death") || propLower.includes("starvation") ? 0.1 : 0.05;
+            else if (
+              propLower.includes("rate") ||
+              propLower.includes("speed")
+            ) {
+              defaultVal = propLower.includes("growth")
+                ? 0.1
+                : propLower.includes("decay")
+                ? 0.05
+                : propLower.includes("death") ||
+                  propLower.includes("starvation")
+                ? 0.1
+                : 0.05;
             }
             // Need/hunger/safety/social properties (0-100 scale)
-            else if (propLower.includes("hunger") || propLower.includes("food")) {
+            else if (
+              propLower.includes("hunger") ||
+              propLower.includes("food")
+            ) {
               defaultVal = 30; // Start somewhat hungry
-            }
-            else if (propLower.includes("safety") || propLower.includes("fear")) {
+            } else if (
+              propLower.includes("safety") ||
+              propLower.includes("fear")
+            ) {
               defaultVal = 70; // Start fairly safe
-            }
-            else if (propLower.includes("social") || propLower.includes("lonely")) {
+            } else if (
+              propLower.includes("social") ||
+              propLower.includes("lonely")
+            ) {
               defaultVal = 50; // Start neutral
             }
             // Trust/reputation/charisma (0-100 scale)
             else if (propLower.includes("trust")) {
-              defaultVal = nameLower.includes("diplomat") ? 70 :
-                           nameLower.includes("skeptic") ? 30 : 50;
-            }
-            else if (propLower.includes("reputation") || propLower.includes("rep")) {
-              defaultVal = nameLower.includes("rival") ? 60 :
-                           nameLower.includes("follower") ? 30 : 50;
-            }
-            else if (propLower.includes("charisma")) {
+              defaultVal = nameLower.includes("diplomat")
+                ? 70
+                : nameLower.includes("skeptic")
+                ? 30
+                : 50;
+            } else if (
+              propLower.includes("reputation") ||
+              propLower.includes("rep")
+            ) {
+              defaultVal = nameLower.includes("rival")
+                ? 60
+                : nameLower.includes("follower")
+                ? 30
+                : 50;
+            } else if (propLower.includes("charisma")) {
               defaultVal = nameLower.includes("diplomat") ? 80 : 50;
             }
             // Cooperativeness/competitiveness
             else if (propLower.includes("cooperat")) {
-              defaultVal = nameLower.includes("diplomat") ? 0.8 :
-                           nameLower.includes("rival") ? 0.2 : 0.5;
-            }
-            else if (propLower.includes("competit")) {
-              defaultVal = nameLower.includes("rival") ? 0.8 :
-                           nameLower.includes("diplomat") ? 0.2 : 0.5;
+              defaultVal = nameLower.includes("diplomat")
+                ? 0.8
+                : nameLower.includes("rival")
+                ? 0.2
+                : 0.5;
+            } else if (propLower.includes("competit")) {
+              defaultVal = nameLower.includes("rival")
+                ? 0.8
+                : nameLower.includes("diplomat")
+                ? 0.2
+                : 0.5;
             }
             // Supply/demand/price (economy)
             else if (propLower.includes("supply")) {
               defaultVal = entType === "producer" ? 100 : 0;
-            }
-            else if (propLower.includes("demand")) {
+            } else if (propLower.includes("demand")) {
               defaultVal = entType === "consumer" ? 80 : 0;
-            }
-            else if (propLower.includes("price")) {
+            } else if (propLower.includes("price")) {
               defaultVal = 50;
             }
             // Efficiency
@@ -4573,13 +6714,26 @@ export async function executeDesign(
               defaultVal = 0.5;
             }
             // Boolean flags
-            else if (propType === "boolean" || propLower.includes("active") || propLower.includes("enabled")) {
+            else if (
+              propType === "boolean" ||
+              propLower.includes("active") ||
+              propLower.includes("enabled")
+            ) {
               defaultVal = 1;
             }
             // State/behavior strings
-            else if (propType === "string" || propLower.includes("state") || propLower.includes("behavior") || propLower.includes("mode")) {
-              defaultVal = entType === "producer" ? "producing" :
-                           entType === "consumer" ? "idle" : "active";
+            else if (
+              propType === "string" ||
+              propLower.includes("state") ||
+              propLower.includes("behavior") ||
+              propLower.includes("mode")
+            ) {
+              defaultVal =
+                entType === "producer"
+                  ? "producing"
+                  : entType === "consumer"
+                  ? "idle"
+                  : "active";
             }
             // Generic number default
             else if (propType === "number") {
@@ -4587,7 +6741,13 @@ export async function executeDesign(
             }
 
             comp[prop][eid] = defaultVal;
-            initLog.push(`${prop}=${typeof defaultVal === 'number' ? defaultVal.toFixed?.(0) ?? defaultVal : defaultVal}`);
+            initLog.push(
+              `${prop}=${
+                typeof defaultVal === "number"
+                  ? defaultVal.toFixed?.(0) ?? defaultVal
+                  : defaultVal
+              }`
+            );
           }
         }
 
@@ -4596,7 +6756,9 @@ export async function executeDesign(
           for (const [compName, values] of Object.entries(ent.initialValues)) {
             const comp = getDynamicComponent(compName);
             if (comp && values) {
-              for (const [prop, val] of Object.entries(values as Record<string, any>)) {
+              for (const [prop, val] of Object.entries(
+                values as Record<string, any>
+              )) {
                 if (comp[prop]) {
                   comp[prop][eid] = val;
                   initLog.push(`${prop}=${val} (explicit)`);
@@ -4607,7 +6769,11 @@ export async function executeDesign(
         }
 
         if (initLog.length > 0) {
-          console.log(`    [Init] ${ent.name}: ${initLog.slice(0, 6).join(', ')}${initLog.length > 6 ? '...' : ''}`);
+          console.log(
+            `    [Init] ${ent.name}: ${initLog.slice(0, 6).join(", ")}${
+              initLog.length > 6 ? "..." : ""
+            }`
+          );
         }
       }
     } catch (e) {
@@ -4652,13 +6818,25 @@ async function generateSystemCode(
   sys: { name: string; purpose: string; frequency: number; logic: string },
   design: DesignDocument
 ): Promise<string> {
-  const componentList = (design.components || []).map(c =>
-    `${c.name}: ${Object.entries(c.properties || {}).map(([k,v]) => `${k}(${v})`).join(', ') || 'value(number)'}`
-  ).join('\n');
+  const componentList = (design.components || [])
+    .map(
+      (c) =>
+        `${c.name}: ${
+          Object.entries(c.properties || {})
+            .map(([k, v]) => `${k}(${v})`)
+            .join(", ") || "value(number)"
+        }`
+    )
+    .join("\n");
 
-  const entityList = (design.entities || []).map(e =>
-    `${e.name} (${e.type}): components=[${e.components?.join(', ') || 'none'}]`
-  ).join('\n');
+  const entityList = (design.entities || [])
+    .map(
+      (e) =>
+        `${e.name} (${e.type}): components=[${
+          e.components?.join(", ") || "none"
+        }]`
+    )
+    .join("\n");
 
   const prompt = `Generate TypeScript code for an ECS system. Return ONLY the code body (no function declaration, no imports).
 
@@ -4674,7 +6852,9 @@ ${entityList}
 
 ⚠️ CRITICAL RULES - READ CAREFULLY:
 
-1. The components listed above (${(design.components || []).map(c => c.name).join(', ')}) are DYNAMIC components.
+1. The components listed above (${(design.components || [])
+    .map((c) => c.name)
+    .join(", ")}) are DYNAMIC components.
 2. ONLY ctx.components.Name is available as a built-in component.
 3. NEVER write ctx.components.Population or ctx.components.Consumer - these don't exist!
 4. ALWAYS query by Name, then filter by checking dynamic data.
@@ -4718,8 +6898,11 @@ Return ONLY the code (no markdown, no explanation):`;
 
     let code = response.text.trim();
     // Remove markdown if present
-    if (code.startsWith('```')) {
-      code = code.replace(/```(?:typescript|ts|javascript|js)?\n?/g, '').replace(/```$/g, '').trim();
+    if (code.startsWith("```")) {
+      code = code
+        .replace(/```(?:typescript|ts|javascript|js)?\n?/g, "")
+        .replace(/```$/g, "")
+        .trim();
     }
     return code;
   } catch (e) {
@@ -4769,30 +6952,45 @@ async function testSimulationHealth(
     const comp = getDynamicComponent(compDef.name);
     if (!comp) continue;
     for (const [prop, propType] of Object.entries(compDef.properties)) {
-      if (propType !== 'number') continue;
+      if (propType !== "number") continue;
       const key = `${compDef.name}.${prop}`;
       const values = new Map<number, number>();
       if (comp[prop]) {
         for (let eid = 0; eid < (comp[prop].length || 100); eid++) {
-          if (comp[prop][eid] !== undefined && typeof comp[prop][eid] === 'number') {
+          if (
+            comp[prop][eid] !== undefined &&
+            typeof comp[prop][eid] === "number"
+          ) {
             values.set(eid, comp[prop][eid]);
           }
         }
       }
       initialValues.set(key, values);
-      health.valueChanges.set(key, { min: Infinity, max: -Infinity, changed: false });
+      health.valueChanges.set(key, {
+        min: Infinity,
+        max: -Infinity,
+        changed: false,
+      });
     }
   }
 
   // Helper to capture entity state snapshot
-  const captureSnapshot = (tick: number, fixes: string[], errors: string[]): TickSnapshot => {
+  const captureSnapshot = (
+    tick: number,
+    fixes: string[],
+    errors: string[]
+  ): TickSnapshot => {
     const entities: EntitySnapshot[] = [];
     const allEntities = query(state.world, [Name]);
 
     for (const eid of allEntities) {
       const name = Name.value[eid] || `Entity_${eid}`;
       // Skip GodAI itself
-      if (name.toLowerCase().includes('god') || name.toLowerCase().includes('architect')) continue;
+      if (
+        name.toLowerCase().includes("god") ||
+        name.toLowerCase().includes("architect")
+      )
+        continue;
 
       const components: Record<string, Record<string, unknown>> = {};
 
@@ -4847,7 +7045,7 @@ async function testSimulationHealth(
     const comp = getDynamicComponent(compDef.name);
     if (!comp) continue;
     for (const [prop, propType] of Object.entries(compDef.properties)) {
-      if (propType !== 'number') continue;
+      if (propType !== "number") continue;
       const key = `${compDef.name}.${prop}`;
       const initial = initialValues.get(key);
       const tracking = health.valueChanges.get(key);
@@ -4855,7 +7053,7 @@ async function testSimulationHealth(
 
       for (const [eid, initVal] of initial) {
         const currentVal = comp[prop][eid];
-        if (currentVal !== undefined && typeof currentVal === 'number') {
+        if (currentVal !== undefined && typeof currentVal === "number") {
           tracking.min = Math.min(tracking.min, currentVal);
           tracking.max = Math.max(tracking.max, currentVal);
           if (Math.abs(currentVal - initVal) > 0.01) {
@@ -4870,17 +7068,24 @@ async function testSimulationHealth(
   // Analyze health
   if (!anyValueChanged) {
     health.healthy = false;
-    health.issues.push("No values changed during simulation - systems may not be updating data");
+    health.issues.push(
+      "No values changed during simulation - systems may not be updating data"
+    );
   }
 
   if (health.systemErrors.length > 0) {
     health.healthy = false;
-    health.issues.push(`Systems with errors: ${health.systemErrors.join(', ')}`);
+    health.issues.push(
+      `Systems with errors: ${health.systemErrors.join(", ")}`
+    );
   }
 
   // Check for stuck values (all at 0 or 100)
   for (const [key, tracking] of health.valueChanges) {
-    if (tracking.min === tracking.max && (tracking.min === 0 || tracking.min === 100)) {
+    if (
+      tracking.min === tracking.max &&
+      (tracking.min === 0 || tracking.min === 100)
+    ) {
       health.issues.push(`${key} stuck at ${tracking.min}`);
     }
   }
@@ -4909,22 +7114,25 @@ function formatSimulationLog(log: TickSnapshot[]): string {
       const compStrings: string[] = [];
       for (const [compName, compData] of Object.entries(entity.components)) {
         const values = Object.entries(compData)
-          .map(([k, v]) => `${k}=${typeof v === 'number' ? (v as number).toFixed(1) : v}`)
-          .join(', ');
+          .map(
+            ([k, v]) =>
+              `${k}=${typeof v === "number" ? (v as number).toFixed(1) : v}`
+          )
+          .join(", ");
         compStrings.push(`${compName}(${values})`);
       }
-      lines.push(`  ${entity.name}: ${compStrings.join(' | ')}`);
+      lines.push(`  ${entity.name}: ${compStrings.join(" | ")}`);
     }
 
     if (snapshot.fixes.length > 0) {
-      lines.push(`  [Auto-fixes: ${snapshot.fixes.join(', ')}]`);
+      lines.push(`  [Auto-fixes: ${snapshot.fixes.join(", ")}]`);
     }
     if (snapshot.errors.length > 0) {
-      lines.push(`  [ERRORS: ${snapshot.errors.join(', ')}]`);
+      lines.push(`  [ERRORS: ${snapshot.errors.join(", ")}]`);
     }
   }
 
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 // Diagnose issues and suggest fixes
@@ -4950,16 +7158,21 @@ SIMULATION OUTPUT (entity states at key ticks):
 ${simulationOutput}
 
 OBSERVED ISSUES:
-${health.issues.map((i, idx) => `${idx + 1}. ${i}`).join('\n')}
+${health.issues.map((i, idx) => `${idx + 1}. ${i}`).join("\n")}
 
 SYSTEM ERRORS:
-${health.systemErrors.length > 0 ? health.systemErrors.join('\n') : 'None'}
+${health.systemErrors.length > 0 ? health.systemErrors.join("\n") : "None"}
 
 VALUE CHANGES SUMMARY:
 ${Array.from(health.valueChanges.entries())
   .filter(([_, v]) => v.min !== Infinity)
-  .map(([k, v]) => `${k}: min=${v.min.toFixed(1)}, max=${v.max.toFixed(1)}, changed=${v.changed}`)
-  .join('\n')}
+  .map(
+    ([k, v]) =>
+      `${k}: min=${v.min.toFixed(1)}, max=${v.max.toFixed(1)}, changed=${
+        v.changed
+      }`
+  )
+  .join("\n")}
 
 Look at the actual simulation output to understand what's happening. Are values changing? Are they stuck? Are behaviors switching?
 
@@ -4988,8 +7201,11 @@ Return ONLY the JSON, no markdown fences.`;
     });
 
     let text = response.text.trim();
-    if (text.startsWith('```')) {
-      text = text.replace(/```json?\n?/g, '').replace(/```$/g, '').trim();
+    if (text.startsWith("```")) {
+      text = text
+        .replace(/```json?\n?/g, "")
+        .replace(/```$/g, "")
+        .trim();
     }
 
     const result = JSON.parse(text);
@@ -5019,15 +7235,17 @@ export async function godDesignAndExecute(
   const {
     skipReview = !ENABLE_DESIGN_REVIEW,
     maxRefinements = 2,
-    maxIterations = 3,  // Test and iterate up to N times
-    testTicks = 10,     // Run this many ticks per test
+    maxIterations = 3, // Test and iterate up to N times
+    testTicks = 10, // Run this many ticks per test
   } = options;
 
   // Phase 1: Design
   let { design, reasoning } = await designSolution(state, challenge);
 
   if (!design) {
-    console.log("[GodAgent] ❌ Design failed, falling back to direct execution");
+    console.log(
+      "[GodAgent] ❌ Design failed, falling back to direct execution"
+    );
     const result = await godThink(state, challenge);
     return { design: null, reasoning, actions: result.actions };
   }
@@ -5044,7 +7262,12 @@ export async function godDesignAndExecute(
       }
 
       if (review.issues.length > 0 || review.suggestions.length > 0) {
-        design = await refineDesign(design, challenge, review.issues, review.suggestions);
+        design = await refineDesign(
+          design,
+          challenge,
+          review.issues,
+          review.suggestions
+        );
         refinements++;
       } else {
         break;
@@ -5058,19 +7281,32 @@ export async function godDesignAndExecute(
   // Phase 4: Test & Iterate (run simulation, check health, fix if needed)
   if (maxIterations > 0 && testTicks > 0) {
     for (let iteration = 0; iteration < maxIterations; iteration++) {
-      console.log(`\n[GodAgent] 🧪 Test Iteration ${iteration + 1}/${maxIterations} (${testTicks} ticks)...`);
+      console.log(
+        `\n[GodAgent] 🧪 Test Iteration ${
+          iteration + 1
+        }/${maxIterations} (${testTicks} ticks)...`
+      );
 
       const health = await testSimulationHealth(state, testTicks);
 
       if (health.healthy) {
-        console.log("[GodAgent] ✅ Simulation is healthy - values changing, no errors");
+        console.log(
+          "[GodAgent] ✅ Simulation is healthy - values changing, no errors"
+        );
         break;
       }
 
-      console.log(`[GodAgent] ⚠️ Issues found: ${health.issues.slice(0, 2).join('; ')}`);
+      console.log(
+        `[GodAgent] ⚠️ Issues found: ${health.issues.slice(0, 2).join("; ")}`
+      );
 
       // Diagnose and get fix suggestions
-      const { diagnosis, fixes } = await diagnoseSimulationIssues(state, design, challenge, health);
+      const { diagnosis, fixes } = await diagnoseSimulationIssues(
+        state,
+        design,
+        challenge,
+        health
+      );
 
       if (fixes.length === 0) {
         console.log("[GodAgent] No fixes suggested, continuing...");
@@ -5091,7 +7327,10 @@ export async function godDesignAndExecute(
   return { design, reasoning, actions };
 }
 
-export async function godThink(state: GodAgentState, prompt: string): Promise<{ thinking: string; actions: ToolResult[] }> {
+export async function godThink(
+  state: GodAgentState,
+  prompt: string
+): Promise<{ thinking: string; actions: ToolResult[] }> {
   const systemPrompt = buildSystemPrompt(state);
   const tools = buildTools(state);
 
@@ -5103,13 +7342,13 @@ export async function godThink(state: GodAgentState, prompt: string): Promise<{ 
 
   try {
     console.log("[GodAgent] Calling Gemini...");
-    
+
     const messages: Array<{ role: "user" | "assistant"; content: string }> = [
-      ...state.conversationHistory.slice(-10).map(h => ({
+      ...state.conversationHistory.slice(-10).map((h) => ({
         role: h.role as "user" | "assistant",
-        content: h.content
+        content: h.content,
       })),
-      { role: "user" as const, content: prompt }
+      { role: "user" as const, content: prompt },
     ];
 
     const response = await generateText({
@@ -5117,13 +7356,16 @@ export async function godThink(state: GodAgentState, prompt: string): Promise<{ 
       system: systemPrompt,
       messages,
       tools,
-      stopWhen: stepCountIs(15)
+      stopWhen: stepCountIs(15),
     });
     console.log("[GodAgent] Gemini response received");
 
     if (response.reasoningText) {
       thinking = response.reasoningText;
-      console.log("[GodAgent] Reasoning:", response.reasoningText.slice(0, 500) + "...");
+      console.log(
+        "[GodAgent] Reasoning:",
+        response.reasoningText.slice(0, 500) + "..."
+      );
     }
 
     if (response.text) {
@@ -5136,20 +7378,57 @@ export async function godThink(state: GodAgentState, prompt: string): Promise<{ 
         if (step.toolCalls) {
           for (const tc of step.toolCalls) {
             if (step.toolResults) {
-              const result = step.toolResults.find((r: any) => r.toolCallId === tc.toolCallId);
+              const result = step.toolResults.find(
+                (r: any) => r.toolCallId === tc.toolCallId
+              );
               if (result) {
                 actions.push(result.output as ToolResult);
                 const toolResult = result.output as ToolResult;
-                if (toolResult.success && !["recordMemory", "searchMemories", "reflect", "makePlan", "advancePlanStep", "getActivePlanStatus", "abandonCurrentPlan"].includes(tc.toolName)) {
-                  addMemory(state, "action", `${tc.toolName}: ${JSON.stringify((tc as any).input).slice(0, 100)}`, {
-                    importance: 5,
-                    tags: ["tool", tc.toolName],
-                  });
+                if (
+                  toolResult.success &&
+                  ![
+                    "recordMemory",
+                    "searchMemories",
+                    "reflect",
+                    "makePlan",
+                    "advancePlanStep",
+                    "getActivePlanStatus",
+                    "abandonCurrentPlan",
+                  ].includes(tc.toolName)
+                ) {
+                  addMemory(
+                    state,
+                    "action",
+                    `${tc.toolName}: ${JSON.stringify((tc as any).input).slice(
+                      0,
+                      100
+                    )}`,
+                    {
+                      importance: 5,
+                      tags: ["tool", tc.toolName],
+                    }
+                  );
                 }
               }
             }
           }
         }
+      }
+    }
+
+    // Log warning if no tools were called - helps debug LLM issues
+    if (actions.length === 0) {
+      console.warn("[GodAgent] WARNING: No tool calls in response!");
+      console.warn(
+        "[GodAgent] Response text:",
+        response.text?.slice(0, 500) || "(no text)"
+      );
+      console.warn("[GodAgent] Steps:", response.steps?.length || 0);
+      if (response.steps && response.steps.length > 0) {
+        console.warn(
+          "[GodAgent] First step:",
+          JSON.stringify(response.steps[0]).slice(0, 300)
+        );
       }
     }
   } catch (error) {
@@ -5175,19 +7454,31 @@ export async function godThink(state: GodAgentState, prompt: string): Promise<{ 
   return { thinking, actions };
 }
 
-export async function godCommand(state: GodAgentState, command: string): Promise<ToolResult[]> {
+export async function godCommand(
+  state: GodAgentState,
+  command: string
+): Promise<ToolResult[]> {
   const { actions } = await godThink(state, command);
   return actions;
 }
 
-export function tickWorld(state: GodAgentState, delta: number = 1000): Array<{ type: string; data: any; timestamp: number }> {
+export function tickWorld(
+  state: GodAgentState,
+  delta: number = 1000
+): Array<{ type: string; data: any; timestamp: number }> {
   state.tick++;
   // Run baked systems from registry
   runSystems(state.world, state.systemRegistry, state.tick, delta);
   runAsyncSystems(state.world, state.systemRegistry, state.tick, delta);
   // Run file-based systems (NeedsDecay, SeekNeeds, RandomWander, etc.)
   if (state.fileSystems.length > 0) {
-    runLoadedSystems(state.world, state.fileSystems, state.systemRegistry, state.tick, delta);
+    runLoadedSystems(
+      state.world,
+      state.fileSystems,
+      state.systemRegistry,
+      state.tick,
+      delta
+    );
   }
   // Run interventions - event-driven precondition→effect rules
   runInterventions(state.world, state.interventionRegistry, state.tick);
@@ -5214,12 +7505,16 @@ export async function tickWorldAsync(
     console.log(`[GodAgent] ${systemsToFix.length} system(s) need fixing...`);
     fixes = await fixAllQueuedSystems(state.fileSystems);
     if (fixes.fixed.length > 0) {
-      console.log(`[GodAgent] Fixed: ${fixes.fixed.join(', ')}`);
-      state.systemRegistry.logs.push(`[AutoFix] Fixed systems: ${fixes.fixed.join(', ')}`);
+      console.log(`[GodAgent] Fixed: ${fixes.fixed.join(", ")}`);
+      state.systemRegistry.logs.push(
+        `[AutoFix] Fixed systems: ${fixes.fixed.join(", ")}`
+      );
     }
     if (fixes.failed.length > 0) {
-      console.log(`[GodAgent] Failed to fix: ${fixes.failed.join(', ')}`);
-      state.systemRegistry.logs.push(`[AutoFix] Failed to fix: ${fixes.failed.join(', ')}`);
+      console.log(`[GodAgent] Failed to fix: ${fixes.failed.join(", ")}`);
+      state.systemRegistry.logs.push(
+        `[AutoFix] Failed to fix: ${fixes.failed.join(", ")}`
+      );
     }
   }
 
@@ -5250,36 +7545,49 @@ export async function tickWorldAsync(
 }
 
 export function getWorldState(state: GodAgentState): string {
-  const entities = state.tools.listEntities().result as Array<{ name: string; id: number }>;
+  const entities = state.tools.listEntities().result as Array<{
+    name: string;
+    id: number;
+  }>;
   const systems = listSystems(state.systemRegistry);
-  
+
   const lines = ["WORLD STATE:", ""];
 
   lines.push("SYSTEMS:");
   for (const sys of systems) {
-    lines.push(`  ${sys.active ? '▶' : '⏸'} ${sys.name} (${sys.frequency}ms): ${sys.description}`);
+    lines.push(
+      `  ${sys.active ? "▶" : "⏸"} ${sys.name} (${sys.frequency}ms): ${
+        sys.description
+      }`
+    );
   }
   lines.push("");
 
   lines.push("ENTITIES:");
   for (const entity of entities) {
     lines.push(`[${entity.name}] (id: ${entity.id})`);
-    
+
     for (const compName of Object.keys(AllComponents)) {
       const values = state.tools.getComponentValues({
         entityName: entity.name,
         componentName: compName,
       });
-      if (values.success && values.result && Object.keys(values.result).length > 0) {
+      if (
+        values.success &&
+        values.result &&
+        Object.keys(values.result).length > 0
+      ) {
         const nonEmpty = Object.fromEntries(
-          Object.entries(values.result).filter(([_, v]) => v !== undefined && v !== "" && v !== 0)
+          Object.entries(values.result).filter(
+            ([_, v]) => v !== undefined && v !== "" && v !== 0
+          )
         );
         if (Object.keys(nonEmpty).length > 0) {
           lines.push(`  ${compName}: ${JSON.stringify(nonEmpty)}`);
         }
       }
     }
-    
+
     for (const relName of Object.keys(AllRelations)) {
       const targets = state.tools.getRelationTargets({
         subjectName: entity.name,
@@ -5289,9 +7597,9 @@ export function getWorldState(state: GodAgentState): string {
         lines.push(`  --[${relName}]--> ${targets.result.targets.join(", ")}`);
       }
     }
-    
+
     lines.push("");
   }
-  
+
   return lines.join("\n");
 }

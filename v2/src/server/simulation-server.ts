@@ -23,6 +23,17 @@ import type { SpiritRegistry } from "../spirits/spirit-registry";
 import { getHierarchyTree, getActiveSpirits, getMessagesForGodAI } from "../spirits/spirit-registry";
 import { Thought, Perception } from "../ecs/components";
 import { getAgentThoughts, getAgentPerceptions, getAgentConversation } from "../cognition/agent-mind";
+import type { DaemonRegistry } from "../spirits/agent-daemon";
+import { getDaemonSummary, getArcSummary, getMemorySummary } from "../spirits/agent-daemon";
+
+// SimulationBus integration
+import {
+  SimulationBus,
+  createSimulationBus,
+  createWebSocketTransport,
+  type SimulationEvent,
+  type WebSocketTransport,
+} from "../bus";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +44,7 @@ export interface SimulationState {
   events: Array<{ type: string; data: any; timestamp: number }>;
   logs: string[];
   spiritRegistry?: SpiritRegistry;
+  daemonRegistry?: DaemonRegistry;
 }
 
 export interface ClientMessage {
@@ -49,14 +61,42 @@ export interface ServerMessage {
 export function createSimulationServer(port: number = 3000) {
   const app = express();
   const server = createServer(app);
-  const wss = new WebSocketServer({ server });
+
+  // Legacy WebSocket server - use noServer to manually handle upgrades
+  // This prevents conflicts with the SimulationBus WebSocket at /bus
+  const wss = new WebSocketServer({ noServer: true });
+
+  // Create SimulationBus and WebSocket transport (handles /bus path)
+  const bus = createSimulationBus();
+  bus.setBuffering(true, 500); // Buffer events for late subscribers
+  const busTransport = createWebSocketTransport(server);
+  busTransport.connect(bus);
+
+  // Handle WebSocket upgrades manually to route by path
+  server.on("upgrade", (request, socket, head) => {
+    const pathname = new URL(request.url || "", `http://${request.headers.host}`).pathname;
+
+    // /bus is handled by SimulationBus transport
+    if (pathname === "/bus") {
+      return; // Let the bus transport handle it
+    }
+
+    // All other WebSocket connections go to legacy server
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
+  });
 
   let simulationState: SimulationState | null = null;
   let godAgent: GodAgentState | null = null;
   let isPaused = false;
   const clients = new Set<WebSocket>();
 
+  // Serve static files (legacy UI)
   app.use(express.static(path.join(__dirname, "../../public")));
+
+  // Serve new Vite UI from /ui path (when built)
+  app.use("/app", express.static(path.join(__dirname, "../../ui/dist")));
 
   app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "../../public/index.html"));
@@ -153,13 +193,39 @@ export function createSimulationServer(port: number = 3000) {
     });
 
     try {
+      // Emit command received to bus
+      bus.emit({
+        type: "god:command",
+        timestamp: Date.now(),
+        command,
+      } as SimulationEvent);
+
       const { thinking, actions } = await godThink(godAgent, command);
+
+      // Emit response to bus for new UI
+      bus.emit({
+        type: "god:response",
+        timestamp: Date.now(),
+        command,
+        thinking,
+        actions,
+      } as SimulationEvent);
+
+      // Also broadcast to legacy WebSocket
       broadcast({
         type: "godResponse",
         payload: { command, thinking, results: actions, worldState: getFullState() },
         timestamp: Date.now(),
       });
     } catch (error) {
+      // Emit error to bus
+      bus.emit({
+        type: "god:error",
+        timestamp: Date.now(),
+        command,
+        error: String(error),
+      } as SimulationEvent);
+
       broadcast({
         type: "error",
         payload: `God command failed: ${error}`,
@@ -483,6 +549,44 @@ export function createSimulationServer(port: number = 3000) {
       };
     }
 
+    // Daemon data (agent guardians)
+    let daemons: any = null;
+    if (simulationState.daemonRegistry) {
+      const dr = simulationState.daemonRegistry;
+      daemons = {
+        totalCount: dr.daemons.size,
+        tension: dr.simulationTension,
+        superiorEid: dr.superiorSpiritEid,
+        summary: getDaemonSummary(dr),
+        active: Array.from(dr.daemons.values()).map(d => ({
+          agentEid: d.agentEid,
+          agentName: d.agentName,
+          observationCount: d.observationCount,
+          whisperCount: d.whisperCount,
+          reportCount: d.reportCount,
+          concernLevel: d.concernLevel,
+          pendingNudges: d.pendingNudges.length,
+          memory: {
+            thoughtCount: d.memory.recentThoughts.length,
+            memoryCount: d.memory.keyMemories.length,
+            planCount: d.memory.activePlans.length,
+            characterMoments: d.memory.characterMoments.length,
+            recentThoughts: d.memory.recentThoughts.slice(-3).map(t => ({
+              focus: t.focus,
+              content: t.content,
+              emotionalTone: t.emotionalTone,
+              timestamp: t.timestamp,
+            })),
+          },
+          growthMetrics: d.growthMetrics,
+          lastObservation: d.lastObservation,
+          lastWhisper: d.lastWhisper,
+          lastReport: d.lastReport,
+          active: d.active,
+        })),
+      };
+    }
+
     // Enhanced agent minds data for dedicated Minds view
     const agentMinds = agents.map(eid => {
       const thoughtEids = getAgentThoughts(world, eid);
@@ -551,6 +655,7 @@ export function createSimulationServer(port: number = 3000) {
       atlases,
       characterRigs: listCharacterRigs(),
       spirits,
+      daemons,
       agentMinds,
     };
   }
@@ -575,6 +680,12 @@ export function createSimulationServer(port: number = 3000) {
   function setSpiritRegistry(registry: SpiritRegistry) {
     if (simulationState) {
       simulationState.spiritRegistry = registry;
+    }
+  }
+
+  function setDaemonRegistry(registry: DaemonRegistry) {
+    if (simulationState) {
+      simulationState.daemonRegistry = registry;
     }
   }
 
@@ -617,7 +728,15 @@ export function createSimulationServer(port: number = 3000) {
   function start() {
     server.listen(port, () => {
       console.log(`\n🌐 Simulation UI: http://localhost:${port}`);
+      console.log(`   └─ Legacy UI: http://localhost:${port}/`);
+      console.log(`   └─ New UI:    http://localhost:${port}/app`);
+      console.log(`   └─ Bus WS:    ws://localhost:${port}/bus`);
     });
+  }
+
+  // Forward legacy events to the bus
+  function emitToBus(event: SimulationEvent) {
+    bus.emit(event);
   }
 
   return {
@@ -625,11 +744,16 @@ export function createSimulationServer(port: number = 3000) {
     setSimulationState,
     setGodAgent,
     setSpiritRegistry,
+    setDaemonRegistry,
     pushEvent,
     pushLog,
     pushAgentAction,
     updateState,
     isPaused: () => isPaused,
     onReset: (cb: () => void) => { resetCallback = cb; },
+    // New bus integration
+    bus,
+    busTransport,
+    emitToBus,
   };
 }

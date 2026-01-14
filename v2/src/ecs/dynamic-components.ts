@@ -1,10 +1,19 @@
 import { writeFile, readFile, mkdir } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const COMPONENTS_DIR = path.join(__dirname, "../../data/components");
+// Get directory path - works in both ESM and CommonJS
+function getCurrentDir(): string {
+  // Check if we're in CommonJS (Jest compiles to this)
+  if (typeof __dirname !== "undefined") {
+    return __dirname;
+  }
+  // ESM fallback - use process.cwd() as base
+  return path.join(process.cwd(), "src/ecs");
+}
+
+const currentDir = getCurrentDir();
+const COMPONENTS_DIR = path.join(currentDir, "../../data/components");
 
 export interface ComponentDefinition {
   name: string;
@@ -27,6 +36,18 @@ export async function ensureComponentsDir(): Promise<void> {
 
 export function createDynamicComponent(def: ComponentDefinition): DynamicComponent {
   const component: DynamicComponent = {};
+
+  // Defensive check for missing properties
+  if (!def || !def.properties || typeof def.properties !== 'object') {
+    console.warn(`[DynamicComponents] Invalid component definition for "${def?.name || 'unknown'}": missing or invalid properties`);
+    // Create empty component with just the name if possible
+    if (def?.name) {
+      runtimeComponents.set(def.name, component);
+      componentDefinitions.set(def.name, { ...def, properties: {} });
+    }
+    return component;
+  }
+
   for (const [propName, propType] of Object.entries(def.properties)) {
     component[propName] = [];
   }

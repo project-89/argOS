@@ -1,0 +1,8 @@
+{
+  "name": "Debt",
+  "description": "Track financial debt",
+  "properties": {
+    "creditor": "string",
+    "amount": "number"
+  }
+}

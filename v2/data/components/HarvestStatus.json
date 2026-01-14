@@ -1,0 +1,8 @@
+{
+  "name": "HarvestStatus",
+  "description": "Progress of the harvest in the fields.",
+  "properties": {
+    "quality": "number",
+    "completion": "number"
+  }
+}

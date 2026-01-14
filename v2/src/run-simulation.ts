@@ -2,22 +2,38 @@ import "dotenv/config";
 import { createArgosWorld } from "./ecs/world";
 import { initializePrefabs } from "./ecs/prefabs";
 import { createGodAgent, godCommand, getWorldState, tickWorld } from "./god/god-agent";
-import { 
-  runCognitionCycle, 
-  executeActions, 
+import {
+  runCognitionCycle,
+  executeActions,
   broadcastToRoom,
-  queueStimulus 
+  queueStimulus
 } from "./cognition/cognition-system";
-import { 
+import {
   createTimeProgressionSystem,
   createSocialDynamicsSystem,
   createNarrativeEventSystem,
-  createRelationshipEvolutionSystem 
+  createRelationshipEvolutionSystem
 } from "./systems/builtin-systems";
 import { createSimulationServer } from "./server/simulation-server";
 import { query, getRelationTargets } from "bitecs";
 import { Agent, Name, Mind } from "./ecs/components";
 import { OccupiesRoom } from "./ecs/relations";
+// Spirit System imports
+import {
+  initializeSpiritSystem,
+  startSpiritSystem,
+  createStandardHierarchy,
+  tickSpiritSystem,
+  setGodAgentCallback,
+  getSpiritSystemDebugInfo,
+} from "./spirits/spirit-system";
+import { createEntityRegistry } from "./ecs/tools";
+import {
+  getPendingProposals,
+  approveProposal,
+  getApprovedProposals,
+} from "./spirits/spirit-factory";
+import { executeAllApprovedProposals } from "./spirits/architect-spirit";
 
 async function main() {
   console.log("╔══════════════════════════════════════════════════════════════╗");
@@ -47,7 +63,27 @@ Create a living, breathing world with interesting characters who have their own 
   god.systemRegistry.systems.set("NarrativeEvents", createNarrativeEventSystem());
   god.systemRegistry.systems.set("RelationshipEvolution", createRelationshipEvolutionSystem());
 
-  console.log("⚡ Setting up world...\n");
+  // Initialize Spirit System with the celestial hierarchy
+  const entityRegistry = createEntityRegistry();
+  initializeSpiritSystem(world, {
+    godAgentEid: 1, // GodAgent entity
+    tickInterval: 10000, // Spirits think every 10 seconds
+    autoCreateNarrator: true,
+  });
+  createStandardHierarchy(1); // Creates The Narrator, The Arbiter, The Weaver, The Tinker, The Crafter, The Steward, The Lawgiver
+
+  // Set up callback for spirits to communicate with GodAgent
+  setGodAgentCallback(async (messages) => {
+    for (const msg of messages) {
+      console.log(`[Spirit→God] ${msg.from}: ${msg.subject}`);
+      server.pushEvent("spirit", { from: msg.from, subject: msg.subject, content: msg.content });
+    }
+  });
+
+  startSpiritSystem();
+  console.log("👼 Spirit hierarchy initialized:", getSpiritSystemDebugInfo());
+
+  console.log("\n⚡ Setting up world...\n");
 
   await godCommand(god, `
     Create "The Crossroads Inn" - a mystical tavern where paths converge.
@@ -128,13 +164,64 @@ Create a living, breathing world with interesting characters who have their own 
     }
 
     const actions = await runCognitionCycle(world, god.systemRegistry);
-    
+
     for (const { eid, action } of actions) {
       const name = Name.value[eid];
       server.pushAgentAction(name, action);
     }
-    
+
     executeActions(world, actions, god.systemRegistry);
+
+    // Tick the Spirit System - spirits observe, think, and may propose changes
+    const spiritResult = await tickSpiritSystem(world, entityRegistry);
+    if (spiritResult.spiritsProcessed > 0) {
+      console.log(`[Spirits] ${spiritResult.spiritsProcessed} spirits processed`);
+    }
+    if (spiritResult.narrativeProse.length > 0) {
+      for (const prose of spiritResult.narrativeProse) {
+        console.log(`[Narrator] ${prose}`);
+        server.pushEvent("narrative", { content: prose, source: "narrator" });
+      }
+    }
+    if (spiritResult.messagesForGodAI.length > 0) {
+      console.log(`[Spirits→God] ${spiritResult.messagesForGodAI.length} messages queued`);
+    }
+
+    // Process spirit proposals - auto-approve system proposals
+    const pendingProposals = getPendingProposals();
+    if (pendingProposals.length > 0) {
+      console.log(`[Proposals] ${pendingProposals.length} pending proposals`);
+      for (const proposal of pendingProposals) {
+        // Auto-approve system proposals (could add more sophisticated logic here)
+        if (proposal.type === "system") {
+          approveProposal(proposal.id, 1); // GodAgent eid = 1
+          console.log(`[Proposals] ✅ Auto-approved: ${proposal.name} (${proposal.type})`);
+          server.pushEvent("spirit", {
+            type: "proposal_approved",
+            name: proposal.name,
+            proposalType: proposal.type
+          });
+        } else {
+          console.log(`[Proposals] ⏸️ Pending review: ${proposal.name} (${proposal.type})`);
+        }
+      }
+    }
+
+    // Execute approved proposals (bakes new systems, creates entities, etc.)
+    const approvedProposals = getApprovedProposals();
+    if (approvedProposals.length > 0) {
+      console.log(`[Proposals] Executing ${approvedProposals.length} approved proposals...`);
+      const { executed, failed } = await executeAllApprovedProposals(world, god.systemRegistry);
+      if (executed.length > 0) {
+        console.log(`[Proposals] 🔧 Executed: ${executed.join(", ")}`);
+        for (const name of executed) {
+          server.pushEvent("spirit", { type: "proposal_executed", name });
+        }
+      }
+      if (failed.length > 0) {
+        console.log(`[Proposals] ❌ Failed: ${failed.join(", ")}`);
+      }
+    }
 
     server.setSimulationState({
       world,

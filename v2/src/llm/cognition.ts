@@ -62,9 +62,28 @@ function parseJSON(text: string): any {
     .replace(/```\n?/g, "")
     .trim();
 
-  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    return JSON.parse(jsonMatch[0]);
+  // Use balanced brace matching to find first complete JSON object
+  const startIdx = cleaned.indexOf('{');
+  if (startIdx !== -1) {
+    let depth = 0;
+    let inString = false;
+    let escapeNext = false;
+
+    for (let i = startIdx; i < cleaned.length; i++) {
+      const char = cleaned[i];
+      if (escapeNext) { escapeNext = false; continue; }
+      if (char === '\\' && inString) { escapeNext = true; continue; }
+      if (char === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (char === '{') depth++;
+      else if (char === '}') {
+        depth--;
+        if (depth === 0) {
+          try { return JSON.parse(cleaned.slice(startIdx, i + 1)); }
+          catch { continue; }
+        }
+      }
+    }
   }
 
   return JSON.parse(cleaned);

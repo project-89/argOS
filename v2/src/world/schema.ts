@@ -272,6 +272,37 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
 // OBJECT TYPE DEFINITIONS - Prefabs for creating entities
 // ============================================================================
 
+/**
+ * A stimulus emission that entities can produce for dynamic perception.
+ * Agents perceive rooms through stimuli, not static descriptions.
+ */
+export interface StimulusDefinition {
+  /** Type of sensory stimulus */
+  type: "visual" | "smell" | "sound" | "heat" | "cold" | "tactile" | "light";
+  /** What agents perceive - written as sensory description */
+  template: string;
+  /** How noticeable (0-1), affects perception priority. Default: 0.5 */
+  intensity?: number;
+  /** Emission interval in ms. Default: 5000 */
+  interval?: number;
+  /** How far the stimulus reaches in units. Default: 5 */
+  radius?: number;
+}
+
+/**
+ * Defines a state transition that can occur via affordance or event
+ */
+export interface StateTransition {
+  from: string;
+  to: string;
+  /** What triggers this transition (affordance name or event type) */
+  trigger: string;
+  /** Optional conditions that must be met */
+  conditions?: RuleCondition[];
+  /** Stimuli emitted during the transition (e.g., sound when opening a door) */
+  transitionStimuli?: StimulusDefinition[];
+}
+
 export interface StateDefinition {
   description: string;
   /** Traits active in this state */
@@ -280,12 +311,14 @@ export interface StateDefinition {
   blockedTraits?: string[];
   /** Sprite/visual key for this state */
   sprite?: string;
-  /** Whether this state emits stimuli */
+  /** DEPRECATED: Use stimuli array instead */
   emitsStimulus?: {
     type: string;
     intensity: number;
     radius: number;
   };
+  /** Multiple stimuli this state emits - for rich multi-sensory perception */
+  stimuli?: StimulusDefinition[];
 }
 
 export interface ComponentSpec {
@@ -301,7 +334,7 @@ export interface ComponentSpec {
 
 export interface ObjectTypeDefinition {
   name: string;
-  /** Base description template */
+  /** Base description template - can use {variable} placeholders */
   description: string;
   /** Base traits this object type has */
   traits: string[];
@@ -309,6 +342,8 @@ export interface ObjectTypeDefinition {
   states: Record<string, StateDefinition>;
   /** Default state when spawned */
   defaultState: string;
+  /** State transitions - how states change in response to actions/events */
+  transitions?: StateTransition[];
   /** Whether this can contain other objects */
   isContainer?: boolean;
   /** Container capacity if isContainer */
@@ -317,6 +352,12 @@ export interface ObjectTypeDefinition {
   defaultComponents?: ComponentSpec[];
   /** Category for organization */
   category?: string;
+  /** Variable definitions for description template */
+  variables?: Record<string, {
+    type: "string" | "enum";
+    default?: string;
+    options?: string[]; // for enum type
+  }>;
 }
 
 // Base object types (GodAI can add more)
@@ -423,18 +464,121 @@ export const BASE_OBJECT_TYPES: Record<string, ObjectTypeDefinition> = {
   torch: {
     name: "torch",
     description: "A torch mounted on the wall",
-    traits: ["examinable", "lightSource"],
+    traits: ["examinable", "lightSource", "lightable"],
     states: {
       lit: {
         description: "The torch burns brightly, casting flickering shadows.",
-        emitsStimulus: { type: "light", intensity: 0.8, radius: 5 },
+        emitsStimulus: { type: "light", intensity: 0.8, radius: 5 }, // legacy
+        stimuli: [
+          { type: "visual", template: "A torch burns on the wall, casting dancing shadows", intensity: 0.7 },
+          { type: "light", template: "Warm flickering light illuminates the area", intensity: 0.8, radius: 5 },
+          { type: "heat", template: "Gentle warmth radiates from the torch", intensity: 0.3, radius: 2 },
+        ],
       },
       unlit: {
         description: "The torch is dark and cold.",
+        stimuli: [
+          { type: "visual", template: "An unlit torch hangs on the wall", intensity: 0.3 },
+        ],
       },
     },
+    transitions: [
+      { from: "lit", to: "unlit", trigger: "extinguish" },
+      { from: "unlit", to: "lit", trigger: "light" },
+    ],
     defaultState: "lit",
     category: "lighting",
+  },
+
+  forge: {
+    name: "forge",
+    description: "A {material} forge for metalworking",
+    traits: ["examinable", "workstation", "heatable", "lightSource"],
+    states: {
+      cold: {
+        description: "The forge sits cold and dark.",
+        stimuli: [
+          { type: "visual", template: "A cold forge with dark coals sits ready", intensity: 0.4 },
+        ],
+      },
+      lit: {
+        description: "The forge burns with intense heat.",
+        stimuli: [
+          { type: "visual", template: "Glowing coals illuminate the forge with fierce orange light", intensity: 0.9 },
+          { type: "heat", template: "Waves of intense heat radiate from the forge", intensity: 0.9, radius: 4 },
+          { type: "light", template: "The forge casts a warm orange glow across the room", intensity: 0.7, radius: 6 },
+          { type: "sound", template: "The fire crackles and roars in the forge", intensity: 0.6 },
+        ],
+      },
+      roaring: {
+        description: "The forge roars at maximum heat, ready for serious work.",
+        stimuli: [
+          { type: "visual", template: "The forge blazes white-hot, almost too bright to look at", intensity: 1.0 },
+          { type: "heat", template: "Searing heat blasts from the roaring forge", intensity: 1.0, radius: 6 },
+          { type: "sound", template: "The forge roars like a hungry beast", intensity: 0.9 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "cold", to: "lit", trigger: "light" },
+      { from: "lit", to: "roaring", trigger: "stoke" },
+      { from: "roaring", to: "lit", trigger: "dampen" },
+      { from: "lit", to: "cold", trigger: "extinguish" },
+    ],
+    defaultState: "cold",
+    defaultComponents: [
+      { name: "Temperature", values: { current: 20, max: 1500 }, dynamic: true, schema: { current: "number", max: "number" } },
+    ],
+    category: "workstation",
+    variables: {
+      material: { type: "enum", default: "stone", options: ["stone", "brick", "iron"] },
+    },
+  },
+
+  oven: {
+    name: "oven",
+    description: "A {material} oven for baking",
+    traits: ["examinable", "workstation", "heatable"],
+    states: {
+      cold: {
+        description: "The oven is cold and empty.",
+        stimuli: [
+          { type: "visual", template: "A cold oven with its door ajar", intensity: 0.3 },
+        ],
+      },
+      heating: {
+        description: "The oven is warming up.",
+        stimuli: [
+          { type: "visual", template: "Embers glow inside the oven as it heats up", intensity: 0.5 },
+          { type: "heat", template: "Warmth begins to radiate from the oven", intensity: 0.4, radius: 2 },
+        ],
+      },
+      hot: {
+        description: "The oven is hot and ready for baking.",
+        stimuli: [
+          { type: "visual", template: "The oven glows with steady heat, ready for baking", intensity: 0.7 },
+          { type: "heat", template: "Even heat radiates from the oven", intensity: 0.7, radius: 3 },
+          { type: "smell", template: "The warm smell of heated stone wafts from the oven", intensity: 0.4 },
+        ],
+      },
+      baking: {
+        description: "Something is baking inside.",
+        stimuli: [
+          { type: "visual", template: "The oven glows warmly with something baking inside", intensity: 0.6 },
+          { type: "heat", template: "Pleasant baking heat radiates from the oven", intensity: 0.6, radius: 3 },
+          { type: "smell", template: "The delicious aroma of fresh baking fills the air", intensity: 0.9, radius: 8 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "cold", to: "heating", trigger: "light" },
+      { from: "heating", to: "hot", trigger: "wait" },
+      { from: "hot", to: "baking", trigger: "insert_food" },
+      { from: "baking", to: "hot", trigger: "remove_food" },
+      { from: "hot", to: "cold", trigger: "extinguish" },
+    ],
+    defaultState: "cold",
+    category: "workstation",
   },
 
   food_item: {
@@ -442,15 +586,38 @@ export const BASE_OBJECT_TYPES: Record<string, ObjectTypeDefinition> = {
     description: "Some {adjective} {foodType}",
     traits: ["edible", "takeable", "examinable"],
     states: {
-      fresh: { description: "It looks fresh and appetizing." },
-      stale: { description: "It's a bit past its prime." },
+      fresh: {
+        description: "It looks fresh and appetizing.",
+        stimuli: [
+          { type: "visual", template: "Fresh {foodType} sits here, looking appetizing", intensity: 0.5 },
+          { type: "smell", template: "A pleasant aroma rises from the fresh {foodType}", intensity: 0.6 },
+        ],
+      },
+      stale: {
+        description: "It's a bit past its prime.",
+        stimuli: [
+          { type: "visual", template: "Slightly stale {foodType} sits here", intensity: 0.3 },
+        ],
+      },
       rotten: {
         description: "It has gone bad.",
         blockedTraits: ["edible"],
+        stimuli: [
+          { type: "visual", template: "Rotten {foodType} sits here, covered in mold", intensity: 0.4 },
+          { type: "smell", template: "A foul stench rises from the rotten food", intensity: 0.8 },
+        ],
       },
     },
+    transitions: [
+      { from: "fresh", to: "stale", trigger: "decay" },
+      { from: "stale", to: "rotten", trigger: "decay" },
+    ],
     defaultState: "fresh",
     category: "consumable",
+    variables: {
+      adjective: { type: "string", default: "fresh" },
+      foodType: { type: "string", default: "bread" },
+    },
   },
 
   npc: {

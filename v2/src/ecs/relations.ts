@@ -70,6 +70,12 @@ export const HasConversation = createRelation();
 
 export const HasGoal = createRelation();
 
+export const HasPlan = createRelation();
+
+export const HasSchedule = createRelation(makeExclusive);
+
+export const HasReflectionState = createRelation(makeExclusive);
+
 export const AllRelations = {
   ChildOf,
   OccupiesRoom,
@@ -89,6 +95,9 @@ export const AllRelations = {
   HasPerception,
   HasConversation,
   HasGoal,
+  HasPlan,
+  HasSchedule,
+  HasReflectionState,
 };
 
 export type RelationName = keyof typeof AllRelations;

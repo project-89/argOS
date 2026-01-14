@@ -22,8 +22,9 @@ import {
   DynamicDescription,
   ObjectProperties,
   StateTransition,
+  StimulusSource,
 } from "../ecs/components";
-import { worldSchema, ContainedIn, OnTopOf, OccupiedBy, type ObjectTypeDefinition } from "./schema";
+import { worldSchema, ContainedIn, OnTopOf, OccupiedBy, type ObjectTypeDefinition, type StimulusDefinition } from "./schema";
 
 export interface SpawnOptions {
   /** Position in the world */
@@ -164,6 +165,16 @@ export class ObjectManager {
       Portal.bidirectional[eid] = true;
     }
 
+    // Set up StimulusSource based on state's stimuli (DYNAMIC PERCEPTION)
+    this.setupStimuliForState(eid, typeDef, initialState, options.properties);
+
+    // Apply defaultComponents from type definition
+    if (typeDef.defaultComponents) {
+      for (const compSpec of typeDef.defaultComponents) {
+        this.applyComponentSpec(eid, compSpec);
+      }
+    }
+
     // Apply any additional component data
     if (options.components) {
       for (const [compName, data] of Object.entries(options.components)) {
@@ -173,6 +184,119 @@ export class ObjectManager {
     }
 
     return eid;
+  }
+
+  /**
+   * Set up StimulusSource component based on state's stimuli definitions
+   */
+  private setupStimuliForState(
+    eid: number,
+    typeDef: ObjectTypeDefinition,
+    state: string,
+    properties?: Record<string, string | undefined>
+  ): void {
+    const stateDef = typeDef.states[state];
+    if (!stateDef) return;
+
+    // Get stimuli from state definition (prefer new stimuli array over legacy emitsStimulus)
+    const stimuli = stateDef.stimuli || [];
+
+    // Also check legacy emitsStimulus and convert if no new stimuli
+    if (stimuli.length === 0 && stateDef.emitsStimulus) {
+      stimuli.push({
+        type: stateDef.emitsStimulus.type as any,
+        template: stateDef.description,
+        intensity: stateDef.emitsStimulus.intensity,
+        radius: stateDef.emitsStimulus.radius,
+      });
+    }
+
+    if (stimuli.length === 0) {
+      // No stimuli - remove component if it exists
+      if (hasComponent(this.world, eid, StimulusSource)) {
+        removeComponent(this.world, eid, StimulusSource);
+      }
+      return;
+    }
+
+    // For now, use the highest-intensity stimulus as the primary one
+    // Future: Support multiple StimulusSource components per entity
+    const primaryStimulus = stimuli.reduce((best, curr) =>
+      (curr.intensity || 0.5) > (best.intensity || 0.5) ? curr : best
+    );
+
+    // Substitute variables in template
+    let template = primaryStimulus.template;
+    if (properties) {
+      for (const [key, value] of Object.entries(properties)) {
+        if (value) {
+          template = template.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+        }
+      }
+    }
+    // Also substitute from type variables defaults
+    if (typeDef.variables) {
+      for (const [key, varDef] of Object.entries(typeDef.variables)) {
+        if (varDef.default) {
+          template = template.replace(new RegExp(`\\{${key}\\}`, 'g'), varDef.default);
+        }
+      }
+    }
+
+    addComponent(this.world, eid, StimulusSource);
+    StimulusSource.stimulusType[eid] = primaryStimulus.type;
+    StimulusSource.template[eid] = template;
+    StimulusSource.interval[eid] = primaryStimulus.interval || 5000;
+    StimulusSource.lastEmit[eid] = 0;
+
+    // Store all stimuli as JSON for systems that want full multi-sensory data
+    // This can be read by enhanced perception systems
+    const allStimuliJson = JSON.stringify(stimuli.map(s => ({
+      ...s,
+      template: this.substituteVariables(s.template, properties, typeDef.variables),
+    })));
+    // TODO: Add a MultiStimuli component or extend StimulusSource to hold this
+  }
+
+  /**
+   * Substitute variables in a template string
+   */
+  private substituteVariables(
+    template: string,
+    properties?: Record<string, string | undefined>,
+    typeVariables?: Record<string, { type: string; default?: string; options?: string[] }>
+  ): string {
+    let result = template;
+    if (properties) {
+      for (const [key, value] of Object.entries(properties)) {
+        if (value) {
+          result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+        }
+      }
+    }
+    if (typeVariables) {
+      for (const [key, varDef] of Object.entries(typeVariables)) {
+        if (varDef.default) {
+          result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), varDef.default);
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Apply a component specification from the type definition
+   */
+  private applyComponentSpec(eid: number, spec: { name: string; values: Record<string, any>; dynamic?: boolean; schema?: Record<string, string> }): void {
+    // For now, log what we would do - actual implementation depends on component registry
+    console.log(`[ObjectManager] Would apply component ${spec.name} to ${eid}:`, spec.values);
+
+    // Handle known dynamic components
+    if (spec.dynamic && spec.schema) {
+      // TODO: Create dynamic component using createComponent from bitecs or our wrapper
+      // For now, we just log
+      console.log(`[ObjectManager] Dynamic component ${spec.name} would be created with schema:`, spec.schema);
+    }
   }
 
   /**
@@ -254,6 +378,10 @@ export class ObjectManager {
         });
         Description.value[eid] = desc;
       }
+
+      // Update stimuli for new state (DYNAMIC PERCEPTION)
+      // When state changes, what the entity emits changes too
+      this.setupStimuliForState(eid, typeDef, newState, this.getProperties(eid));
     }
 
     return true;

@@ -11,10 +11,9 @@
 
 import type { World } from "../ecs/world";
 import { query, entityExists, hasComponent } from "bitecs";
-import { AllComponents, Name, Agent, Description, GridPosition, Room } from "../ecs/components";
-import { listSystems, type SystemRegistry, type SystemDefinition } from "../ecs/dynamic-systems";
-import { OccupiesRoom } from "../ecs/relations";
-import { safeGetRelationTargets } from "../ecs/dynamic-systems";
+import { AllComponents, Name, Agent, Description, GridPosition, Room, Memory, Thought, Belief, Goal, Mind, Personality } from "../ecs/components";
+import { listSystems, type SystemRegistry, type SystemDefinition, safeGetRelationTargets } from "../ecs/dynamic-systems";
+import { OccupiesRoom, HasMemory, HasThought, HasBelief, HasGoal } from "../ecs/relations";
 
 // =============================================================================
 // ACTION INTROSPECTION
@@ -465,6 +464,229 @@ export function detectPatterns(buffer: RollingEventBuffer): Array<{ pattern: str
   }
 
   return patterns;
+}
+
+// =============================================================================
+// AGENT INTROSPECTION
+// =============================================================================
+
+export interface AgentMemory {
+  id: number;
+  type: string;
+  content: string;
+  importance: number;
+  emotionalValence: number;
+  timestamp: number;
+  lastRecalled: number;
+  recallCount: number;
+}
+
+export interface AgentThought {
+  id: number;
+  content: string;
+  type: string;
+  salience: number;
+  timestamp: number;
+}
+
+export interface AgentBelief {
+  id: number;
+  subject: string;
+  predicate: string;
+  object: string;
+  confidence: number;
+  source: string;
+  timestamp: number;
+}
+
+export interface AgentGoalInfo {
+  id: number;
+  description: string;
+  priority: number;
+  status: string;
+  progress: number;
+}
+
+export interface AgentMindState {
+  mode: string;
+  arousal: number;
+  focus: string;
+  lastUpdate: number;
+}
+
+export interface AgentPersonality {
+  openness: number;
+  conscientiousness: number;
+  extraversion: number;
+  agreeableness: number;
+  neuroticism: number;
+}
+
+export interface AgentIntrospection {
+  eid: number;
+  name: string;
+  description: string;
+  role: string;
+  room: string | null;
+  mind: AgentMindState;
+  personality: AgentPersonality | null;
+  memories: AgentMemory[];
+  thoughts: AgentThought[];
+  beliefs: AgentBelief[];
+  goals: AgentGoalInfo[];
+  currentThought: string | null;
+}
+
+/**
+ * Get agent entity ID by name
+ */
+export function getAgentByName(world: World, name: string): number | null {
+  const agents = Array.from(query(world, [Agent]));
+  for (const eid of agents) {
+    if (Name.value[eid] === name) return eid;
+  }
+  return null;
+}
+
+/**
+ * Get all memories for an agent
+ */
+export function getAgentMemories(world: World, agentEid: number): AgentMemory[] {
+  if (!entityExists(world, agentEid)) return [];
+
+  const memoryEids = safeGetRelationTargets(world, agentEid, HasMemory);
+  return memoryEids
+    .filter(eid => entityExists(world, eid) && Memory.content[eid])
+    .map(eid => ({
+      id: eid,
+      type: Memory.type[eid] || "unknown",
+      content: Memory.content[eid] || "",
+      importance: Memory.importance[eid] || 0,
+      emotionalValence: Memory.emotionalValence[eid] || 0,
+      timestamp: Memory.timestamp[eid] || 0,
+      lastRecalled: Memory.lastRecalled[eid] || 0,
+      recallCount: Memory.recallCount[eid] || 0,
+    }))
+    .sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/**
+ * Get all thoughts for an agent
+ */
+export function getAgentThoughts(world: World, agentEid: number): AgentThought[] {
+  if (!entityExists(world, agentEid)) return [];
+
+  const thoughtEids = safeGetRelationTargets(world, agentEid, HasThought);
+  return thoughtEids
+    .filter(eid => entityExists(world, eid) && Thought.content[eid])
+    .map(eid => ({
+      id: eid,
+      content: Thought.content[eid] || "",
+      type: Thought.type[eid] || "unknown",
+      salience: Thought.salience[eid] || 0,
+      timestamp: Thought.timestamp[eid] || 0,
+    }))
+    .sort((a, b) => b.timestamp - a.timestamp);
+}
+
+/**
+ * Get all beliefs for an agent
+ */
+export function getAgentBeliefs(world: World, agentEid: number): AgentBelief[] {
+  if (!entityExists(world, agentEid)) return [];
+
+  const beliefEids = safeGetRelationTargets(world, agentEid, HasBelief);
+  return beliefEids
+    .filter(eid => entityExists(world, eid) && Belief.subject[eid])
+    .map(eid => ({
+      id: eid,
+      subject: Belief.subject[eid] || "",
+      predicate: Belief.predicate[eid] || "",
+      object: Belief.object[eid] || "",
+      confidence: Belief.confidence[eid] || 0,
+      source: Belief.source[eid] || "unknown",
+      timestamp: Belief.timestamp[eid] || 0,
+    }))
+    .sort((a, b) => b.confidence - a.confidence);
+}
+
+/**
+ * Get all goals for an agent
+ */
+export function getAgentGoals(world: World, agentEid: number): AgentGoalInfo[] {
+  if (!entityExists(world, agentEid)) return [];
+
+  const goalEids = safeGetRelationTargets(world, agentEid, HasGoal);
+  return goalEids
+    .filter(eid => entityExists(world, eid) && Goal.description[eid])
+    .map(eid => ({
+      id: eid,
+      description: Goal.description[eid] || "",
+      priority: Goal.priority[eid] || 0,
+      status: Goal.status[eid] || "pending",
+      progress: Goal.progress[eid] || 0,
+    }))
+    .sort((a, b) => b.priority - a.priority);
+}
+
+/**
+ * Get full introspection data for an agent by name
+ */
+export function getAgentIntrospection(world: World, agentName: string): AgentIntrospection | null {
+  const eid = getAgentByName(world, agentName);
+  if (eid === null) return null;
+
+  const roomEids = safeGetRelationTargets(world, eid, OccupiesRoom);
+  const roomName = roomEids.length > 0 ? Name.value[roomEids[0]] : null;
+
+  const thoughts = getAgentThoughts(world, eid);
+  const currentThought = thoughts.length > 0 ? thoughts[0].content : null;
+
+  // Get personality if exists
+  let personality: AgentPersonality | null = null;
+  if (hasComponent(world, eid, Personality)) {
+    personality = {
+      openness: Personality.openness[eid] || 0.5,
+      conscientiousness: Personality.conscientiousness[eid] || 0.5,
+      extraversion: Personality.extraversion[eid] || 0.5,
+      agreeableness: Personality.agreeableness[eid] || 0.5,
+      neuroticism: Personality.neuroticism[eid] || 0.5,
+    };
+  }
+
+  return {
+    eid,
+    name: Name.value[eid] || "",
+    description: Description.value[eid] || "",
+    role: Agent.role[eid] || "",
+    room: roomName,
+    mind: {
+      mode: Mind.mode[eid] || "idle",
+      arousal: Mind.arousal[eid] || 0,
+      focus: Mind.focus[eid] || "",
+      lastUpdate: Mind.lastUpdate[eid] || 0,
+    },
+    personality,
+    memories: getAgentMemories(world, eid),
+    thoughts,
+    beliefs: getAgentBeliefs(world, eid),
+    goals: getAgentGoals(world, eid),
+    currentThought,
+  };
+}
+
+/**
+ * Get all agents with their full introspection data
+ */
+export function getAllAgentIntrospections(world: World): AgentIntrospection[] {
+  const agents = Array.from(query(world, [Agent]));
+  return agents
+    .map(eid => {
+      const name = Name.value[eid];
+      if (!name) return null;
+      return getAgentIntrospection(world, name);
+    })
+    .filter((a): a is AgentIntrospection => a !== null);
 }
 
 // =============================================================================

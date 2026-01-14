@@ -1,0 +1,8 @@
+{
+  "name": "Wealth",
+  "description": "Currency and valuables held by an entity",
+  "properties": {
+    "currencyType": "string",
+    "amount": "number"
+  }
+}

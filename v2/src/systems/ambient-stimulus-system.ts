@@ -6,6 +6,11 @@
  * - A fire that crackles (auditory)
  * - A flower that has a scent (olfactory)
  * - A light source that flickers (visual)
+ *
+ * TEMPLATE VARIATIONS:
+ * Templates can include multiple variations separated by "|" to add variety.
+ * Example: "The {name} bubbles softly|Water splashes from the {name}|The {name}'s water glistens"
+ * One variation is randomly selected each time the stimulus is emitted.
  */
 
 import type { World } from "../ecs/world";
@@ -16,9 +21,49 @@ import { broadcastToRoom, queueStimulus } from "../cognition/cognition-system";
 import type { SensoryModality } from "../cognition/sensory-system";
 
 export const name = "AmbientStimulusSystem";
-export const description = "Emits periodic stimuli from StimulusSource entities";
+export const description = "Emits periodic stimuli from StimulusSource entities with variation support";
 export const frequency = 5000; // Every 5 seconds
 export const active = true;
+
+// Track recent emissions to avoid immediate repetition
+const recentEmissions = new Map<number, string[]>(); // sourceEid -> last N contents
+const MAX_RECENT_TRACK = 3;
+
+/**
+ * Parse a template that may contain variations (separated by "|")
+ * Returns all possible variations
+ */
+function parseTemplateVariations(template: string): string[] {
+  if (!template.includes("|")) {
+    return [template];
+  }
+  return template.split("|").map(v => v.trim()).filter(v => v.length > 0);
+}
+
+/**
+ * Select a variation, preferring ones not recently used
+ */
+function selectVariation(sourceEid: number, variations: string[]): string {
+  if (variations.length === 1) return variations[0];
+
+  const recent = recentEmissions.get(sourceEid) || [];
+
+  // Filter out recently used variations if possible
+  const unused = variations.filter(v => !recent.includes(v));
+  const pool = unused.length > 0 ? unused : variations;
+
+  // Pick randomly from the pool
+  const selected = pool[Math.floor(Math.random() * pool.length)];
+
+  // Update recent tracking
+  recent.push(selected);
+  if (recent.length > MAX_RECENT_TRACK) {
+    recent.shift();
+  }
+  recentEmissions.set(sourceEid, recent);
+
+  return selected;
+}
 
 /**
  * Map stimulus type strings to sensory modalities
@@ -70,8 +115,12 @@ export function run(world: World, tick: number): void {
     const template = StimulusSource.template[sourceEid] || "";
     const sourceName = Name.value[sourceEid] || "something";
 
-    // Generate content from template
-    const content = template
+    // Parse template variations and select one
+    const variations = parseTemplateVariations(template);
+    const selectedTemplate = selectVariation(sourceEid, variations);
+
+    // Generate content from selected template
+    const content = selectedTemplate
       .replace(/\{name\}/g, sourceName)
       .replace(/\{source\}/g, sourceName);
 

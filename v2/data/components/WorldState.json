@@ -1,0 +1,8 @@
+{
+  "name": "WorldState",
+  "description": "Global world variables",
+  "properties": {
+    "festivalDaysLeft": "number",
+    "stormThreat": "number"
+  }
+}

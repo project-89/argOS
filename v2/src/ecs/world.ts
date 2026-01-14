@@ -27,6 +27,12 @@ export interface WorldContext {
     tick: number;
     delta: number;
     elapsed: number;
+    /** Simulation hour (0-23), progressed by TimeProgression system */
+    simulationHour: number;
+    /** Time of day: "dawn" | "morning" | "midday" | "afternoon" | "evening" | "night" */
+    timeOfDay: string;
+    /** Total simulation days elapsed */
+    simulationDay: number;
   };
   meta: {
     name: string;
@@ -41,6 +47,9 @@ export function createArgosWorld(name: string = "ArgOS World"): WorldContext {
       tick: 0,
       delta: 0,
       elapsed: 0,
+      simulationHour: 8,     // Start at 8am
+      timeOfDay: "morning",
+      simulationDay: 1,
     },
     meta: {
       name,

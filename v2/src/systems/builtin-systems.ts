@@ -1,9 +1,46 @@
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext } from "../ecs/dynamic-systems";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
-import { query, entityExists } from "bitecs";
+import { query, entityExists, addComponent, removeComponent, hasComponent } from "bitecs";
 import { Name, Agent, Mind, Room, StimulusSource, GridPosition } from "../ecs/components";
 import { OccupiesRoom } from "../ecs/relations";
+import { ActionRegistry } from "../cognition/action-registry";
+
+// =============================================================================
+// REGISTER BUILTIN SYSTEM ACTIONS
+// =============================================================================
+
+// These are the core actions provided by the builtin systems
+ActionRegistry.registerSystemActions("BuiltinSystems", [
+  {
+    name: "move",
+    description: "Move to a different room/location",
+    category: "movement",
+    requiresTarget: true,
+    requiresContent: false,
+  },
+  {
+    name: "speak",
+    description: "Say something out loud that others can hear",
+    category: "social",
+    requiresTarget: false,
+    requiresContent: true,
+  },
+  {
+    name: "observe",
+    description: "Pay attention to someone or something",
+    category: "social",
+    requiresTarget: true,
+    requiresContent: false,
+  },
+  {
+    name: "interact",
+    description: "Physically interact with an object or person",
+    category: "interaction",
+    requiresTarget: true,
+    requiresContent: true,
+  },
+]);
 
 // Track movement targets for agents (agentEid -> targetEid)
 const movementTargets = new Map<number, number>();
@@ -24,9 +61,6 @@ export function getMovementTarget(agentEid: number): number | undefined {
 }
 
 export function createTimeProgressionSystem(): SystemDefinition {
-  let worldTime = 0;
-  let timeOfDay = "evening";
-  
   return {
     name: "TimeProgression",
     description: "Advances world time and triggers time-based events",
@@ -35,33 +69,49 @@ export function createTimeProgressionSystem(): SystemDefinition {
     active: true,
     lastRun: 0,
     compiledFn: (world: World, ctx: SystemContext) => {
-      worldTime += 1;
-      
-      const hour = worldTime % 24;
-      let newTimeOfDay = timeOfDay;
-      
+      // Read current simulation time from world context (not closure!)
+      const worldContext = world as any;
+      let hour = worldContext.time?.simulationHour ?? 8;
+      let day = worldContext.time?.simulationDay ?? 1;
+      const previousTimeOfDay = worldContext.time?.timeOfDay ?? "morning";
+
+      // Advance by 1 hour
+      hour += 1;
+      if (hour >= 24) {
+        hour = 0;
+        day += 1;
+      }
+
+      // Calculate time of day
+      let newTimeOfDay = previousTimeOfDay;
       if (hour >= 5 && hour < 8) newTimeOfDay = "dawn";
       else if (hour >= 8 && hour < 12) newTimeOfDay = "morning";
       else if (hour >= 12 && hour < 14) newTimeOfDay = "midday";
       else if (hour >= 14 && hour < 18) newTimeOfDay = "afternoon";
       else if (hour >= 18 && hour < 21) newTimeOfDay = "evening";
       else if (hour >= 21 || hour < 5) newTimeOfDay = "night";
-      
-      if (newTimeOfDay !== timeOfDay) {
-        timeOfDay = newTimeOfDay;
-        ctx.emit("time_change", { 
-          hour, 
-          timeOfDay,
-          worldTime 
+
+      // CRITICAL: Write back to world context so other systems can read it
+      if (worldContext.time) {
+        worldContext.time.simulationHour = hour;
+        worldContext.time.simulationDay = day;
+        worldContext.time.timeOfDay = newTimeOfDay;
+      }
+
+      // Emit time change event and update room ambience when time of day changes
+      if (newTimeOfDay !== previousTimeOfDay) {
+        ctx.emit("time_change", {
+          hour,
+          timeOfDay: newTimeOfDay,
+          day,
         });
-        ctx.log(`Time changed to ${timeOfDay} (hour ${hour})`);
-        
+        ctx.log(`Time changed to ${newTimeOfDay} (hour ${hour}, day ${day})`);
+
         const rooms = Array.from(ctx.query(world, [Room]));
         for (const roomEid of rooms) {
-          const baseName = Name.value[roomEid];
           let ambience = Room.ambience[roomEid] || "";
-          
-          switch (timeOfDay) {
+
+          switch (newTimeOfDay) {
             case "dawn":
               ambience = "Soft light filters through windows as the world awakens.";
               break;
@@ -81,7 +131,7 @@ export function createTimeProgressionSystem(): SystemDefinition {
               ambience = "Darkness reigns outside, punctuated by candlelight within.";
               break;
           }
-          
+
           Room.ambience[roomEid] = ambience;
         }
       }
@@ -301,10 +351,227 @@ export function createMovementSystem(): SystemDefinition {
   };
 }
 
+/**
+ * StuckAgentRecovery - Detects and nudges agents who haven't changed state
+ * This helps prevent "frozen" agents who get stuck in logic loops
+ */
+export function createStuckAgentRecoverySystem(): SystemDefinition {
+  // Track last known state for each agent
+  const agentLastState = new Map<number, { focus: string; x: number; y: number; ticks: number }>();
+
+  return {
+    name: "StuckAgentRecovery",
+    description: "Detects agents who haven't moved or changed focus for too long and gives them a nudge",
+    pseudocode: `
+FOR EACH agent WITH Agent, Mind:
+  IF agent.position AND agent.focus unchanged for 5+ ticks:
+    Emit stimulus to agent: "Something catches your attention..."
+    Reset stuck counter
+`,
+    frequency: 20000, // Every 20 seconds
+    active: true,  // Enabled by default to prevent frozen agents
+    lastRun: 0,
+    compiledFn: (world: World, ctx: SystemContext) => {
+      const agents = Array.from(ctx.query(world, [Agent, Mind])).filter(eid => entityExists(world, eid));
+
+      for (const eid of agents) {
+        const currentFocus = Mind.focus[eid] || "";
+        const currentX = GridPosition?.x?.[eid] ?? 0;
+        const currentY = GridPosition?.y?.[eid] ?? 0;
+
+        const last = agentLastState.get(eid);
+
+        if (last) {
+          const sameState = last.focus === currentFocus && last.x === currentX && last.y === currentY;
+
+          if (sameState) {
+            last.ticks++;
+
+            // After 5 unchanged observations, nudge the agent
+            if (last.ticks >= 5) {
+              const agentName = Name.value[eid] || `Agent_${eid}`;
+
+              // Emit a stimulus to break them out of their loop
+              ctx.emit("agent_nudge", {
+                agent: agentName,
+                reason: "stuck",
+                stuckTicks: last.ticks
+              });
+
+              // Slightly increase arousal to encourage action
+              const currentArousal = Mind.arousal[eid] || 0.5;
+              Mind.arousal[eid] = Math.min(1.0, currentArousal + 0.1);
+
+              // Add a random element to their focus to shake things up
+              const nudges = [
+                "something nearby",
+                "a distant sound",
+                "a passing thought",
+                "restlessness",
+                "curiosity"
+              ];
+              Mind.focus[eid] = nudges[Math.floor(Math.random() * nudges.length)];
+
+              ctx.log(`[StuckRecovery] Nudged ${agentName} after ${last.ticks} stuck ticks`);
+
+              // Reset counter
+              last.ticks = 0;
+            }
+          } else {
+            // State changed, reset counter
+            last.focus = currentFocus;
+            last.x = currentX;
+            last.y = currentY;
+            last.ticks = 0;
+          }
+        } else {
+          // First observation
+          agentLastState.set(eid, { focus: currentFocus, x: currentX, y: currentY, ticks: 0 });
+        }
+      }
+    },
+  };
+}
+
+/**
+ * RoomArrival - Updates OccupiesRoom relation based on GridPosition proximity
+ * This is the critical bridge between grid-based movement and room occupancy
+ */
+export function createRoomArrivalSystem(): SystemDefinition {
+  // Threshold distance for considering an agent "in" a room
+  const ARRIVAL_THRESHOLD = 3;
+
+  return {
+    name: "RoomArrival",
+    description: "Updates room occupancy based on grid position proximity to rooms",
+    pseudocode: `
+FOR EACH agent WITH Agent, GridPosition:
+  Find closest room within ARRIVAL_THRESHOLD
+  IF agent is close to a new room:
+    Remove old OccupiesRoom relation
+    Add new OccupiesRoom relation
+    Emit room_entered event
+  ELSE IF agent left all rooms:
+    Remove OccupiesRoom relation
+    Emit room_left event
+`,
+    frequency: 1000, // Check every second
+    active: true,
+    lastRun: 0,
+    compiledFn: (world: World, ctx: SystemContext) => {
+      const agents = Array.from(ctx.query(world, [Agent, GridPosition])).filter(eid => entityExists(world, eid));
+      const rooms = Array.from(ctx.query(world, [Room, GridPosition])).filter(eid => entityExists(world, eid));
+
+      for (const agentEid of agents) {
+        if (!entityExists(world, agentEid)) continue;
+
+        const agentX = GridPosition.x[agentEid];
+        const agentY = GridPosition.y[agentEid];
+
+        if (agentX === undefined || agentY === undefined) continue;
+
+        // Find the closest room within threshold
+        let closestRoom: number | null = null;
+        let closestDistance = Infinity;
+
+        for (const roomEid of rooms) {
+          if (!entityExists(world, roomEid)) continue;
+
+          const roomX = GridPosition.x[roomEid];
+          const roomY = GridPosition.y[roomEid];
+
+          if (roomX === undefined || roomY === undefined) continue;
+
+          const dx = roomX - agentX;
+          const dy = roomY - agentY;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < ARRIVAL_THRESHOLD && distance < closestDistance) {
+            closestRoom = roomEid;
+            closestDistance = distance;
+          }
+        }
+
+        // Get current room occupancy
+        const currentRooms = safeGetRelationTargets(world, agentEid, OccupiesRoom);
+        const currentRoom = currentRooms.length > 0 ? currentRooms[0] : null;
+
+        const agentName = Name.value[agentEid];
+
+        // Handle room changes
+        if (closestRoom !== null && closestRoom !== currentRoom) {
+          // Agent entered a new room
+          const newRoomName = Name.value[closestRoom];
+
+          // Remove old room relation if any
+          if (currentRoom !== null && entityExists(world, currentRoom)) {
+            removeComponent(world, agentEid, OccupiesRoom(currentRoom));
+            const oldRoomName = Name.value[currentRoom];
+            ctx.emit("room_left", {
+              agent: agentName,
+              room: oldRoomName,
+            });
+          }
+
+          // Add new room relation
+          addComponent(world, agentEid, OccupiesRoom(closestRoom));
+
+          ctx.emit("room_entered", {
+            agent: agentName,
+            room: newRoomName,
+            position: { x: agentX, y: agentY },
+          });
+
+          ctx.log(`${agentName} entered ${newRoomName}`);
+        } else if (closestRoom === null && currentRoom !== null) {
+          // Agent left all rooms (in the wilderness)
+          if (entityExists(world, currentRoom)) {
+            const oldRoomName = Name.value[currentRoom];
+            removeComponent(world, agentEid, OccupiesRoom(currentRoom));
+            ctx.emit("room_left", {
+              agent: agentName,
+              room: oldRoomName,
+            });
+            ctx.log(`${agentName} left ${oldRoomName}`);
+          }
+        }
+      }
+    },
+  };
+}
+
 export const BUILTIN_SYSTEMS = {
   TimeProgression: createTimeProgressionSystem,
   SocialDynamics: createSocialDynamicsSystem,
   NarrativeEvents: createNarrativeEventSystem,
   RelationshipEvolution: createRelationshipEvolutionSystem,
   Movement: createMovementSystem,
+  RoomArrival: createRoomArrivalSystem,
+  StuckAgentRecovery: createStuckAgentRecoverySystem,
 };
+
+/**
+ * Register all built-in systems to a system registry.
+ * This is the recommended way to set up a simulation with all core systems.
+ *
+ * Systems registered:
+ * - TimeProgression: Advances world time in 24-hour cycles
+ * - SocialDynamics: Updates agent arousal based on social proximity
+ * - NarrativeEvents: Injects atmospheric narrative stimuli
+ * - RelationshipEvolution: Strengthens familiarity between co-located agents
+ * - Movement: Grid-based agent movement toward targets
+ * - RoomArrival: Updates OccupiesRoom when agents reach rooms via GridPosition
+ * - StuckAgentRecovery: Detects and nudges frozen agents
+ */
+export function registerAllBuiltinSystems(systemRegistry: { systems: Map<string, SystemDefinition> }): void {
+  for (const [name, creator] of Object.entries(BUILTIN_SYSTEMS)) {
+    systemRegistry.systems.set(name, creator());
+  }
+}
+
+/**
+ * Get an array of all builtin system names for debugging/display
+ */
+export function getBuiltinSystemNames(): string[] {
+  return Object.keys(BUILTIN_SYSTEMS);
+}

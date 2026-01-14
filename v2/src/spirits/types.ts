@@ -236,6 +236,9 @@ export interface NarrativeState {
   // Planned beats
   plannedBeats: StoryBeat[];
   completedBeats: string[];
+
+  // Recent prose for deduplication (last 10 summaries)
+  recentProse: string[];
 }
 
 export type NarrativePhase =

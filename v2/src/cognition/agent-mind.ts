@@ -4,18 +4,30 @@ import type { World } from "../ecs/world";
 import { addEntity, addComponent, removeEntity, query, getRelationTargets, hasComponent } from "bitecs";
 import { Name, Description, Agent, Mind, Room, Thought, Perception, ConversationTurn, Goal, Personality } from "../ecs/components";
 import { OccupiesRoom, HasThought, HasPerception, HasConversation, HasGoal } from "../ecs/relations";
-import { 
-  getKnowledgeSummary, 
-  getRelevantMemories, 
+import {
+  getKnowledgeSummary,
+  getRelevantMemories,
   getImpressionOf,
   getAgentMemories
 } from "./knowledge-graph";
-import { Memory } from "../ecs/components";
+import { Memory, Plan, Schedule, ReflectionState } from "../ecs/components";
+import { HasPlan, HasSchedule, HasReflectionState } from "../ecs/relations";
+import { formatPlansForContext, getNextPlannedAction } from "./planning-system";
+import { formatInsightsForContext } from "./reflection-system";
+import { formatScheduleForContext, getCurrentActivity } from "./schedule-system";
+import { formatActionsForPrompt, getValidActionTypes } from "./action-registry";
 
 const model = google("gemini-2.5-flash");
 
+// Valid action types - expanded to match all handlers in cognition-system.ts
+export type ValidActionType =
+  | "speak" | "observe" | "move" | "interact" | "think" | "wait"  // Core
+  | "attack" | "defend"                                           // Combat
+  | "pickup" | "drop" | "use" | "give" | "examine"                // Inventory
+  | "rest" | "reflect";                                           // Self
+
 export interface AgentAction {
-  type: "speak" | "observe" | "move" | "interact" | "think" | "wait";
+  type: ValidActionType;
   target?: string;
   content?: string;
 }
@@ -89,6 +101,12 @@ export function addThought(
   agentEid: number,
   data: { content: string; type?: string; salience?: number }
 ): number {
+  // Check if agent entity still exists before trying to add components
+  if (!hasComponent(world, agentEid, Agent)) {
+    console.warn(`[AgentMind] Cannot add thought - agent entity ${agentEid} no longer exists`);
+    return -1;
+  }
+
   const thoughtEid = addEntity(world);
   addComponent(world, thoughtEid, Thought);
   addComponent(world, agentEid, HasThought(thoughtEid));
@@ -284,7 +302,13 @@ ${recentThoughts.length > 0
   ? recentThoughts.map(eid => `- ${Thought.content[eid]}`).join("\n")
   : "Mind is clear."}
 
-${buildKnowledgeContext(world, eid, othersInRoom)}`;
+${buildKnowledgeContext(world, eid, othersInRoom)}
+
+${formatPlansForContext(world, eid)}
+
+${formatScheduleForContext(world, eid)}
+
+${formatInsightsForContext(world, eid)}`;
 }
 
 export async function agentThink(world: World, eid: number): Promise<AgentAction> {
@@ -297,24 +321,42 @@ export async function agentThink(world: World, eid: number): Promise<AgentAction
     content: ConversationTurn.content[turnEid],
   }));
 
-  const prompt = `Based on your current situation, perceptions, goals, and character, decide what to do next.
+  // Get dynamic actions based on agent's components, location, and environment
+  const actionsContext = formatActionsForPrompt(world, eid);
+  const validTypes = getValidActionTypes(world, eid);
 
-You can:
-- speak: Say something out loud (provide content)
-- observe: Pay attention to someone/something specific (provide target)
-- think: Have an internal thought (provide content)
-- interact: Physically interact with something (provide target and content describing the action)
-- move: Go to a different location (provide target as the destination name)
-- wait: Do nothing, just exist in the moment
+  const prompt = `Based on your current situation, perceptions, goals, plans, schedule, and character, decide what to do next.
 
-Consider your active goals when deciding what to do. Work toward completing them.
+${actionsContext}
+
+DECISION PRIORITIES:
+1. FIRST check your RECENT PERCEPTIONS for action feedback (🚨 CRITICAL failures, ✅ successes)
+   - If your last action FAILED, you MUST acknowledge it and try something DIFFERENT
+   - Do NOT repeat failed actions or assume they succeeded
+2. Check your INVENTORY to know what you actually have - don't assume you picked something up
+3. If you have CRITICAL NEEDS (hunger/energy), address them
+4. If you have an ACTIVE PLAN, follow the current step
+5. Consider your SCHEDULE - what activity should you be doing now?
+6. Work toward your ACTIVE GOALS
+7. React naturally to your perceptions and surroundings
+
+CRITICAL RULE:
+- If your perception shows "🚨 CRITICAL - YOUR LAST ACTION FAILED", you MUST acknowledge this failure
+- Never say "I have X" unless X appears in your INVENTORY
+- Never say "I did X" unless your perception shows "✅ SUCCESS"
+
+IMPORTANT:
+- Only use actions from the list above
+- When moving, use exact location names from "PLACES YOU CAN GO"
+- When interacting with objects or people, use their exact names
+- Your action type MUST be one of: ${validTypes.join(", ")}
 
 Respond with JSON only:
 {
   "innerThought": "Your internal reasoning about what to do",
   "action": {
-    "type": "speak|observe|think|interact|move|wait",
-    "target": "optional - who/what",
+    "type": "<action_type>",
+    "target": "optional - exact name of who/what from the lists above",
     "content": "optional - what you say/think/do"
   }
 }
@@ -354,8 +396,8 @@ Stay in character. Be concise. React naturally to your perceptions and surroundi
     addConversationTurn(world, eid, "user", prompt);
     addConversationTurn(world, eid, "assistant", text);
 
-    console.log(`[${name}] thinks: "${result.innerThought?.slice(0, 80)}..."`);
-    console.log(`[${name}] action: ${action.type}${action.content ? ` - "${action.content.slice(0, 50)}..."` : ""}`);
+    console.log(`[${name}] thinks: "${result.innerThought || ""}"`);
+    console.log(`[${name}] action: ${action.type}${action.content ? ` - "${action.content}"` : ""}`);
 
     return action;
   } catch (error) {

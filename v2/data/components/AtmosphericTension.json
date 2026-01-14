@@ -1,0 +1,8 @@
+{
+  "name": "AtmosphericTension",
+  "description": "Atmospheric and narrative tension related to the coming storm. 0-100.",
+  "properties": {
+    "warningLevel": "number",
+    "intensity": "number"
+  }
+}

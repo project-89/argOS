@@ -82,6 +82,8 @@ export {
   startSpiritSystem,
   stopSpiritSystem,
   setGodAgentCallback,
+  setGlobalContext,
+  getGlobalContext,
   recordAction,
   recordActionEvent,
   tickSpiritSystem,

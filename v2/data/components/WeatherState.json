@@ -1,0 +1,9 @@
+{
+  "name": "WeatherState",
+  "description": "Atmospheric moisture and pressure level",
+  "properties": {
+    "pressure": "number",
+    "humidity": "number",
+    "stormImpending": "boolean"
+  }
+}

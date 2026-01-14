@@ -6,11 +6,18 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "dev": "tsx watch src/index.ts",
+    "dev": "concurrently -n server,ui -c cyan,magenta \"tsx watch src/run-dev-server.ts\" \"npm run dev --prefix ui\"",
+    "dev:server": "tsx watch src/run-dev-server.ts",
+    "dev:ui": "npm run dev --prefix ui",
     "start": "tsx src/index.ts",
     "simulate": "tsx src/run-simulation.ts",
     "sandbox": "tsx src/run-sandbox.ts",
-    "test": "tsx src/test.ts",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPattern=__tests__",
+    "test:behavioral": "tsx src/behavioral-tests/09-cognitive-enhancements.ts",
+    "stress-test": "tsx src/behavioral-tests/10-full-simulation-stress-test.ts",
+    "stress-test:short": "tsx src/behavioral-tests/10-full-simulation-stress-test.ts --duration=2",
+    "stress-test:long": "tsx src/behavioral-tests/10-full-simulation-stress-test.ts --duration=30",
     "typecheck": "tsc --noEmit",
     "extract-sprites": "tsx src/scripts/extract-sprites.ts"
   },
@@ -26,10 +33,14 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^20.10.0",
     "@types/sharp": "^0.31.1",
+    "concurrently": "^9.2.1",
     "gif-frames": "^1.0.1",
+    "jest": "^29.7.0",
     "sharp": "^0.34.5",
+    "ts-jest": "^29.4.6",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0"
   }

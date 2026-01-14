@@ -1,0 +1,8 @@
+{
+  "name": "Romance",
+  "description": "Track romance levels between agents",
+  "properties": {
+    "target": "string",
+    "level": "number"
+  }
+}

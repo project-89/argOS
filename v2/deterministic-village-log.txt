@@ -1,0 +1,178 @@
+DETERMINISTIC VILLAGE SIMULATION LOG
+============================================================
+
+Statistics:
+  Total movements: 12
+  Goals created: 22
+  Goals completed: 12
+  Needs satisfied: 5
+
+Hourly Snapshots:
+
+Hour 5:
+  Ada the Baker: Home [H:0.55 E:1.00 S:0.31]
+  Bjorn the Smith: Forge [H:0.28 E:0.95 S:0.41]
+  Clara the Healer: Temple [H:0.43 E:1.00 S:0.28]
+  Dirk the Merchant: Market [H:0.54 E:0.93 S:0.60]
+  Elena the Scholar: Library [H:0.31 E:0.86 S:0.25]
+
+Hour 6:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.40]
+  Bjorn the Smith: Tavern [H:0.00 E:0.71 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.94 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.00]
+  Elena the Scholar: Tavern [H:0.00 E:0.59 S:1.00]
+
+Hour 7:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.16]
+  Bjorn the Smith: Tavern [H:0.00 E:0.16 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.40 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.26]
+  Elena the Scholar: Tavern [H:0.00 E:0.04 S:1.00]
+
+Hour 8:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.45]
+  Bjorn the Smith: Tavern [H:0.00 E:0.64 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.88 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.02]
+  Elena the Scholar: Tavern [H:0.00 E:0.52 S:1.00]
+
+Hour 9:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.21]
+  Bjorn the Smith: Tavern [H:0.00 E:0.10 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.34 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.31]
+  Elena the Scholar: Tavern [H:0.00 E:0.00 S:1.00]
+
+Hour 10:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.00]
+  Bjorn the Smith: Tavern [H:0.00 E:0.58 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.82 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.07]
+  Elena the Scholar: Tavern [H:0.00 E:0.46 S:1.00]
+
+Hour 11:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.26]
+  Bjorn the Smith: Tavern [H:0.00 E:0.04 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.28 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.36]
+  Elena the Scholar: Tavern [H:0.00 E:0.94 S:1.00]
+
+Hour 12:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.02]
+  Bjorn the Smith: Tavern [H:0.00 E:0.52 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.76 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.12]
+  Elena the Scholar: Tavern [H:0.00 E:0.40 S:1.00]
+
+Hour 13:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.31]
+  Bjorn the Smith: Tavern [H:0.00 E:0.00 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.22 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.40]
+  Elena the Scholar: Tavern [H:0.00 E:0.88 S:1.00]
+
+Hour 14:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.07]
+  Bjorn the Smith: Tavern [H:0.00 E:0.46 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.70 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.16]
+  Elena the Scholar: Tavern [H:0.00 E:0.34 S:1.00]
+
+Hour 15:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.36]
+  Bjorn the Smith: Tavern [H:0.00 E:0.94 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.16 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.45]
+  Elena the Scholar: Tavern [H:0.00 E:0.82 S:1.00]
+
+Hour 16:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.12]
+  Bjorn the Smith: Tavern [H:0.00 E:0.40 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.64 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.21]
+  Elena the Scholar: Tavern [H:0.00 E:0.28 S:1.00]
+
+Hour 17:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.40]
+  Bjorn the Smith: Tavern [H:0.00 E:0.88 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.10 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.00]
+  Elena the Scholar: Tavern [H:0.00 E:0.76 S:1.00]
+
+Hour 18:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.16]
+  Bjorn the Smith: Tavern [H:0.00 E:0.34 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.58 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.26]
+  Elena the Scholar: Tavern [H:0.00 E:0.22 S:1.00]
+
+Hour 19:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.45]
+  Bjorn the Smith: Tavern [H:0.00 E:0.82 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.04 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.02]
+  Elena the Scholar: Tavern [H:0.00 E:0.70 S:1.00]
+
+Hour 20:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.21]
+  Bjorn the Smith: Tavern [H:0.00 E:0.28 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.52 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.31]
+  Elena the Scholar: Tavern [H:0.00 E:0.16 S:1.00]
+
+Hour 21:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.00]
+  Bjorn the Smith: Tavern [H:0.00 E:0.76 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.00 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.07]
+  Elena the Scholar: Tavern [H:0.00 E:0.64 S:1.00]
+
+Hour 22:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.26]
+  Bjorn the Smith: Tavern [H:0.00 E:0.22 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.46 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.36]
+  Elena the Scholar: Tavern [H:0.00 E:0.10 S:1.00]
+
+Hour 23:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.02]
+  Bjorn the Smith: Tavern [H:0.00 E:0.70 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.94 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.12]
+  Elena the Scholar: Tavern [H:0.00 E:0.58 S:1.00]
+
+Hour 0:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.31]
+  Bjorn the Smith: Tavern [H:0.00 E:0.16 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.40 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.40]
+  Elena the Scholar: Tavern [H:0.00 E:0.04 S:1.00]
+
+Hour 1:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.07]
+  Bjorn the Smith: Tavern [H:0.00 E:0.64 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.88 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.16]
+  Elena the Scholar: Tavern [H:0.00 E:0.52 S:1.00]
+
+Hour 2:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.36]
+  Bjorn the Smith: Tavern [H:0.00 E:0.10 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.34 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.45]
+  Elena the Scholar: Tavern [H:0.00 E:0.00 S:1.00]
+
+Hour 3:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.12]
+  Bjorn the Smith: Tavern [H:0.00 E:0.58 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.82 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.21]
+  Elena the Scholar: Tavern [H:0.00 E:0.46 S:1.00]
+
+Hour 4:
+  Ada the Baker: Home [H:1.00 E:1.00 S:0.40]
+  Bjorn the Smith: Tavern [H:0.00 E:0.04 S:1.00]
+  Clara the Healer: Tavern [H:0.00 E:0.28 S:1.00]
+  Dirk the Merchant: Home [H:1.00 E:1.00 S:0.00]
+  Elena the Scholar: Tavern [H:0.00 E:0.94 S:1.00]

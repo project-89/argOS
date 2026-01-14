@@ -14,10 +14,10 @@
 
 import type { World } from "../ecs/world";
 import { query, getRelationTargets, hasComponent, entityExists } from "bitecs";
-import { Name, Description, Agent, Mind, Room, StimulusSource } from "../ecs/components";
+import { Name, Description, Agent, Mind, Room, StimulusSource, Traits, Inventory, ObjectState, ObjectType } from "../ecs/components";
 import { OccupiesRoom, Contains } from "../ecs/relations";
-import { getDynamicComponentValues } from "../ecs/dynamic-components";
 import { getAvailableAffordances } from "./cognition-system";
+import { getEffectiveActorTraits } from "../world/effect-executor";
 import { worldSchema } from "../world/schema";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
 
@@ -115,6 +115,19 @@ export function generateStimuliForAgent(
     }
   }
 
+  // Add awareness of notable object states (things that might need fixing)
+  const notableStates = getNotableObjectStates(world, roomEid);
+  if (notableStates.length > 0) {
+    stimuli.push({
+      modality: "cognitive",
+      type: "awareness",
+      content: `Objects needing attention: ${notableStates.join(", ")}`,
+      source: "intuition",
+      intensity: 0.7,
+      timestamp: Date.now(),
+    });
+  }
+
   return stimuli;
 }
 
@@ -125,18 +138,20 @@ function getAgentCapabilities(world: World, agentEid: number): SensoryCapabiliti
   // Start with defaults
   const caps = { ...DEFAULT_CAPABILITIES };
 
-  // Check for modifying traits
-  const meta = getDynamicComponentValues("ObjectMeta", agentEid);
-  if (meta?.traits) {
-    const traits = meta.traits.split(",");
+  // Check for modifying traits - read from ECS Traits.active component
+  const traitsJson = Traits?.active?.[agentEid];
+  if (traitsJson) {
+    try {
+      const traits = JSON.parse(traitsJson) as string[];
 
-    // Trait-based modifications
-    if (traits.includes("blind")) caps.visual = 0;
-    if (traits.includes("deaf")) caps.auditory = 0;
-    if (traits.includes("keen_sight")) caps.visual = 1.5;
-    if (traits.includes("keen_hearing")) caps.auditory = 1.5;
-    if (traits.includes("intuitive")) caps.cognitive = 1;
-    if (traits.includes("psychic")) caps.cognitive = 1.5;
+      // Trait-based modifications
+      if (traits.includes("blind")) caps.visual = 0;
+      if (traits.includes("deaf")) caps.auditory = 0;
+      if (traits.includes("keen_sight")) caps.visual = 1.5;
+      if (traits.includes("keen_hearing")) caps.auditory = 1.5;
+      if (traits.includes("intuitive")) caps.cognitive = 1;
+      if (traits.includes("psychic")) caps.cognitive = 1.5;
+    } catch { /* ignore parse errors */ }
   }
 
   return caps;
@@ -184,8 +199,9 @@ function generateVisualStimuli(
     if (otherRooms.includes(roomEid)) {
       const otherName = Name.value[otherEid] || "someone";
       const otherDesc = Description.value[otherEid];
-      const meta = getDynamicComponentValues("ObjectMeta", otherEid);
-      const state = meta?.state ? ` (${meta.state})` : "";
+      // Read state from ECS ObjectState component (not ObjectMeta)
+      const currentState = ObjectState?.current?.[otherEid];
+      const state = currentState && currentState !== "normal" ? ` (${currentState})` : "";
 
       if (otherDesc) {
         peopleLines.push(`${otherName}${state}: ${otherDesc.slice(0, 80)}`);
@@ -216,14 +232,17 @@ function generateVisualStimuli(
 
     const objName = Name.value[contentEid];
     if (objName) {
+      // Description.value is updated from WorldSchema by ObjectManager.transitionState()
       const objDesc = Description.value[contentEid];
-      const meta = getDynamicComponentValues("ObjectMeta", contentEid);
-      const state = meta?.state && meta.state !== "normal" ? ` (${meta.state})` : "";
+      // Read state from ECS ObjectState component (not ObjectMeta)
+      const currentState = ObjectState?.current?.[contentEid];
+      const state = currentState && currentState !== "normal" ? ` [${currentState}]` : "";
 
       if (objDesc) {
-        objectLines.push(`${objName}${state}: ${objDesc.slice(0, 60)}`);
+        // Show full description - it contains important state info from WorldSchema
+        objectLines.push(`- ${objName}${state}: ${objDesc}`);
       } else {
-        objectLines.push(`${objName}${state}`);
+        objectLines.push(`- ${objName}${state}`);
       }
     }
   }
@@ -232,7 +251,7 @@ function generateVisualStimuli(
     stimuli.push({
       modality: "visual",
       type: "objects",
-      content: `You see: ${objectLines.join("; ")}`,
+      content: `Objects here:\n${objectLines.join("\n")}`,
       source: "environment",
       intensity: 0.7 * sensitivity,
       timestamp: Date.now(),
@@ -311,14 +330,22 @@ function generateOlfactoryStimuli(
 
   for (const contentEid of contents) {
     if (!entityExists(world, contentEid)) continue;
-    const meta = getDynamicComponentValues("ObjectMeta", contentEid);
-    if (!meta?.traits) continue;
 
-    const traits = meta.traits.split(",");
+    // Read traits from ECS Traits.active component (not ObjectMeta)
+    const traitsJson = Traits?.active?.[contentEid];
+    if (!traitsJson) continue;
+
+    let traits: string[] = [];
+    try {
+      traits = JSON.parse(traitsJson) as string[];
+    } catch { continue; }
+
     const sourceName = Name.value[contentEid] || "something";
+    // Read state from ECS ObjectState component
+    const currentState = ObjectState?.current?.[contentEid];
 
     // Things that typically have smells
-    if (traits.includes("edible") && meta.state === "fresh") {
+    if (traits.includes("edible") && currentState === "fresh") {
       stimuli.push({
         modality: "olfactory",
         type: "food",
@@ -327,7 +354,7 @@ function generateOlfactoryStimuli(
         intensity: 0.6 * sensitivity,
         timestamp: Date.now(),
       });
-    } else if (traits.includes("edible") && meta.state === "rotten") {
+    } else if (traits.includes("edible") && currentState === "rotten") {
       stimuli.push({
         modality: "olfactory",
         type: "decay",
@@ -418,10 +445,15 @@ function generateCognitiveStimuli(
     if (contentEid === agentEid) continue;
     if (!entityExists(world, contentEid)) continue;
 
-    const meta = getDynamicComponentValues("ObjectMeta", contentEid);
-    if (!meta?.traits) continue;
+    // Read traits from ECS Traits.active component (not ObjectMeta)
+    const traitsJson = Traits?.active?.[contentEid];
+    if (!traitsJson) continue;
 
-    const traits = meta.traits.split(",");
+    let traits: string[] = [];
+    try {
+      traits = JSON.parse(traitsJson) as string[];
+    } catch { continue; }
+
     const name = Name.value[contentEid] || "something";
 
     if (traits.includes("hostile") || traits.includes("predator") || traits.includes("dangerous")) {
@@ -444,14 +476,139 @@ function generateCognitiveStimuli(
 }
 
 // ============================================================================
+// AGENT SELF-AWARENESS - Capabilities and Action History
+// ============================================================================
+
+/**
+ * Get agent's current tool/resource capabilities (traits starting with "has")
+ * Uses DYNAMIC TRAIT RESOLUTION - capabilities come from held items, not copied traits
+ *
+ * Example: Holding a sharp knife gives "knife" capability
+ * Example: Holding an open spice jar gives "spices" capability
+ */
+export function getAgentToolCapabilities(agentEid: number): string[] {
+  // Use dynamic resolution - capabilities come from what we're holding
+  const effectiveTraits = getEffectiveActorTraits(agentEid);
+
+  return Array.from(effectiveTraits)
+    .filter(t => t.startsWith("has"))
+    .map(t => {
+      // Convert "hasCrowbar" -> "crowbar", "hasOil" -> "oil"
+      return t.slice(3).charAt(0).toLowerCase() + t.slice(4);
+    });
+}
+
+/**
+ * Get the names of items in an agent's inventory
+ * Critical for preventing hallucination about what agent has
+ */
+export function getInventoryItemNames(agentEid: number): string[] {
+  const itemsJson = Inventory?.items?.[agentEid];
+  if (!itemsJson) return [];
+
+  try {
+    const itemIds = JSON.parse(itemsJson) as number[];
+    return itemIds
+      .map(eid => Name?.value?.[eid])
+      .filter((n): n is string => typeof n === "string" && n.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+// Track recent successful actions per agent for better memory
+const recentSuccesses = new Map<number, string[]>();
+const MAX_RECENT_ACTIONS = 5;
+
+/**
+ * Get notable object states in a room (things that might need action)
+ * Shows: locked, wet, dull, rusty, empty, etc.
+ * Also shows what's BLOCKING certain actions (prerequisites)
+ */
+export function getNotableObjectStates(world: World, roomEid: number): string[] {
+  const notable: string[] = [];
+  const contents = safeGetRelationTargets(world, roomEid, Contains);
+
+  for (const eid of contents) {
+    if (!entityExists(world, eid)) continue;
+    if (hasComponent(world, eid, Agent)) continue;
+
+    const objName = Name.value[eid];
+    if (!objName) continue;
+
+    // Check object state from ECS ObjectState component (not ObjectMeta)
+    const state = ObjectState?.current?.[eid];
+
+    // Check traits for blocked actions - from ECS Traits.active
+    const traitsJson = Traits?.active?.[eid];
+    let traits: string[] = [];
+    if (traitsJson) {
+      try {
+        traits = JSON.parse(traitsJson) as string[];
+      } catch { }
+    }
+
+    // Build a status string showing state and any blockers
+    const statuses: string[] = [];
+
+    // DYNAMIC: Check if current state has blockedTraits in WorldSchema
+    // A state is "notable" if it's blocking some capability
+    const typeId = ObjectType?.typeId?.[eid];
+    if (state && typeId) {
+      const typeDef = worldSchema.getObjectType(typeId);
+      if (typeDef) {
+        const stateDef = typeDef.states[state];
+        // If this state has blockedTraits, it's notable (something is blocked)
+        if (stateDef?.blockedTraits && stateDef.blockedTraits.length > 0) {
+          statuses.push(state.toUpperCase());
+        }
+      }
+    }
+
+    // Check for blocked capabilities based on current traits
+    // If object should be takeable but currently isn't, note it
+    if (!traits.includes("takeable") && traits.includes("unreachable")) {
+      statuses.push("can't take yet");
+    }
+    // If object is locked, note it needs unlocking
+    if (traits.includes("locked")) {
+      statuses.push("needs unlocking");
+    }
+
+    if (statuses.length > 0) {
+      notable.push(`${objName}: ${statuses.join(", ")}`);
+    }
+  }
+
+  return notable;
+}
+
+export function recordSuccessfulAction(agentEid: number, action: string): void {
+  if (!recentSuccesses.has(agentEid)) {
+    recentSuccesses.set(agentEid, []);
+  }
+  const actions = recentSuccesses.get(agentEid)!;
+  actions.push(action);
+  if (actions.length > MAX_RECENT_ACTIONS) {
+    actions.shift();
+  }
+}
+
+export function getRecentSuccesses(agentEid: number): string[] {
+  return recentSuccesses.get(agentEid) || [];
+}
+
+// ============================================================================
 // STIMULUS FORMATTING FOR AGENT PROMPT
 // ============================================================================
 
 /**
  * Format stimuli into a prompt-friendly text for the agent
+ * Action results/failures are shown FIRST and prominently to prevent hallucination
+ * Optional agentEid enables showing current capabilities
  */
-export function formatStimuliForPrompt(stimuli: Stimulus[]): string {
-  if (stimuli.length === 0) return "You perceive nothing unusual.";
+export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number): string {
+  if (stimuli.length === 0 && !agentEid) return "You perceive nothing unusual.";
 
   // Group by modality
   const byModality = new Map<SensoryModality, Stimulus[]>();
@@ -463,6 +620,65 @@ export function formatStimuliForPrompt(stimuli: Stimulus[]): string {
   }
 
   const sections: string[] = [];
+
+  // ⚠️ ACTION FEEDBACK FIRST - This is critical for preventing hallucination
+  // Pull out action_result and action_failed from cognitive stimuli and show them prominently
+  const cognitive = byModality.get("cognitive") || [];
+  const actionFeedback = cognitive.filter(s => s.type === "action_result" || s.type === "action_failed");
+  const otherCognitive = cognitive.filter(s => s.type !== "action_result" && s.type !== "action_failed");
+
+  if (actionFeedback.length > 0) {
+    // Check if there are failures - if so, make them VERY prominent
+    const failures = actionFeedback.filter(s => s.type === "action_failed");
+    const successes = actionFeedback.filter(s => s.type === "action_result");
+
+    if (failures.length > 0) {
+      sections.push("🚨🚨🚨 CRITICAL - YOUR LAST ACTION FAILED 🚨🚨🚨");
+      sections.push("════════════════════════════════════════════");
+      for (const stim of failures) {
+        sections.push(`❌ ${stim.content}`);
+      }
+      sections.push("════════════════════════════════════════════");
+      sections.push("⛔ DO NOT proceed as if this action succeeded!");
+      sections.push("⛔ You must try a DIFFERENT approach.");
+      sections.push("");
+    }
+
+    if (successes.length > 0) {
+      sections.push("✅ YOUR LAST ACTION SUCCEEDED:");
+      for (const stim of successes) {
+        sections.push(`  ${stim.content}`);
+      }
+      sections.push("");
+    }
+  }
+
+  // 🎒 SELF-AWARENESS - Show agent their ACTUAL state (prevents hallucination)
+  // This section is CRITICAL - it shows undeniable facts about what the agent has
+  if (agentEid !== undefined) {
+    const inventoryItems = getInventoryItemNames(agentEid);
+    const capabilities = getAgentToolCapabilities(agentEid);
+    const recentActions = getRecentSuccesses(agentEid);
+
+    // Always show inventory section - even if empty
+    sections.push("🎒 YOUR INVENTORY (THIS IS WHAT YOU ACTUALLY HAVE):");
+    if (inventoryItems.length > 0) {
+      sections.push(`  You are holding: ${inventoryItems.join(", ")}`);
+    } else {
+      sections.push(`  You are NOT holding anything. Your hands are empty.`);
+    }
+
+    // Show derived capabilities from items
+    if (capabilities.length > 0) {
+      sections.push(`  Your capabilities (from tools): ${capabilities.join(", ")}`);
+    }
+
+    // Show recent actions
+    if (recentActions.length > 0) {
+      sections.push(`  Recent actions: ${recentActions.join(" → ")}`);
+    }
+    sections.push(""); // Empty line for separation
+  }
 
   // Visual
   const visual = byModality.get("visual");
@@ -500,11 +716,25 @@ export function formatStimuliForPrompt(stimuli: Stimulus[]): string {
     }
   }
 
-  // Cognitive
-  const cognitive = byModality.get("cognitive");
-  if (cognitive && cognitive.length > 0) {
+  // ⚠️ OBJECT STATES - Show what needs attention (locked, unreachable, etc.)
+  const awarenessStimuli = otherCognitive.filter(s => s.type === "awareness");
+  const remainingCognitive = otherCognitive.filter(s => s.type !== "awareness");
+
+  if (awarenessStimuli.length > 0) {
+    sections.push("⚠️ IMPORTANT - OBJECTS NEEDING ACTION:");
+    for (const stim of awarenessStimuli) {
+      // Parse out the objects and show them individually for clarity
+      const content = stim.content.replace("Objects needing attention: ", "");
+      sections.push(`  ${content}`);
+    }
+    sections.push("  (You must resolve these states before certain actions work)");
+    sections.push("");
+  }
+
+  // Other Cognitive (affordances, intuition, etc)
+  if (remainingCognitive.length > 0) {
     sections.push("🧠 INTUITION:");
-    for (const stim of cognitive) {
+    for (const stim of remainingCognitive) {
       sections.push(`  ${stim.content}`);
     }
   }

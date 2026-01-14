@@ -30,6 +30,7 @@ import {
   moveEntity,
   isWalkable,
 } from "../world/ascii-world";
+import { requestRoomPopulation } from "../spirits/steward-spirit";
 
 export interface EntityRegistry {
   byName: Map<string, number>;
@@ -105,6 +106,62 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
         const eid = createRoomEntity(world, params);
         registerEntity(registry, params.name, eid);
         return { success: true, result: { entityId: eid, name: params.name } };
+      } catch (e) {
+        return { success: false, result: null, error: String(e) };
+      }
+    },
+
+    /**
+     * Create a room AND request The Steward to populate it with appropriate entities.
+     * This is the preferred way to create rooms as it ensures they are properly furnished.
+     */
+    createAndPopulateRoom: (params: {
+      name: string;
+      roomType: string; // e.g., "bakery", "blacksmith", "tavern"
+      description?: string;
+      capacity?: number;
+      ambience?: string;
+      context?: {
+        worldTheme?: string;
+        economyLevel?: "poor" | "modest" | "prosperous" | "wealthy";
+        primaryFunction?: string;
+        inhabitants?: string[];
+      };
+      constraints?: {
+        maxItems?: number;
+        requiredItems?: string[];
+        budgetLevel?: "sparse" | "normal" | "abundant";
+      };
+    }): ToolResult => {
+      try {
+        // Create the room entity
+        const eid = createRoomEntity(world, {
+          name: params.name,
+          description: params.description || `A ${params.roomType} awaiting furnishing.`,
+          capacity: params.capacity,
+          ambience: params.ambience,
+        });
+        registerEntity(registry, params.name, eid);
+
+        // Queue for population by The Steward
+        const request = requestRoomPopulation(
+          params.roomType,
+          params.name,
+          params.context || {},
+          params.constraints || {},
+          0 // GodAI EID (will be set properly in context)
+        );
+
+        return {
+          success: true,
+          result: {
+            entityId: eid,
+            name: params.name,
+            roomType: params.roomType,
+            populationRequestId: request.id,
+            message: `Room created and queued for population by The Steward`,
+          },
+        };
       } catch (e) {
         return { success: false, result: null, error: String(e) };
       }

@@ -2,7 +2,7 @@ import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext, SystemRegistry } from "../ecs/dynamic-systems";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
 import { query, getRelationTargets, addComponent, removeComponent, hasComponent, entityExists } from "bitecs";
-import { Name, Agent, Mind, Room, Description, Portal, GridPosition, WorldMap, Health, CombatStats, InCombat, Inventory, Item, StimulusSource, PhysicalObject } from "../ecs/components";
+import { Name, Agent, Mind, Room, Description, Portal, GridPosition, WorldMap, Health, CombatStats, InCombat, Inventory, Item, StimulusSource, PhysicalObject, Appearance, Traits, ObjectState } from "../ecs/components";
 import { OccupiesRoom, Contains } from "../ecs/relations";
 import {
   processAgentCognition,
@@ -11,13 +11,13 @@ import {
   type AgentAction
 } from "./agent-mind";
 import { extractKnowledgeFromInteraction } from "./knowledge-graph";
-import { executeAffordance, canUseAffordance, type EffectContext } from "../world/effect-executor";
+import { executeAffordance, canUseAffordance, transferToolTraits, type EffectContext } from "../world/effect-executor";
 import { worldSchema, type AffordanceDefinition } from "../world/schema";
-import { getDynamicComponentValues } from "../ecs/dynamic-components";
 import {
   generateStimuliForAgent,
   formatStimuliForPrompt,
   eventToStimulus,
+  recordSuccessfulAction,
   type SensoryModality,
   type Stimulus,
 } from "./sensory-system";
@@ -29,6 +29,32 @@ import {
   recordIssue,
   type ValidAction,
 } from "../spirits/consistency-spirit";
+import { recordFailedInteraction } from "../spirits/world-crafter-spirit";
+import {
+  runPlanningSystem,
+  advancePlanStep,
+  getPlanForGoal,
+  getNextPlannedAction,
+} from "./planning-system";
+import {
+  runReflectionSystem,
+  accumulateImportance,
+  initializeReflectionState,
+} from "./reflection-system";
+import {
+  runScheduleSystem,
+  initializeAllSchedules,
+  getCurrentActivity,
+} from "./schedule-system";
+import {
+  runAppearanceEmitter,
+  broadcastAppearanceChange,
+  broadcastExpressionChange,
+  cleanupAppearanceState,
+} from "./appearance-emitter";
+import { HasGoal, HasPlan } from "../ecs/relations";
+import { Goal, Plan } from "../ecs/components";
+import { addEntity as bitAddEntity } from "bitecs";
 
 export interface PendingStimulus {
   targetEid: number;
@@ -41,6 +67,33 @@ export interface PendingStimulus {
 
 const pendingStimuli: PendingStimulus[] = [];
 const pendingActions: Array<{ eid: number; action: AgentAction }> = [];
+
+// Staggered processing state - prevents timeout from processing all agents at once
+let agentProcessingIndex = 0;
+
+// Tune these based on your API rate limits:
+// - Free tier: PARALLEL_BATCH_SIZE = 4-5
+// - Paid tier: PARALLEL_BATCH_SIZE = 8-12
+// - Enterprise: PARALLEL_BATCH_SIZE = 15-20
+const AGENTS_PER_TICK = 12;        // Process max agents per cognition cycle
+const PARALLEL_BATCH_SIZE = 8;     // Process in parallel (Promise.all) - safe for most paid tiers
+
+/**
+ * Determine if an agent should think this tick based on arousal level
+ * High arousal agents think more frequently
+ */
+function shouldAgentThink(eid: number, tick: number): boolean {
+  const arousal = Mind.arousal[eid] ?? 0.5;
+
+  // High arousal (>0.7): think every tick
+  if (arousal > 0.7) return true;
+
+  // Medium arousal (0.4-0.7): think every 2 ticks
+  if (arousal > 0.4) return tick % 2 === eid % 2;
+
+  // Low arousal (<0.4): think every 3 ticks
+  return tick % 3 === eid % 3;
+}
 
 // Entity registry for name lookups (shared with effect executor)
 const entityRegistry = {
@@ -65,6 +118,141 @@ export function unregisterEntity(eid: number): void {
     entityRegistry.byName.delete(name);
     entityRegistry.byId.delete(eid);
   }
+}
+
+// ============================================================================
+// GOAL CREATION HELPERS
+// These create Goals that deterministic systems will execute
+// This is the bridge between AI cognition (intent) and ECS systems (execution)
+// ============================================================================
+
+/**
+ * Create a movement goal for an agent.
+ * The GoalPursuitSystem will execute the actual movement.
+ *
+ * @param world - The ECS world
+ * @param agentEid - The agent entity ID
+ * @param destination - Target location name (room name)
+ * @param reason - Optional reason for movement (for context)
+ * @param priority - Goal priority (1-10, default 5)
+ * @returns The goal entity ID, or undefined if goal already exists
+ */
+export function createMovementGoal(
+  world: World,
+  agentEid: number,
+  destination: string,
+  reason?: string,
+  priority: number = 5
+): number | undefined {
+  const agentName = Name.value[agentEid] || `Agent ${agentEid}`;
+
+  // Check if agent already has a movement goal to this destination
+  const existingGoals = safeGetRelationTargets(world, agentEid, HasGoal);
+  for (const goalEid of existingGoals) {
+    if (!hasComponent(world, goalEid, Goal)) continue;
+    const desc = Goal.description[goalEid] || "";
+    const status = Goal.status[goalEid];
+    if (status === "active" &&
+        desc.toLowerCase().includes("go to") &&
+        desc.toLowerCase().includes(destination.toLowerCase())) {
+      // Already has this goal
+      console.log(`[Goal] ${agentName} already has goal to go to ${destination}`);
+      return undefined;
+    }
+  }
+
+  // Create new goal entity
+  const goalEid = bitAddEntity(world);
+  addComponent(world, goalEid, Goal);
+  addComponent(world, agentEid, HasGoal(goalEid));
+
+  // Set goal properties - format matches what GoalPursuitSystem expects
+  const goalDescription = reason
+    ? `Go to ${destination} to ${reason}`
+    : `Go to ${destination}`;
+
+  Goal.description[goalEid] = goalDescription;
+  Goal.priority[goalEid] = Math.min(10, Math.max(1, priority));
+  Goal.status[goalEid] = "active";
+  Goal.progress[goalEid] = 0;
+  Goal.deadline[goalEid] = Date.now() + 5 * 60 * 1000; // 5 minute deadline
+
+  console.log(`🎯 ${agentName} created goal: "${goalDescription}" (priority: ${priority})`);
+
+  return goalEid;
+}
+
+/**
+ * Create a general intent goal for an agent.
+ * This allows AI to express intent that deterministic systems can act on.
+ *
+ * @param world - The ECS world
+ * @param agentEid - The agent entity ID
+ * @param description - What the agent wants to do
+ * @param priority - Goal priority (1-10)
+ * @returns The goal entity ID
+ */
+export function createIntentGoal(
+  world: World,
+  agentEid: number,
+  description: string,
+  priority: number = 5
+): number {
+  const agentName = Name.value[agentEid] || `Agent ${agentEid}`;
+
+  // Create goal entity
+  const goalEid = bitAddEntity(world);
+  addComponent(world, goalEid, Goal);
+  addComponent(world, agentEid, HasGoal(goalEid));
+
+  Goal.description[goalEid] = description;
+  Goal.priority[goalEid] = Math.min(10, Math.max(1, priority));
+  Goal.status[goalEid] = "active";
+  Goal.progress[goalEid] = 0;
+  Goal.deadline[goalEid] = Date.now() + 10 * 60 * 1000; // 10 minute deadline
+
+  console.log(`🎯 ${agentName} created intent goal: "${description}" (priority: ${priority})`);
+
+  return goalEid;
+}
+
+/**
+ * Check if agent has any active movement goals
+ */
+export function hasActiveMovementGoal(world: World, agentEid: number): boolean {
+  const goalEids = safeGetRelationTargets(world, agentEid, HasGoal);
+
+  for (const goalEid of goalEids) {
+    if (!hasComponent(world, goalEid, Goal)) continue;
+    const desc = Goal.description[goalEid] || "";
+    const status = Goal.status[goalEid];
+    if (status === "active" && desc.toLowerCase().includes("go to")) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Get all active goals for an agent
+ */
+export function getActiveGoals(world: World, agentEid: number): Array<{ eid: number; description: string; priority: number }> {
+  const goalEids = safeGetRelationTargets(world, agentEid, HasGoal);
+  const active: Array<{ eid: number; description: string; priority: number }> = [];
+
+  for (const goalEid of goalEids) {
+    if (!hasComponent(world, goalEid, Goal)) continue;
+    if (Goal.status[goalEid] !== "active") continue;
+
+    active.push({
+      eid: goalEid,
+      description: Goal.description[goalEid] || "",
+      priority: Goal.priority[goalEid] || 0,
+    });
+  }
+
+  return active.sort((a, b) => b.priority - a.priority);
 }
 
 /**
@@ -257,6 +445,276 @@ export function formatInventory(eid: number): string {
 
   const itemNames = items.map(itemEid => Name.value[itemEid] || `Unknown Item`);
   return `You are carrying: ${itemNames.join(", ")}`;
+}
+
+// ============================================================================
+// APPEARANCE HELPERS - NPC physical appearance system
+// ============================================================================
+
+export interface AppearanceConfig {
+  // Stable traits
+  height?: string;
+  build?: string;
+  hairColor?: string;
+  hairStyle?: string;
+  eyeColor?: string;
+  skinTone?: string;
+  age?: string;
+  distinguishing?: string;
+  // Dynamic state
+  expression?: string;
+  posture?: string;
+  clothing?: string;
+  accessories?: string;
+  condition?: string;
+}
+
+/**
+ * Initialize an NPC's appearance with stable physical traits
+ */
+export function initializeAppearance(eid: number, config: AppearanceConfig): void {
+  // Stable traits
+  Appearance.height[eid] = config.height || "average";
+  Appearance.build[eid] = config.build || "average";
+  Appearance.hairColor[eid] = config.hairColor || "brown";
+  Appearance.hairStyle[eid] = config.hairStyle || "short";
+  Appearance.eyeColor[eid] = config.eyeColor || "brown";
+  Appearance.skinTone[eid] = config.skinTone || "fair";
+  Appearance.age[eid] = config.age || "adult";
+  Appearance.distinguishing[eid] = config.distinguishing || "";
+
+  // Dynamic state
+  Appearance.expression[eid] = config.expression || "neutral";
+  Appearance.posture[eid] = config.posture || "relaxed";
+  Appearance.clothing[eid] = config.clothing || "simple clothes";
+  Appearance.accessories[eid] = config.accessories || "";
+  Appearance.condition[eid] = config.condition || "clean";
+  Appearance.visiblyHolding[eid] = "";
+  Appearance.lastUpdate[eid] = Date.now();
+
+  const name = Name.value[eid] || `Entity ${eid}`;
+  console.log(`[Appearance] Initialized appearance for ${name}`);
+}
+
+/**
+ * Check if entity has appearance component
+ */
+export function hasAppearance(eid: number): boolean {
+  return Appearance.height[eid] !== undefined;
+}
+
+/**
+ * Update an NPC's expression (smile, frown, angry, etc.)
+ */
+export function setExpression(eid: number, expression: string): void {
+  const oldExpression = Appearance.expression[eid];
+  Appearance.expression[eid] = expression;
+  Appearance.lastUpdate[eid] = Date.now();
+
+  if (oldExpression !== expression) {
+    const name = Name.value[eid] || `Entity ${eid}`;
+    console.log(`[Appearance] ${name}'s expression changed to: ${expression}`);
+  }
+}
+
+/**
+ * Update an NPC's posture (tense, relaxed, defensive, etc.)
+ */
+export function setPosture(eid: number, posture: string): void {
+  Appearance.posture[eid] = posture;
+  Appearance.lastUpdate[eid] = Date.now();
+}
+
+/**
+ * Update an NPC's clothing
+ */
+export function setClothing(eid: number, clothing: string): void {
+  Appearance.clothing[eid] = clothing;
+  Appearance.lastUpdate[eid] = Date.now();
+}
+
+/**
+ * Update an NPC's accessories (hat, jewelry, belt, etc.)
+ */
+export function setAccessories(eid: number, accessories: string): void {
+  Appearance.accessories[eid] = accessories;
+  Appearance.lastUpdate[eid] = Date.now();
+}
+
+/**
+ * Update an NPC's physical condition (clean, muddy, bloody, sweaty, etc.)
+ */
+export function setCondition(eid: number, condition: string): void {
+  Appearance.condition[eid] = condition;
+  Appearance.lastUpdate[eid] = Date.now();
+}
+
+/**
+ * Update what an NPC is visibly holding in their hands
+ * This syncs with inventory but only shows actively held items
+ */
+export function setVisiblyHolding(eid: number, itemName: string): void {
+  Appearance.visiblyHolding[eid] = itemName;
+  Appearance.lastUpdate[eid] = Date.now();
+}
+
+/**
+ * Sync visiblyHolding with the first item in inventory (or clear it)
+ */
+export function syncVisiblyHoldingFromInventory(eid: number): void {
+  if (!hasInventory(eid)) {
+    Appearance.visiblyHolding[eid] = "";
+    return;
+  }
+
+  const items = getInventoryItems(eid);
+  if (items.length > 0) {
+    // Show the first/primary item as what they're holding
+    const firstItem = items[0];
+    const itemName = Name.value[firstItem] || "something";
+    Appearance.visiblyHolding[eid] = itemName;
+  } else {
+    Appearance.visiblyHolding[eid] = "";
+  }
+  Appearance.lastUpdate[eid] = Date.now();
+}
+
+/**
+ * Generate a short appearance description for visual perception
+ * This is what other NPCs see when they look at this character
+ */
+export function getAppearanceDescription(eid: number): string {
+  if (!hasAppearance(eid)) {
+    return Name.value[eid] || "someone";
+  }
+
+  const name = Name.value[eid] || "someone";
+  const parts: string[] = [];
+
+  // Build physical description
+  const age = Appearance.age[eid];
+  const height = Appearance.height[eid];
+  const build = Appearance.build[eid];
+  const hairColor = Appearance.hairColor[eid];
+  const hairStyle = Appearance.hairStyle[eid];
+
+  // Concise physical traits
+  if (age && age !== "adult") parts.push(age);
+  if (height && height !== "average") parts.push(height);
+  if (build && build !== "average") parts.push(build);
+
+  // Hair description
+  if (hairColor && hairStyle && hairColor !== "bald") {
+    parts.push(`${hairStyle} ${hairColor} hair`);
+  } else if (hairColor === "bald") {
+    parts.push("bald");
+  }
+
+  // Clothing
+  const clothing = Appearance.clothing[eid];
+  if (clothing) {
+    parts.push(`wearing ${clothing}`);
+  }
+
+  // Current state
+  const expression = Appearance.expression[eid];
+  const posture = Appearance.posture[eid];
+  const condition = Appearance.condition[eid];
+
+  if (expression && expression !== "neutral") {
+    parts.push(`looking ${expression}`);
+  }
+  if (posture && posture !== "relaxed" && posture !== "upright") {
+    parts.push(`standing ${posture}`);
+  }
+  if (condition && condition !== "clean") {
+    parts.push(condition);
+  }
+
+  // What they're holding
+  const holding = Appearance.visiblyHolding[eid];
+  if (holding) {
+    parts.push(`holding ${holding}`);
+  }
+
+  // Distinguishing features
+  const distinguishing = Appearance.distinguishing[eid];
+  if (distinguishing) {
+    parts.push(`with ${distinguishing}`);
+  }
+
+  if (parts.length === 0) {
+    return name;
+  }
+
+  return `${name} - ${parts.join(", ")}`;
+}
+
+/**
+ * Generate a detailed appearance description for close observation
+ */
+export function getDetailedAppearance(eid: number): string {
+  if (!hasAppearance(eid)) {
+    return `You see ${Name.value[eid] || "someone"}.`;
+  }
+
+  const name = Name.value[eid] || "someone";
+  const lines: string[] = [];
+
+  lines.push(`You observe ${name} closely.`);
+
+  // Physical build
+  const height = Appearance.height[eid];
+  const build = Appearance.build[eid];
+  const age = Appearance.age[eid];
+  if (height || build || age) {
+    lines.push(`They appear ${[age, height, build].filter(Boolean).join(", ")}.`);
+  }
+
+  // Face and hair
+  const hairColor = Appearance.hairColor[eid];
+  const hairStyle = Appearance.hairStyle[eid];
+  const eyeColor = Appearance.eyeColor[eid];
+  const skinTone = Appearance.skinTone[eid];
+
+  if (hairColor || eyeColor) {
+    const hairPart = hairColor !== "bald" ? `${hairStyle} ${hairColor} hair` : "a bald head";
+    lines.push(`They have ${hairPart} and ${eyeColor} eyes.`);
+  }
+
+  // Clothing and accessories
+  const clothing = Appearance.clothing[eid];
+  const accessories = Appearance.accessories[eid];
+  if (clothing) {
+    lines.push(`They are wearing ${clothing}${accessories ? ` with ${accessories}` : ""}.`);
+  }
+
+  // Current state
+  const expression = Appearance.expression[eid];
+  const posture = Appearance.posture[eid];
+  const condition = Appearance.condition[eid];
+
+  if (expression || posture) {
+    lines.push(`Their expression is ${expression || "neutral"} and they stand ${posture || "normally"}.`);
+  }
+
+  if (condition && condition !== "clean") {
+    lines.push(`They look ${condition}.`);
+  }
+
+  // What they're holding
+  const holding = Appearance.visiblyHolding[eid];
+  if (holding) {
+    lines.push(`They are holding ${holding}.`);
+  }
+
+  // Distinguishing features
+  const distinguishing = Appearance.distinguishing[eid];
+  if (distinguishing) {
+    lines.push(`Notable: ${distinguishing}.`);
+  }
+
+  return lines.join(" ");
 }
 
 // ============================================================================
@@ -479,6 +937,70 @@ export function getAvailableAffordances(
 }
 
 /**
+ * Find objects in a room that can be used with a specific affordance
+ * Useful for suggesting correct targets when AI picks the wrong one
+ */
+export function findObjectsWithAffordance(
+  world: World,
+  actorEid: number,
+  roomEid: number,
+  affordanceName: string
+): string[] {
+  const validTargets: string[] = [];
+
+  // Get room contents
+  const contents = safeGetRelationTargets(world, roomEid, Contains);
+
+  for (const contentEid of contents) {
+    if (!entityExists(world, contentEid)) continue;
+    if (hasComponent(world, contentEid, Agent)) continue;  // Skip other agents
+
+    const objName = Name.value[contentEid];
+    if (!objName) continue;
+
+    // Check if this affordance is available on this target
+    const affordances = getAvailableAffordances(world, actorEid, contentEid);
+    if (affordances.some(a => a.name === affordanceName)) {
+      validTargets.push(objName);
+    }
+  }
+
+  return validTargets;
+}
+
+/**
+ * Find an item in the room that has a specific trait (e.g., "hasMatches")
+ * Used to tell the agent which item to pick up to gain a capability
+ */
+export function findItemWithTrait(
+  world: World,
+  roomEid: number,
+  traitName: string
+): string | null {
+  const contents = safeGetRelationTargets(world, roomEid, Contains);
+
+  for (const contentEid of contents) {
+    if (!entityExists(world, contentEid)) continue;
+    if (hasComponent(world, contentEid, Agent)) continue;
+
+    // Check if this item has the trait
+    const traitsJson = Traits?.active?.[contentEid];
+    if (traitsJson) {
+      try {
+        const traits = JSON.parse(traitsJson) as string[];
+        if (traits.includes(traitName)) {
+          return Name.value[contentEid] || null;
+        }
+      } catch {
+        // continue
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Get the entity registry for effect context
  */
 export function getEntityRegistry() {
@@ -666,7 +1188,7 @@ export function renderRoomPerception(
 
   // Find other agents in the room
   const allAgents = Array.from(query(world, [Agent])).filter(eid => entityExists(world, eid));
-  const othersInRoom: Array<{ name: string; desc?: string; affordances: string[] }> = [];
+  const othersInRoom: Array<{ eid: number; appearance: string; affordances: string[] }> = [];
 
   for (const otherEid of allAgents) {
     if (otherEid === agentEid) continue;
@@ -674,16 +1196,33 @@ export function renderRoomPerception(
 
     const otherRooms = safeGetRelationTargets(world, otherEid, OccupiesRoom);
     if (otherRooms.includes(roomEid)) {
-      const otherName = Name.value[otherEid] || "someone";
-      const otherDesc = Description.value[otherEid];
-
       // Get available affordances for interacting with this agent
       const availableAffordances = getAvailableAffordances(world, agentEid, otherEid);
       const affordanceNames = availableAffordances.map(a => a.name);
 
+      // Use appearance system if available, otherwise fall back to basic description
+      let appearance: string;
+      if (hasAppearance(otherEid)) {
+        appearance = getAppearanceDescription(otherEid);
+      } else {
+        // Fallback: basic name + inventory
+        const otherName = Name.value[otherEid] || "someone";
+        const heldItems: string[] = [];
+        if (hasInventory(otherEid)) {
+          const items = getInventoryItems(otherEid);
+          for (const itemEid of items) {
+            const itemName = Name.value[itemEid];
+            if (itemName) heldItems.push(itemName);
+          }
+        }
+        appearance = heldItems.length > 0
+          ? `${otherName} (holding: ${heldItems.join(", ")})`
+          : otherName;
+      }
+
       othersInRoom.push({
-        name: otherName,
-        desc: otherDesc?.slice(0, 60),
+        eid: otherEid,
+        appearance,
         affordances: affordanceNames,
       });
     }
@@ -693,10 +1232,7 @@ export function renderRoomPerception(
     lines.push("");
     lines.push("People here:");
     for (const other of othersInRoom) {
-      let line = `  - ${other.name}`;
-      if (other.desc) {
-        line += ` - ${other.desc}`;
-      }
+      let line = `  - ${other.appearance}`;
       if (other.affordances.length > 0) {
         line += ` [can: ${other.affordances.join(", ")}]`;
       }
@@ -720,9 +1256,9 @@ export function renderRoomPerception(
       const availableAffordances = getAvailableAffordances(world, agentEid, contentEid);
       const affordanceNames = availableAffordances.map(a => a.name);
 
-      // Get object description/state
-      const objMeta = getDynamicComponentValues("ObjectMeta", contentEid);
-      const stateDesc = objMeta?.state ? ` (${objMeta.state})` : "";
+      // Get object state from ECS ObjectState component (not ObjectMeta)
+      const objState = ObjectState?.current?.[contentEid];
+      const stateDesc = objState && objState !== "normal" ? ` (${objState})` : "";
 
       objectEntries.push({
         name: objName + stateDesc,
@@ -788,8 +1324,20 @@ export function renderRoomPerception(
 
 export async function runCognitionCycle(
   world: World,
-  registry: SystemRegistry
+  registry: SystemRegistry,
+  options: { tick?: number; maxAgents?: number; enablePlanning?: boolean } = {}
 ): Promise<Array<{ eid: number; action: AgentAction }>> {
+  const currentTick = options.tick ?? Date.now();
+  const maxAgentsThisTick = options.maxAgents ?? AGENTS_PER_TICK;
+  const enablePlanning = options.enablePlanning ?? true; // Planning ON by default!
+
+  // === PLANNING PHASE ===
+  // Generate plans for agents with goals but no active plan
+  // This is crucial for multi-step reasoning!
+  if (enablePlanning) {
+    await runPlanningSystem(world);
+  }
+
   // Collect pending event-based stimuli by agent
   const eventsByAgent = new Map<number, PendingStimulus[]>();
 
@@ -801,41 +1349,65 @@ export async function runCognitionCycle(
   }
   pendingStimuli.length = 0;
 
-  const activeAgents = Array.from(query(world, [Agent, Mind])).filter(
+  const allActiveAgents = Array.from(query(world, [Agent, Mind])).filter(
     eid => Agent.active[eid]
   );
 
+  // Filter agents based on arousal-based thinking schedule
+  // Agents with pending stimuli always get to think
+  const agentsToProcess = allActiveAgents.filter(eid =>
+    eventsByAgent.has(eid) || shouldAgentThink(eid, currentTick)
+  );
+
+  // Apply round-robin pagination to avoid processing all agents at once
+  const startIdx = agentProcessingIndex % Math.max(1, agentsToProcess.length);
+  const agentsThisTick = agentsToProcess.slice(startIdx, startIdx + maxAgentsThisTick);
+
+  // Update index for next cycle
+  agentProcessingIndex = (startIdx + agentsThisTick.length) % Math.max(1, agentsToProcess.length);
+
+  if (agentsThisTick.length > 0) {
+    console.log(`[Cognition] Processing ${agentsThisTick.length}/${allActiveAgents.length} agents this tick`);
+  }
+
   const results: Array<{ eid: number; action: AgentAction }> = [];
 
-  for (const eid of activeAgents) {
-    // Convert pending events to stimulus format with modalities
-    const pendingEvents = (eventsByAgent.get(eid) || []).map(s => {
-      // If modality was specified, use it; otherwise infer from type
-      if (s.modality) {
-        return {
-          modality: s.modality,
-          type: s.type,
-          content: s.content,
-          source: s.source,
-          intensity: 1,
-        };
-      }
-      return eventToStimulus({ type: s.type, content: s.content, source: s.source });
-    });
+  // Process agents in parallel batches for better throughput
+  for (let i = 0; i < agentsThisTick.length; i += PARALLEL_BATCH_SIZE) {
+    const batch = agentsThisTick.slice(i, i + PARALLEL_BATCH_SIZE);
 
-    // Generate all stimuli for this agent (visual, auditory, cognitive, etc.)
-    const allStimuli = generateStimuliForAgent(world, eid, pendingEvents);
+    const batchResults = await Promise.all(batch.map(async (eid) => {
+      // Convert pending events to stimulus format with modalities
+      const pendingEvents = (eventsByAgent.get(eid) || []).map(s => {
+        // If modality was specified, use it; otherwise infer from type
+        if (s.modality) {
+          return {
+            modality: s.modality,
+            type: s.type,
+            content: s.content,
+            source: s.source,
+            intensity: 1,
+          };
+        }
+        return eventToStimulus({ type: s.type, content: s.content, source: s.source });
+      });
 
-    // Format stimuli for the agent prompt
-    const perceptionText = formatStimuliForPrompt(allStimuli);
+      // Generate all stimuli for this agent (visual, auditory, cognitive, etc.)
+      const allStimuli = generateStimuliForAgent(world, eid, pendingEvents);
 
-    // Pass formatted perception to cognition
-    const action = await processAgentCognition(
-      world,
-      eid,
-      [{ type: "perception", content: perceptionText, source: "senses" }]
-    );
-    results.push({ eid, action });
+      // Format stimuli for the agent prompt (include agentEid for self-awareness)
+      const perceptionText = formatStimuliForPrompt(allStimuli, eid);
+
+      // Pass formatted perception to cognition
+      const action = await processAgentCognition(
+        world,
+        eid,
+        [{ type: "perception", content: perceptionText, source: "senses" }]
+      );
+      return { eid, action };
+    }));
+
+    results.push(...batchResults);
   }
 
   return results;
@@ -884,6 +1456,42 @@ function normalizeActionType(actionType: string): ValidAction | null {
     "contemplate": "think",
     "do": "interact",
     "perform": "interact",
+    // Affordance-based actions → interact (the affordance system handles specifics)
+    "sharpen": "interact",
+    "chop": "interact",
+    "cut": "interact",
+    "fill": "interact",
+    "dry": "interact",
+    "light": "interact",
+    "ignite": "interact",
+    "cook": "interact",
+    "eat": "interact",
+    "consume": "interact",
+    "drink": "interact",
+    "unlock": "interact",
+    "lock": "interact",
+    "open": "interact",
+    "close": "interact",
+    "pry": "interact",
+    "oil": "interact",
+    "lubricate": "interact",
+    "use": "interact",
+    "apply": "interact",
+    "stack": "interact",
+    "climb": "interact",
+    "reach": "interact",
+    "search": "interact",
+    "combine": "interact",
+    "pour": "interact",
+    "add": "interact",
+    "place": "interact",
+    "put": "interact",
+    "read": "interact",
+    "push": "interact",
+    "pull": "interact",
+    "turn": "interact",
+    "flip": "interact",
+    "press": "interact",
     "idle": "wait",
     "pause": "wait",
     "stand": "wait",
@@ -938,7 +1546,20 @@ export function executeActions(
     }
 
     // Use the normalized action type
-    const validatedAction = { ...action, type: normalizedType };
+    // IMPORTANT: If an affordance-type action was normalized to "interact",
+    // preserve the original action name as the content (affordance to execute)
+    let validatedAction = { ...action, type: normalizedType };
+    if (normalizedType === "interact" && originalType.toLowerCase() !== "interact") {
+      // The original type was an affordance name (e.g., "sharpen", "cook", "oil")
+      // Put it in the content field so the interact handler can use it
+      const originalLower = originalType.toLowerCase();
+      if (!validatedAction.content || validatedAction.content.trim() === "") {
+        validatedAction = { ...validatedAction, content: originalLower };
+      } else if (!validatedAction.content.toLowerCase().startsWith(originalLower)) {
+        // Prepend the affordance name if content doesn't already start with it
+        validatedAction = { ...validatedAction, content: `${originalLower} ${validatedAction.content}` };
+      }
+    }
 
     switch (validatedAction.type) {
       case "speak":
@@ -967,15 +1588,16 @@ export function executeActions(
             setMovementTarget(eid, observeTargetEid);
             const targetName = Name.value[observeTargetEid] || action.target;
             const targetDesc = Description.value[observeTargetEid] || "You see nothing special.";
-            const targetMeta = getDynamicComponentValues("ObjectMeta", observeTargetEid);
+            // Read state from ECS ObjectState component (not ObjectMeta)
+            const targetState = ObjectState?.current?.[observeTargetEid];
 
             // Build detailed observation
             const observationParts: string[] = [];
             observationParts.push(`You examine ${targetName} closely.`);
             observationParts.push(targetDesc);
 
-            if (targetMeta?.state && targetMeta.state !== "normal") {
-              observationParts.push(`It appears to be ${targetMeta.state}.`);
+            if (targetState && targetState !== "normal") {
+              observationParts.push(`It appears to be ${targetState}.`);
             }
 
             // Get available affordances - examining reveals what you can do
@@ -1010,20 +1632,30 @@ export function executeActions(
         break;
 
       case "interact":
-        if (action.target && action.content) {
+        if (validatedAction.target && validatedAction.content) {
+          // Parse affordance name from content (e.g., "eat the apple" -> "eat")
+          const affordanceName = validatedAction.content.split(" ")[0].toLowerCase();
+
           // Find the target entity
-          const targetEid = findEntityByName(world, action.target);
+          const targetEid = findEntityByName(world, validatedAction.target);
 
           if (targetEid === undefined) {
-            console.log(`❓ ${name} tried to interact with "${action.target}" but couldn't find it`);
+            console.log(`❓ ${name} tried to interact with "${validatedAction.target}" but couldn't find it`);
+            // Record failed interaction for World Crafter spirit
+            const roomName = roomEid !== undefined ? (Name.value[roomEid] || "Unknown Room") : "Unknown Room";
+            recordFailedInteraction(
+              name,
+              eid,
+              roomName,
+              affordanceName,
+              validatedAction.target,
+              validatedAction.content
+            );
             break;
           }
 
           // Set movement target so agent moves towards the object they're interacting with
           setMovementTarget(eid, targetEid);
-
-          // Parse affordance name from content (e.g., "eat the apple" -> "eat")
-          const affordanceName = action.content.split(" ")[0].toLowerCase();
 
           // Create effect context
           const ctx: EffectContext = {
@@ -1038,9 +1670,16 @@ export function executeActions(
           const result = executeAffordance(affordanceName, ctx);
 
           if (result.success) {
-            // Broadcast to room (description already sent by executeAffordance)
             const targetName = Name.value[targetEid] || action.target;
             console.log(`🎯 ${name} ${affordanceName}s ${targetName}: ${result.changes.join(", ") || "success"}`);
+
+            // Record successful action for memory/self-awareness
+            recordSuccessfulAction(eid, `${affordanceName} ${targetName}`);
+
+            // Broadcast visual to others in room - they can see the interaction!
+            if (roomEid !== undefined) {
+              broadcastVisual(world, roomEid, `${name} ${affordanceName}s the ${targetName}.`, name, eid);
+            }
 
             // Give feedback to actor about what happened (cognitive stimulus)
             if (result.changes.length > 0) {
@@ -1052,60 +1691,169 @@ export function executeActions(
                 source: "self",
               });
             }
+
+            // MEMORY FORMATION for successful actions - include the result!
+            extractKnowledgeFromInteraction(world, eid, {
+              type: "action_success",
+              content: `SUCCESS: I ${affordanceName}ed the ${targetName}. ${result.changes.join(". ")}`,
+              otherParty: targetName,
+              context: `In ${Name.value[roomEid] || "a room"}. The action succeeded and changed the world state.`,
+            }).catch(() => {});
           } else {
-            // Action failed - notify actor (cognitive stimulus)
+            // Action failed - notify actor with HELPFUL feedback
             console.log(`❌ ${name} failed to ${affordanceName} ${action.target}: ${result.message}`);
+
+            // Build helpful error message with ACTIONABLE hints
+            const targetName = Name.value[targetEid] || action.target;
+            let helpfulMessage = `FAILED: You cannot ${affordanceName} ${targetName}.`;
+            const hints: string[] = [];
+
+            // Check if actor is missing a required trait (e.g., "hasMatches")
+            const actorMissingMatch = result.message?.match(/Actor lacks trait: (has\w+)/);
+            if (actorMissingMatch && roomEid !== undefined) {
+              const missingTrait = actorMissingMatch[1];
+              // Find which item provides this trait
+              const itemName = findItemWithTrait(world, roomEid, missingTrait);
+              if (itemName) {
+                hints.push(`→ PICK UP "${itemName}" first to gain ${missingTrait}`);
+              } else {
+                hints.push(`→ You need ${missingTrait} - find and pick up the right tool`);
+              }
+            }
+
+            // Check if target is missing a required trait
+            const targetMissingMatch = result.message?.match(/Target lacks trait: (\w+)/);
+            if (targetMissingMatch) {
+              const missingTrait = targetMissingMatch[1];
+              // Suggest what might make the target have that trait
+              hints.push(`→ ${targetName} is not ${missingTrait} - check its current state or try a different action`);
+            }
+
+            // Get available affordances for this target
+            const targetAffordances = getAvailableAffordances(world, eid, targetEid);
+            if (targetAffordances.length > 0) {
+              hints.push(`→ Available actions on ${targetName}: ${targetAffordances.map(a => a.name).join(", ")}`);
+            }
+
+            // If the affordance exists, suggest valid targets
+            const affordanceDef = worldSchema.getAffordance(affordanceName);
+            if (affordanceDef && roomEid !== undefined) {
+              const validTargets = findObjectsWithAffordance(world, eid, roomEid, affordanceName);
+              if (validTargets.length > 0 && validTargets[0] !== targetName) {
+                hints.push(`→ TRY: ${affordanceName} "${validTargets[0]}" instead`);
+              }
+            }
+
+            // Combine message with hints and an explicit warning
+            if (hints.length > 0) {
+              helpfulMessage += "\n" + hints.join("\n");
+            }
+            helpfulMessage += "\n⛔ DO NOT proceed as if this action succeeded. Try a different approach.";
+
             queueStimulus({
               targetEid: eid,
               type: "action_failed",
               modality: "cognitive",
-              content: `You cannot ${affordanceName} ${action.target}: ${result.message}`,
+              content: helpfulMessage,
               source: "self",
             });
-          }
 
-          extractKnowledgeFromInteraction(world, eid, {
-            type: "interaction",
-            content: action.content,
-            otherParty: action.target,
-            context: `In ${Name.value[roomEid] || "a room"}`,
-          }).catch(() => {});
+            // MEMORY FORMATION for failed actions - remember what didn't work!
+            extractKnowledgeFromInteraction(world, eid, {
+              type: "action_failed",
+              content: `FAILED: I tried to ${affordanceName} the ${targetName} but it didn't work. ${result.message}`,
+              otherParty: targetName,
+              context: `In ${Name.value[roomEid] || "a room"}. This action failed - I should try a different approach.`,
+            }).catch(() => {});
+          }
         }
         break;
 
       case "move":
+        // GOAL-BASED MOVEMENT SYSTEM
+        // AI creates intent (Goals), deterministic GoalPursuitSystem executes movement
+        // This separates cognition (what to do) from execution (how to do it)
+
         // Check if agent has grid position for grid-based movement
         const hasGridPos = GridPosition.x[eid] !== undefined;
 
         if (action.target) {
-          // First try room-based movement
+          // First try room-based movement via Goal system
           const destRoom = findRoomByName(world, action.target);
           if (destRoom !== undefined && destRoom !== roomEid) {
             const destName = Name.value[destRoom] || action.target;
             const sourceName = roomEid !== undefined ? Name.value[roomEid] : "somewhere";
 
-            // Broadcast departure to current room (visual stimulus)
-            if (roomEid !== undefined) {
-              broadcastVisual(world, roomEid, `${name} leaves toward ${destName}`, name, eid);
-              // Remove from current room
-              removeComponent(world, eid, OccupiesRoom(roomEid));
+            // Check if agent actually has a current room
+            // If no room but has GridPosition, use grid-based movement instead
+            // GoalPursuitSystem can't move agents without OccupiesRoom relation
+            const hasCurrentRoom = roomEid !== undefined;
+
+            if (hasCurrentRoom) {
+              // Agent is in a room - use Goal-based movement
+              // Create a movement goal - GoalPursuitSystem will execute the actual movement
+              // Parse reason from action.content if available
+              const reason = action.content || undefined;
+
+              // Calculate priority based on agent's arousal (urgency)
+              const arousal = Mind.arousal[eid] || 0.5;
+              const priority = Math.round(3 + arousal * 7); // 3-10 based on arousal
+
+              const goalEid = createMovementGoal(world, eid, destName, reason, priority);
+
+              if (goalEid !== undefined) {
+                // Update agent's focus
+                Mind.focus[eid] = `going to ${destName}`;
+                Mind.arousal[eid] = Math.min(1, arousal + 0.1);
+
+                // Broadcast intent to room (others can see them getting ready to leave)
+                broadcastVisual(world, roomEid, `${name} prepares to head toward ${destName}`, name, eid);
+
+                console.log(`🎯 ${name} intends to go to ${destName} (goal created, GoalPursuitSystem will execute)`);
+
+                // Notify agent of their plan (cognitive feedback)
+                queueStimulus({
+                  targetEid: eid,
+                  type: "intent",
+                  modality: "cognitive",
+                  content: `You decide to go to ${destName}${reason ? ` to ${reason}` : ""}.`,
+                  source: "self",
+                });
+
+                extractKnowledgeFromInteraction(world, eid, {
+                  type: "movement_intent",
+                  content: `Planning to travel from ${sourceName} to ${destName}`,
+                  context: `Currently in ${sourceName}`,
+                }).catch(() => {});
+              }
+            } else if (hasGridPos && GridPosition.x[destRoom] !== undefined) {
+              // Agent has NO room but has GridPosition - use grid-based movement to room
+              // This is the key fix: agents stuck "somewhere" can now physically move to rooms
+              // Once they arrive at room's GridPosition, RoomArrival system will set OccupiesRoom
+              setMovementTarget(eid, destRoom);
+              Mind.focus[eid] = `heading to ${destName}`;
+              Mind.arousal[eid] = Math.min(1, (Mind.arousal[eid] || 0.5) + 0.1);
+
+              console.log(`🚶 ${name} starts moving towards ${destName} (grid-based, no current room)`);
+
+              // Notify agent
+              queueStimulus({
+                targetEid: eid,
+                type: "intent",
+                modality: "cognitive",
+                content: `You start walking toward ${destName}.`,
+                source: "self",
+              });
+            } else {
+              // No current room AND no grid position - create goal anyway (might work later)
+              const reason = action.content || undefined;
+              const priority = Math.round(3 + (Mind.arousal[eid] || 0.5) * 7);
+              createMovementGoal(world, eid, destName, reason, priority);
+              console.log(`🎯 ${name} intends to go to ${destName} (goal created, hoping GoalPursuit can help)`);
             }
-
-            // Add to new room
-            addComponent(world, eid, OccupiesRoom(destRoom));
-
-            // Broadcast arrival to new room (visual stimulus)
-            broadcastVisual(world, destRoom, `${name} arrives from ${sourceName}`, name, eid);
-
-            console.log(`🚶 ${name} moves from ${sourceName} to ${destName}`);
-
-            extractKnowledgeFromInteraction(world, eid, {
-              type: "movement",
-              content: `Traveled from ${sourceName} to ${destName}`,
-              context: `Now in ${destName}`,
-            }).catch(() => {});
           } else if (hasGridPos) {
-            // Try grid-based movement - find an entity to move towards
+            // Grid-based movement - find an entity to move towards
+            // This still uses direct movement for grid-based (pathfinding separate concern)
             const targetEid = findEntityByName(world, action.target);
             if (targetEid !== undefined && GridPosition.x[targetEid] !== undefined) {
               setMovementTarget(eid, targetEid);
@@ -1115,10 +1863,15 @@ export function executeActions(
               doRandomWander(world, eid, name);
             }
           } else {
+            // Neither room nor grid-based target found
             console.log(`❓ ${name} tried to move to "${action.target}" but couldn't find it`);
+
+            // Still give them a goal if we have a valid room name
+            // GoalPursuitSystem might find it even if we can't here
+            createMovementGoal(world, eid, action.target, action.content, 5);
           }
         } else if (hasGridPos) {
-          // No specific target - random wander
+          // No specific target - random wander (for grid-based only)
           doRandomWander(world, eid, name);
         }
         break;
@@ -1235,9 +1988,50 @@ export function executeActions(
           const itemEid = findEntityByName(world, validatedAction.target);
           if (itemEid !== undefined) {
             const itemName = Name.value[itemEid] || validatedAction.target;
+
+            // Check if item has the "takeable" trait
+            const itemTraitsJson = Traits?.active?.[itemEid];
+            let hasTakeable = false;
+            if (itemTraitsJson) {
+              try {
+                const itemTraits = JSON.parse(itemTraitsJson) as string[];
+                hasTakeable = itemTraits.includes("takeable");
+              } catch {
+                hasTakeable = false;
+              }
+            }
+
+            if (!hasTakeable) {
+              console.log(`❌ ${name} cannot pick up ${itemName} - it's not takeable`);
+              queueStimulus({
+                targetEid: eid,
+                type: "action_failed",
+                modality: "cognitive",
+                content: `FAILED: You tried to take "${itemName}" but it cannot be taken right now. You do NOT have the ${itemName}. Check what conditions must be met first.`,
+                source: "inventory",
+              });
+              break;
+            }
+
             const success = addToInventory(world, eid, itemEid);
             if (success) {
               console.log(`📦 ${name} picked up ${itemName}`);
+
+              // Record successful action for memory/self-awareness
+              recordSuccessfulAction(eid, `picked up ${itemName}`);
+
+              // Transfer tool traits from item to actor
+              const traitChanges: string[] = [];
+              transferToolTraits(eid, itemEid, traitChanges);
+              if (traitChanges.length > 0) {
+                console.log(`🔧 ${name} gained: ${traitChanges.join(", ")}`);
+              }
+
+              // Update appearance - they're now visibly holding this item
+              if (hasAppearance(eid)) {
+                setVisiblyHolding(eid, itemName);
+              }
+
               queueStimulus({
                 targetEid: eid,
                 type: "inventory",
@@ -1245,18 +2039,39 @@ export function executeActions(
                 content: `You pick up the ${itemName}.`,
                 source: "inventory",
               });
+              // Broadcast to others in the room so they can see the pickup!
+              if (roomEid !== undefined) {
+                broadcastVisual(world, roomEid, `${name} picks up the ${itemName}.`, name, eid);
+              }
             } else {
               console.log(`❓ ${name} couldn't pick up ${itemName} (inventory full or too heavy)`);
               queueStimulus({
                 targetEid: eid,
-                type: "inventory",
+                type: "action_failed",
                 modality: "cognitive",
-                content: `You can't pick up the ${itemName} - your inventory is full or it's too heavy.`,
+                content: `FAILED: You tried to take "${itemName}" but your inventory is full or it's too heavy. You do NOT have the ${itemName}.`,
                 source: "inventory",
               });
             }
           } else {
             console.log(`❓ ${name} tried to pickup "${validatedAction.target}" but couldn't find it`);
+            // Record failed interaction for World Crafter spirit
+            const roomName = roomEid !== undefined ? (Name.value[roomEid] || "Unknown Room") : "Unknown Room";
+            recordFailedInteraction(
+              name,
+              eid,
+              roomName,
+              "pickup",
+              validatedAction.target,
+              validatedAction.content
+            );
+            queueStimulus({
+              targetEid: eid,
+              type: "action_failed",
+              modality: "cognitive",
+              content: `FAILED: "${validatedAction.target}" was not found here. You do NOT have it.`,
+              source: "inventory",
+            });
           }
         }
         break;
@@ -1270,6 +2085,12 @@ export function executeActions(
             const success = removeFromInventory(eid, itemEid);
             if (success) {
               console.log(`📦 ${name} dropped ${itemName}`);
+
+              // Update appearance - sync visiblyHolding with remaining inventory
+              if (hasAppearance(eid)) {
+                syncVisiblyHoldingFromInventory(eid);
+              }
+
               queueStimulus({
                 targetEid: eid,
                 type: "inventory",
@@ -1277,6 +2098,11 @@ export function executeActions(
                 content: `You drop the ${itemName}.`,
                 source: "inventory",
               });
+
+              // Broadcast to others in the room so they can see the drop
+              if (roomEid !== undefined) {
+                broadcastVisual(world, roomEid, `${name} drops the ${itemName}.`, name, eid);
+              }
             }
           } else {
             console.log(`❓ ${name} tried to drop "${validatedAction.target}" but doesn't have it`);
@@ -1424,6 +2250,25 @@ export function executeActions(
         console.log(`❓ ${name} tried unknown action "${validatedAction.type}"`);
         break;
     }
+
+    // === PLAN ADVANCEMENT ===
+    // After each action, check if it advances the agent's active plan
+    // This is crucial for multi-step goal execution!
+    const nextStep = getNextPlannedAction(world, eid);
+    if (nextStep) {
+      // Check if the action matches the current plan step
+      const actionMatchesPlan =
+        validatedAction.type === nextStep.actionType ||
+        (validatedAction.type === "interact" && nextStep.actionType === "interact") ||
+        (validatedAction.target?.toLowerCase() === nextStep.target?.toLowerCase());
+
+      if (actionMatchesPlan) {
+        const advanced = advanceAgentPlan(world, eid);
+        if (advanced) {
+          console.log(`📋 ${name} completed plan step: ${nextStep.description}`);
+        }
+      }
+    }
   }
 }
 
@@ -1438,3 +2283,135 @@ export function createCognitionSystem(): SystemDefinition {
     compiledFn: undefined,
   };
 }
+
+// ============================================================================
+// COGNITIVE ENHANCEMENT SYSTEMS
+// ============================================================================
+
+/**
+ * Run planning system - generates plans for goals that don't have them
+ * Should be called periodically (e.g., every 30 seconds)
+ */
+export async function runPlanning(world: World): Promise<void> {
+  await runPlanningSystem(world);
+}
+
+/**
+ * Run reflection system - triggers reflection when importance threshold exceeded
+ * Should be called after cognition cycles
+ */
+export async function runReflection(world: World): Promise<number> {
+  return await runReflectionSystem(world);
+}
+
+/**
+ * Run schedule system - updates current activities based on time
+ * Should be called every cognition cycle
+ */
+export function runSchedule(world: World): void {
+  runScheduleSystem(world);
+}
+
+/**
+ * Initialize all cognitive enhancement systems for agents
+ * Call this after creating agents
+ */
+export async function initializeCognitiveEnhancements(
+  world: World,
+  options: {
+    generateSchedules?: boolean;  // Use LLM to generate schedules
+    generatePlans?: boolean;      // Generate plans for existing goals
+  } = {}
+): Promise<void> {
+  const agents = query(world, [Agent, Mind]);
+
+  console.log(`[Cognition] Initializing cognitive enhancements for ${agents.length} agents...`);
+
+  // Initialize reflection state for all agents
+  for (const agentEid of agents) {
+    if (!Agent.active[agentEid]) continue;
+    initializeReflectionState(world, agentEid);
+  }
+
+  // Initialize schedules
+  await initializeAllSchedules(world, options.generateSchedules ?? false);
+
+  // Generate plans for existing goals if requested
+  if (options.generatePlans) {
+    await runPlanningSystem(world);
+  }
+
+  console.log(`[Cognition] Cognitive enhancements initialized`);
+}
+
+/**
+ * Run a full cognitive cycle including all enhancement systems
+ * This is a convenience function that runs everything in order
+ */
+export async function runFullCognitiveCycle(
+  world: World,
+  registry: SystemRegistry
+): Promise<Array<{ eid: number; action: AgentAction }>> {
+  // 1. Update schedules based on current time
+  runSchedule(world);
+
+  // 2. Run main cognition cycle
+  const results = await runCognitionCycle(world, registry);
+
+  // 3. Execute actions (this also accumulates importance for reflection)
+  executeActions(world, results, registry);
+
+  // 4. Run appearance emitter - broadcasts appearance changes to nearby NPCs
+  runAppearanceEmitter(world);
+
+  // 5. Accumulate importance for agents based on stimuli received
+  for (const { eid, action } of results) {
+    // Significant actions increase importance
+    if (action.type === "speak" || action.type === "interact") {
+      accumulateImportance(world, eid, 5);
+    } else if (action.type !== "wait") {
+      accumulateImportance(world, eid, 2);
+    }
+  }
+
+  // 6. Check for reflection triggers (runs async, doesn't block)
+  runReflection(world).catch(console.error);
+
+  return results;
+}
+
+/**
+ * Advance an agent's plan after completing a step
+ * Call this when an action aligns with the current plan step
+ */
+export function advanceAgentPlan(world: World, agentEid: number): boolean {
+  const goalTargets = getRelationTargets(world, agentEid, HasGoal);
+
+  for (const goalEid of goalTargets) {
+    if (!hasComponent(world, goalEid, Goal)) continue;
+    if (Goal.status[goalEid] !== "active") continue;
+
+    const planEid = getPlanForGoal(world, agentEid, goalEid);
+    if (planEid && Plan.status[planEid] === "active") {
+      const advanced = advancePlanStep(planEid);
+      if (!advanced) {
+        // Plan completed - update goal progress
+        Goal.progress[goalEid] = 100;
+        Goal.status[goalEid] = "completed";
+        const agentName = Name.value[agentEid];
+        console.log(`[Cognition] ${agentName} completed goal: ${Goal.description[goalEid]}`);
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Re-export appearance emitter functions for external use
+export {
+  runAppearanceEmitter,
+  broadcastAppearanceChange,
+  broadcastExpressionChange,
+  cleanupAppearanceState,
+};

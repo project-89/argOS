@@ -162,13 +162,15 @@ function collectRoomSnapshots(world: World, registry: EntityRegistry): RoomSnaps
 
 /**
  * Run a single cognition cycle for a spirit
+ * @param globalContext - Optional global context from GodAgent (mood, directives, pacing)
  */
 export async function runSpiritCognition(
   spirit: SpiritState,
   world: World,
   registry: EntityRegistry,
   spiritRegistry: SpiritRegistry,
-  recentActions: ActionSnapshot[] = []
+  recentActions: ActionSnapshot[] = [],
+  globalContext?: string
 ): Promise<SpiritCognitionOutput> {
   const startTime = Date.now();
 
@@ -184,8 +186,8 @@ export async function runSpiritCognition(
     activeDirectives: spirit.pendingDirectives.filter(d => d.status === "pending" || d.status === "active"),
   };
 
-  // 3. Build prompt based on spirit type
-  const prompt = buildSpiritPrompt(spirit, input);
+  // 3. Build prompt based on spirit type (including global context if available)
+  const prompt = buildSpiritPrompt(spirit, input, globalContext);
 
   // 4. Run LLM
   const model = models[spirit.definition.model];
@@ -237,12 +239,19 @@ export async function runSpiritCognition(
 // PROMPT BUILDING
 // =============================================================================
 
-function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput): string {
+function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, globalContext?: string): string {
   const sections: string[] = [];
 
   // Header
   sections.push(`You are ${spirit.definition.name}, a ${spirit.definition.rank} spirit managing the ${spirit.definition.domain} domain.`);
   sections.push("");
+
+  // GLOBAL CONTEXT (if provided by God)
+  // This is the critical "pinned context" that spans all spirits
+  if (globalContext) {
+    sections.push(globalContext);
+    sections.push("");
+  }
 
   // Current state
   sections.push("=== CURRENT WORLD STATE ===");
@@ -326,6 +335,21 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput): st
     sections.push("⚠️ DO NOT mention any entities, items, creatures, or locations not listed above!");
     sections.push("⚠️ If you need something to exist, request it via reportToSuperior.");
     sections.push("");
+
+    // Add recent prose to prevent repetition
+    if (spirit.narrativeState.recentProse && spirit.narrativeState.recentProse.length > 0) {
+      sections.push("=== RECENT PROSE (AVOID REPETITION) ===");
+      sections.push("You have recently written these summaries. DO NOT repeat similar ideas or phrasing:");
+      for (const prose of spirit.narrativeState.recentProse.slice(-5)) {
+        sections.push(`  - "${prose.slice(0, 100)}${prose.length > 100 ? '...' : ''}"`);
+      }
+      sections.push("");
+      sections.push("⚠️ CRITICAL: Write something NEW. Advance the story. If characters are doing the same thing,");
+      sections.push("   describe the PROGRESSION or CHANGE, not the same action again.");
+      sections.push("   BAD: 'Emma moves toward the forge' (again)");
+      sections.push("   GOOD: 'Emma arrives at the forge, her breath catching at the sight of Lars'");
+      sections.push("");
+    }
   }
 
   // Messages
@@ -384,6 +408,14 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput): st
     sections.push('    "protagonists": ["names"],');
     sections.push('    "antagonists": ["names"]');
     sections.push('  },');
+    sections.push('  "narrativeDirectives": [');
+    sections.push('    {');
+    sections.push('      "type": "nudge_character|resolve_thread|escalate|create_event|suggest_beat",');
+    sections.push('      "target": "character name or thread name",');
+    sections.push('      "action": "What should happen - be specific",');
+    sections.push('      "reason": "Why this advances the story"');
+    sections.push('    }');
+    sections.push('  ],');
     sections.push('  "storyProse": "Write 1-3 sentences of engaging narrative prose describing what just happened. Write it like a novel - vivid, immersive, showing not telling. Use present tense. If nothing interesting happened, leave empty string."');
   }
 
@@ -391,6 +423,48 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput): st
   sections.push("```");
 
   return sections.join("\n");
+}
+
+// =============================================================================
+// NARRATIVE DEDUPLICATION
+// =============================================================================
+
+/**
+ * Calculate similarity between new prose and recent prose entries.
+ * Uses word overlap (Jaccard similarity) to detect repetition.
+ * Returns max similarity score (0-1) against any recent prose.
+ */
+function calculateProseSimilarity(newProse: string, recentProse: string[]): number {
+  if (recentProse.length === 0) return 0;
+
+  // Tokenize and normalize
+  const tokenize = (text: string): Set<string> => {
+    return new Set(
+      text.toLowerCase()
+        .replace(/[^\w\s]/g, '')
+        .split(/\s+/)
+        .filter(w => w.length > 3)  // Skip short words
+    );
+  };
+
+  const newTokens = tokenize(newProse);
+  if (newTokens.size === 0) return 0;
+
+  let maxSimilarity = 0;
+
+  for (const oldProse of recentProse) {
+    const oldTokens = tokenize(oldProse);
+    if (oldTokens.size === 0) continue;
+
+    // Jaccard similarity: intersection / union
+    const intersection = new Set([...newTokens].filter(x => oldTokens.has(x)));
+    const union = new Set([...newTokens, ...oldTokens]);
+    const similarity = intersection.size / union.size;
+
+    maxSimilarity = Math.max(maxSimilarity, similarity);
+  }
+
+  return maxSimilarity;
 }
 
 // =============================================================================
@@ -586,7 +660,51 @@ function parseSpiritResponse(
       }
     }
 
-    // Extract story prose from narrative spirits - with validation
+    // Process narrative directives - send to appropriate handlers via messaging
+    if (parsed.narrativeDirectives && Array.isArray(parsed.narrativeDirectives)) {
+      for (const directive of parsed.narrativeDirectives) {
+        if (!directive.type || !directive.target) continue;
+
+        console.log(`[Narrator] Directive: ${directive.type} -> ${directive.target}: ${directive.action}`);
+
+        // Convert directive to appropriate message/intervention
+        switch (directive.type) {
+          case "nudge_character":
+            // Create intervention to inject stimulus to character
+            output.interventions.push({
+              id: `dir_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+              spiritEid: spirit.eid,
+              timestamp: Date.now(),
+              type: "inject_stimulus",
+              target: { type: "agent", name: directive.target },
+              content: `[Narrative nudge] ${directive.action}`,
+              reason: directive.reason || "Story progression",
+            });
+            break;
+
+          case "resolve_thread":
+          case "escalate":
+          case "create_event":
+          case "suggest_beat":
+            // Report to GodAI with specific suggestion
+            output.reports.push({
+              id: `dir_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+              timestamp: Date.now(),
+              from: spirit.eid,
+              to: spirit.superiorEid || -1,
+              type: "report",
+              domain: "narrative",
+              priority: directive.type === "escalate" ? "high" : "normal",
+              subject: `[${directive.type.toUpperCase()}] ${directive.target}`,
+              content: `Suggested action: ${directive.action}\n\nReason: ${directive.reason}`,
+              requiresResponse: false,
+            });
+            break;
+        }
+      }
+    }
+
+    // Extract story prose from narrative spirits - with validation and deduplication
     if (parsed.storyProse && typeof parsed.storyProse === "string" && parsed.storyProse.trim()) {
       const rawProse = parsed.storyProse.trim();
 
@@ -615,7 +733,23 @@ function parseSpiritResponse(
         }
       }
 
-      output.storyProse = cleanedProse;
+      // Check for prose similarity/repetition
+      const recentProse = spirit.narrativeState?.recentProse || [];
+      const similarity = calculateProseSimilarity(cleanedProse, recentProse);
+
+      if (similarity > 0.6) {
+        console.warn(`[Spirit] Narrative repetition detected (${(similarity * 100).toFixed(0)}% similar). Skipping prose.`);
+        // Don't output repetitive prose
+      } else {
+        output.storyProse = cleanedProse;
+
+        // Track this prose for future deduplication
+        if (!output.updatedNarrativeState) {
+          output.updatedNarrativeState = {};
+        }
+        const updatedRecentProse = [...recentProse, cleanedProse].slice(-10);
+        output.updatedNarrativeState.recentProse = updatedRecentProse;
+      }
     }
 
   } catch (error) {

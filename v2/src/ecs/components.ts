@@ -284,6 +284,48 @@ export const Needs = {
   comfort: [] as number[],
 };
 
+// ============================================================================
+// PLANNING & REFLECTION COMPONENTS
+// ============================================================================
+
+/** Plan for achieving a goal - breaks goals into actionable steps */
+export const Plan = {
+  goalEid: [] as number[],           // Links to Goal entity this plan is for
+  steps: [] as string[],             // JSON array of step descriptions
+  currentStep: [] as number[],       // Index of current step (0-based)
+  status: [] as string[],            // "active", "completed", "failed", "paused"
+  createdAt: [] as number[],         // When plan was created
+  lastUpdated: [] as number[],       // Last time plan was updated
+};
+
+/** Daily/time-based schedule for an agent */
+export const Schedule = {
+  activities: [] as string[],        // JSON array of scheduled activities
+  currentActivity: [] as string[],   // Current activity name
+  nextTransition: [] as number[],    // When to switch to next activity (world time)
+  flexibility: [] as number[],       // 0-1, how strictly agent follows schedule
+  lastUpdated: [] as number[],       // When schedule was last generated
+};
+
+/** Scheduled activity within a Schedule */
+export const ScheduledActivity = {
+  name: [] as string[],              // Activity name (e.g., "sleep", "work", "socialize")
+  startHour: [] as number[],         // Hour of day to start (0-23)
+  duration: [] as number[],          // Duration in hours
+  location: [] as string[],          // Preferred location for this activity
+  priority: [] as number[],          // How important (can be skipped if low)
+  interruptible: [] as boolean[],    // Can this be interrupted?
+};
+
+/** Reflection state - tracks when agent should reflect */
+export const ReflectionState = {
+  lastReflection: [] as number[],    // Timestamp of last reflection
+  importanceAccum: [] as number[],   // Accumulated importance since last reflection
+  reflectionThreshold: [] as number[], // Threshold to trigger reflection (default 100)
+  reflectionCount: [] as number[],   // Total reflections performed
+  insights: [] as string[],          // JSON array of recent insights
+};
+
 export const Interactable = {
   action: [] as string[],
   targetNeed: [] as string[],
@@ -389,6 +431,36 @@ export const ObjectProperties = {
   custom: [] as string[],        // JSON object for extra properties
 };
 
+/**
+ * Physical Appearance Component
+ * Defines how an NPC looks to others - both stable traits and dynamic state.
+ * This gets broadcast as visual stimuli to nearby NPCs.
+ */
+export const Appearance = {
+  // Stable physical traits (rarely change)
+  height: [] as string[],           // "tall", "short", "average", "towering"
+  build: [] as string[],            // "muscular", "slender", "stocky", "frail"
+  hairColor: [] as string[],        // "brown", "blonde", "gray", "bald"
+  hairStyle: [] as string[],        // "long", "short", "braided", "messy"
+  eyeColor: [] as string[],         // "blue", "brown", "green", "gray"
+  skinTone: [] as string[],         // "pale", "tan", "dark", "weathered"
+  age: [] as string[],              // "young", "middle-aged", "elderly", "ancient"
+  distinguishing: [] as string[],   // "scar on cheek", "missing finger", "tattoo on arm"
+
+  // Dynamic state (changes frequently)
+  expression: [] as string[],       // "smiling", "frowning", "worried", "angry", "neutral"
+  posture: [] as string[],          // "upright", "slouched", "tense", "relaxed", "defensive"
+  clothing: [] as string[],         // "worn farmer's clothes", "fine merchant robes", "leather armor"
+  accessories: [] as string[],      // "wide-brimmed hat", "silver necklace", "tool belt"
+  condition: [] as string[],        // "clean", "dusty", "muddy", "bloody", "sweaty", "wet"
+
+  // What's visibly in their hands (synced from inventory + current action)
+  visiblyHolding: [] as string[],   // "iron plow", "wooden staff", "loaf of bread"
+
+  // Timestamp for change detection
+  lastUpdate: [] as number[],
+};
+
 export const AllComponents = {
   Name,
   Description,
@@ -434,6 +506,11 @@ export const AllComponents = {
   Interactable,
   CurrentAction,
   CharacterRigConfig,
+  // Planning & reflection
+  Plan,
+  Schedule,
+  ScheduledActivity,
+  ReflectionState,
   // Object system components
   ObjectType,
   ObjectState,
@@ -447,6 +524,8 @@ export const AllComponents = {
   StateTransition,
   DynamicDescription,
   ObjectProperties,
+  // NPC appearance system
+  Appearance,
 };
 
 export type ComponentName = keyof typeof AllComponents;

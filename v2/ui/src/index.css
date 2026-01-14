@@ -1,0 +1,315 @@
+@import "tailwindcss";
+
+/* Import fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* Tailwind v4 CSS-first configuration */
+@theme {
+  /* Background colors */
+  --color-argos-bg-primary: #0a0a0f;
+  --color-argos-bg-secondary: #12121a;
+  --color-argos-bg-tertiary: #1a1a24;
+  --color-argos-bg-elevated: #22222e;
+
+  /* Border colors */
+  --color-argos-border: #2a2a3a;
+  --color-argos-border-light: #3a3a4a;
+
+  /* God AI - Gold/Amber */
+  --color-argos-god: #f59e0b;
+  --color-argos-god-light: #fbbf24;
+  --color-argos-god-dark: #d97706;
+
+  /* Spirits - Purple/Violet */
+  --color-argos-spirit: #8b5cf6;
+  --color-argos-spirit-light: #a78bfa;
+  --color-argos-spirit-dark: #7c3aed;
+
+  /* Agents - Green/Emerald */
+  --color-argos-agent: #10b981;
+  --color-argos-agent-light: #34d399;
+  --color-argos-agent-dark: #059669;
+
+  /* Systems - Blue/Cyan */
+  --color-argos-system: #06b6d4;
+  --color-argos-system-light: #22d3ee;
+  --color-argos-system-dark: #0891b2;
+
+  /* World - Slate/Gray */
+  --color-argos-world: #64748b;
+  --color-argos-world-light: #94a3b8;
+  --color-argos-world-dark: #475569;
+
+  /* Status colors */
+  --color-argos-status-success: #22c55e;
+  --color-argos-status-warning: #eab308;
+  --color-argos-status-error: #ef4444;
+  --color-argos-status-info: #3b82f6;
+
+  /* Text colors */
+  --color-argos-text-primary: #f1f5f9;
+  --color-argos-text-secondary: #94a3b8;
+  --color-argos-text-muted: #64748b;
+
+  /* Font families */
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Custom shadows */
+  --shadow-glow-god: 0 0 20px rgba(245, 158, 11, 0.3);
+  --shadow-glow-spirit: 0 0 20px rgba(139, 92, 246, 0.3);
+  --shadow-glow-agent: 0 0 20px rgba(16, 185, 129, 0.3);
+  --shadow-glow-system: 0 0 20px rgba(6, 182, 212, 0.3);
+
+  /* Animations */
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-glow: glow 2s ease-in-out infinite alternate;
+}
+
+@keyframes glow {
+  0% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+/* Base styles */
+@layer base {
+  html {
+    background-color: var(--color-argos-bg-primary);
+    color: var(--color-argos-text-primary);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    margin: 0;
+  }
+
+  #root {
+    min-height: 100vh;
+    width: 100%;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 0.5rem;
+    height: 0.5rem;
+  }
+
+  ::-webkit-scrollbar-track {
+    background-color: var(--color-argos-bg-secondary);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-argos-border);
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-argos-border-light);
+  }
+}
+
+/* Component styles */
+@layer components {
+  /* Panel container */
+  .panel {
+    background-color: var(--color-argos-bg-secondary);
+    border: 1px solid var(--color-argos-border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--color-argos-border);
+    background-color: var(--color-argos-bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .panel-title {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-argos-text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .panel-content {
+    padding: 1rem;
+  }
+
+  /* Badge styles */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .badge-god {
+    background-color: rgba(245, 158, 11, 0.2);
+    color: var(--color-argos-god-light);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+
+  .badge-spirit {
+    background-color: rgba(139, 92, 246, 0.2);
+    color: var(--color-argos-spirit-light);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+  }
+
+  .badge-agent {
+    background-color: rgba(16, 185, 129, 0.2);
+    color: var(--color-argos-agent-light);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+  }
+
+  .badge-system {
+    background-color: rgba(6, 182, 212, 0.2);
+    color: var(--color-argos-system-light);
+    border: 1px solid rgba(6, 182, 212, 0.3);
+  }
+
+  /* Button styles */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 1rem;
+    border-radius: 0.375rem;
+    font-weight: 500;
+    transition: all 150ms;
+  }
+
+  .btn:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-argos-bg-primary), 0 0 0 4px var(--color-argos-god);
+  }
+
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    background-color: var(--color-argos-god);
+    color: black;
+  }
+
+  .btn-primary:hover {
+    background-color: var(--color-argos-god-light);
+  }
+
+  .btn-secondary {
+    background-color: var(--color-argos-bg-tertiary);
+    color: var(--color-argos-text-primary);
+    border: 1px solid var(--color-argos-border);
+  }
+
+  .btn-secondary:hover {
+    background-color: var(--color-argos-bg-elevated);
+  }
+
+  .btn-ghost {
+    color: var(--color-argos-text-secondary);
+  }
+
+  .btn-ghost:hover {
+    color: var(--color-argos-text-primary);
+    background-color: var(--color-argos-bg-tertiary);
+  }
+
+  /* Input styles */
+  .input {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background-color: var(--color-argos-bg-tertiary);
+    border: 1px solid var(--color-argos-border);
+    border-radius: 0.375rem;
+    color: var(--color-argos-text-primary);
+  }
+
+  .input::placeholder {
+    color: var(--color-argos-text-muted);
+  }
+
+  .input:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-argos-god);
+    border-color: transparent;
+  }
+
+  /* Status indicators */
+  .status-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+  }
+
+  .status-dot-active {
+    background-color: var(--color-argos-status-success);
+    animation: pulse 2s infinite;
+  }
+
+  .status-dot-inactive {
+    background-color: var(--color-argos-text-muted);
+  }
+
+  .status-dot-error {
+    background-color: var(--color-argos-status-error);
+    animation: pulse 2s infinite;
+  }
+
+  /* Glow effects */
+  .glow-god {
+    box-shadow: var(--shadow-glow-god);
+  }
+
+  .glow-spirit {
+    box-shadow: var(--shadow-glow-spirit);
+  }
+
+  .glow-agent {
+    box-shadow: var(--shadow-glow-agent);
+  }
+
+  .glow-system {
+    box-shadow: var(--shadow-glow-system);
+  }
+}
+
+/* Utility styles */
+@layer utilities {
+  .text-gradient-god {
+    background: linear-gradient(to right, var(--color-argos-god), var(--color-argos-god-light));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-gradient-spirit {
+    background: linear-gradient(to right, var(--color-argos-spirit), var(--color-argos-spirit-light));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-gradient-agent {
+    background: linear-gradient(to right, var(--color-argos-agent), var(--color-argos-agent-light));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .text-gradient-system {
+    background: linear-gradient(to right, var(--color-argos-system), var(--color-argos-system-light));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}

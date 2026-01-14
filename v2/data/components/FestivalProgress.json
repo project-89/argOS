@@ -1,0 +1,8 @@
+{
+  "name": "FestivalProgress",
+  "description": "Tracks progress toward the harvest festival",
+  "properties": {
+    "target": "number",
+    "current": "number"
+  }
+}
