@@ -114,7 +114,7 @@ export function createWorldTools(state: WorldToolsState) {
           .optional()
           .describe("State transitions: { currentState: newState }"),
         duration: z.number().optional().describe("Action duration in ticks (0 = instant)"),
-        effect: z.string().optional().describe("Custom effect handler name"),
+        effects: z.array(z.any()).optional().describe("Effects that happen when this affordance is executed"),
         descriptionTemplate: z
           .string()
           .optional()
@@ -127,7 +127,7 @@ export function createWorldTools(state: WorldToolsState) {
           blockedBy: params.blockedBy,
           transitions: params.transitions,
           duration: params.duration,
-          effect: params.effect,
+          effects: params.effects,
           descriptionTemplate: params.descriptionTemplate,
         };
 

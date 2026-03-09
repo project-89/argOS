@@ -81,7 +81,7 @@ export type AIOperation = {
   execute: () => Promise<any>;
   priority?: TaskPriority;
   interval: number;              // Run every N ticks
-  lastRun: number;
+  lastRun?: number;
 };
 
 export interface SimulationState {
@@ -303,7 +303,7 @@ function runECSTick(state: SimulationState): void {
 function checkAIOperations(state: SimulationState): void {
   for (const op of state.aiOperations) {
     // Check if it's time to run this operation
-    if (state.tick - op.lastRun >= op.interval) {
+    if (state.tick - (op.lastRun ?? 0) >= op.interval) {
       // Don't queue if already in progress
       if (isTaskInProgress(op.name)) {
         continue;

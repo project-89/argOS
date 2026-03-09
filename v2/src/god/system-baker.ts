@@ -6,6 +6,7 @@ import { AllRelations, HasGoal, HasMemory, HasBelief, HasThought, HasImpression 
 import { query, hasComponent, getRelationTargets, addEntity, addComponent, removeEntity } from "bitecs";
 import { createAIContext } from "../ai/ai-context";
 import { moveEntity, isWalkable, getTile } from "../world/ascii-world";
+import { getDirectContainer, getRoomForEntity, listDirectContents } from "../ecs/location";
 import { query as q } from "bitecs";
 import { WorldMap as WorldMapComponent } from "../ecs/components";
 // LOCKED MODELS from centralized config - DO NOT CHANGE
@@ -1579,6 +1580,11 @@ export function testSystem(
         }
         return undefined;
       },
+    },
+    location: {
+      getDirectContainer,
+      getRoomForEntity,
+      listDirectContents,
     },
     cognitive: cognitiveContext,
   };

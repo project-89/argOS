@@ -145,7 +145,7 @@ export async function generateSamplingDimensions(
 Generate 3-6 key dimensions that would produce a representative sample. Include demographic, socioeconomic, and relevant behavioral dimensions.`,
   });
 
-  return result.object.dimensions;
+  return result.object.dimensions as SamplingDimension[];
 }
 
 // Generate sampling plan from dimensions
@@ -346,7 +346,7 @@ function deepMerge<T extends Record<string, any>>(target: T, source: Partial<T>)
         !Array.isArray(source[key]) &&
         source[key] !== null
       ) {
-        result[key] = deepMerge(result[key] || {}, source[key] as any);
+        result[key] = deepMerge(result[key] || {} as any, source[key] as any);
       } else {
         result[key] = source[key] as any;
       }

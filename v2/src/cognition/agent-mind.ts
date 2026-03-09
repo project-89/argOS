@@ -620,7 +620,7 @@ export async function agentThink(world: World, eid: number): Promise<AgentAction
   if (procedural) {
     const name = Name.value[eid];
     console.log(`[${name}] uses skill: ${procedural.type}${procedural.target ? ` -> ${procedural.target}` : ""}`);
-    return normalizeSelectedAction(world, eid, procedural);
+    return normalizeSelectedAction(world, eid, procedural as AgentAction);
   }
 
   // Deterministic failure recovery: if the last action failed, change strategy immediately.

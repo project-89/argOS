@@ -278,7 +278,7 @@ function safeParseTree(json: string): BehaviorNode | null {
   }
 }
 
-function getNeedValue(world: World, agentEid: number, need: ConditionOp["need_above"]["need"]): number {
+function getNeedValue(world: World, agentEid: number, need: "hunger" | "energy" | "social" | "comfort"): number {
   if (!hasComponent(world as any, agentEid, Needs as any)) return 0;
   const v = (Needs as any)[need]?.[agentEid];
   return typeof v === "number" ? v : 0;

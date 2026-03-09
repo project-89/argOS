@@ -198,7 +198,7 @@ export function createSimulationServer(port: number = 3456) {
         type: "god:command",
         timestamp: Date.now(),
         command,
-      } as SimulationEvent);
+      } as unknown as SimulationEvent);
 
       const { thinking, actions } = await godThink(godAgent, command);
 
@@ -209,7 +209,7 @@ export function createSimulationServer(port: number = 3456) {
         command,
         thinking,
         actions,
-      } as SimulationEvent);
+      } as unknown as SimulationEvent);
 
       // Also broadcast to legacy WebSocket
       broadcast({
@@ -224,7 +224,7 @@ export function createSimulationServer(port: number = 3456) {
         timestamp: Date.now(),
         command,
         error: String(error),
-      } as SimulationEvent);
+      } as unknown as SimulationEvent);
 
       broadcast({
         type: "error",

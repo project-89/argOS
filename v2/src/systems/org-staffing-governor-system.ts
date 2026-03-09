@@ -280,7 +280,7 @@ function createTicketGoal(world: World, agentEid: number, boardEid: number, boar
         ),
         ...dependsOnTitles.map((t) => ({ type: "kanban_card_in_column" as const, boardName, cardTitle: t, columnName: "Done" })),
         ...(String(commandIncludes || "").trim() ? [{ type: "tool_exit_code_equals", toolId: "terminal.run", commandIncludes, equals: 0 }] : []),
-      ],
+      ] as any,
     },
   });
 

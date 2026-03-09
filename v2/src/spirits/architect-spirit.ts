@@ -417,7 +417,7 @@ Respond with a JSON array of needs:
     "rationale": "Why this would improve the simulation"
   }
 ]`,
-      maxTokens: 500,
+      maxOutputTokens: 500,
     });
 
     const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");
@@ -452,7 +452,7 @@ async function designProposal(
 ${specPrompt}
 
 Respond with valid JSON only, no markdown.`,
-      maxTokens: 800,
+      maxOutputTokens: 800,
     });
 
     const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");

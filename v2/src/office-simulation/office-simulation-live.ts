@@ -242,10 +242,10 @@ Be substantive - discuss actual work, problems, and solutions.`,
 
 function initializeOfficeWorld(): OfficeWorld {
   const world = createWorld();
-  initializePrefabs(world);
+  initializePrefabs(world as any);
   initializeEnhancedAgentSystem();
 
-  const ow: OfficeWorld = { world, rooms: new Map(), agents: new Map() };
+  const ow: OfficeWorld = { world: world as any, rooms: new Map(), agents: new Map() };
 
   // Create rooms
   const rooms = [

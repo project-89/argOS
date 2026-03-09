@@ -16,7 +16,7 @@
 
 import { addEntity, addComponent } from "bitecs";
 import type { World } from "../ecs/world";
-import { Name, Description, Spirit } from "../ecs/components";
+import { Name, Description } from "../ecs/components";
 import type { SpiritRegistry, SpiritState } from "./spirit-registry";
 import {
   createSpirit,

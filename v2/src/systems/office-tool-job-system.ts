@@ -77,6 +77,7 @@ export function createOfficeToolJobSystem(): SystemDefinition {
   return {
     name: "OfficeToolJobSystem",
     description: "Completes async office tool jobs (terminal/CLI) and records tool evidence",
+    pseudocode: "Drain completed office tool jobs and record results as tool evidence entities",
     frequency: 250,
     active: true,
     lastRun: 0,

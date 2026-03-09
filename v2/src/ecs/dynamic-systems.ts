@@ -463,7 +463,7 @@ function createSystemContext(world: World, registry: SystemRegistry, tick: numbe
     query,
     hasComponent,
     // Use safe wrapper that filters out non-existent entities
-    getRelationTargets: (w: World, eid: number, rel: any) => safeGetRelationTargets(w, eid, rel),
+    getRelationTargets: ((w: World, eid: number, rel: any) => safeGetRelationTargets(w, eid, rel)) as any,
     addEntity,
     addComponent,
     removeEntity,

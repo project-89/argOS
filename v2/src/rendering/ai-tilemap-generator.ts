@@ -203,7 +203,7 @@ Be thorough - analyze the ENTIRE tileset and catalog every distinct tile.`;
         role: "user",
         content: [
           { type: "text", text: prompt },
-          { type: "image", image: imageBuffer, mimeType },
+          { type: "image", image: imageBuffer, mimeType } as any,
         ],
       },
     ],
@@ -485,7 +485,7 @@ Look at the visual content to determine what each row/section represents.`;
         role: "user",
         content: [
           { type: "text", text: prompt },
-          { type: "image", image: imageBuffer, mimeType },
+          { type: "image", image: imageBuffer, mimeType } as any,
         ],
       },
     ],

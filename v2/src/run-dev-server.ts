@@ -131,6 +131,9 @@ async function main() {
   });
   server.setGodAgent(god);
 
+  // Helper to emit arbitrary events without strict type checking
+  const busEmit = (event: Record<string, any>) => server.bus.emit(event as any);
+
   // Helper to emit world state to the bus
   function emitWorldState() {
     const agentEids = query(world, [Agent]);
@@ -140,7 +143,7 @@ async function main() {
     const systemCount = god.systemRegistry.systems.size;
 
     // Build agent summaries
-    const agents = agentEids.map(eid => {
+    const agents = Array.from(agentEids).map(eid => {
       const roomEid = getRoomForEntity(world, eid);
 
       // Get agent's memories (limit to 20 most recent)
@@ -191,9 +194,9 @@ async function main() {
     });
 
     // Build room summaries
-    const rooms = roomEids.map(eid => {
+    const rooms = Array.from(roomEids).map(eid => {
       // Find agents in this room
-      const occupants = agentEids.filter(agentEid => {
+      const occupants = Array.from(agentEids).filter(agentEid => {
         return getRoomForEntity(world, agentEid) === eid;
       }).map(agentEid => Name.value[agentEid] || `Agent ${agentEid}`);
 
@@ -208,7 +211,7 @@ async function main() {
     });
 
     // Build stimulus source summaries
-    const stimulusSources = stimulusSourceEids.map(eid => {
+    const stimulusSources = Array.from(stimulusSourceEids).map(eid => {
       const roomEid = getRoomForEntity(world, eid);
       return {
         id: eid,
@@ -349,7 +352,7 @@ async function main() {
   function emitSystemCreated(systemName: string, description: string, frequency: number) {
     if (seenSystems.has(systemName)) return;
     seenSystems.add(systemName);
-    server.bus.emit({
+    busEmit({
       type: "system:created",
       timestamp: Date.now(),
       systemName,
@@ -364,7 +367,7 @@ async function main() {
       const prevRuns = lastSystemRuns.get(t.systemName) ?? 0;
       if (t.runs <= prevRuns) continue;
       lastSystemRuns.set(t.systemName, t.runs);
-      server.bus.emit({
+      busEmit({
         type: "system:executed",
         timestamp: t.lastTimestamp || Date.now(),
         systemName: t.systemName,
@@ -382,7 +385,7 @@ async function main() {
       // Typical format: [tick] [SystemName] message
       const withSystem = line.match(/^\[(\d+)\]\s+\[([^\]]+)\]\s*(.*)$/);
       if (withSystem) {
-        server.bus.emit({
+        busEmit({
           type: "system:log",
           timestamp: Date.now(),
           tick: Number(withSystem[1]),
@@ -393,7 +396,7 @@ async function main() {
       }
 
       const generic = line.match(/^\[(\d+)\]\s*(.*)$/);
-      server.bus.emit({
+      busEmit({
         type: "system:log",
         timestamp: Date.now(),
         tick: generic ? Number(generic[1]) : tick,
@@ -406,7 +409,7 @@ async function main() {
   function emitSystemErrors() {
     const errors = consumeSystemErrors(god.systemRegistry);
     for (const err of errors) {
-      server.bus.emit({
+      busEmit({
         type: "system:error",
         timestamp: err.timestamp || Date.now(),
         systemName: err.systemName,
@@ -462,7 +465,7 @@ async function main() {
           const target = data.target ? String(data.target) : undefined;
           const key = `moved:${agentId}:${from}->${to}:${target || ""}:${Math.floor(ts / 250)}`;
           if (!shouldEmitEcsEvent(key, 500)) break;
-          server.bus.emit({
+          busEmit({
             type: "agent:action",
             timestamp: ts,
             agentId,
@@ -477,7 +480,7 @@ async function main() {
           const agentName = String(data.agent || "");
           const agentId = agentName ? findAgentEidByName(agentName) : undefined;
           if (!agentName || agentId === undefined) break;
-          server.bus.emit({
+          busEmit({
             type: "agent:action",
             timestamp: ts,
             agentId,
@@ -497,7 +500,7 @@ async function main() {
           if (roomId === undefined) break;
           const key = `enter:${agentName}:${roomId}:${Math.floor(ts / 1000)}`;
           if (!shouldEmitEcsEvent(key, 1500)) break;
-          server.bus.emit({
+          busEmit({
             type: "room:activity",
             timestamp: ts,
             roomId,
@@ -517,7 +520,7 @@ async function main() {
           if (roomId === undefined) break;
           const key = `leave:${agentName}:${roomId}:${Math.floor(ts / 1000)}`;
           if (!shouldEmitEcsEvent(key, 1500)) break;
-          server.bus.emit({
+          busEmit({
             type: "room:activity",
             timestamp: ts,
             roomId,
@@ -536,7 +539,7 @@ async function main() {
           const goal = data.goal ? String(data.goal) : "goal";
           const key = `goal_completed:${agentId}:${goal}:${Math.floor(ts / 1000)}`;
           if (!shouldEmitEcsEvent(key, 2000)) break;
-          server.bus.emit({
+          busEmit({
             type: "agent:think",
             timestamp: ts,
             agentId,
@@ -576,7 +579,7 @@ async function main() {
 
         // Emit thought event if there's a new thought
         if (latestThought) {
-          server.bus.emit({
+          busEmit({
             type: "agent:think",
             timestamp: Date.now(),
             agentId: eid,
@@ -587,7 +590,7 @@ async function main() {
         }
 
         // Emit action event
-        server.bus.emit({
+        busEmit({
           type: "agent:action",
           timestamp: Date.now(),
           agentId: eid,
@@ -680,7 +683,7 @@ async function main() {
         if (story && lastDaemonStorySignature.get(daemon.agentName) !== story.signature) {
           lastDaemonStorySignature.set(daemon.agentName, story.signature);
           emittedDaemonStory = true;
-          server.bus.emit({
+          busEmit({
             type: "daemon:observe",
             timestamp: Date.now(),
             agentId: daemon.agentEid,
@@ -688,7 +691,7 @@ async function main() {
             observation: story.prose,
           } as any);
         } else if (daemon.observationCount > prev.observationCount) {
-          server.bus.emit({
+          busEmit({
             type: "daemon:observe",
             timestamp: Date.now(),
             agentId: daemon.agentEid,
@@ -698,7 +701,7 @@ async function main() {
         }
 
         if (daemon.whisperCount > prev.whisperCount) {
-          server.bus.emit({
+          busEmit({
             type: "daemon:whisper",
             timestamp: Date.now(),
             agentId: daemon.agentEid,
@@ -712,7 +715,7 @@ async function main() {
         }
 
         if (daemon.reportCount > prev.reportCount) {
-          server.bus.emit({
+          busEmit({
             type: "daemon:report",
             timestamp: Date.now(),
             agentId: daemon.agentEid,
@@ -733,7 +736,7 @@ async function main() {
         if (daemon.pendingNudges.length > prev.pendingNudges) {
           const latestNudge = daemon.pendingNudges[daemon.pendingNudges.length - 1];
           if (latestNudge) {
-            server.bus.emit({
+            busEmit({
               type: "daemon:nudge",
               timestamp: Date.now(),
               agentId: daemon.agentEid,
@@ -784,7 +787,7 @@ async function main() {
         // Emit any new observations since the last bus flush.
         const prevObsCount = emittedSpiritObsCount.get(spirit.eid) ?? 0;
         for (const obs of spirit.observations.slice(prevObsCount)) {
-          server.bus.emit({
+          busEmit({
             type: "spirit:observe",
             timestamp: obs.timestamp || Date.now(),
             spiritId: spirit.eid,
@@ -808,7 +811,7 @@ async function main() {
         const outbox = spirit.outbox ?? [];
         const prevOutboxCount = emittedSpiritOutboxCount.get(spirit.eid) ?? 0;
         for (const msg of outbox.slice(prevOutboxCount)) {
-          server.bus.emit({
+          busEmit({
             type: "spirit:message",
             timestamp: msg.timestamp || Date.now(),
             from: (msg as any).from ?? spirit.eid,
@@ -828,7 +831,7 @@ async function main() {
 
       // Emit narrative prose if any
       for (const prose of result.narrativeProse) {
-        server.bus.emit({
+        busEmit({
           type: "spirit:message",
           timestamp: Date.now(),
           from: narratorEid ?? god.eid,
@@ -857,7 +860,7 @@ async function main() {
 
           if (crafterResult.entitiesCreated > 0) {
             console.log(`[WorldCrafter] Created ${crafterResult.entitiesCreated} entities`);
-            server.bus.emit({
+            busEmit({
               type: "spirit:message",
               timestamp: Date.now(),
               spiritName: "The Crafter",
@@ -873,7 +876,7 @@ async function main() {
           }
           if (crafterResult.evolutionProposalsSent > 0) {
             console.log(`[WorldCrafter] Sent ${crafterResult.evolutionProposalsSent} evolution proposals to The Weaver`);
-            server.bus.emit({
+            busEmit({
               type: "spirit:message",
               timestamp: Date.now(),
               spiritName: "The Crafter",
@@ -892,7 +895,7 @@ async function main() {
 
           if (stewardResult.roomsPopulated > 0) {
             console.log(`[Steward] Populated ${stewardResult.roomsPopulated} rooms with ${stewardResult.entitiesGenerated} entities`);
-            server.bus.emit({
+            busEmit({
               type: "spirit:message",
               timestamp: Date.now(),
               spiritName: "The Steward",
@@ -921,7 +924,7 @@ async function main() {
                 architect
               );
               if (proposals.length > 0) {
-                server.bus.emit({
+                busEmit({
                   type: "spirit:message",
                   timestamp: Date.now(),
                   spiritName: architect.definition.name,
@@ -947,7 +950,7 @@ async function main() {
                 artificer
               );
               if (report.repairsAttempted.length > 0 || report.criticalSystems > 0) {
-                server.bus.emit({
+                busEmit({
                   type: "spirit:message",
                   timestamp: Date.now(),
                   spiritName: artificer.definition.name,
@@ -974,7 +977,7 @@ async function main() {
             if (autoApprove) {
               approveProposal(proposal.id, god.eid);
               console.log(`[Proposals] ✅ Auto-approved: ${proposal.name} (${proposal.type})`);
-              server.bus.emit({
+              busEmit({
                 type: "spirit:message",
                 timestamp: Date.now(),
                 spiritName: "System",
@@ -998,7 +1001,7 @@ async function main() {
           if (executed.length > 0) {
             console.log(`[Proposals] 🔧 Executed: ${executed.join(", ")}`);
             for (const name of executed) {
-              server.bus.emit({
+              busEmit({
                 type: "spirit:message",
                 timestamp: Date.now(),
                 spiritName: "The Weaver",
@@ -1028,7 +1031,7 @@ async function main() {
     console.log(`[God Command] ${injection.command}`);
 
     // Emit command started
-    server.bus.emit({
+    busEmit({
       type: "god:command",
       timestamp: Date.now(),
       command: injection.command,
@@ -1039,7 +1042,7 @@ async function main() {
       const result = await godThink(god, injection.command);
 
       // Emit response
-      server.bus.emit({
+      busEmit({
         type: "god:response",
         timestamp: Date.now(),
         command: injection.command,
@@ -1051,7 +1054,7 @@ async function main() {
       emitWorldState();
     } catch (error) {
       // Emit error
-      server.bus.emit({
+      busEmit({
         type: "god:error",
         timestamp: Date.now(),
         command: injection.command,
@@ -1081,7 +1084,7 @@ async function main() {
 
     if (!targetSpirit) {
       console.error(`[Spirit Message] Spirit not found: ${injection.targetSpiritName || injection.targetSpiritId}`);
-      server.bus.emit({
+      busEmit({
         type: "spirit:message",
         timestamp: Date.now(),
         spiritName: "System",
@@ -1111,7 +1114,7 @@ async function main() {
     console.log(`[Spirit Message] Added to ${targetSpirit.definition.name}'s inbox (${targetSpirit.inbox.length} messages)`);
 
     // Emit event to confirm message was received
-    server.bus.emit({
+    busEmit({
       type: "spirit:message",
       timestamp: Date.now(),
       spiritName: targetSpirit.definition.name,
@@ -1126,7 +1129,7 @@ async function main() {
   server.bus.registerInjectionHandler("inject:simulation_pause", async () => {
     console.log("[Simulation] Pausing...");
     paused = true;
-    server.bus.emit({
+    busEmit({
       type: "simulation:status",
       timestamp: Date.now(),
       status: "paused",
@@ -1145,7 +1148,7 @@ async function main() {
     }
 
     paused = false;
-    server.bus.emit({
+    busEmit({
       type: "simulation:status",
       timestamp: Date.now(),
       status: "running",
@@ -1158,7 +1161,7 @@ async function main() {
     console.log("[Simulation] Stopping...");
     paused = true;
     tick = 0;
-    server.bus.emit({
+    busEmit({
       type: "simulation:status",
       timestamp: Date.now(),
       status: "stopped",
@@ -1173,7 +1176,7 @@ async function main() {
     if (!mapData) {
       console.log("[Simulation] Starting without map payload (resume existing world)");
       paused = false;
-      server.bus.emit({
+      busEmit({
         type: "simulation:status",
         timestamp: Date.now(),
         status: "running",
@@ -1249,7 +1252,7 @@ async function main() {
       // Start the simulation
       paused = false;
 
-      server.bus.emit({
+      busEmit({
         type: "simulation:status",
         timestamp: Date.now(),
         status: "running",
@@ -1262,7 +1265,7 @@ async function main() {
       console.log(`[Simulation] Started successfully`);
     } catch (error) {
       console.error("[Simulation] Start failed:", error);
-      server.bus.emit({
+      busEmit({
         type: "simulation:error",
         timestamp: Date.now(),
         error: String(error),

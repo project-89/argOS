@@ -355,7 +355,7 @@ export function createArgosServer(port: number = 3456) {
           },
         });
       } else {
-        god = createGodAgent(world);
+        god = createGodAgent(world, {} as any);
       }
 
       // Register builtin systems for narrative atmosphere
@@ -365,7 +365,7 @@ export function createArgosServer(port: number = 3456) {
 
       // Initialize spirit system with proper hierarchy
       const spiritSystem = initializeSpiritSystem(world, {
-        godAgentEid: god.godAgentEid,
+        godAgentEid: (god as any).godAgentEid ?? god.eid,
         tickInterval: 15000, // Spirits observe every 15 seconds
         autoCreateNarrator: true,
       });
@@ -441,7 +441,7 @@ Respond with JSON analysis of social dynamics and any interventions needed.`,
 
       broadcast({
         type: "godResponse",
-        payload: { command: prompt, thinking: result.thinking, actions: result.actions },
+        payload: { command: prompt, thinking: (result as any).thinking, actions: (result as any).actions },
         timestamp: Date.now(),
       });
 
@@ -691,10 +691,10 @@ Respond with JSON analysis of social dynamics and any interventions needed.`,
           recordActionEvent(agentName, action.type, action.content || "", action.target);
 
           // Emit thought if the action includes thinking
-          if (action.thinking) {
+          if ((action as any).thinking) {
             const thoughtEvt = {
               type: "agent_thought",
-              data: { agent: agentName, thought: action.thinking },
+              data: { agent: agentName, thought: (action as any).thinking },
               timestamp: Date.now(),
             };
             activeSimulation.events.push(thoughtEvt);
@@ -744,7 +744,7 @@ Respond with JSON analysis of social dynamics and any interventions needed.`,
         };
         activeSimulation.events.push(narrativeEvt);
         broadcast({ type: "event", payload: narrativeEvt, timestamp: Date.now() });
-        broadcast({ type: "narrative", payload: prose, timestamp: Date.now() });
+        broadcast({ type: "narrative" as any, payload: prose, timestamp: Date.now() });
         console.log(`[System] Narrative: "${prose.slice(0, 80)}..."`);
       }
 
@@ -929,7 +929,7 @@ Respond with JSON analysis of social dynamics and any interventions needed.`,
       const firstRoom = getRoomForEntity(world, eid);
 
       // Get dynamic component data
-      const dynamicData = getDynamicComponentValues(world, eid);
+      const dynamicData = getDynamicComponentValues(world as any, eid);
 
       entities.push({
         id: eid,

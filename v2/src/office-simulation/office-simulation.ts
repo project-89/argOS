@@ -290,11 +290,11 @@ Your colleagues: Check who else is in the office and coordinate with them.`,
  */
 function initializeOfficeWorld(): OfficeWorld {
   const world = createWorld();
-  initializePrefabs(world);
+  initializePrefabs(world as any);
   initializeEnhancedAgentSystem();
 
   const ow: OfficeWorld = {
-    world,
+    world: world as any,
     rooms: new Map(),
     agents: new Map(),
     slackChannels: new Map(),
@@ -426,12 +426,12 @@ async function runAgentCycle(
 
   // Add Slack notifications as perceptions
   for (const notif of notifications.slice(0, 3)) {
-    queueStimulus(ow.world, agent.eid, {
+    queueStimulus({
+      targetEid: agent.eid,
       type: "notification",
       content: `[Slack ${notif.type}] ${notif.from}: "${notif.preview.slice(0, 60)}..."`,
       source: "phone",
-      metadata: { channelName: notif.channelName },
-    });
+    } as any);
   }
 
   try {
@@ -441,7 +441,7 @@ async function runAgentCycle(
     // Process the action
     if (action) {
       // If the agent mentions Slack in their action, interpret it
-      if (action.type === "use_device" || action.type === "use" || action.content?.toLowerCase().includes("slack")) {
+      if ((action.type as string) === "use_device" || action.type === "use" || action.content?.toLowerCase().includes("slack")) {
         // Parse for Slack intent
         const content = action.content?.toLowerCase() || "";
 
@@ -545,12 +545,12 @@ function propagateSpeech(ow: OfficeWorld, speakerEid: number, speakerName: strin
   const listeners = getAgentsInSameRoom(ow, speakerEid);
 
   for (const listener of listeners) {
-    queueStimulus(ow.world, listener.eid, {
+    queueStimulus({
+      targetEid: listener.eid,
       type: "speech",
       content: `${speakerName} says: "${speech}"`,
       source: speakerName,
-      metadata: { speakerEid, direct: true },
-    });
+    } as any);
     log.thought(`  (${listener.name} hears ${speakerName})`);
   }
 }

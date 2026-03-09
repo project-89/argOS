@@ -109,15 +109,11 @@ export function initiateIncomingCall(
   operatorState.activeCalls.set(call.id, call);
 
   // Create a stimulus for the phone ringing
-  queueStimulus(world, phoneEntityId, {
+  queueStimulus({
+    targetEid: phoneEntityId,
     type: "device",
     content: `Phone is ringing. Incoming call from ${from}`,
     source: "phone",
-    metadata: {
-      callId: call.id,
-      callerNumber: from,
-      action: "incoming_call",
-    },
   });
 
   console.log(`[Operator] Incoming call ${call.id} from ${from} to ${toAgentName}`);
@@ -148,15 +144,11 @@ export function handleCallerSpeech(
   });
 
   // Create stimulus for agent to perceive
-  queueStimulus(world, agentEntityId, {
+  queueStimulus({
+    targetEid: agentEntityId,
     type: "speech",
     content: `[On phone] ${call.from} says: "${text}"`,
     source: "phone_call",
-    metadata: {
-      callId,
-      speaker: call.from,
-      isPhoneCall: true,
-    },
   });
 }
 

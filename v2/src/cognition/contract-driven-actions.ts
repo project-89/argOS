@@ -316,7 +316,7 @@ function selectMissingOrgStep(
     // Prefer selecting by name if provided; otherwise look for a board in-room.
     const boardEid = findBoardEid(world, first.boardName) ?? findRoomEntityByTrait(world, agentEid, "kanban_board");
     const boardName = boardEid !== undefined ? String(Name.value[boardEid] || "").trim() : "";
-    if (!boardName) return null;
+    if (!boardName || boardEid === undefined) return null;
 
     // Ensure initialized (idempotent).
     if (!hasComponent(world as any, boardEid, KanbanBoard as any)) {

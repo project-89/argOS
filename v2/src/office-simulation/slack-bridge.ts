@@ -70,7 +70,7 @@ export async function initializeSlackBridge(
   });
 
   // Log ALL incoming events for debugging
-  app.use(async ({ event, next }) => {
+  app.use(async ({ event, next }: any) => {
     if (event) {
       console.log(`[SlackBridge] 🔔 RAW EVENT: type=${event.type}, channel=${(event as any).channel || 'N/A'}`);
     }
@@ -152,12 +152,13 @@ export async function initializeSlackBridge(
     const simChannelName = REVERSE_CHANNEL_MAP[event.channel];
     if (!simChannelName) return;
 
-    let userName = userNameCache.get(event.user);
+    const userId = event.user || "unknown";
+    let userName = userNameCache.get(userId);
     if (!userName) {
       try {
-        const userInfo = await client.users.info({ user: event.user });
+        const userInfo = await client.users.info({ user: userId });
         userName = userInfo.user?.real_name || userInfo.user?.name || "Unknown";
-        userNameCache.set(event.user, userName);
+        userNameCache.set(userId, userName);
       } catch {
         userName = "Unknown";
       }

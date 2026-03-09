@@ -3466,7 +3466,7 @@ registerOfficeTool("workspace.git_apply", (params: any, ctx: OfficeToolContext):
 
     const existing = new Set(listKanbanColumns(ctx.world, boardEid).map((c) => c.name));
     let created = 0;
-    colNames.forEach((name, idx) => {
+    colNames.forEach((name: any, idx: any) => {
       if (existing.has(name)) return;
       const colEid = addEntity(ctx.world as any);
       addComponent(ctx.world as any, colEid, Name as any);

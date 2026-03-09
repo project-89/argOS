@@ -27,18 +27,21 @@ export type SpiritRank =
 
 export interface SpiritDefinition {
   name: string;
+  title?: string;
   domain: SpiritDomain;
   rank: SpiritRank;
-  description: string;
+  description?: string;
 
   // What this spirit watches
-  watchConfig: WatchConfig;
+  watchConfig?: WatchConfig;
 
   // Intervention capabilities
-  canInjectEvents: boolean;
-  canModifyMood: boolean;
-  canCreateEntities: boolean;
-  canBakeSystems: boolean;
+  canInjectEvents?: boolean;
+  canModifyMood?: boolean;
+  canCreateEntities?: boolean;
+  canBakeSystems?: boolean;
+  canIntervene?: boolean;
+  interventionTypes?: string[];
 
   // Cognition settings
   model: "flash" | "haiku" | "pro";

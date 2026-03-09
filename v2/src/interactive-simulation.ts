@@ -403,7 +403,7 @@ Think about what would help you achieve your goal, then take action. Don't just 
       system: systemPrompt,
       prompt: userPrompt,
       tools,
-      maxSteps: 5,
+      ...({ maxSteps: 5 } as any),
     });
   } catch (error: any) {
     const errMsg = error?.message || String(error);

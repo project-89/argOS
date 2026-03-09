@@ -27,7 +27,7 @@ import type {
 } from "./types";
 
 // Re-export types for convenience
-export type { SpiritState, SpiritDefinition, SpiritDomain } from "./types";
+export type { SpiritState, SpiritDefinition, SpiritDomain, SpiritRank } from "./types";
 
 // =============================================================================
 // SPIRIT COMPONENT
@@ -99,7 +99,7 @@ export function createSpirit(
 
   // Set Name and Description
   Name.value[eid] = definition.name;
-  Description.value[eid] = definition.description;
+  Description.value[eid] = definition.description || "";
 
   // Set Mind for cognitive processing
   Mind.mode[eid] = "deliberative";
@@ -514,6 +514,7 @@ function createInitialNarrativeState(): NarrativeState {
     sceneHistory: [],
     plannedBeats: [],
     completedBeats: [],
+    recentProse: [],
   };
 }
 

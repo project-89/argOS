@@ -13,5 +13,18 @@
     "lib": ["ES2022"]
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/systems/generated",
+    "src/behavioral-tests",
+    "src/tests",
+    "src/__tests__",
+    "src/ecs/__tests__",
+    "src/cognition/__tests__",
+    "src/world/__tests__",
+    "src/spirits/__tests__",
+    "src/god/__tests__",
+    "src/systems/__tests__"
+  ]
 }

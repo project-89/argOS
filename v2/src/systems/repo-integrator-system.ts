@@ -98,6 +98,7 @@ export function createRepoIntegratorSystem(): SystemDefinition {
   return {
     name: "RepoIntegratorSystem",
     description: "Applies, tests, and merges PR patches into shared repos (non-blocking via async jobs)",
+    pseudocode: "Process pending PR patches: apply, test, and merge into shared repos using async jobs",
     frequency: 250,
     active: true,
     lastRun: 0,

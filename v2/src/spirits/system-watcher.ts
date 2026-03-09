@@ -499,7 +499,7 @@ ${allAnomalies.map(a => `- [${a.severity}] ${a.type}: ${a.description}`).join("\
 
 Provide 1-3 concise, actionable recommendations for fixing/repairing the simulation.
 Return a JSON array of strings.`,
-        maxTokens: 200,
+        maxOutputTokens: 200,
       });
 
       try {

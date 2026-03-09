@@ -537,7 +537,7 @@ ${d.issues.map(i => `- [${i.severity}] ${i.type}: ${i.description}`).join("\n")}
 
 Respond with a JSON array of recommendation strings (max 3):
 ["recommendation 1", "recommendation 2"]`,
-        maxTokens: 200,
+        maxOutputTokens: 200,
       });
 
       const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");
@@ -853,7 +853,7 @@ Respond with JSON:
   "analysis": "Brief overall assessment",
   "suggestions": ["suggestion 1", "suggestion 2", ...]
 }`,
-      maxTokens: 500,
+      maxOutputTokens: 500,
     });
 
     const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");

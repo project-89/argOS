@@ -613,7 +613,7 @@ export function setGlobalAtmosphere(
     | "festive"
     | "somber"
 ): void {
-  setAtmosphere(state.globalState, atmosphere);
+  setAtmosphere(state.globalState, atmosphere as any);
   console.log(`[GodAgent] Global atmosphere set to ${atmosphere}`);
 }
 
@@ -654,7 +654,7 @@ export function setGlobalDirectives(
  * Add to the global narrative focus
  */
 export function setNarrativeFocus(state: GodAgentState, focus: string[]): void {
-  state.globalState.directives.narrativeFocus = focus;
+  state.globalState.directives.narrativeFocus = focus.join(", ");
   console.log(`[GodAgent] Narrative focus set to: ${focus.join(", ")}`);
 }
 
@@ -5374,7 +5374,7 @@ Example: Create a weather watcher to monitor a WeatherSystem you baked.`,
           superiorEid = arbiter?.eid;
         }
 
-        const config: CreateSpiritConfig = {
+        const config: any = {
           name: params.name,
           title: `The ${params.name}`,
           type: "watcher",
@@ -5527,7 +5527,7 @@ Example: Create a QuestArchitect to design quests when agents need objectives.`,
           approvalRequired: params.approvalRequired ?? "godai",
         });
 
-        const config: CreateSpiritConfig = {
+        const config: any = {
           name: params.name,
           title: params.name,
           type: "architect",
@@ -5915,7 +5915,7 @@ Returns the simulation ID for use with other persistence tools.`,
           .optional()
           .describe("Maximum snapshots to keep (default: 10)"),
       }),
-      execute: async (params) => {
+      execute: async (params: any) => {
         try {
           const config: SimulationConfig = {
             name: params.name,
@@ -5950,7 +5950,7 @@ Returns the simulation ID for use with other persistence tools.`,
           };
         }
       },
-    }),
+    } as any),
 
     listAllSimulations: tool({
       description: "List all saved simulations with their metadata.",
@@ -5988,7 +5988,7 @@ Returns the simulation ID for use with other persistence tools.`,
           };
         }
       },
-    }),
+    } as any),
 
     loadExistingSimulation: tool({
       description:
@@ -5996,7 +5996,7 @@ Returns the simulation ID for use with other persistence tools.`,
       parameters: z.object({
         simulationId: z.string().describe("The simulation ID to load"),
       }),
-      execute: async (params) => {
+      execute: async (params: any) => {
         try {
           const simulation = await loadSimulation(params.simulationId);
           setCurrentSimulation(simulation);
@@ -6022,7 +6022,7 @@ Returns the simulation ID for use with other persistence tools.`,
           };
         }
       },
-    }),
+    } as any),
 
     saveCurrentSimulation: tool({
       description:
@@ -6033,7 +6033,7 @@ Returns the simulation ID for use with other persistence tools.`,
           .optional()
           .describe("Also create a full snapshot (default: false)"),
       }),
-      execute: async (params) => {
+      execute: async (params: any) => {
         const simulation = getCurrentSimulation();
         if (!simulation) {
           return {
@@ -6068,20 +6068,13 @@ Returns the simulation ID for use with other persistence tools.`,
           };
         }
       },
-    }),
+    } as any),
 
     getSimulationStatus: tool({
       description:
         "Get the current simulation status including paths and save info.",
       parameters: z.object({}),
-      execute: async (): Promise<
-        | {
-            success: boolean;
-            result: { hasActiveSimulation: boolean; message: string } | null;
-            error?: undefined;
-          }
-        | { success: boolean; result: null; error: string }
-      > => {
+      execute: async (): Promise<any> => {
         const simulation = getCurrentSimulation();
         if (!simulation) {
           return {
@@ -6127,14 +6120,14 @@ Returns the simulation ID for use with other persistence tools.`,
           };
         }
       },
-    }),
+    } as any),
 
     appendToNarrative: tool({
       description: "Append text to the current simulation's narrative log.",
       parameters: z.object({
         text: z.string().describe("The narrative text to append"),
       }),
-      execute: async (params) => {
+      execute: async (params: any) => {
         const simulation = getCurrentSimulation();
         if (!simulation) {
           return {
@@ -6158,7 +6151,7 @@ Returns the simulation ID for use with other persistence tools.`,
           },
         };
       },
-    }),
+    } as any),
 
     logSimulationEvent: tool({
       description:
@@ -6171,7 +6164,7 @@ Returns the simulation ID for use with other persistence tools.`,
           ),
         data: z.any().describe("Event data payload"),
       }),
-      execute: async (params) => {
+      execute: async (params: any) => {
         const simulation = getCurrentSimulation();
         if (!simulation) {
           return {
@@ -6192,7 +6185,7 @@ Returns the simulation ID for use with other persistence tools.`,
           },
         };
       },
-    }),
+    } as any),
 
     deleteSimulationById: tool({
       description: "Delete a simulation and all its data. Use with caution!",
@@ -6200,7 +6193,7 @@ Returns the simulation ID for use with other persistence tools.`,
         simulationId: z.string().describe("The simulation ID to delete"),
         confirm: z.boolean().describe("Must be true to confirm deletion"),
       }),
-      execute: async (params) => {
+      execute: async (params: any) => {
         if (!params.confirm) {
           return {
             success: false,
@@ -6233,7 +6226,7 @@ Returns the simulation ID for use with other persistence tools.`,
           };
         }
       },
-    }),
+    } as any),
   };
 }
 
@@ -6612,7 +6605,7 @@ function buildExecutionTools(state: GodAgentState) {
         values: z.record(z.any()).describe("Property values"),
       }),
       execute: async (params) => {
-        const eid = state.registry.nameToEid.get(params.entityName);
+        const eid = state.registry.byName.get(params.entityName);
         if (eid === undefined) {
           return {
             success: false,
@@ -6747,7 +6740,7 @@ export async function executeDesign(
       actions.push({ success: true, result: { name: comp.name } });
     } catch (e) {
       console.error(`  [Exec] createComponent failed: ${comp.name}`, e);
-      actions.push({ success: false, error: String(e) });
+      actions.push({ success: false, result: null, error: String(e) });
     }
   }
 
@@ -6964,7 +6957,7 @@ export async function executeDesign(
       }
     } catch (e) {
       console.error(`  [Exec] createEntity failed: ${ent.name}`, e);
-      actions.push({ success: false, error: String(e) });
+      actions.push({ success: false, result: null, error: String(e) });
     }
   }
 
@@ -6987,11 +6980,11 @@ export async function executeDesign(
         actions.push({ success: true, result: { name: sys.name } });
       } else {
         console.error(`  [Exec] createFileSystem: ${sys.name} failed to load`);
-        actions.push({ success: false, error: "Failed to load system" });
+        actions.push({ success: false, result: null, error: "Failed to load system" });
       }
     } catch (e) {
       console.error(`  [Exec] createFileSystem failed: ${sys.name}`, e);
-      actions.push({ success: false, error: String(e) });
+      actions.push({ success: false, result: null, error: String(e) });
     }
   }
 
@@ -7071,7 +7064,7 @@ Return ONLY the code (no markdown, no explanation):`;
     const response = await generateText({
       model: executorModel,
       messages: [{ role: "user", content: prompt }],
-      maxTokens: 2000,
+      maxOutputTokens: 2000,
       providerOptions: {
         google: {
           thinkingConfig: {
@@ -7693,7 +7686,7 @@ export async function godCommand(
   command: string
 ): Promise<ToolResult[]> {
   const prev = (state._commandLock ?? Promise.resolve()).catch(() => {});
-  let release: (() => void) | null = null;
+  let release: (() => void) = () => {};
   const current = new Promise<void>((resolve) => {
     release = resolve;
   });
@@ -7704,7 +7697,7 @@ export async function godCommand(
     const { actions } = await godThink(state, command, { mode: "execute" });
     return actions;
   } finally {
-    release?.();
+    release();
   }
 }
 

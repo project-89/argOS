@@ -1812,7 +1812,7 @@ function normalizePlanContent(raw: string): string {
 }
 
 function doesActionSatisfyPlanStep(
-  action: ValidAction,
+  action: { type: string; target?: string; content?: string },
   step: { actionType: string; target?: string; content?: string }
 ): boolean {
   const typeMatches = String(action.type || "") === String(step.actionType || "");
@@ -2061,7 +2061,7 @@ export function executeActions(
             type: "observation",
             content: `Observing ${action.target}`,
             otherParty: action.target,
-            context: `In ${Name.value[roomEid] || "a room"}`,
+            context: `In ${roomEid !== undefined ? Name.value[roomEid] || "a room" : "a room"}`,
           }).catch(() => {});
           clearFailedActionAttempt(eid);
 
@@ -2275,14 +2275,14 @@ export function executeActions(
               type: "action_success",
               content: `SUCCESS: I ${affordanceName}ed the ${targetName}. ${result.changes.join(". ")}`,
               otherParty: targetName,
-              context: `In ${Name.value[roomEid] || "a room"}. The action succeeded and changed the world state.`,
+              context: `In ${roomEid !== undefined ? Name.value[roomEid] || "a room" : "a room"}. The action succeeded and changed the world state.`,
             }).catch(() => {});
             clearFailedActionAttempt(eid);
 
             // LastAction (ECS): used by deterministic goal evaluation.
             if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
             LastAction.type[eid] = "interact";
-            LastAction.target[eid] = targetName;
+            LastAction.target[eid] = targetName || "";
             LastAction.content[eid] = `${affordanceName}${affordanceArgs ? ` ${affordanceArgs}` : ""}`;
             LastAction.success[eid] = true;
             LastAction.timestamp[eid] = Date.now();
@@ -2365,13 +2365,13 @@ export function executeActions(
               type: "action_failed",
               content: `FAILED: I tried to ${affordanceName} the ${targetName} but it didn't work. ${result.message}`,
               otherParty: targetName,
-              context: `In ${Name.value[roomEid] || "a room"}. This action failed - I should try a different approach.`,
+              context: `In ${roomEid !== undefined ? Name.value[roomEid] || "a room" : "a room"}. This action failed - I should try a different approach.`,
             }).catch(() => {});
 
             // LastAction (ECS): used by deterministic goal evaluation.
             if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
             LastAction.type[eid] = "interact";
-            LastAction.target[eid] = targetName;
+            LastAction.target[eid] = targetName || "";
             LastAction.content[eid] = `${affordanceName}${affordanceArgs ? ` ${affordanceArgs}` : ""}`;
             LastAction.success[eid] = false;
             LastAction.timestamp[eid] = Date.now();

@@ -1950,7 +1950,7 @@ You've observed a concern: ${topConcern.description}
 Generate a short, subtle whisper (1 sentence, under 20 words) to gently guide them.
 The whisper should feel like an inner voice or intuition, not a direct command.
 Do not use quotes. Just output the whisper text.`,
-          maxTokens: 50,
+          maxOutputTokens: 50,
         });
         whisperContent = result.text.trim().replace(/^["']|["']$/g, '');
         whisperType = "guidance";
@@ -2078,7 +2078,7 @@ Generate a short, provocative whisper (1 sentence, under 20 words) that:
 
 The whisper should feel like a nagging inner voice that won't let them rest easy.
 Be subtle but unsettling. Do not use quotes. Just output the whisper text.`,
-      maxTokens: 50,
+      maxOutputTokens: 50,
     });
     challengeContent = result.text.trim().replace(/^["']|["']$/g, '');
   } catch (error) {
@@ -2473,7 +2473,7 @@ export function buildDaemonPovStory(daemon: DaemonState): DaemonPovStory | null 
   const nudge = daemon.pendingNudges[0];
   const arousal = state?.arousal ?? Math.min(1, 0.25 + daemon.concernLevel * 0.7);
   const mood = daemonMoodLabel(arousal);
-  const room = state?.room || recentMoment?.location || "their corner of the world";
+  const room = state?.room || (recentMoment as any)?.location || "their corner of the world";
   const focus = state?.focus || activePlan?.goal || arc.drivingGoal || "the day ahead";
 
   const lines: string[] = [];

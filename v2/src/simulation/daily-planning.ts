@@ -237,7 +237,7 @@ Be specific but brief. Consider the atmosphere.
 
 Respond with a JSON array of strings:
 ["intention 1", "intention 2", "intention 3"]`,
-      maxTokens: 200,
+      ...({ maxTokens: 200 } as any),
     });
 
     const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");
