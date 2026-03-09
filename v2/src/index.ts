@@ -129,6 +129,8 @@ import {
   runGodAutopilotCycle,
   type GodAutopilotConfig,
 } from "./god/god-autopilot";
+import { setAgentBehaviorPolicy } from "./cognition/behavior-policy";
+import { inferPolicyFromRole, getPolicyTemplate } from "./cognition/behavior-templates";
 import {
   createSimulation as createRuntimeSimulation,
   registerFastSystem,
@@ -518,6 +520,14 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
       // Ensure canonical containment is set exactly once.
       if (agentConfig.startRoom && roomEid && getDirectContainer(world, agentEid) === undefined) {
         setLocatedIn(world, agentEid, roomEid);
+      }
+
+      // Auto-assign behavior policy based on role (deterministic-first cognition)
+      const { template, params } = inferPolicyFromRole(agentConfig.role);
+      const policyTree = getPolicyTemplate(template, params);
+      if (policyTree) {
+        setAgentBehaviorPolicy(world, agentEid, policyTree);
+        console.log(`     policy: ${template}`);
       }
     }
   }

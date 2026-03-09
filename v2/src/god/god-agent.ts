@@ -14,6 +14,8 @@ import { createGodAgentEntity } from "../ecs/prefabs";
 import { GodAgent, Name, Description, Agent, Mind, ObjectType, ObjectState, Traits } from "../ecs/components";
 import { AllComponents } from "../ecs/components";
 import { AllRelations } from "../ecs/relations";
+import { setAgentBehaviorPolicy } from "../cognition/behavior-policy";
+import { getPolicyTemplate, inferPolicyFromRole, getAvailableTemplates, type PolicyTemplateName } from "../cognition/behavior-templates";
 import { transitionObjectState as transitionObjectStateCanonical } from "../world/effect-executor";
 import {
   createSystemRegistry,
@@ -4501,6 +4503,43 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
             focus: params.focus || Mind.focus[eid],
           },
         };
+      },
+    }),
+
+    setAgentBehaviorPolicy: tool({
+      description: `Assign a deterministic behavior policy (behavior tree) to an agent. Policies run BEFORE LLM calls, making agents faster and cheaper. Available templates: ${getAvailableTemplates().join(", ")}. The policy falls through to LLM for situations not covered.`,
+      inputSchema: z.object({
+        agentName: z.string().describe("Name of the agent"),
+        template: z.enum(["survival", "innkeeper", "guard", "scholar", "merchant", "worker", "idle"] as [string, ...string[]]).optional().describe("Policy template name. If omitted, inferred from agent role."),
+        params: z.record(z.any()).optional().describe("Template parameters (e.g., { room: 'Tavern' } for innkeeper, { rooms: ['Hall', 'Gate'] } for guard)"),
+      }),
+      execute: async (params: any) => {
+        const agents = Array.from(query(state.world, [Agent as any]));
+        const eid = agents.find((e: number) => Name.value[e] === params.agentName);
+        if (eid === undefined) {
+          return { success: false, result: null, error: `Agent "${params.agentName}" not found` };
+        }
+
+        let templateName: PolicyTemplateName;
+        let templateParams = params.params;
+
+        if (params.template) {
+          templateName = params.template as PolicyTemplateName;
+        } else {
+          const role = String(Agent.role[eid] || "");
+          const inferred = inferPolicyFromRole(role);
+          templateName = inferred.template;
+          templateParams = templateParams || inferred.params;
+        }
+
+        const tree = getPolicyTemplate(templateName, templateParams);
+        if (!tree) {
+          return { success: false, result: null, error: `Template "${templateName}" not found` };
+        }
+
+        setAgentBehaviorPolicy(state.world, eid, tree);
+        console.log(`[Tool] setAgentBehaviorPolicy: ${params.agentName} -> ${templateName}`);
+        return { success: true, result: { agent: params.agentName, template: templateName, params: templateParams } };
       },
     }),
 
