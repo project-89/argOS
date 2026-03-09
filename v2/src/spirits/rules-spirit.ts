@@ -129,53 +129,53 @@ export async function generateRuleProposal(
 
   // Get existing rules for context
   const existingRules = worldSchema.getActiveRules();
-  const existingTypes = worldSchema.getAllObjectTypes().map(t => t.name);
+  const existingTypes = worldSchema.getAllObjectTypeIds();
 
   const prompt = `You are The Lawgiver, creator of deterministic world rules.
 
-TASK: Create a rule for: "${request.description}"
+TASK: Create a deterministic rule for: "${request.description}"
 
 CONTEXT:
 - World theme: ${request.context.worldTheme || "fantasy"}
 - Desired behavior: ${request.context.desiredBehavior}
-- Existing object types: ${existingTypes.slice(0, 20).join(", ")}...
+- Existing object type IDs (sample): ${existingTypes.slice(0, 20).join(", ")}...
 - Existing rules: ${existingRules.map(r => r.name).join(", ") || "none"}
 
-RULE DESIGN PRINCIPLES:
-1. Rules are DETERMINISTIC - no randomness, no AI
-2. Rules should be SIMPLE - complex behavior emerges from many simple rules
-3. Rules run on TICK or EVENT triggers
-4. Conditions check entity traits, states, proximity, or component values
-5. Effects modify states, emit events, or trigger other rules
+IMPORTANT: Output MUST match the engine's RuleDefinition schema:
+- Trigger: use "tick" (most common)
+- Condition is a single object (RuleCondition) with optional fields:
+  - has: string[]
+  - not: string[]
+  - inState: string
+  - expression: string (optional)
+- Effects are an array of RuleEffect objects with REQUIRED "action":
+  - action: one of ["add_trait","remove_trait","transition_state","modify_value","emit_event","destroy","spawn"]
+  - target: "self" | "source" | "nearby" (optional; default "self")
+  - query: { radius?: number, has?: string[], not?: string[] } (optional; only for target:"nearby")
+  - params: object (optional; may include "chance" 0-1 to make an effect probabilistic)
 
-AVAILABLE CONDITION TYPES:
-- entity_has_trait: { trait: "flammable" }
-- entity_in_state: { state: "burning" }
-- nearby_entity: { trait: "flammable", radius: 2 }
-- time_elapsed: { since: "lastTransition", duration: 60000 }
-- component_value: { component: "Durability", property: "value", operator: "<", value: 10 }
+Examples:
+{
+  "name": "lantern_flicker",
+  "description": "Lit lanterns occasionally flicker and emit an ambient perception event",
+  "trigger": "tick",
+  "priority": 10,
+  "condition": { "has": ["lit","light_source"] },
+  "effects": [
+    { "action": "emit_event", "target": "self", "params": { "chance": 0.05, "type": "perception", "content": "A lantern flame flickers.", "source": "lantern" } }
+  ],
+  "reason": "Adds atmosphere without AI"
+}
 
-AVAILABLE EFFECT TYPES:
-- set_state: { target: "self" | "nearby", state: "burning" }
-- emit_event: { type: "fire_started", data: {} }
-- modify_component: { component: "Durability", property: "value", operation: "subtract", value: 1 }
-- destroy_entity: {}
-- spawn_entity: { type: "ash_pile" }
-
-Respond with JSON:
+Respond with JSON ONLY:
 {
   "name": "rule_name_snake_case",
   "description": "Human readable description",
   "trigger": "tick",
   "priority": 50,
-  "conditions": [
-    { "type": "entity_has_trait", "trait": "flammable" },
-    { "type": "nearby_entity", "trait": "burning", "radius": 2 }
-  ],
-  "effects": [
-    { "type": "set_state", "target": "self", "state": "burning" }
-  ],
-  "reason": "Why this rule creates good emergent behavior"
+  "condition": { "has": ["trait"], "not": ["trait"], "inState": "state" },
+  "effects": [ { "action": "add_trait", "target": "self", "params": { "trait": "burning" } } ],
+  "reason": "Why this creates good emergent behavior"
 }`;
 
   try {
@@ -193,14 +193,19 @@ Respond with JSON:
 
     const parsed = JSON.parse(jsonMatch[0]);
 
+    const parsedCondition: RuleCondition | undefined =
+      (parsed.when?.condition as RuleCondition | undefined) ||
+      (parsed.condition as RuleCondition | undefined) ||
+      undefined;
+
     const proposal: RuleProposal = {
       id: `rule_prop_${Date.now()}`,
       timestamp: Date.now(),
       name: parsed.name,
       description: parsed.description,
-      trigger: parsed.trigger || "tick",
-      conditions: parsed.conditions || [],
-      effects: parsed.effects || [],
+      trigger: parsed.when?.event || parsed.trigger || "tick",
+      conditions: parsedCondition ? [parsedCondition] : (parsed.conditions || []),
+      effects: parsed.then || parsed.effects || [],
       priority: parsed.priority || 50,
       reason: parsed.reason || "Generated rule",
       status: "proposed",
@@ -231,6 +236,47 @@ export function approveRule(proposalId: string): boolean {
     return false;
   }
 
+  // Validate and normalize effects (LLM output can be malformed)
+  const allowedActions = new Set([
+    "add_trait",
+    "remove_trait",
+    "transition_state",
+    "modify_value",
+    "emit_event",
+    "destroy",
+    "spawn",
+  ]);
+
+  const normalizedEffects: RuleEffect[] = [];
+  let droppedEffects = 0;
+  for (const raw of proposal.effects || []) {
+    if (!raw || typeof raw !== "object") {
+      droppedEffects++;
+      continue;
+    }
+    const action = (raw as any).action;
+    if (typeof action !== "string" || action.trim().length === 0 || !allowedActions.has(action)) {
+      droppedEffects++;
+      continue;
+    }
+
+    normalizedEffects.push({
+      action,
+      target: (raw as any).target,
+      query: (raw as any).query,
+      params: (raw as any).params,
+    });
+  }
+
+  if (normalizedEffects.length === 0) {
+    proposal.status = "rejected";
+    console.warn(`[Lawgiver] Rejecting rule "${proposal.name}" - no valid effects (dropped=${droppedEffects})`);
+    return false;
+  }
+  if (droppedEffects > 0) {
+    console.warn(`[Lawgiver] Rule "${proposal.name}" had invalid effects dropped: ${droppedEffects}`);
+  }
+
   // Convert to RuleDefinition
   // Merge proposal conditions into a single RuleCondition
   const mergedCondition: RuleCondition = {};
@@ -250,7 +296,7 @@ export function approveRule(proposalId: string): boolean {
       event: proposal.trigger,
       condition: Object.keys(mergedCondition).length > 0 ? mergedCondition : undefined,
     },
-    then: proposal.effects,
+    then: normalizedEffects,
   };
 
   // Register with WorldSchema

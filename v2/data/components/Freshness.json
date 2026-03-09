@@ -1,0 +1,7 @@
+{
+  "name": "Freshness",
+  "description": "Tracks the freshness of an item",
+  "properties": {
+    "value": "number"
+  }
+}

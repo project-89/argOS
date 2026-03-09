@@ -1,18 +1,78 @@
 import { readdir, readFile, writeFile, mkdir } from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { pathToFileURL } from "url";
 import type { World } from "../ecs/world";
-import type { SystemRegistry } from "../ecs/dynamic-systems";
+import { createSystemRegistry, reportSystemError, type SystemRegistry } from "../ecs/dynamic-systems";
 import { query, addEntity, addComponent, removeEntity, getRelationTargets } from "bitecs";
 import * as AllComponents from "../ecs/components";
 import * as AllRelations from "../ecs/relations";
-import { getAllDynamicComponents, getDynamicComponent, getComponentDefinition, listDynamicComponents, type DynamicComponent } from "../ecs/dynamic-components";
+import { getDirectContainer, getRoomForEntity, listDirectContents } from "../ecs/location";
+import { getAllDynamicComponents, getDynamicComponent, getComponentDefinition, listDynamicComponents, loadComponentDefinitions, type DynamicComponent } from "../ecs/dynamic-components";
 import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const GENERATED_DIR = path.join(__dirname, "generated");
+// Default to a path under the project root. (Tests may load this module under CJS; avoid `import.meta`.)
+const DEFAULT_GENERATED_DIR = path.resolve(process.cwd(), "src/systems/generated");
+
+function getGeneratedDir(): string {
+  const env = process.env.ARGOS_GENERATED_SYSTEMS_DIR;
+  if (env && env.trim().length > 0) {
+    const trimmed = env.trim();
+    return path.isAbsolute(trimmed) ? trimmed : path.resolve(process.cwd(), trimmed);
+  }
+  return DEFAULT_GENERATED_DIR;
+}
+
+function getQuarantineDir(): string {
+  return path.join(getGeneratedDir(), "_quarantine");
+}
+
+function shouldQuarantineSystems(): boolean {
+  return String(process.env.ARGOS_SYSTEM_QUARANTINE || "").trim() !== "0";
+}
+
+function quarantineSystemFileSync(system: LoadedSystem, reason: string): void {
+  if (!shouldQuarantineSystems()) return;
+  if (!system.filePath || !existsSync(system.filePath)) return;
+  if (system.quarantinedAtMs) return;
+
+  const quarantineDir = getQuarantineDir();
+  try {
+    mkdirSync(quarantineDir, { recursive: true });
+  } catch {
+    // best-effort
+  }
+
+  const base = path.basename(system.filePath);
+  const ts = Date.now();
+  const destFile = path.join(quarantineDir, `${base.replace(/\.ts$/, "")}.${ts}.ts`);
+  try {
+    renameSync(system.filePath, destFile);
+    system.quarantinedTo = destFile;
+    system.quarantinedAtMs = ts;
+
+    const report = {
+      name: system.name,
+      description: system.description,
+      frequency: system.frequency,
+      originalPath: system.filePath,
+      quarantinedPath: destFile,
+      quarantinedAtMs: ts,
+      reason,
+      lastError: system.lastError,
+    };
+    try {
+      writeFileSync(path.join(quarantineDir, `${base.replace(/\.ts$/, "")}.${ts}.json`), JSON.stringify(report, null, 2), "utf8");
+    } catch {
+      // ignore
+    }
+    console.error(`[SystemLoader] Quarantined ${system.name} -> ${destFile}`);
+  } catch (e) {
+    // Never throw from the runtime loop.
+    console.error(`[SystemLoader] Failed to quarantine ${system.name}:`, e);
+  }
+}
 
 export interface SystemFile {
   name: string;
@@ -32,6 +92,11 @@ export interface SystemContext {
   getRelationTargets: typeof getRelationTargets;
   components: typeof AllComponents;
   relations: typeof AllRelations;
+  location: {
+    getDirectContainer: typeof getDirectContainer;
+    getRoomForEntity: typeof getRoomForEntity;
+    listDirectContents: typeof listDirectContents;
+  };
   dynamicComponents: Map<string, DynamicComponent>;
   getDynamic: (name: string) => DynamicComponent | undefined;
   hasDynamic: (eid: number, componentName: string) => boolean;
@@ -52,11 +117,14 @@ export interface LoadedSystem {
   consecutiveErrors: number;
   lastError: string | null;
   fixAttempts: number;
+  quarantinedTo?: string;
+  quarantinedAtMs?: number;
 }
 
 export async function ensureGeneratedDir(): Promise<void> {
-  if (!existsSync(GENERATED_DIR)) {
-    await mkdir(GENERATED_DIR, { recursive: true });
+  const dir = getGeneratedDir();
+  if (!existsSync(dir)) {
+    await mkdir(dir, { recursive: true });
   }
 }
 
@@ -91,7 +159,7 @@ export async function writeSystemFile(system: {
   await ensureGeneratedDir();
   
   const kebabName = system.name.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-  const filePath = path.join(GENERATED_DIR, `${kebabName}.ts`);
+  const filePath = path.join(getGeneratedDir(), `${kebabName}.ts`);
   const code = generateSystemCode(system);
   
   await writeFile(filePath, code, "utf-8");
@@ -103,7 +171,8 @@ export async function writeSystemFile(system: {
 export async function loadSystemFromFile(filePath: string): Promise<LoadedSystem | null> {
   try {
     const source = await readFile(filePath, "utf-8");
-    const module = await import(filePath + `?t=${Date.now()}`);
+    const url = pathToFileURL(filePath);
+    const module = await import(url.href + `?t=${Date.now()}`);
     
     return {
       name: module.name,
@@ -118,6 +187,8 @@ export async function loadSystemFromFile(filePath: string): Promise<LoadedSystem
       consecutiveErrors: 0,
       lastError: null,
       fixAttempts: 0,
+      quarantinedTo: undefined,
+      quarantinedAtMs: undefined,
     };
   } catch (error) {
     console.error(`[SystemLoader] Failed to load ${filePath}:`, error);
@@ -128,20 +199,21 @@ export async function loadSystemFromFile(filePath: string): Promise<LoadedSystem
 export async function loadAllSystems(): Promise<LoadedSystem[]> {
   await ensureGeneratedDir();
   
-  const files = await readdir(GENERATED_DIR);
+  const dir = getGeneratedDir();
+  const files = await readdir(dir);
   const tsFiles = files.filter(f => f.endsWith(".ts") && !f.startsWith("_"));
   
   const systems: LoadedSystem[] = [];
   
   for (const file of tsFiles) {
-    const filePath = path.join(GENERATED_DIR, file);
+    const filePath = path.join(dir, file);
     const system = await loadSystemFromFile(filePath);
     if (system) {
       systems.push(system);
     }
   }
   
-  console.log(`[SystemLoader] Loaded ${systems.length} systems from ${GENERATED_DIR}`);
+  console.log(`[SystemLoader] Loaded ${systems.length} systems from ${dir}`);
   return systems;
 }
 
@@ -160,6 +232,11 @@ export function createSystemContext(
     getRelationTargets,
     components: AllComponents,
     relations: AllRelations,
+    location: {
+      getDirectContainer,
+      getRoomForEntity,
+      listDirectContents,
+    },
     dynamicComponents: getAllDynamicComponents(),
     getDynamic: getDynamicComponent,
     hasDynamic: (eid: number, componentName: string): boolean => {
@@ -204,12 +281,25 @@ export function runLoadedSystems(
       system.consecutiveErrors = 0;
       system.lastError = null;
     } catch (error) {
-      const errorStr = String(error);
+      const errorStr = error instanceof Error ? (error.stack || error.message) : String(error);
       system.consecutiveErrors++;
       system.lastError = errorStr;
 
       console.error(`[SystemLoader] Error in ${system.name} (${system.consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}):`, error);
       registry.logs.push(`[Error] System ${system.name} failed: ${errorStr}`);
+      reportSystemError(registry, system.name, errorStr, `fileSystem:${system.filePath}`);
+
+      // Always deactivate when we hit the threshold. Even if the system is already queued for fixing,
+      // it must not keep running and spamming errors (e.g., if an agent tries to re-activate it).
+      if (system.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        system.active = false;
+        quarantineSystemFileSync(system, `runtime_error_threshold:${system.consecutiveErrors}`);
+        registry.events.push({
+          type: "system_quarantined",
+          data: { name: system.name, filePath: system.filePath, quarantinedTo: system.quarantinedTo, error: errorStr },
+          timestamp: Date.now(),
+        });
+      }
 
       // Queue for fixing if threshold reached and not already queued
       if (system.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS &&
@@ -217,7 +307,6 @@ export function runLoadedSystems(
           !systemsNeedingFix.some(s => s.system.name === system.name)) {
         console.log(`[SystemLoader] Queuing ${system.name} for auto-fix (attempt ${system.fixAttempts + 1})`);
         systemsNeedingFix.push({ system, error: errorStr });
-        system.active = false; // Deactivate until fixed
       } else if (system.fixAttempts >= MAX_FIX_ATTEMPTS) {
         console.error(`[SystemLoader] ${system.name} exceeded fix attempts, deactivating`);
         system.active = false;
@@ -237,13 +326,13 @@ export function clearSystemsNeedingFix(): void {
 
 export async function listSystemFiles(): Promise<string[]> {
   await ensureGeneratedDir();
-  const files = await readdir(GENERATED_DIR);
+  const files = await readdir(getGeneratedDir());
   return files.filter(f => f.endsWith(".ts") && !f.startsWith("_"));
 }
 
 export async function getSystemSource(systemName: string): Promise<string | null> {
   const kebabName = systemName.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-  const filePath = path.join(GENERATED_DIR, `${kebabName}.ts`);
+  const filePath = path.join(getGeneratedDir(), `${kebabName}.ts`);
   try {
     return await readFile(filePath, "utf-8");
   } catch {
@@ -254,7 +343,7 @@ export async function getSystemSource(systemName: string): Promise<string | null
 export async function deleteSystemFile(systemName: string): Promise<boolean> {
   const { unlink } = await import("fs/promises");
   const kebabName = systemName.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-  const filePath = path.join(GENERATED_DIR, `${kebabName}.ts`);
+  const filePath = path.join(getGeneratedDir(), `${kebabName}.ts`);
   try {
     await unlink(filePath);
     console.log(`[SystemLoader] Deleted system ${systemName}`);
@@ -415,13 +504,59 @@ Return ONLY the fixed function body code (everything inside the run function).`;
       reloadedSystem.fixAttempts = system.fixAttempts + 1;
       reloadedSystem.consecutiveErrors = 0;
       reloadedSystem.active = true;
-      console.log(`[RuntimeFixer] Successfully fixed and reloaded ${system.name}`);
+      const preflight = await preflightValidateSystem(reloadedSystem, { ticks: 2 });
+      if (!preflight.ok) {
+        reloadedSystem.lastError = preflight.error || "Preflight validation failed";
+        reloadedSystem.active = false;
+        quarantineSystemFileSync(reloadedSystem, "preflight_failed_after_fix");
+        console.error(`[RuntimeFixer] Preflight failed for ${system.name}, quarantined`);
+        return null;
+      }
+      console.log(`[RuntimeFixer] Successfully fixed, validated, and reloaded ${system.name}`);
     }
     return reloadedSystem;
   } catch (err) {
     console.error(`[RuntimeFixer] Failed to fix ${system.name}:`, err);
     return null;
   }
+}
+
+export async function preflightValidateSystem(
+  system: LoadedSystem,
+  opts: { ticks?: number } = {}
+): Promise<{ ok: boolean; error?: string }> {
+  const ticks = Number.isFinite(Number(opts.ticks)) ? Math.max(1, Math.min(10, Number(opts.ticks))) : 2;
+  try {
+    await loadComponentDefinitions();
+  } catch {
+    // best-effort
+  }
+
+  const { createArgosWorld } = await import("../ecs/world");
+  const { initializePrefabs, createRoomEntity, createAgentEntity } = await import("../ecs/prefabs");
+  const { ObjectManager } = await import("../world/object-manager");
+
+  const world = createArgosWorld(`SystemPreflight:${system.name}`) as any;
+  initializePrefabs(world);
+  const objectManager = new ObjectManager(world);
+
+  const room = createRoomEntity(world, { name: "Validation Room", description: "A room used for preflight validation." });
+  createAgentEntity(world, { name: "Validator", role: "npc", systemPrompt: "x", roomId: room });
+  objectManager.spawn("torch", { name: "Validation Torch", containedIn: room, state: "lit" });
+
+  const registry = createSystemRegistry();
+
+  for (let t = 1; t <= ticks; t++) {
+    const ctx = createSystemContext(registry, t, 16);
+    try {
+      system.run(world, ctx);
+    } catch (e) {
+      const errorStr = e instanceof Error ? (e.stack || e.message) : String(e);
+      return { ok: false, error: errorStr };
+    }
+  }
+
+  return { ok: true };
 }
 
 export async function fixAllQueuedSystems(
@@ -536,7 +671,7 @@ export async function getSystemSourceFromDir(dir: string, systemName: string): P
  */
 export function getSystemFilePath(systemName: string, customDir?: string): string {
   const kebabName = systemName.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-  const dir = customDir ?? GENERATED_DIR;
+  const dir = customDir ?? getGeneratedDir();
   return path.join(dir, `${kebabName}.ts`);
 }
 
@@ -544,5 +679,9 @@ export function getSystemFilePath(systemName: string, customDir?: string): strin
  * Export the default generated directory path
  */
 export function getDefaultSystemsDir(): string {
-  return GENERATED_DIR;
+  return DEFAULT_GENERATED_DIR;
+}
+
+export function getConfiguredSystemsDir(): string {
+  return getGeneratedDir();
 }

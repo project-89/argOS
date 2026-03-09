@@ -86,6 +86,7 @@ function DaemonListItem({
   const isHighConcern = daemon.concernLevel > 0.6;
   const isStagnating = daemon.growthMetrics.stagnationScore > 0.5;
   const recentThought = daemon.memory.recentThoughts[0];
+  const povPreview = daemon.latestPovStory;
 
   return (
     <button
@@ -117,11 +118,15 @@ function DaemonListItem({
           )}
         </div>
       </div>
-      {recentThought && (
+      {povPreview ? (
+        <p className="text-xs text-argos-text-muted mt-1 truncate italic">
+          {povPreview}
+        </p>
+      ) : recentThought ? (
         <p className="text-xs text-argos-text-muted mt-1 truncate italic">
           Thinking about: {recentThought.focus}
         </p>
-      )}
+      ) : null}
       <div className="flex items-center gap-2 mt-1 text-xs text-argos-text-muted">
         <span>{daemon.observationCount} obs</span>
         <span>{daemon.whisperCount} whispers</span>
@@ -360,6 +365,28 @@ function DaemonDetail({ daemon, events }: { daemon: DaemonSummary; events: any[]
       )}
 
       {/* Daemon Activity Stream */}
+      {daemon.latestPovStory && (
+        <div className="panel">
+          <div className="panel-header">
+            <span className="panel-title flex items-center gap-2">
+              <MessageCircle className="w-4 h-4" />
+              Daemon POV Narrative
+            </span>
+          </div>
+          <div className="panel-content space-y-2">
+            <p className="text-sm text-argos-text-secondary italic leading-relaxed">
+              {daemon.latestPovStory}
+            </p>
+            <div className="text-xs text-argos-text-muted flex items-center gap-3">
+              {daemon.arcStatus && <span>Arc: {daemon.arcStatus}</span>}
+              {daemon.arcTension !== undefined && (
+                <span>Tension: {(daemon.arcTension * 100).toFixed(0)}%</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="panel">
         <div className="panel-header">
           <span className="panel-title flex items-center gap-2">

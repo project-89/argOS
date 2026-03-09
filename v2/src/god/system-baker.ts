@@ -85,6 +85,64 @@ function extractJSON(text: string): any {
   return null;
 }
 
+function extractFencedCodeBlock(text: string): string | null {
+  const match = text.match(/```(?:javascript|js|ts)?\s*([\s\S]*?)```/i);
+  return match ? match[1] : null;
+}
+
+function sanitizeFunctionBody(raw: string): string {
+  let code = raw.trim();
+
+  const fenced = extractFencedCodeBlock(code);
+  if (fenced) code = fenced.trim();
+
+  // Remove any remaining fence markers.
+  code = code.replace(/^```[a-zA-Z]*\s*/g, "").replace(/```$/g, "").trim();
+
+  // Strip leading non-code prose that sometimes sneaks in ("Fix:", "Explanation:", etc.).
+  const lines = code.split("\n");
+  while (lines.length > 0) {
+    const line = lines[0].trim();
+    if (line === "") {
+      lines.shift();
+      continue;
+    }
+
+    if (/^(here('s| is)|sure|fix(ing)?[:\s]|explanation[:\s]|note[:\s]|updated code[:\s])/i.test(line)) {
+      lines.shift();
+      continue;
+    }
+
+    if (/^\d+[\).]/.test(line) || /^- /.test(line)) {
+      lines.shift();
+      continue;
+    }
+
+    if (/:$/.test(line) && !/[;{]/.test(line)) {
+      lines.shift();
+      continue;
+    }
+
+    // Stop when the first line looks like JS.
+    if (/^(\/\*\*?|\/\/|\*|\}|{|const |let |var |for |if |while |switch |return |try |throw |break;|continue;)/.test(line)) {
+      break;
+    }
+
+    // If it's not obviously code, keep it (best-effort).
+    break;
+  }
+
+  return lines.join("\n").trim();
+}
+
+function extractRequestedSystemName(description: string): string | null {
+  const match = description.match(/(?:^|\n)System Name:\s*([^\n]+)/i);
+  if (!match) return null;
+  const raw = match[1].trim();
+  const name = raw.replace(/[^A-Za-z0-9_-]/g, "");
+  return name.length > 0 ? name : null;
+}
+
 export interface SystemBakeResult {
   success: boolean;
   system?: SystemDefinition;
@@ -142,7 +200,9 @@ export function validateSystemCode(code: string, design: SystemDesignDoc): {
     "Action", "CognitiveEvent", "PhysicalObject", "StimulusSource", "GodAgent",
     "GridPosition", "Sprite", "WorldMap", "Needs", "Health", "Plan", "Schedule",
     "ReflectionState", "CombatStats", "InCombat", "StatusEffect", "Inventory",
-    "Item", "EquipSlot", "Interactable", "ObjectState", "Container"
+    "Item", "EquipSlot", "Interactable", "ObjectState", "Container",
+    // Deterministic cognition control layers
+    "BehaviorPolicy", "ProcedureState"
   ];
 
   // Check for component writes (Pattern: ComponentName.property[eid] = value)
@@ -155,6 +215,24 @@ export function validateSystemCode(code: string, design: SystemDesignDoc): {
   // Check for cognitive helper usage (these create entities with components)
   const cognitiveHelperPattern = /ctx\.cognitive\.(createGoal|createMemory|createBelief|createThought|createImpression|updateGoal|completeGoal)/g;
   const cognitiveHelperUses = code.match(cognitiveHelperPattern) || [];
+
+  const helperCoverage: Record<string, RegExp[]> = {
+    Goal: [
+      /ctx\.cognitive\.(createGoal|updateGoal|completeGoal|removeGoal)\s*\(/,
+    ],
+    Memory: [
+      /ctx\.cognitive\.createMemory\s*\(/,
+    ],
+    Belief: [
+      /ctx\.cognitive\.createBelief\s*\(/,
+    ],
+    Thought: [
+      /ctx\.cognitive\.createThought\s*\(/,
+    ],
+    Impression: [
+      /ctx\.cognitive\.createImpression\s*\(/,
+    ],
+  };
 
   // Check for entity creation (addEntity + addComponent)
   const entityCreationPattern = /ctx\.addEntity\(world\)/g;
@@ -181,8 +259,14 @@ export function validateSystemCode(code: string, design: SystemDesignDoc): {
   // Check that modified components from design are actually written
   if (design.modifiedComponents && design.modifiedComponents.length > 0) {
     for (const component of design.modifiedComponents) {
-      const compPattern = new RegExp(`${component}\\.\\w+\\[\\w+\\]\\s*=`);
-      if (!compPattern.test(code)) {
+      const normalized = component.endsWith("s") ? component.slice(0, -1) : component;
+      const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const compPattern = new RegExp(`${escaped}\\.\\w+\\[\\w+\\]\\s*=`);
+      const addCompPattern = new RegExp(`ctx\\.addComponent\\(world,\\s*\\w+,\\s*${escaped}(?:\\(|\\b)`);
+      const helperPatterns = helperCoverage[normalized] || [];
+      const hasHelperWrite = helperPatterns.some((pattern) => pattern.test(code));
+
+      if (!compPattern.test(code) && !addCompPattern.test(code) && !hasHelperWrite) {
         issues.push(`Design specifies ${component} should be modified, but no writes to ${component} found`);
         suggestions.push(`Add write: ${component}.someProperty[eid] = newValue`);
       }
@@ -225,24 +309,26 @@ const agents = Array.from(ctx.query(world, [Agent, Needs]));
 for (const eid of agents) {
   if (!Agent.active[eid]) continue;
 
-  // Hunger increases over time (0 = full, 1 = starving)
+  // Needs are canonicalized as 0..100.
+  // - Hunger: 0 = full, 100 = starving
+  // - Energy: 0 = exhausted, 100 = fully rested
   const currentHunger = Needs.hunger[eid] || 0;
-  const hungerRate = 0.02; // per tick
-  Needs.hunger[eid] = Math.min(1, currentHunger + hungerRate);
+  const hungerRate = 2; // per tick (~10s in slice-of-life preset)
+  Needs.hunger[eid] = Math.min(100, currentHunger + hungerRate);
 
   // Energy decreases when active
-  const currentEnergy = Needs.energy[eid] || 1;
-  const energyDrain = 0.01;
+  const currentEnergy = Needs.energy[eid] ?? 100;
+  const energyDrain = 1;
   Needs.energy[eid] = Math.max(0, currentEnergy - energyDrain);
 
   // High hunger affects mood
-  if (Needs.hunger[eid] > 0.7) {
+  if (Needs.hunger[eid] >= 70) {
     Mind.arousal[eid] = Math.min(1, (Mind.arousal[eid] || 0.5) + 0.05);
     Mind.focus[eid] = "hungry";
   }
 
   // Low energy affects behavior
-  if (Needs.energy[eid] < 0.3) {
+  if (Needs.energy[eid] <= 30) {
     Mind.focus[eid] = "tired";
   }
 }`,
@@ -261,7 +347,7 @@ for (const eid of agents) {
   if (focus.includes("eating") || action.includes("eat")) {
     const hunger = Needs.hunger[eid] || 0;
     if (hunger > 0) {
-      Needs.hunger[eid] = Math.max(0, hunger - 0.3);
+      Needs.hunger[eid] = Math.max(0, hunger - 25);
       ctx.emit("need_satisfied", {
         agent: Name.value[eid],
         need: "hunger",
@@ -273,27 +359,25 @@ for (const eid of agents) {
 
   // Resting restores energy
   if (focus.includes("resting") || focus.includes("sleeping") || action.includes("rest")) {
-    const energy = Needs.energy[eid] || 0;
-    if (energy < 1) {
-      Needs.energy[eid] = Math.min(1, energy + 0.2);
+    const energy = Needs.energy[eid] ?? 100;
+    if (energy < 100) {
+      Needs.energy[eid] = Math.min(100, energy + 20);
     }
   }
 
   // Social interaction satisfies social need
-  const rooms = ctx.getRelationTargets(world, eid, OccupiesRoom);
-  if (rooms.length > 0) {
-    const roomEid = rooms[0];
+  const roomEid = ctx.location.getRoomForEntity(world, eid);
+  if (roomEid !== undefined) {
     let othersInRoom = 0;
 
     for (const otherEid of agents) {
       if (otherEid === eid) continue;
-      const otherRooms = ctx.getRelationTargets(world, otherEid, OccupiesRoom);
-      if (otherRooms.includes(roomEid)) othersInRoom++;
+      if (ctx.location.getRoomForEntity(world, otherEid) === roomEid) othersInRoom++;
     }
 
     if (othersInRoom > 0) {
-      const social = Needs.social[eid] || 0.5;
-      Needs.social[eid] = Math.min(1, social + 0.01 * othersInRoom);
+      const social = Needs.social[eid] ?? 50;
+      Needs.social[eid] = Math.min(100, social + 2 * othersInRoom);
     }
   }
 }`,
@@ -309,13 +393,13 @@ for (const eid of agents) {
 
   // Starvation damage
   const hunger = Needs.hunger[eid] || 0;
-  if (hunger >= 1) {
+  if (hunger >= 100) {
     Health.current[eid] = Math.max(0, current - 1);
     Health.lastDamage[eid] = ctx.elapsed;
     ctx.emit("starvation_damage", { agent: Name.value[eid], health: Health.current[eid] });
   }
   // Regeneration when well-fed
-  else if (hunger < 0.5 && current < max) {
+  else if (hunger < 50 && current < max) {
     const timeSinceDamage = ctx.elapsed - (Health.lastDamage[eid] || 0);
     if (timeSinceDamage > 5000) { // 5 seconds since last damage
       Health.current[eid] = Math.min(max, current + regenRate);
@@ -336,16 +420,14 @@ const agents = Array.from(ctx.query(world, [Agent, Mind]));
 for (const eid of agents) {
   if (!Agent.active[eid]) continue;
 
-  const rooms = ctx.getRelationTargets(world, eid, OccupiesRoom);
-  if (rooms.length === 0) continue;
-  const roomEid = rooms[0];
+  const roomEid = ctx.location.getRoomForEntity(world, eid);
+  if (roomEid === undefined) continue;
 
   // Find others in same room
   for (const otherEid of agents) {
     if (otherEid === eid || !Agent.active[otherEid]) continue;
 
-    const otherRooms = ctx.getRelationTargets(world, otherEid, OccupiesRoom);
-    if (!otherRooms.includes(roomEid)) continue;
+    if (ctx.location.getRoomForEntity(world, otherEid) !== roomEid) continue;
 
     // Build familiarity through proximity
     // Check if Knows relation exists, if not we track via impressions
@@ -418,18 +500,18 @@ for (const eid of agents) {
   // Create needs-based goals if none active
   if (activeGoals.length === 0) {
     const hunger = Needs.hunger[eid] || 0;
-    const energy = Needs.energy[eid] || 1;
+    const energy = Needs.energy[eid] ?? 100;
 
-    if (hunger > 0.6) {
+    if (hunger >= 60) {
       ctx.cognitive.createGoal(world, eid, {
         description: "Find food and eat",
-        priority: Math.floor(hunger * 10),
+        priority: Math.min(10, Math.max(1, Math.floor(hunger / 10))),
         status: "active"
       });
-    } else if (energy < 0.3) {
+    } else if (energy <= 30) {
       ctx.cognitive.createGoal(world, eid, {
         description: "Find a place to rest",
-        priority: Math.floor((1 - energy) * 10),
+        priority: Math.min(10, Math.max(1, Math.floor((100 - energy) / 10))),
         status: "active"
       });
     }
@@ -445,28 +527,27 @@ for (const eid of agents) {
   if (!Agent.active[eid]) continue;
 
   const hunger = Needs.hunger[eid] || 0;
-  // Only serve agents who are moderately hungry (threshold 0.4 to allow eating before critical)
-  if (hunger < 0.4) continue;
+  // Only serve agents who are moderately hungry (threshold 40 to allow eating before critical)
+  if (hunger < 40) continue;
 
   // Check if agent is in a food-serving location
-  const rooms = ctx.getRelationTargets(world, eid, OccupiesRoom);
+  const roomEid = ctx.location.getRoomForEntity(world, eid);
   let inFoodLocation = false;
   let locationName = "";
 
-  for (const roomEid of rooms) {
+  if (roomEid !== undefined) {
     const roomName = (Name.value[roomEid] || "").toLowerCase();
     if (roomName.includes("tavern") || roomName.includes("kitchen") ||
         roomName.includes("dining") || roomName.includes("inn") ||
         roomName.includes("cafe") || roomName.includes("restaurant")) {
       inFoodLocation = true;
       locationName = Name.value[roomEid];
-      break;
     }
   }
 
   if (inFoodLocation) {
     // Serve food - reduce hunger significantly
-    const hungerReduction = 0.4;
+    const hungerReduction = 40;
     const newHunger = Math.max(0, hunger - hungerReduction);
     Needs.hunger[eid] = newHunger;
 
@@ -524,10 +605,10 @@ for (const agentEid of agents) {
   if (!Agent.active[agentEid]) continue;
 
   const hunger = Needs.hunger[agentEid] || 0;
-  const energy = Needs.energy[agentEid] || 1;
+  const energy = Needs.energy[agentEid] ?? 100;
 
   // Skip if not hungry
-  if (hunger < 0.3) continue;
+  if (hunger < 30) continue;
 
   const agentX = GridPosition.x[agentEid];
   const agentY = GridPosition.y[agentEid];
@@ -543,12 +624,12 @@ for (const agentEid of agents) {
 
     if (distance <= 2) {
       // Consume the item
-      if (consumable.isFood && hunger > 0.3) {
-        const reduction = 0.5;
+      if (consumable.isFood && hunger >= 30) {
+        const reduction = 40;
         Needs.hunger[agentEid] = Math.max(0, hunger - reduction);
 
         // Also restore some energy from food
-        Needs.energy[agentEid] = Math.min(1, energy + 0.1);
+        Needs.energy[agentEid] = Math.min(100, energy + 10);
 
         Mind.focus[agentEid] = "eating " + consumable.name;
 
@@ -564,7 +645,7 @@ for (const agentEid of agents) {
 
       if (consumable.isDrink) {
         // Drinks restore energy
-        Needs.energy[agentEid] = Math.min(1, energy + 0.15);
+        Needs.energy[agentEid] = Math.min(100, energy + 15);
 
         Mind.focus[agentEid] = "drinking " + consumable.name;
 
@@ -588,8 +669,8 @@ const agents = Array.from(ctx.query(world, [Agent, Needs, Mind]));
 for (const eid of agents) {
   if (!Agent.active[eid]) continue;
 
-  const energy = Needs.energy[eid] || 1;
-  const comfort = Needs.comfort[eid] || 0.5;
+  const energy = Needs.energy[eid] ?? 100;
+  const comfort = Needs.comfort[eid] ?? 50;
   const focus = (Mind.focus[eid] || "").toLowerCase();
   const mode = (Mind.mode[eid] || "").toLowerCase();
 
@@ -598,39 +679,37 @@ for (const eid of agents) {
                     mode.includes("rest") || mode.includes("sleep");
 
   // Check if in a comfortable location
-  const rooms = ctx.getRelationTargets(world, eid, OccupiesRoom);
   let inRestLocation = false;
-
-  for (const roomEid of rooms) {
+  const roomEid = ctx.location.getRoomForEntity(world, eid);
+  if (roomEid !== undefined) {
     const roomName = (Name.value[roomEid] || "").toLowerCase();
     if (roomName.includes("bedroom") || roomName.includes("inn") ||
         roomName.includes("home") || roomName.includes("quarters")) {
       inRestLocation = true;
-      break;
     }
   }
 
   if (isResting) {
     // Base recovery rate
-    let recoveryRate = 0.05;
+    let recoveryRate = 5;
 
     // Bonus for resting in appropriate location
     if (inRestLocation) {
-      recoveryRate = 0.1;
+      recoveryRate = 10;
     }
 
     // Restore energy
-    const newEnergy = Math.min(1, energy + recoveryRate);
+    const newEnergy = Math.min(100, energy + recoveryRate);
     Needs.energy[eid] = newEnergy;
 
     // Improve comfort when resting
-    Needs.comfort[eid] = Math.min(1, comfort + 0.05);
+    Needs.comfort[eid] = Math.min(100, comfort + 5);
 
     // Reduce arousal (become calmer)
     const arousal = Mind.arousal[eid] || 0.5;
     Mind.arousal[eid] = Math.max(0.1, arousal - 0.05);
 
-    if (newEnergy >= 0.9) {
+    if (newEnergy >= 90) {
       // Well rested - can change focus
       Mind.focus[eid] = "refreshed";
 
@@ -642,7 +721,7 @@ for (const eid of agents) {
   }
 
   // Natural tiredness when low energy
-  if (energy < 0.2 && !isResting) {
+  if (energy < 20 && !isResting) {
     Mind.focus[eid] = "tired";
     Mind.arousal[eid] = Math.max(0.1, (Mind.arousal[eid] || 0.5) - 0.02);
 
@@ -715,19 +794,19 @@ for (const eid of agents) {
   const energy = Needs.energy[eid];
 
   // Apply rules
-  Needs.hunger[eid] = Math.min(1, hunger + 0.01);  // Hunger increases
+  Needs.hunger[eid] = Math.min(100, hunger + 1);  // Hunger increases (0..100)
 
   // Derived effects
-  if (hunger > 0.8) {
+  if (hunger > 80) {
     Mind.arousal[eid] = Math.min(1, Mind.arousal[eid] + 0.1);  // Hungry = stressed
     Mind.focus[eid] = "finding food";  // Changes behavior
   }
 
-  if (energy < 0.2) {
+  if (energy < 20) {
     // Create a Goal entity to drive behavior
     ctx.cognitive.createGoal(world, eid, {
       description: "Rest and recover energy",
-      priority: Math.floor((1 - energy) * 10)  // Lower energy = higher priority
+      priority: Math.floor((100 - energy) / 10)  // Lower energy = higher priority (1..10)
     });
   }
 }
@@ -737,19 +816,19 @@ for (const eid of agents) {
 \`\`\`javascript
 // EXCELLENT - multiple factors influence outcome
 for (const eid of agents) {
-  const room = ctx.getRelationTargets(world, eid, OccupiesRoom)[0];
+  const room = ctx.location.getRoomForEntity(world, eid);
   const roommates = agents.filter(other =>
-    other !== eid && ctx.getRelationTargets(world, other, OccupiesRoom)[0] === room
+    other !== eid && ctx.location.getRoomForEntity(world, other) === room
   );
 
   // Social energy drain/gain based on personality
   const extraversion = Personality.extraversion[eid] || 0.5;
-  const socialNeed = Needs.social[eid] || 0.5;
+  const socialNeed = Needs.social[eid] ?? 50;
 
   if (roommates.length > 0) {
     // Extroverts gain energy from company, introverts lose it
-    const socialChange = (extraversion - 0.5) * 0.02 * roommates.length;
-    Needs.social[eid] = Math.max(0, Math.min(1, socialNeed + socialChange));
+    const socialChange = (extraversion - 0.5) * 5 * roommates.length;
+    Needs.social[eid] = Math.max(0, Math.min(100, socialNeed + socialChange));
 
     // Build relationships with roommates
     for (const other of roommates) {
@@ -760,8 +839,8 @@ for (const eid of agents) {
     }
   } else {
     // Alone - introverts recover, extroverts get lonely
-    const change = (0.5 - extraversion) * 0.01;
-    Needs.social[eid] = Math.max(0, Math.min(1, socialNeed + change));
+    const change = (0.5 - extraversion) * 2;
+    Needs.social[eid] = Math.max(0, Math.min(100, socialNeed + change));
   }
 }
 \`\`\`
@@ -773,7 +852,7 @@ A system MUST:
 2. READ component values to make DECISIONS
 3. WRITE new values to components (actual state mutation!)
 4. Handle EDGE CASES (entity not found, division by zero, etc.)
-5. Use RELATIONS correctly (OccupiesRoom, not Room.value[eid])
+5. Use the LOCATION model correctly (LocatedIn + ctx.location.getRoomForEntity, not Room.value[eid])
 
 A system SHOULD:
 1. Consider MULTIPLE factors (not just one condition)
@@ -869,8 +948,11 @@ Relations connect entities. Use ctx.getRelationTargets(world, eid, RelationName)
 Adding a relation: addComponent(world, subjectEid, RelationName(targetEid))
 
 // Spatial Relations
-OccupiesRoom - entity occupies a room (exclusive - can only be in one room)
-Contains - entity contains another entity
+LocatedIn - entity is located in a container/room (exclusive - can only be in one container)
+
+LEGACY (avoid for new systems):
+OccupiesRoom - legacy room occupancy (replaced by LocatedIn + ctx.location.getRoomForEntity)
+Contains - legacy containment (replaced by LocatedIn + ctx.location.listDirectContents)
 
 // Social Relations
 Knows - entity knows another entity (has familiarity, sentiment, lastInteraction)
@@ -898,6 +980,12 @@ ctx.log(message) - log a message
 ctx.query(world, [Component1, Component2]) - returns iterable of entity IDs
 ctx.hasComponent(world, eid, Component) - check if entity has component
 ctx.getRelationTargets(world, eid, Relation) - get array of target entity IDs
+
+=== LOCATION HELPERS (ctx.location) ===
+
+ctx.location.getDirectContainer(world, eid) - get immediate container (via LocatedIn)
+ctx.location.getRoomForEntity(world, eid) - get ultimate Room ancestor (via LocatedIn chain)
+ctx.location.listDirectContents(world, containerEid) - list entities directly in a container (via LocatedIn)
 
 WARNING: There is NO ctx.events function! Use ctx.emit() to emit events.
 WARNING: ctx.query returns an ITERABLE, use Array.from() to convert to array.
@@ -967,9 +1055,8 @@ for (const eid of agents) {
 // When setting templates, use: "Option 1|Option 2|Option 3"
 const sources = Array.from(ctx.query(world, [StimulusSource]));
 for (const sourceEid of sources) {
-  const roomTargets = ctx.getRelationTargets(world, sourceEid, OccupiesRoom);
-  if (roomTargets.length === 0) continue;
-  const roomEid = roomTargets[0];
+  const roomEid = ctx.location.getRoomForEntity(world, sourceEid);
+  if (roomEid === undefined) continue;
 
   // Get template and pick a random variation if it contains "|"
   const template = StimulusSource.template[sourceEid] || "";
@@ -978,8 +1065,7 @@ for (const sourceEid of sources) {
 
   const agents = Array.from(ctx.query(world, [Agent]));
   for (const agentEid of agents) {
-    const agentRooms = ctx.getRelationTargets(world, agentEid, OccupiesRoom);
-    if (agentRooms.includes(roomEid)) {
+    if (ctx.location.getRoomForEntity(world, agentEid) === roomEid) {
       ctx.emit("stimulus", {
         type: StimulusSource.stimulusType[sourceEid],
         content: content,
@@ -1141,7 +1227,7 @@ Generate PLAIN JAVASCRIPT code for a system function body that TRANSFORMS STATE.
 Your code MUST:
 1. READ component values to make decisions (don't ignore ECS state!)
 2. WRITE new values to components (actual state mutation!)
-3. Use proper relations (ctx.getRelationTargets, OccupiesRoom, etc.)
+3. Use the canonical location model (LocatedIn + ctx.location.getRoomForEntity / listDirectContents)
 4. Handle edge cases (entity not found, division by zero, etc.)
 
 Your code MUST NOT:
@@ -1155,7 +1241,7 @@ Your code MUST NOT:
 1. NO TypeScript - no type annotations, no "as" casts, no generics
 2. NO imports/exports - everything is available in scope
 3. Components are already destructured: Name, Room, Agent, Mind, StimulusSource, etc.
-4. Relations are already destructured: OccupiesRoom, Knows, Contains, etc.
+4. Relations are already destructured: LocatedIn, Knows, HasGoal, etc. Prefer ctx.location helpers for room membership and contents.
 5. Always use Array.from() on query results
 6. Access data with: ComponentName.property[eid]
 7. Find entities by name by iterating and checking Name.value[eid]
@@ -1293,15 +1379,7 @@ Text-only systems that don't change state are REJECTED.
 Generate the plain JavaScript function body only. No markdown.`,
     });
 
-    let code = text.trim();
-    if (code.startsWith('```')) {
-      code = code.replace(/```\w*\n?/g, '').trim();
-    }
-    if (code.endsWith('```')) {
-      code = code.slice(0, -3).trim();
-    }
-
-    return code;
+    return sanitizeFunctionBody(text);
   } catch (error) {
     console.error("Build error:", error);
     return null;
@@ -1322,7 +1400,7 @@ export function compileSystemCode(code: string, isAsync: boolean = false): Compi
 
     // Expose ALL components and relations to generated systems
     const componentDestructure = `const { Name, Description, Position, Room, Agent, Mind, WorkingMemory, Attention, Personality, Thought, Perception, Memory, Belief, Impression, Goal, ConversationTurn, Stimulus, KnowledgeNode, Action, CognitiveEvent, PhysicalObject, StimulusSource, GodAgent, GridPosition, Sprite, WorldMap, Needs, Health, Plan, Schedule, ReflectionState, Visual, Connection, Tile, Removed, CombatStats, InCombat, StatusEffect, Inventory, Item, EquipSlot, ScheduledActivity, Interactable, CurrentAction, CharacterRigConfig, ObjectType, ObjectState, Traits, Durability, Fuel, Container, Surface, Portal, LightSource, StateTransition, DynamicDescription, ObjectProperties } = ctx.components;`;
-    const relationDestructure = `const { ChildOf, OccupiesRoom, Knows, RelatesTo, Causes, Supports, Contradicts, Contains, Perceives, Targets, BelongsTo, HasMemory, HasBelief, HasImpression, HasThought, HasPerception, HasConversation, HasGoal, HasPlan, HasSchedule, HasReflectionState } = ctx.relations;`;
+    const relationDestructure = `const { ChildOf, LocatedIn, Knows, RelatesTo, Causes, Supports, Contradicts, Perceives, Targets, BelongsTo, HasMemory, HasBelief, HasImpression, HasThought, HasPerception, HasConversation, HasGoal, HasPlan, HasSchedule, HasReflectionState } = ctx.relations;`;
 
     let wrappedCode: string;
 
@@ -1560,15 +1638,7 @@ System purpose: ${design.purpose}
 Return ONLY the fixed JavaScript function body. No markdown fences.`,
     });
 
-    let fixedCode = text.trim();
-    if (fixedCode.startsWith('```')) {
-      fixedCode = fixedCode.replace(/```\w*\n?/g, '').trim();
-    }
-    if (fixedCode.endsWith('```')) {
-      fixedCode = fixedCode.slice(0, -3).trim();
-    }
-
-    return fixedCode;
+    return sanitizeFunctionBody(text);
   } catch (error) {
     console.error("[SystemBaker] Code review failed:", error);
     return null;
@@ -1624,10 +1694,13 @@ export async function bakeSystem(
 ): Promise<SystemBakeResult> {
   console.log("\n[SystemBaker] Baking:", description.slice(0, 100) + "...");
 
+  const requestedName = extractRequestedSystemName(description);
+
   // Check if a template matches first
   const templateMatch = matchSystemTemplate(description);
   if (templateMatch) {
-    console.log(`[SystemBaker] Template match found: ${templateMatch.name}`);
+    const finalName = requestedName || templateMatch.name;
+    console.log(`[SystemBaker] Template match found: ${templateMatch.name}${requestedName ? ` (forced name: ${finalName})` : ""}`);
 
     const compileResult = compileSystemCode(templateMatch.template, false);
     if (compileResult.success && compileResult.fn) {
@@ -1636,7 +1709,7 @@ export async function bakeSystem(
 
       if (allPassed) {
         const system: SystemDefinition = {
-          name: templateMatch.name,
+          name: finalName,
           description: description,
           pseudocode: "Template-based system: " + templateMatch.name,
           frequency: 10000,
@@ -1657,6 +1730,12 @@ export async function bakeSystem(
   if (!design) {
     return { success: false, error: "Failed to design system" };
   }
+
+  if (requestedName && design.name !== requestedName) {
+    console.log(`[SystemBaker] Forcing system name "${design.name}" -> "${requestedName}" (from request)`);
+    design.name = requestedName;
+  }
+
   console.log("[SystemBaker] Design:", design.name, "-", design.purpose);
 
   // Validate design has modified components
@@ -1830,13 +1909,7 @@ Modify this code according to the request. Return ONLY the new function body.`,
       prompt: `Modify the "${systemName}" system: ${modification}`,
     });
 
-    let code = text.trim();
-    if (code.startsWith('```')) {
-      code = code.replace(/```\w*\n?/g, '').trim();
-    }
-    if (code.endsWith('```')) {
-      code = code.slice(0, -3).trim();
-    }
+    const code = sanitizeFunctionBody(text);
 
     const compileResult = compileSystemCode(code, existingSystem.async ?? false);
     if (!compileResult.success || !compileResult.fn) {

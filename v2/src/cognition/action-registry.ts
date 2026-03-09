@@ -12,13 +12,13 @@
  */
 
 import type { World } from "../ecs/world";
-import { query, hasComponent, getRelationTargets } from "bitecs";
+import { query, hasComponent } from "bitecs";
 import {
   Agent, Name, Room, Needs, Health, Inventory, Mind, Description,
-  CombatStats, InCombat, StimulusSource, Item, Appearance
+  CombatStats, InCombat, StimulusSource, Item, Appearance, Traits
 } from "../ecs/components";
-import { OccupiesRoom, Contains } from "../ecs/relations";
-import { worldSchema } from "../world/schema";
+import { getRoomForEntity, listDirectContents } from "../ecs/location";
+import { getAvailableAffordances } from "../world/affordance-availability";
 
 // =============================================================================
 // TYPE DEFINITIONS
@@ -39,6 +39,8 @@ export interface AffordanceInstance {
   action: string;                  // Action to perform
   target: string;                  // Target name
   description: string;             // What this specific affordance does
+  affordanceName?: string;         // For "interact": the concrete affordance name
+  contentHint?: string;            // Suggested content string (e.g., "open", "eat the apple")
   priority?: number;               // Suggested priority (higher = more relevant)
 }
 
@@ -97,6 +99,20 @@ class ActionRegistryClass {
       targetTypes: ["agent", "object", "any"],
       examples: ["observe the stranger", "observe the locked door"],
       category: "social",
+    });
+
+    this.coreActions.set("interact", {
+      name: "interact",
+      description: "Physically interact with a target using a specific affordance (content must start with the affordance name, e.g. \"open\", \"eat\", \"take\")",
+      requiresTarget: true,
+      requiresContent: true,
+      targetTypes: ["agent", "object", "any"],
+      examples: [
+        "interact with Door: open",
+        "interact with Apple: eat",
+        "interact with Chest: unlock (if you have a key)",
+      ],
+      category: "interaction",
     });
 
     // Self
@@ -301,9 +317,8 @@ export function buildAvailableActionsContext(
   context.availableLocations = getAvailableLocations(world, agentEid);
 
   // 3. Get current room context
-  const roomTargets = getRelationTargets(world, agentEid, OccupiesRoom);
-  if (roomTargets.length > 0) {
-    const roomEid = roomTargets[0];
+  const roomEid = getRoomForEntity(world, agentEid);
+  if (roomEid !== undefined) {
 
     // Location-specific affordances
     context.locationAffordances = getLocationAffordances(world, roomEid);
@@ -337,8 +352,8 @@ function getComponentBasedActions(world: World, agentEid: number): ActionDefinit
   // Check for Needs component - add need-awareness
   if (hasComponent(world, agentEid, Needs)) {
     const hunger = Needs.hunger[agentEid] || 0;
-    const energy = Needs.energy[agentEid] || 1;
-    const social = Needs.social[agentEid] || 0.5;
+    const energy = Needs.energy[agentEid] ?? 100;
+    const social = Needs.social[agentEid] ?? 50;
 
     // These aren't actions per se, but the AI should know about them
     // We'll handle this in the prompt formatting
@@ -352,15 +367,14 @@ function getComponentBasedActions(world: World, agentEid: number): ActionDefinit
  */
 function getAvailableLocations(world: World, agentEid: number): string[] {
   const locations: string[] = [];
-  const currentRooms = getRelationTargets(world, agentEid, OccupiesRoom);
-  const currentRoomEid = currentRooms[0];
+  const currentRoomEid = getRoomForEntity(world, agentEid);
 
   // Get all rooms in the world
   const allRooms = Array.from(query(world, [Room]));
 
   for (const roomEid of allRooms) {
     const roomName = Name.value[roomEid];
-    if (roomName && roomEid !== currentRoomEid) {
+    if (roomName && (currentRoomEid === undefined || roomEid !== currentRoomEid)) {
       locations.push(roomName);
     }
   }
@@ -372,77 +386,35 @@ function getAvailableLocations(world: World, agentEid: number): string[] {
  * Get affordances specific to the current location
  */
 function getLocationAffordances(world: World, roomEid: number): AffordanceInstance[] {
-  const affordances: AffordanceInstance[] = [];
-  const roomName = Name.value[roomEid] || "this place";
-  const roomNameLower = roomName.toLowerCase();
-
-  // Location-based implicit affordances
-  if (roomNameLower.includes("tavern") || roomNameLower.includes("inn")) {
-    affordances.push({
-      action: "interact",
-      target: "bar",
-      description: "Order food or drink to satisfy hunger",
-      priority: 5,
-    });
-    affordances.push({
-      action: "interact",
-      target: "innkeeper",
-      description: "Rent a room to rest and restore energy",
-      priority: 4,
-    });
-  }
-
-  if (roomNameLower.includes("market") || roomNameLower.includes("shop")) {
-    affordances.push({
-      action: "interact",
-      target: "merchant",
-      description: "Buy or sell goods",
-      priority: 5,
-    });
-  }
-
-  if (roomNameLower.includes("temple") || roomNameLower.includes("shrine")) {
-    affordances.push({
-      action: "interact",
-      target: "altar",
-      description: "Pray or meditate for spiritual comfort",
-      priority: 4,
-    });
-  }
-
-  if (roomNameLower.includes("library") || roomNameLower.includes("study")) {
-    affordances.push({
-      action: "interact",
-      target: "books",
-      description: "Read and study to gain knowledge",
-      priority: 5,
-    });
-  }
-
-  if (roomNameLower.includes("forge") || roomNameLower.includes("smithy")) {
-    affordances.push({
-      action: "interact",
-      target: "forge",
-      description: "Craft or repair equipment",
-      priority: 5,
-    });
-  }
-
-  if (roomNameLower.includes("home") || roomNameLower.includes("bedroom")) {
-    affordances.push({
-      action: "rest",
-      target: roomName,
-      description: "Rest to restore energy",
-      priority: 6,
-    });
-  }
-
-  return affordances;
+  // NOTE: "Location affordances" must be grounded in actual entities.
+  // The previous implementation inferred conceptual targets ("merchant", "bar", etc.)
+  // from room names, which encouraged hallucinated actions.
+  //
+  // For now we rely on object affordances in the room (and core/self actions).
+  void world;
+  void roomEid;
+  return [];
 }
 
 /**
  * Get affordances from objects in the room
  */
+function getTraitsArray(traitsJson: string | undefined): string[] {
+  if (!traitsJson) return [];
+  try {
+    const traits = JSON.parse(traitsJson) as unknown;
+    return Array.isArray(traits) ? (traits.filter((t) => typeof t === "string") as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function hasTrait(world: World, eid: number, trait: string): boolean {
+  if (!hasComponent(world, eid, Traits)) return false;
+  const traits = getTraitsArray(Traits.active[eid]);
+  return traits.includes(trait);
+}
+
 function getObjectAffordances(
   world: World,
   agentEid: number,
@@ -450,8 +422,10 @@ function getObjectAffordances(
 ): AffordanceInstance[] {
   const affordances: AffordanceInstance[] = [];
 
-  // Get objects in room via Contains relation
-  const contents = getRelationTargets(world, roomEid, Contains);
+  // Get objects directly located in the room (canonical containment)
+  const contents = listDirectContents(world, roomEid);
+
+  const MAX_AFFORDANCES_PER_OBJECT = 6;
 
   for (const objectEid of contents) {
     // Skip agents
@@ -460,35 +434,46 @@ function getObjectAffordances(
     const objectName = Name.value[objectEid];
     if (!objectName) continue;
 
-    // Check WorldSchema for registered affordances
-    const schemaAffordances = worldSchema.getAllAffordances();
-    for (const affordance of schemaAffordances) {
-      // Check if this affordance applies to this object
-      // (simplified check - could be more sophisticated)
-      affordances.push({
-        action: "interact",
-        target: objectName,
-        description: `${affordance.name} the ${objectName}`,
-        priority: 3,
-      });
-    }
-
-    // Check if it's a pickupable item
-    if (hasComponent(world, objectEid, Item)) {
+    // Pickup suggestions should align with deterministic pickup grounding:
+    // - requires actor inventory action availability
+    // - requires target trait "takeable"
+    if (hasComponent(world, agentEid, Inventory) && hasTrait(world, objectEid, "takeable")) {
       affordances.push({
         action: "pickup",
         target: objectName,
-        description: `Pick up the ${objectName}`,
+        description: `Pick up ${objectName}`,
+        priority: 6,
+      });
+    }
+
+    // Affordance-based interaction suggestions (worldSchema + canUseAffordance)
+    const available = getAvailableAffordances(world, agentEid, objectEid);
+    const filtered = available
+      .map((a) => a.name)
+      // Avoid double-teaching the same verb through multiple channels.
+      // `examine` exists as a first-class action, so keep it out of "interact" suggestions.
+      .filter((name) => name !== "examine")
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, MAX_AFFORDANCES_PER_OBJECT);
+
+    for (const affordanceName of filtered) {
+      affordances.push({
+        action: "interact",
+        target: objectName,
+        affordanceName,
+        contentHint: affordanceName,
+        description: `Interact with ${objectName} using "${affordanceName}"`,
         priority: 4,
       });
     }
 
-    // Check if it has a stimulus source (observable)
+    // Optional: point out that some objects emit stimuli (useful observation targets).
+    // We do NOT enumerate observe targets for every object to keep prompts compact.
     if (hasComponent(world, objectEid, StimulusSource)) {
       affordances.push({
         action: "observe",
         target: objectName,
-        description: `Examine the ${objectName} more closely`,
+        description: `Observe ${objectName}`,
         priority: 2,
       });
     }
@@ -513,8 +498,7 @@ function getSocialAffordances(
   for (const otherEid of allAgents) {
     if (otherEid === agentEid) continue;
 
-    const otherRooms = getRelationTargets(world, otherEid, OccupiesRoom);
-    if (!otherRooms.includes(roomEid)) continue;
+    if (getRoomForEntity(world, otherEid) !== roomEid) continue;
 
     const otherName = Name.value[otherEid];
     if (!otherName) continue;
@@ -629,8 +613,19 @@ export function formatActionsForPrompt(
       uniqueObjects.get(aff.target)!.push(aff);
     }
     for (const [target, affs] of uniqueObjects) {
-      const actions = affs.map(a => a.action).join(", ");
-      lines.push(`  - ${target}: can ${actions}`);
+      const pickups = affs.some((a) => a.action === "pickup");
+      const observes = affs.some((a) => a.action === "observe");
+      const interactNames = affs
+        .filter((a) => a.action === "interact")
+        .map((a) => a.affordanceName || a.contentHint)
+        .filter((v): v is string => Boolean(v));
+
+      const parts: string[] = [];
+      if (pickups) parts.push("pickup");
+      if (interactNames.length > 0) parts.push(`interact via: ${[...new Set(interactNames)].join(", ")}`);
+      if (observes) parts.push("observe");
+
+      lines.push(`  - ${target}: ${parts.join("; ")}`);
     }
     lines.push("");
   }
@@ -654,13 +649,13 @@ export function formatActionsForPrompt(
   // Agent's needs status (if they have Needs component)
   if (hasComponent(world, agentEid, Needs)) {
     const hunger = Needs.hunger[agentEid] || 0;
-    const energy = Needs.energy[agentEid] || 1;
-    const social = Needs.social[agentEid] || 0.5;
+    const energy = Needs.energy[agentEid] ?? 100;
+    const social = Needs.social[agentEid] ?? 50;
 
     lines.push("YOUR NEEDS:");
-    lines.push(`  - Hunger: ${(hunger * 100).toFixed(0)}%${hunger > 0.7 ? " (CRITICAL - find food!)" : ""}`);
-    lines.push(`  - Energy: ${(energy * 100).toFixed(0)}%${energy < 0.3 ? " (LOW - need rest!)" : ""}`);
-    lines.push(`  - Social: ${(social * 100).toFixed(0)}%${social < 0.3 ? " (lonely - seek company!)" : ""}`);
+    lines.push(`  - Hunger: ${hunger.toFixed(0)}%${hunger >= 70 ? " (CRITICAL - find food!)" : ""}`);
+    lines.push(`  - Energy: ${energy.toFixed(0)}%${energy <= 30 ? " (LOW - need rest!)" : ""}`);
+    lines.push(`  - Social: ${social.toFixed(0)}%${social <= 30 ? " (lonely - seek company!)" : ""}`);
     lines.push("");
   }
 

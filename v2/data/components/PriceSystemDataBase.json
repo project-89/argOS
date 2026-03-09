@@ -1,0 +1,9 @@
+{
+  "name": "PriceSystemDataBase",
+  "description": "Economic value of an item",
+  "properties": {
+    "price": "number",
+    "demand": "number",
+    "supply": "number"
+  }
+}

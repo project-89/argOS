@@ -20,11 +20,12 @@
 import { generateText } from "ai";
 import { addEntity, addComponent } from "bitecs";
 import type { World } from "../ecs/world";
-import { Name, Description } from "../ecs/components";
+import { Name, Description, Agent, Mind, Needs, Health, Room, StimulusSource } from "../ecs/components";
+import { OccupiesRoom } from "../ecs/relations";
 import { spiritModel, plannerModel } from "../llm/config";
 import type { SystemRegistry, SystemDefinition } from "../ecs/dynamic-systems";
-import { registerSystem, createSystemFromSpec } from "../ecs/dynamic-systems";
-import { createDynamicComponent, setDynamicComponentValue } from "../ecs/dynamic-components";
+import { registerSystem } from "../ecs/dynamic-systems";
+import { createDynamicComponent, getDynamicComponent, setDynamicComponentValue } from "../ecs/dynamic-components";
 import type { SpiritRegistry } from "./spirit-registry";
 import { reportToSuperior } from "./spirit-registry";
 import {
@@ -74,6 +75,45 @@ export interface RuleProposalSpec {
   trigger: string;   // When to fire
   condition: string; // What must be true
   effect: string;    // What happens
+}
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
+const DEFAULT_BAKE_TIMEOUT_MS = readPositiveIntEnv("SPIRIT_BAKE_TIMEOUT_MS", 30000);
+const DEFAULT_BAKE_MAX_RETRIES = readPositiveIntEnv("SPIRIT_BAKE_MAX_RETRIES", 1);
+const DEFAULT_MAX_APPROVED_PER_PASS = readPositiveIntEnv("SPIRIT_MAX_APPROVED_PER_PASS", 3);
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise
+      .then((result) => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+function toPascalCase(input: string): string {
+  const cleaned = input.replace(/[^a-zA-Z0-9]+/g, " ").trim();
+  if (!cleaned) return "Adaptive";
+  return cleaned
+    .split(/\s+/)
+    .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
+    .join("");
 }
 
 // =============================================================================
@@ -166,10 +206,10 @@ async function gatherArchitectContext(
     entityCounts,
     recentEvents: getRecentEvents(50),
     detectedPatterns: getDetectedPatterns(),
-    agentStates: agents.map(a => ({
+    agentStates: agents.map((a: any) => ({
       name: a.name,
       arousal: a.arousal ?? 0.5,
-      goalCount: a.goals?.length ?? 0,
+      goalCount: Array.isArray(a.goals) ? a.goals.length : 0,
     })),
   };
 }
@@ -179,6 +219,169 @@ interface IdentifiedNeed {
   description: string;
   priority: "low" | "medium" | "high";
   rationale: string;
+}
+
+function isNeedType(value: unknown): value is IdentifiedNeed["type"] {
+  return value === "system" || value === "component" || value === "entity" || value === "rule";
+}
+
+function isPriority(value: unknown): value is IdentifiedNeed["priority"] {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+function normalizeNeed(raw: any): IdentifiedNeed | null {
+  if (!raw || typeof raw !== "object") return null;
+  if (!isNeedType(raw.type)) return null;
+
+  const description = typeof raw.description === "string" ? raw.description.trim() : "";
+  if (!description) return null;
+
+  const priority: IdentifiedNeed["priority"] = isPriority(raw.priority) ? raw.priority : "medium";
+  const rationale = typeof raw.rationale === "string" && raw.rationale.trim().length > 0
+    ? raw.rationale.trim()
+    : "Improves simulation robustness and behavioral depth.";
+
+  return {
+    type: raw.type,
+    description,
+    priority,
+    rationale,
+  };
+}
+
+function createFallbackNeeds(
+  architect: DynamicSpiritState,
+  context: ArchitectContext
+): IdentifiedNeed[] {
+  const needs: IdentifiedNeed[] = [];
+  const domain = architect.definition.domain.toLowerCase();
+  const can = architect.architectConfig;
+  const hasSystem = (fragment: string) =>
+    context.existingSystems.some((s) => s.toLowerCase().includes(fragment.toLowerCase()));
+
+  if (can?.canProposeSystems) {
+    if (domain === "economy" && !hasSystem("trade")) {
+      needs.push({
+        type: "system",
+        description: "Add a deterministic trade loop so NPCs can exchange goods and money.",
+        priority: "high",
+        rationale: "Economy domain requires stable exchange behavior for emergent office/world activity.",
+      });
+    } else if (domain === "narrative" && !hasSystem("event")) {
+      needs.push({
+        type: "system",
+        description: "Add a narrative event cadence system that updates agent focus over time.",
+        priority: "medium",
+        rationale: "Narrative momentum prevents static worlds and keeps agent goals moving.",
+      });
+    } else if (!hasSystem("goal")) {
+      needs.push({
+        type: "system",
+        description: "Add a goal maintenance system that creates and progresses NPC goals.",
+        priority: "high",
+        rationale: "Without goal progression, agents stall and cognition output becomes repetitive.",
+      });
+    }
+  }
+
+  if (can?.canProposeComponents && !context.existingComponents.includes("TaskMomentum")) {
+    needs.push({
+      type: "component",
+      description: "Introduce TaskMomentum component to track how strongly an agent is pursuing a goal.",
+      priority: "medium",
+      rationale: "A lightweight momentum signal helps prevent thrash and supports deterministic policies.",
+    });
+  }
+
+  if (can?.canProposeEntities) {
+    if (context.entityCounts.rooms < 3) {
+      needs.push({
+        type: "entity",
+        description: "Create a collaborative workspace room for NPC interactions.",
+        priority: "medium",
+        rationale: "Additional shared spaces increase collisions and social opportunities.",
+      });
+    } else if ((context.entityCounts.agents || 0) < 6) {
+      needs.push({
+        type: "entity",
+        description: "Add a specialist NPC who can participate in new tasks.",
+        priority: "low",
+        rationale: "More agents create richer interactions and reduce brittle single-agent loops.",
+      });
+    }
+  }
+
+  return needs.slice(0, can?.maxProposalsPerCycle || 3);
+}
+
+function fallbackSpecificationForNeed(
+  need: IdentifiedNeed,
+  context: ArchitectContext
+): SystemProposalSpec | ComponentProposalSpec | EntityProposalSpec | RuleProposalSpec {
+  const baseName = toPascalCase(need.description);
+
+  if (need.type === "system") {
+    const targetComponents = ["Agent", "Mind"];
+    if (context.existingComponents.includes("Needs")) targetComponents.push("Needs");
+    if (context.existingComponents.includes("Goal")) targetComponents.push("Goal");
+
+    return {
+      name: `${baseName.replace(/System$/, "")}System`,
+      description: need.description,
+      frequency: 8000,
+      targetComponents,
+      logic:
+        "For each active agent, read needs/arousal, nudge focus toward the highest unmet need, and clamp values to stable ranges.",
+      triggers: ["tick"],
+      effects: ["Improved NPC focus stability", "Reduced idle thrashing"],
+    };
+  }
+
+  if (need.type === "component") {
+    return {
+      name: `${baseName.replace(/Component$/, "")}Component`,
+      description: need.description,
+      category: "cognition",
+      fields: [
+        { name: "level", type: "number", description: "Current momentum/intensity value." },
+        { name: "status", type: "string", description: "Current state label for this signal." },
+      ],
+    };
+  }
+
+  if (need.type === "entity") {
+    const lower = need.description.toLowerCase();
+    if (lower.includes("room") || lower.includes("workspace") || lower.includes("office")) {
+      return {
+        name: `${baseName.replace(/Room$/, "")}Room`,
+        description: need.description,
+        type: "room",
+        components: [
+          { name: "Room", values: { capacity: 12, ambience: "busy but focused" } },
+        ],
+      };
+    }
+
+    return {
+      name: `${baseName.replace(/Npc$/, "")}Npc`,
+      description: need.description,
+      type: "agent",
+      components: [
+        { name: "Agent", values: { role: "specialist", active: true } },
+        { name: "Mind", values: { mode: "reactive", arousal: 0.5, focus: "assist team" } },
+        { name: "Needs", values: { hunger: 25, energy: 70, social: 45, comfort: 55 } },
+        { name: "Health", values: { current: 100, max: 100 } },
+      ],
+    };
+  }
+
+  return {
+    name: `${baseName.replace(/Rule$/, "")}Rule`,
+    description: need.description,
+    trigger: "On each tick",
+    condition: "When an agent is idle and has unmet needs",
+    effect: "Create or increase a relevant goal priority",
+  };
 }
 
 async function identifyNeeds(
@@ -218,10 +421,16 @@ Respond with a JSON array of needs:
     });
 
     const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
+    const normalized = (Array.isArray(parsed) ? parsed : []).map(normalizeNeed).filter(Boolean) as IdentifiedNeed[];
+
+    if (normalized.length > 0) return normalized;
+
+    console.warn(`[Architect] ${architect.definition.name} produced no valid needs; using fallback needs`);
+    return createFallbackNeeds(architect, context);
   } catch (error) {
     console.error(`[Architect] Failed to identify needs:`, error);
-    return [];
+    return createFallbackNeeds(architect, context);
   }
 }
 
@@ -231,6 +440,8 @@ async function designProposal(
   context: ArchitectContext,
   spiritRegistry?: SpiritRegistry
 ): Promise<SpiritProposal | null> {
+  let specification: any = null;
+
   try {
     const specPrompt = getSpecificationPrompt(need.type, need.description, context);
 
@@ -245,39 +456,49 @@ Respond with valid JSON only, no markdown.`,
     });
 
     const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");
-    const specification = JSON.parse(cleaned);
-
-    // Submit the proposal
-    const proposal = submitProposal(
-      architect.eid,
-      need.type,
-      specification.name,
-      specification.description,
-      specification,
-      need.rationale
-    );
-
-    if (proposal) {
-      console.log(`[Architect] ${architect.definition.name} proposed ${need.type}: ${specification.name}`);
-
-      // Report proposal to superior (only if registry is available)
-      if (spiritRegistry) {
-        reportToSuperior(
-          spiritRegistry,
-          architect.eid,
-          `New Proposal: ${specification.name}`,
-          `**Type:** ${need.type}\n**Description:** ${specification.description}\n**Rationale:** ${need.rationale}`,
-          need.priority as any,
-          { proposal }
-        );
-      }
-    }
-
-    return proposal;
+    specification = JSON.parse(cleaned);
   } catch (error) {
     console.error(`[Architect] Failed to design proposal for "${need.description}":`, error);
-    return null;
+    specification = fallbackSpecificationForNeed(need, context);
   }
+
+  if (!specification || typeof specification !== "object") {
+    specification = fallbackSpecificationForNeed(need, context);
+  }
+
+  if (!specification.name || typeof specification.name !== "string") {
+    specification.name = toPascalCase(need.description) + (need.type === "system" ? "System" : "");
+  }
+  if (!specification.description || typeof specification.description !== "string") {
+    specification.description = need.description;
+  }
+
+  const proposal = submitProposal(
+    architect.eid,
+    need.type,
+    specification.name,
+    specification.description,
+    specification,
+    need.rationale
+  );
+
+  if (proposal) {
+    console.log(`[Architect] ${architect.definition.name} proposed ${need.type}: ${specification.name}`);
+
+    // Report proposal to superior (only if registry is available)
+    if (spiritRegistry) {
+      reportToSuperior(
+        spiritRegistry,
+        architect.eid,
+        `New Proposal: ${specification.name}`,
+        `**Type:** ${need.type}\n**Description:** ${specification.description}\n**Rationale:** ${need.rationale}`,
+        need.priority as any,
+        { proposal }
+      );
+    }
+  }
+
+  return proposal;
 }
 
 function getSpecificationPrompt(
@@ -414,6 +635,54 @@ async function executeProposal(
   }
 }
 
+function registerPlaceholderSystem(
+  systemRegistry: SystemRegistry,
+  spec: SystemProposalSpec,
+  reason: string
+): void {
+  const placeholderDef: SystemDefinition = {
+    name: spec.name,
+    description: spec.description,
+    pseudocode: spec.logic,
+    frequency: spec.frequency,
+    active: true,
+    lastRun: 0,
+    compiledFn: (world, ctx) => {
+      const agents = Array.from(ctx.query(world, [Agent, Mind]));
+      let processed = 0;
+
+      for (const eid of agents) {
+        if (!Agent.active[eid]) continue;
+        const current = Mind.arousal[eid] || 0.5;
+        const next = current > 0.55 ? current - 0.02 : current + 0.01;
+        Mind.arousal[eid] = Math.max(0.1, Math.min(0.9, next));
+
+        if (!Mind.focus[eid]) {
+          Mind.focus[eid] = `adapt:${spec.name}`;
+        }
+        processed++;
+      }
+
+      if (processed > 0) {
+        ctx.emit("architect_placeholder_tick", {
+          system: spec.name,
+          processed,
+          reason,
+        });
+      }
+    },
+  };
+
+  registerSystem(systemRegistry, placeholderDef);
+
+  recordEvent("system_created_placeholder", {
+    name: spec.name,
+    description: spec.description,
+    createdBy: "architect",
+    reason,
+  }, "Architect");
+}
+
 async function executeSystemProposal(
   world: World,
   systemRegistry: SystemRegistry,
@@ -434,9 +703,19 @@ ${spec.effects?.length ? `Effects: ${spec.effects.join(", ")}` : ""}
 `.trim();
 
   try {
+    if (process.env.SPIRIT_FORCE_PLACEHOLDER_SYSTEMS === "1") {
+      registerPlaceholderSystem(systemRegistry, spec, "SPIRIT_FORCE_PLACEHOLDER_SYSTEMS=1");
+      console.log(`[Architect] ⚠ Registered placeholder for ${spec.name} (forced by env)`);
+      return;
+    }
+
     // Actually bake the system using the system baker
     const { bakeSystem } = await import("../god/system-baker");
-    const result = await bakeSystem(bakerDescription, world, systemRegistry, 2);
+    const result = await withTimeout(
+      bakeSystem(bakerDescription, world, systemRegistry, DEFAULT_BAKE_MAX_RETRIES),
+      DEFAULT_BAKE_TIMEOUT_MS,
+      `Baking ${spec.name}`
+    );
 
     if (result.success && result.system) {
       // Override the frequency with the architect's specification
@@ -455,54 +734,12 @@ ${spec.effects?.length ? `Effects: ${spec.effects.join(", ")}` : ""}
 
       console.log(`[Architect] ✓ Baked and registered system: ${spec.name}`);
     } else {
-      // Fallback: register a placeholder system that logs what it would do
       console.log(`[Architect] Baking failed for ${spec.name}: ${result.error}`);
-      console.log(`[Architect] Registering placeholder system instead`);
-
-      const placeholderDef: SystemDefinition = {
-        name: spec.name,
-        description: spec.description,
-        pseudocode: spec.logic,
-        frequency: spec.frequency,
-        active: true,
-        lastRun: 0,
-        compiledFn: async (w: World) => {
-          console.log(`[${spec.name}] Placeholder execution - Logic: ${spec.logic.slice(0, 100)}...`);
-        },
-      };
-
-      registerSystem(systemRegistry, placeholderDef);
-
-      recordEvent("system_created_placeholder", {
-        name: spec.name,
-        description: spec.description,
-        createdBy: "architect",
-        reason: result.error,
-      }, "Architect");
+      registerPlaceholderSystem(systemRegistry, spec, result.error || "unknown bake failure");
     }
   } catch (error) {
     console.error(`[Architect] Error baking system ${spec.name}:`, error);
-
-    // Register placeholder on error
-    const placeholderDef: SystemDefinition = {
-      name: spec.name,
-      description: spec.description,
-      pseudocode: spec.logic,
-      frequency: spec.frequency,
-      active: true,
-      lastRun: 0,
-      compiledFn: async (w: World) => {
-        console.log(`[${spec.name}] Placeholder execution - Logic: ${spec.logic.slice(0, 100)}...`);
-      },
-    };
-
-    registerSystem(systemRegistry, placeholderDef);
-
-    recordEvent("system_created_error", {
-      name: spec.name,
-      error: String(error),
-      createdBy: "architect",
-    }, "Architect");
+    registerPlaceholderSystem(systemRegistry, spec, String(error));
   }
 }
 
@@ -517,10 +754,13 @@ function executeComponentProposal(
   }
 
   // Create dynamic component with proper ComponentDefinition structure
-  const properties: Record<string, string> = {};
+  const properties: Record<string, "string" | "number" | "boolean"> = {};
   if (spec.fields && Array.isArray(spec.fields)) {
     for (const field of spec.fields) {
-      if (field.name && field.type) {
+      if (
+        field.name &&
+        (field.type === "string" || field.type === "number" || field.type === "boolean")
+      ) {
         properties[field.name] = field.type;
       }
     }
@@ -545,6 +785,21 @@ function executeEntityProposal(
   world: World,
   spec: EntityProposalSpec
 ): void {
+  const asNumber = (value: any, fallback: number): number => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  const asString = (value: any, fallback: string): string =>
+    typeof value === "string" ? value : fallback;
+  const asBoolean = (value: any, fallback: boolean): boolean =>
+    typeof value === "boolean" ? value : fallback;
+
+  const componentSpecs = Array.isArray(spec.components) ? spec.components : [];
+  const getValues = (name: string): Record<string, any> => {
+    const found = componentSpecs.find((c) => c?.name?.toLowerCase() === name.toLowerCase());
+    return (found?.values && typeof found.values === "object") ? found.values : {};
+  };
+
   const eid = addEntity(world);
 
   addComponent(world, eid, Name);
@@ -553,21 +808,85 @@ function executeEntityProposal(
   addComponent(world, eid, Description);
   Description.value[eid] = spec.description;
 
-  // Add specified components
-  for (const comp of spec.components) {
-    // For built-in components, we'd need to handle each case
-    // For dynamic components, use setDynamicComponentValue
-    console.log(`[Architect] Would add component ${comp.name} with values:`, comp.values);
+  // Materialize baseline built-ins by proposed entity type.
+  if (spec.type === "room") {
+    const values = getValues("Room");
+    addComponent(world, eid, Room);
+    Room.capacity[eid] = asNumber(values.capacity, 12);
+    Room.ambience[eid] = asString(values.ambience, "neutral");
+  } else if (spec.type === "agent") {
+    const agentValues = getValues("Agent");
+    const mindValues = getValues("Mind");
+    const needsValues = getValues("Needs");
+    const healthValues = getValues("Health");
+
+    addComponent(world, eid, Agent);
+    Agent.role[eid] = asString(agentValues.role, "worker");
+    Agent.systemPrompt[eid] = asString(
+      agentValues.systemPrompt,
+      `You are ${spec.name}, an autonomous agent in the simulation.`
+    );
+    Agent.active[eid] = asBoolean(agentValues.active, true);
+
+    addComponent(world, eid, Mind);
+    Mind.mode[eid] = asString(mindValues.mode, "reactive");
+    Mind.arousal[eid] = asNumber(mindValues.arousal, 0.5);
+    Mind.focus[eid] = asString(mindValues.focus, "");
+    Mind.lastUpdate[eid] = Date.now();
+
+    addComponent(world, eid, Needs);
+    Needs.hunger[eid] = asNumber(needsValues.hunger, 20);
+    Needs.energy[eid] = asNumber(needsValues.energy, 70);
+    Needs.social[eid] = asNumber(needsValues.social, 40);
+    Needs.comfort[eid] = asNumber(needsValues.comfort, 50);
+
+    addComponent(world, eid, Health);
+    Health.current[eid] = asNumber(healthValues.current, 100);
+    Health.max[eid] = asNumber(healthValues.max, 100);
+
+    if (Number.isFinite(spec.roomEid)) {
+      addComponent(world, eid, OccupiesRoom(spec.roomEid as number));
+    }
+  } else if (spec.type === "stimulus_source") {
+    const values = getValues("StimulusSource");
+    addComponent(world, eid, StimulusSource);
+    StimulusSource.stimulusType[eid] = asString(values.stimulusType, "environmental");
+    StimulusSource.template[eid] = asString(values.template, `${spec.name} hums softly.`);
+    StimulusSource.interval[eid] = asNumber(values.interval, 12000);
+    StimulusSource.lastEmit[eid] = 0;
+  }
+
+  // Apply values for dynamic components when present.
+  const builtins = new Set(["name", "description", "agent", "mind", "needs", "health", "room", "stimulussource"]);
+  for (const comp of componentSpecs) {
+    if (!comp || typeof comp.name !== "string" || !comp.values || typeof comp.values !== "object") {
+      continue;
+    }
+
+    if (builtins.has(comp.name.toLowerCase())) {
+      continue;
+    }
+
+    const dynamic = getDynamicComponent(comp.name);
+    if (!dynamic) {
+      console.log(`[Architect] Skipping unknown component ${comp.name} for ${spec.name}`);
+      continue;
+    }
+
+    for (const [key, value] of Object.entries(comp.values)) {
+      setDynamicComponentValue(comp.name, eid, key, value);
+    }
   }
 
   recordEvent("entity_created", {
     name: spec.name,
     type: spec.type,
     eid,
+    componentCount: componentSpecs.length,
     createdBy: "architect",
   }, "Architect");
 
-  console.log(`[Architect] Created entity: ${spec.name} (eid: ${eid})`);
+  console.log(`[Architect] Created entity: ${spec.name} (eid: ${eid}, type: ${spec.type})`);
 }
 
 // =============================================================================
@@ -579,13 +898,22 @@ function executeEntityProposal(
  */
 export async function executeAllApprovedProposals(
   world: World,
-  systemRegistry: SystemRegistry
+  systemRegistry: SystemRegistry,
+  options: { maxProposals?: number } = {}
 ): Promise<{ executed: string[]; failed: string[] }> {
+  const maxProposals = Math.max(1, options.maxProposals ?? DEFAULT_MAX_APPROVED_PER_PASS);
   const approved = getApprovedProposals();
+  const batch = approved.slice(0, maxProposals);
   const executed: string[] = [];
   const failed: string[] = [];
 
-  for (const proposal of approved) {
+  if (approved.length > batch.length) {
+    console.log(
+      `[Architect] Limiting execution to ${batch.length}/${approved.length} approved proposals this pass`
+    );
+  }
+
+  for (const proposal of batch) {
     try {
       console.log(`[Architect] Executing approved proposal: ${proposal.name}`);
       await executeProposal(world, systemRegistry, proposal);
@@ -676,16 +1004,7 @@ ${spec.effects?.length ? `Effects: ${spec.effects.join(", ")}` : ""}
           return { success: true, system: result.system };
         } else {
           console.log(`[Architect] ✗ Background bake failed: ${spec.name} - ${result.error}`);
-          // Register placeholder
-          registerSystem(systemRegistry, {
-            name: spec.name,
-            description: spec.description,
-            frequency: spec.frequency,
-            enabled: true,
-            execute: async () => {
-              console.log(`[${spec.name}] Placeholder execution`);
-            },
-          });
+          registerPlaceholderSystem(systemRegistry, spec, result.error || "background bake failed");
           return { success: false, error: result.error };
         }
       },

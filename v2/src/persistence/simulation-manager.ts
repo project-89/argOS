@@ -129,6 +129,11 @@ export function getCurrentSimulation(): SimulationInstance | null {
 
 export function setCurrentSimulation(sim: SimulationInstance | null): void {
   currentSimulation = sim;
+  if (sim) {
+    process.env.ARGOS_GENERATED_SYSTEMS_DIR = path.resolve(process.cwd(), sim.getSystemsDir());
+  } else {
+    delete process.env.ARGOS_GENERATED_SYSTEMS_DIR;
+  }
 }
 
 // ============================================================================

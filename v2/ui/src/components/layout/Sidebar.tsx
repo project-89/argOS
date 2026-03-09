@@ -15,6 +15,8 @@ import {
   ChevronRight,
   Wifi,
   WifiOff,
+  Map,
+  Box,
 } from "lucide-react";
 import { useSimulationStore } from "../../store/simulation";
 import type { SimulationState } from "../../store/simulation";
@@ -26,7 +28,9 @@ const navItems: Array<{
   color: string;
 }> = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, color: "text-argos-god" },
+  { id: "mapeditor", label: "Map Editor", icon: Map, color: "text-emerald-400" },
   { id: "agents", label: "Agents", icon: Users, color: "text-argos-agent" },
+  { id: "entities", label: "Entities", icon: Box, color: "text-argos-system" },
   { id: "rooms", label: "Rooms", icon: MapPin, color: "text-argos-world" },
   { id: "spirits", label: "Spirits", icon: Sparkles, color: "text-argos-spirit" },
   { id: "daemons", label: "Daemons", icon: Ghost, color: "text-purple-400" },

@@ -18,9 +18,11 @@ import {
   Belief,
   PhysicalObject,
   GodAgent,
+  ObjectState,
+  ObjectType,
 } from "../ecs/components";
-import { OccupiesRoom, HasGoal, HasImpression, HasBelief } from "../ecs/relations";
-import { getDynamicComponentValues } from "../ecs/dynamic-components";
+import { HasGoal, HasImpression, HasBelief } from "../ecs/relations";
+import { getRoomForEntity } from "../ecs/location";
 import { broadcastToRoom, queueStimulus } from "../cognition/cognition-system";
 import type { SensoryModality } from "../cognition/sensory-system";
 import type { EntityRegistry } from "../ecs/tools";
@@ -153,8 +155,8 @@ export function getAgentSummaries(world: World, registry: EntityRegistry): Agent
     const active = Agent.active[eid] ?? true;
 
     // Get location
-    const rooms = getRelationTargets(world, eid, OccupiesRoom);
-    const location = rooms.length > 0 ? (Name.value[rooms[0]] || "Unknown") : "Nowhere";
+    const roomEid = getRoomForEntity(world, eid);
+    const location = roomEid !== undefined ? (Name.value[roomEid] || "Unknown") : "Nowhere";
 
     // Derive mood from arousal
     const mood = deriveMood(arousal, mode);
@@ -204,8 +206,7 @@ export function getRoomSummaries(world: World, registry: EntityRegistry): RoomSu
     // Find agents in this room
     const allAgents = Array.from(query(world, [Agent]));
     const agentsHere = allAgents.filter(aid => {
-      const agentRooms = getRelationTargets(world, aid, OccupiesRoom);
-      return agentRooms.includes(eid);
+      return getRoomForEntity(world, aid) === eid;
     });
 
     const agentNames = agentsHere.map(aid => Name.value[aid] || "Unknown");
@@ -213,15 +214,14 @@ export function getRoomSummaries(world: World, registry: EntityRegistry): RoomSu
     // Find objects in this room
     const allObjects = Array.from(query(world, [PhysicalObject]));
     const objectsHere = allObjects.filter(oid => {
-      const objRooms = getRelationTargets(world, oid, OccupiesRoom);
-      return objRooms.includes(eid);
+      return getRoomForEntity(world, oid) === eid;
     });
 
     const objects = objectsHere.map(oid => {
       const objName = Name.value[oid] || "object";
-      const meta = getDynamicComponentValues("ObjectMeta", oid);
-      const state = meta?.state || "normal";
-      return { name: objName, state };
+      const state = ObjectState.current?.[oid] || "normal";
+      const typeId = ObjectType.typeId?.[oid] || "";
+      return { name: objName, state: typeId ? `${typeId}:${state}` : state };
     });
 
     return {

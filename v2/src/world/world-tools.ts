@@ -16,8 +16,8 @@ import {
   type EntityRegistry,
   registerEntity,
   unregisterEntity,
-  lookupEntity,
 } from "../ecs/tools";
+import { resolveEntityId } from "../ecs/entity-lookup";
 import {
   worldSchema,
   ObjectManager,
@@ -41,7 +41,8 @@ export interface WorldToolsState {
  * Create world manipulation tools for GodAI
  */
 export function createWorldTools(state: WorldToolsState) {
-  const { objectManager, textRenderer, rulesEngine, registry } = state;
+  const { objectManager, textRenderer, rulesEngine, registry, world } = state;
+  const resolveId = (name: string): number | undefined => resolveEntityId(world, registry, name);
 
   return {
     // ===== Prefab/Type Definition Tools =====
@@ -245,14 +246,14 @@ export function createWorldTools(state: WorldToolsState) {
         let onTopOf: number | undefined;
 
         if (params.containedIn) {
-          containedIn = lookupEntity(registry, params.containedIn);
+          containedIn = resolveId(params.containedIn);
           if (!containedIn) {
             return { success: false, message: `Container '${params.containedIn}' not found` };
           }
         }
 
         if (params.onTopOf) {
-          onTopOf = lookupEntity(registry, params.onTopOf);
+          onTopOf = resolveId(params.onTopOf);
           if (!onTopOf) {
             return { success: false, message: `Surface '${params.onTopOf}' not found` };
           }
@@ -303,7 +304,7 @@ export function createWorldTools(state: WorldToolsState) {
         let containedIn: number | undefined;
 
         if (params.containedIn) {
-          containedIn = lookupEntity(registry, params.containedIn);
+          containedIn = resolveId(params.containedIn);
           if (!containedIn) {
             return { success: false, message: `Container '${params.containedIn}' not found` };
           }
@@ -339,7 +340,7 @@ export function createWorldTools(state: WorldToolsState) {
         triggeredBy: z.string().optional().describe("What caused this transition"),
       }),
       execute: async (params) => {
-        const eid = lookupEntity(registry,params.objectName);
+        const eid = resolveId(params.objectName);
         if (!eid) {
           return { success: false, message: `Object '${params.objectName}' not found` };
         }
@@ -376,7 +377,7 @@ export function createWorldTools(state: WorldToolsState) {
         trait: z.string().describe("Trait to add"),
       }),
       execute: async (params) => {
-        const eid = lookupEntity(registry,params.objectName);
+        const eid = resolveId(params.objectName);
         if (!eid) {
           return { success: false, message: `Object '${params.objectName}' not found` };
         }
@@ -398,7 +399,7 @@ export function createWorldTools(state: WorldToolsState) {
         trait: z.string().describe("Trait to remove"),
       }),
       execute: async (params) => {
-        const eid = lookupEntity(registry,params.objectName);
+        const eid = resolveId(params.objectName);
         if (!eid) {
           return { success: false, message: `Object '${params.objectName}' not found` };
         }
@@ -420,7 +421,7 @@ export function createWorldTools(state: WorldToolsState) {
         description: z.string().describe("New description text"),
       }),
       execute: async (params) => {
-        const eid = lookupEntity(registry,params.objectName);
+        const eid = resolveId(params.objectName);
         if (!eid) {
           return { success: false, message: `Object '${params.objectName}' not found` };
         }
@@ -445,7 +446,7 @@ export function createWorldTools(state: WorldToolsState) {
         includeAffordances: z.boolean().optional().describe("List available actions"),
       }),
       execute: async (params) => {
-        const eid = lookupEntity(registry,params.roomName);
+        const eid = resolveId(params.roomName);
         if (!eid) {
           return { success: false, message: `Room '${params.roomName}' not found` };
         }
@@ -471,7 +472,7 @@ export function createWorldTools(state: WorldToolsState) {
         includeAffordances: z.boolean().optional().describe("Include available actions"),
       }),
       execute: async (params) => {
-        const eid = lookupEntity(registry,params.objectName);
+        const eid = resolveId(params.objectName);
         if (!eid) {
           return { success: false, message: `Object '${params.objectName}' not found` };
         }
@@ -497,7 +498,7 @@ export function createWorldTools(state: WorldToolsState) {
         containerName: z.string().describe("Name of the container or room"),
       }),
       execute: async (params) => {
-        const eid = lookupEntity(registry,params.containerName);
+        const eid = resolveId(params.containerName);
         if (!eid) {
           return { success: false, message: `Container '${params.containerName}' not found` };
         }
@@ -593,12 +594,12 @@ export function createWorldTools(state: WorldToolsState) {
         targetName: z.string().describe("Name of the target object"),
       }),
       execute: async (params) => {
-        const actorEid = lookupEntity(registry,params.actorName);
+        const actorEid = resolveId(params.actorName);
         if (!actorEid) {
           return { success: false, message: `Actor '${params.actorName}' not found` };
         }
 
-        const targetEid = lookupEntity(registry,params.targetName);
+        const targetEid = resolveId(params.targetName);
         if (!targetEid) {
           return { success: false, message: `Target '${params.targetName}' not found` };
         }
@@ -693,12 +694,12 @@ export function createWorldTools(state: WorldToolsState) {
         containerName: z.string().describe("Name of the destination container/room"),
       }),
       execute: async (params) => {
-        const objectEid = lookupEntity(registry,params.objectName);
+        const objectEid = resolveId(params.objectName);
         if (!objectEid) {
           return { success: false, message: `Object '${params.objectName}' not found` };
         }
 
-        const containerEid = lookupEntity(registry,params.containerName);
+        const containerEid = resolveId(params.containerName);
         if (!containerEid) {
           return { success: false, message: `Container '${params.containerName}' not found` };
         }
@@ -720,12 +721,12 @@ export function createWorldTools(state: WorldToolsState) {
         surfaceName: z.string().describe("Name of the surface"),
       }),
       execute: async (params) => {
-        const objectEid = lookupEntity(registry,params.objectName);
+        const objectEid = resolveId(params.objectName);
         if (!objectEid) {
           return { success: false, message: `Object '${params.objectName}' not found` };
         }
 
-        const surfaceEid = lookupEntity(registry,params.surfaceName);
+        const surfaceEid = resolveId(params.surfaceName);
         if (!surfaceEid) {
           return { success: false, message: `Surface '${params.surfaceName}' not found` };
         }
@@ -746,7 +747,7 @@ export function createWorldTools(state: WorldToolsState) {
         objectName: z.string().describe("Name of the object to destroy"),
       }),
       execute: async (params) => {
-        const eid = lookupEntity(registry,params.objectName);
+        const eid = resolveId(params.objectName);
         if (!eid) {
           return { success: false, message: `Object '${params.objectName}' not found` };
         }

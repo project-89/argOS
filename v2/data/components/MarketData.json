@@ -1,0 +1,10 @@
+{
+  "name": "MarketData",
+  "description": "Data for market pricing and supply/demand simulation",
+  "properties": {
+    "supply": "number",
+    "demand": "number",
+    "basePrice": "number",
+    "currentPrice": "number"
+  }
+}

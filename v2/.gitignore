@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Local IDE / OS noise
+.DS_Store
+.claude/
+
+# Runtime state and generated simulation artifacts
+saves/
+simulations/
+stress-test-output/
+logs/
+feedback/
+
+# Temp and scratch files
+tmp/
+temp/
+*.log
+*.pid
+SHELL_WRITE_TEST.txt
+zz_shell_test.txt

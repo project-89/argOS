@@ -2,7 +2,7 @@ import { generateText, tool, stepCountIs } from "ai";
 import { google } from "@ai-sdk/google";
 import { z } from "zod/v3";
 import { query } from "bitecs";
-import type { World } from "../ecs/world";
+import { createArgosWorld, type World } from "../ecs/world";
 import {
   createEcsTools,
   createEntityRegistry,
@@ -11,9 +11,10 @@ import {
   type ToolResult,
 } from "../ecs/tools";
 import { createGodAgentEntity } from "../ecs/prefabs";
-import { GodAgent, Name, Description, Agent, Mind } from "../ecs/components";
+import { GodAgent, Name, Description, Agent, Mind, ObjectType, ObjectState, Traits } from "../ecs/components";
 import { AllComponents } from "../ecs/components";
 import { AllRelations } from "../ecs/relations";
+import { transitionObjectState as transitionObjectStateCanonical } from "../world/effect-executor";
 import {
   createSystemRegistry,
   type SystemRegistry,
@@ -29,6 +30,14 @@ import {
 } from "../ecs/dynamic-systems";
 import { bakeSystem, modifySystem, activateBakedSystem } from "./system-baker";
 import {
+  getPendingTaskNames,
+  getQueueStats,
+  getQueueSummary,
+  getTaskStatus,
+  queueTask,
+  type TaskPriority,
+} from "../runtime/async-task-queue";
+import {
   writeSystemFile,
   loadSystemFromFile,
   loadAllSystems,
@@ -38,6 +47,7 @@ import {
   updateSystemFile,
   getSystemsNeedingFix,
   fixAllQueuedSystems,
+  preflightValidateSystem,
   type LoadedSystem,
 } from "../systems/system-loader";
 import {
@@ -91,6 +101,7 @@ import {
   type AffordanceDefinition,
   type RuleDefinition,
 } from "../world/schema";
+import type { GodAutopilotState } from "./god-autopilot";
 import {
   createSimulation,
   loadSimulation,
@@ -301,6 +312,12 @@ export interface GodAgentState {
   globalState: GlobalSimulationState;
   // Persistence - automatically saves if attached
   simulation?: SimulationInstance;
+  // --- Concurrency control ---
+  /** Internal command mutex chain to prevent concurrent godCommand calls */
+  _commandLock?: Promise<void>;
+  // --- Autonomy ---
+  /** GodAI autopilot state (spirit message inbox + throttle config) */
+  autopilot?: GodAutopilotState;
 }
 
 export interface GodAgentConfig {
@@ -371,7 +388,8 @@ export function createGodAgent(
 
   const interventionRegistry = createInterventionRegistry();
   const propositionRegistry = createPropositionRegistry();
-  const worldSchema = new WorldSchema(); // Each god agent gets its own schema instance
+  // Single source of truth: use the shared world schema instance used by rules/affordances.
+  const worldSchema = defaultWorldSchema;
 
   // Initialize global simulation state with selected preset
   const presetKey = config.preset || "slice-of-life";
@@ -1229,6 +1247,34 @@ ${buildCurrentWorldContext(state)}
 ${formatMemoryForPrompt(state)}`;
 }
 
+function buildCommandSystemPrompt(state: GodAgentState): string {
+  const worldName = GodAgent.worldName[state.eid];
+  const narrative = GodAgent.narrative[state.eid];
+
+  return `You are GodAI, the overseer of the simulated world "${worldName}".
+
+You MUST use tool calls to implement the user's command.
+
+GROUNDING RULES:
+- Only refer to entities that exist (use listEntities/queryEntities to verify).
+- Prefer deterministic changes (systems/rules) over one-off narration.
+- Keep outputs minimal; tool calls are the primary output.
+
+NOTE ON LONG TASKS:
+- bakeNewSystem queues async baking and returns a taskId (it does NOT wait for completion).
+- Use getTaskStatus to poll until status is "completed" (or "failed"), then activateSystem (or pass activateOnComplete: true).
+
+DEFINITION OF DONE (do not stop early):
+- Verify your changes with tool calls (listSystems/listRules/listObjectTypes/queryEntities).
+- If the command requires baked systems, wait for the bake tasks to complete and confirm they are present/active.
+
+${narrative ? `NARRATIVE CONTEXT:\n${narrative}\n` : ""}WORLD SNAPSHOT:
+${buildCurrentWorldContext(state)}
+
+MEMORY (recent):
+${formatMemoryForPrompt(state)}`;
+}
+
 function buildTools(state: GodAgentState) {
   const componentNames = Object.keys(AllComponents) as [string, ...string[]];
   const relationNames = Object.keys(AllRelations) as [string, ...string[]];
@@ -1519,6 +1565,50 @@ function buildTools(state: GodAgentState) {
       },
     }),
 
+    getTaskQueueSummary: tool({
+      description:
+        "Get async task queue status (pending/running/completed/failed) and a brief list of tasks",
+      inputSchema: z.object({}),
+      execute: async () => {
+        return {
+          success: true,
+          result: {
+            stats: getQueueStats(),
+            summary: getQueueSummary(),
+            pendingTaskNames: getPendingTaskNames(),
+          },
+        };
+      },
+    }),
+
+    getTaskStatus: tool({
+      description:
+        "Get status/result/error for a queued async task (e.g., from bakeNewSystem)",
+      inputSchema: z.object({
+        taskId: z.string().describe("Task id returned by bakeNewSystem"),
+      }),
+      execute: async (params) => {
+        const task = getTaskStatus(params.taskId);
+        if (!task) {
+          return { success: false, result: null, error: "Task not found" };
+        }
+        return {
+          success: true,
+          result: {
+            id: task.id,
+            name: task.name,
+            priority: task.priority,
+            status: task.status,
+            queuedAt: task.queuedAt,
+            startedAt: task.startedAt,
+            completedAt: task.completedAt,
+            result: task.status === "completed" ? task.result : undefined,
+            error: task.status === "failed" ? task.error : undefined,
+          },
+        };
+      },
+    }),
+
     getComponentValues: tool({
       description: "Get component values from an entity",
       inputSchema: z.object({
@@ -1540,36 +1630,66 @@ function buildTools(state: GodAgentState) {
 
     bakeNewSystem: tool({
       description:
-        "Design and create a new system that runs periodically in the world. Describe what the system should do and it will be designed, built, tested, and made available for activation. Retries automatically on failure.",
+        "Design and create a new system that runs periodically in the world. This queues baking asynchronously (non-blocking). Use getTaskStatus to poll for completion, then activateSystem (or set activateOnComplete).",
       inputSchema: z.object({
         description: z
           .string()
           .describe(
             "Natural language description of what the system should do, what it reacts to, and what effects it has"
           ),
+        activateOnComplete: z
+          .boolean()
+          .optional()
+          .describe("If true, activate the system immediately after baking completes"),
+        priority: z
+          .enum(["critical", "high", "normal", "low"])
+          .optional()
+          .describe("Async task priority (default: high)"),
       }),
       execute: async (params) => {
         console.log(
           `[Tool] bakeNewSystem: "${params.description.slice(0, 100)}..."`
         );
-        const result = await bakeSystem(
-          params.description,
-          state.world,
-          state.systemRegistry
-        );
-        if (result.success && result.system) {
-          state.systemRegistry.systems.set(result.system.name, result.system);
-          return {
-            success: true,
-            result: {
+        const activateOnComplete = params.activateOnComplete ?? false;
+        const priority: TaskPriority = params.priority ?? "high";
+
+        const taskId = queueTask(
+          `bakeSystem:${params.description.slice(0, 60)}`,
+          async () => {
+            // Bake against a sandbox world so the bake-time tests don't pollute the live simulation world.
+            const sandboxWorld = createArgosWorld("SystemBakeSandbox");
+            const result = await bakeSystem(
+              params.description,
+              sandboxWorld,
+              state.systemRegistry
+            );
+            if (!result.success || !result.system) {
+              throw new Error(result.error || "System baking failed");
+            }
+
+            state.systemRegistry.systems.set(result.system.name, result.system);
+            if (activateOnComplete) {
+              activateSystem(state.systemRegistry, result.system.name);
+            }
+
+            return {
               name: result.system.name,
               description: result.system.description,
               frequency: result.system.frequency,
-              status: "baked (inactive - use activateSystem to enable)",
-            },
-          };
-        }
-        return { success: false, result: null, error: result.error };
+              activated: activateOnComplete,
+            };
+          },
+          { priority }
+        );
+
+        return {
+          success: true,
+          result: {
+            taskId,
+            status: "queued",
+            activateOnComplete,
+          },
+        };
       },
     }),
 
@@ -1688,7 +1808,7 @@ Available in ctx:
 - ctx.removeEntity(world, eid) - remove entity
 - ctx.getRelationTargets(world, eid, Relation) - get relation targets
 - ctx.components.{Name, Agent, Needs, Interactable, CurrentAction, Room, GridPosition, etc.}
-- ctx.relations.{OccupiesRoom, StimulusInRoom, etc.}
+- ctx.relations.{LocatedIn, StimulusInRoom, etc.}
 - ctx.dynamicComponents - Map of all dynamic components
 - ctx.getDynamic(name) - get a dynamic component by name (returns component or undefined)
 - ctx.hasDynamic(eid, name) - check if entity has dynamic component data
@@ -1765,6 +1885,16 @@ RIGHT - DO THIS INSTEAD:
           });
           const loaded = await loadSystemFromFile(filePath);
           if (loaded) {
+            const preflight = await preflightValidateSystem(loaded, { ticks: 2 });
+            if (!preflight.ok) {
+              loaded.active = false;
+              console.log(`[Tool] createSystem preflight failed: ${params.name}`);
+              return {
+                success: false,
+                result: null,
+                error: `Preflight validation failed for ${params.name}: ${preflight.error || "unknown error"}`,
+              };
+            }
             state.fileSystems.push(loaded);
           }
           console.log(`[Tool] createSystem: ${params.name} -> ${filePath}`);
@@ -3210,12 +3340,17 @@ Custom types defined via defineObjectType can include defaultComponents for syst
           };
         }
 
+        // Determine initial state (before entity creation so description can reflect state)
+        const initialState = params.state || objectType.defaultState;
+        const stateData = objectType.states[initialState];
+        const templateVars = { ...(params.properties || {}), name: params.name };
+
         // Create the entity
         const createResult = state.tools.createEntity({
           name: params.name,
           description: interpolateTemplate(
-            objectType.description,
-            params.properties || {}
+            stateData?.description || objectType.description,
+            templateVars
           ),
         });
 
@@ -3232,22 +3367,17 @@ Custom types defined via defineObjectType can include defaultComponents for syst
           };
         }
 
-        // Determine initial state
-        const initialState = params.state || objectType.defaultState;
-        const stateData = objectType.states[initialState];
-
-        // Store object type metadata on entity (using dynamic component)
-        const ObjectMeta = getDynamicComponent("ObjectMeta");
-        if (!ObjectMeta) {
-          createDynamicComponent({
-            name: "ObjectMeta",
-            description:
-              "Metadata for spawned objects including type and state",
-            properties: { type: "string", state: "string", traits: "string" },
-          });
-        }
-        setDynamicComponentValue("ObjectMeta", eid, "type", params.type);
-        setDynamicComponentValue("ObjectMeta", eid, "state", initialState);
+        // Canonical object identity/state/traits in ECS components
+        state.tools.setComponentValues({
+          entityName: params.name,
+          componentName: "ObjectType",
+          values: { typeId: params.type, instanceName: params.name },
+        });
+        state.tools.setComponentValues({
+          entityName: params.name,
+          componentName: "ObjectState",
+          values: { current: initialState, previous: "", lockedUntil: 0 },
+        });
 
         // Combine base traits with state-specific traits (using Set to dedupe)
         const traitSet = new Set(objectType.traits);
@@ -3258,21 +3388,47 @@ Custom types defined via defineObjectType can include defaultComponents for syst
           stateData.blockedTraits.forEach((t) => traitSet.delete(t));
         }
         const allTraits = Array.from(traitSet);
-        setDynamicComponentValue(
-          "ObjectMeta",
-          eid,
-          "traits",
-          allTraits.join(",")
-        );
+        state.tools.setComponentValues({
+          entityName: params.name,
+          componentName: "Traits",
+          values: { active: JSON.stringify(allTraits) },
+        });
+
+        // Legacy mirror for compatibility/debugging
+        if (!getDynamicComponent("ObjectMeta")) {
+          createDynamicComponent({
+            name: "ObjectMeta",
+            description: "Legacy mirror of ObjectType/ObjectState/Traits",
+            properties: { type: "string", state: "string", traits: "string" },
+          });
+        }
+        setDynamicComponentValue("ObjectMeta", eid, "type", params.type);
+        setDynamicComponentValue("ObjectMeta", eid, "state", initialState);
+        setDynamicComponentValue("ObjectMeta", eid, "traits", allTraits.join(","));
 
         // === NEW: Create defaultComponents from object type ===
         const createdComponents: string[] = [];
         if (objectType.defaultComponents) {
           for (const compSpec of objectType.defaultComponents) {
-            // Check if component exists, create if dynamic
+            // Merge default values with any overrides
+            const overrides = params.componentOverrides?.[compSpec.name] || {};
+            const finalValues = { ...compSpec.values, ...overrides };
+
+            // Built-in ECS component path
+            const ecsComponent = (AllComponents as any)[compSpec.name];
+            if (ecsComponent) {
+              state.tools.setComponentValues({
+                entityName: params.name,
+                componentName: compSpec.name,
+                values: finalValues,
+              });
+              createdComponents.push(compSpec.name);
+              continue;
+            }
+
+            // Dynamic component path
             let comp = getDynamicComponent(compSpec.name);
             if (!comp && compSpec.dynamic !== false) {
-              // Auto-create dynamic component from schema or infer from values
               const schema = compSpec.schema || inferSchema(compSpec.values);
               createDynamicComponent({
                 name: compSpec.name,
@@ -3282,18 +3438,11 @@ Custom types defined via defineObjectType can include defaultComponents for syst
               comp = getDynamicComponent(compSpec.name);
             }
 
-            if (comp) {
-              // Merge default values with any overrides
-              const overrides =
-                params.componentOverrides?.[compSpec.name] || {};
-              const finalValues = { ...compSpec.values, ...overrides };
-
-              // Set each property value
-              for (const [prop, value] of Object.entries(finalValues)) {
-                setDynamicComponentValue(compSpec.name, eid, prop, value);
-              }
-              createdComponents.push(compSpec.name);
+            if (!comp) continue;
+            for (const [prop, value] of Object.entries(finalValues)) {
+              setDynamicComponentValue(compSpec.name, eid, prop, value);
             }
+            createdComponents.push(compSpec.name);
           }
         }
 
@@ -3325,7 +3474,7 @@ Custom types defined via defineObjectType can include defaultComponents for syst
         if (params.roomName) {
           state.tools.addRelation({
             subjectName: params.name,
-            relationName: "OccupiesRoom",
+            relationName: "LocatedIn",
             targetName: params.roomName,
           });
         }
@@ -3766,10 +3915,15 @@ defineRule({
             error: `Entity not found: ${params.entityName}`,
           };
         }
-        const traitsStr = getDynamicComponentValues("ObjectMeta", eid)?.traits;
-        const traits = traitsStr ? traitsStr.split(",") : [];
-        const objectType = getDynamicComponentValues("ObjectMeta", eid)?.type;
-        const objectState = getDynamicComponentValues("ObjectMeta", eid)?.state;
+        const traitsJson = Traits.active?.[eid] || "[]";
+        let traits: string[] = [];
+        try {
+          traits = JSON.parse(traitsJson) as string[];
+        } catch {
+          traits = [];
+        }
+        const objectType = ObjectType.typeId?.[eid];
+        const objectState = ObjectState.current?.[eid];
         return {
           success: true,
           result: {
@@ -3796,8 +3950,14 @@ defineRule({
             error: `Entity not found: ${params.entityName}`,
           };
         }
-        const traitsStr = getDynamicComponentValues("ObjectMeta", eid)?.traits;
-        const traits = new Set(traitsStr ? traitsStr.split(",") : []);
+        const traitsJson = Traits.active?.[eid] || "[]";
+        let traitsArr: string[] = [];
+        try {
+          traitsArr = JSON.parse(traitsJson) as string[];
+        } catch {
+          traitsArr = [];
+        }
+        const traits = new Set(traitsArr);
 
         const availableActions: string[] = [];
         for (const aff of state.worldSchema.getAllAffordances()) {
@@ -3836,12 +3996,12 @@ defineRule({
           };
         }
 
-        const objectType = getDynamicComponentValues("ObjectMeta", eid)?.type;
+        const objectType = ObjectType.typeId?.[eid];
         if (!objectType) {
           return {
             success: false,
             result: null,
-            error: `Entity ${params.entityName} has no ObjectMeta (not spawned from object type)`,
+            error: `Entity ${params.entityName} has no ObjectType.typeId`,
           };
         }
 
@@ -3865,24 +4025,33 @@ defineRule({
           };
         }
 
-        // Update state
-        setDynamicComponentValue("ObjectMeta", eid, "state", params.newState);
-
-        // Recalculate traits (using Set to dedupe)
-        const traitSet = new Set(typeDef.traits);
-        if (newStateData.traits) {
-          newStateData.traits.forEach((t) => traitSet.add(t));
-        }
-        if (newStateData.blockedTraits) {
-          newStateData.blockedTraits.forEach((t) => traitSet.delete(t));
-        }
-        const allTraits = Array.from(traitSet);
-        setDynamicComponentValue(
-          "ObjectMeta",
+        const oldState = ObjectState.current?.[eid];
+        const result = transitionObjectStateCanonical(
+          state.world,
           eid,
-          "traits",
-          allTraits.join(",")
+          params.newState,
+          {
+            world: state.world,
+            targetEid: eid,
+            worldSchema: state.worldSchema,
+            registry: state.registry,
+          } as any,
+          "tool:transitionObjectState"
         );
+        if (!result.ok) {
+          return {
+            success: false,
+            result: null,
+            error: `Failed to transition state for ${params.entityName}`,
+          };
+        }
+
+        let traits: string[] = [];
+        try {
+          traits = JSON.parse(Traits.active?.[eid] || "[]") as string[];
+        } catch {
+          traits = [];
+        }
 
         console.log(
           `[Tool] transitionObjectState: ${params.entityName} -> ${params.newState}`
@@ -3891,9 +4060,9 @@ defineRule({
           success: true,
           result: {
             name: params.entityName,
-            oldState: getDynamicComponentValues("ObjectMeta", eid)?.state,
+            oldState,
             newState: params.newState,
-            traits: allTraits,
+            traits,
           },
         };
       },
@@ -6487,6 +6656,15 @@ function buildExecutionTools(state: GodAgentState) {
           });
           const loaded = await loadSystemFromFile(filePath);
           if (loaded) {
+            const preflight = await preflightValidateSystem(loaded, { ticks: 2 });
+            if (!preflight.ok) {
+              loaded.active = false;
+              console.log(`  [Tool] createFileSystem preflight failed: ${params.name}`);
+              return {
+                success: false,
+                error: `Preflight validation failed for ${params.name}: ${preflight.error || "unknown error"}`,
+              };
+            }
             state.fileSystems.push(loaded);
           }
           console.log(`  [Tool] createFileSystem: ${params.name}`);
@@ -6508,6 +6686,14 @@ function buildExecutionTools(state: GodAgentState) {
       execute: async (params) => {
         const sys = state.fileSystems.find((s) => s.name === params.systemName);
         if (sys) {
+          // Prevent re-activating systems that are already in a broken state and queued for repair.
+          // Otherwise they can spam errors every tick and never allow the fixer loop to catch up.
+          if (sys.consecutiveErrors >= 3) {
+            return {
+              success: false,
+              error: `Cannot activate ${params.systemName}: system is in error state (consecutiveErrors=${sys.consecutiveErrors}). Fix or replace it first.`,
+            };
+          }
           sys.active = true;
           console.log(`  [Tool] activateFileSystem: ${params.systemName}`);
           return { success: true, result: { activated: params.systemName } };
@@ -7329,10 +7515,40 @@ export async function godDesignAndExecute(
 
 export async function godThink(
   state: GodAgentState,
-  prompt: string
+  prompt: string,
+  options: { mode?: "collaborate" | "execute" } = {}
 ): Promise<{ thinking: string; actions: ToolResult[] }> {
-  const systemPrompt = buildSystemPrompt(state);
+  const systemPrompt =
+    options.mode === "execute"
+      ? buildCommandSystemPrompt(state)
+      : buildSystemPrompt(state);
   const tools = buildTools(state);
+  const coreToolNames = [
+    "listEntities",
+    "queryEntities",
+    "createRoom",
+    "createAndPopulateRoom",
+    "createAgent",
+    "createObject",
+    "listSystems",
+    "bakeNewSystem",
+    "getTaskStatus",
+    "getTaskQueueSummary",
+    "modifyBakedSystem",
+    "activateSystem",
+    "deactivateSystem",
+    "listObjectTypes",
+    "defineObjectType",
+    "spawn",
+    "listRules",
+    "defineRule",
+  ] as const;
+
+  const coreTools: Record<string, any> = {};
+  for (const name of coreToolNames) {
+    const t = (tools as any)[name];
+    if (t) coreTools[name] = t;
+  }
 
   console.log("\n[GodAgent] Thinking...\n");
   console.log("[GodAgent] Prompt:", prompt.slice(0, 100) + "...");
@@ -7340,101 +7556,119 @@ export async function godThink(
   const actions: ToolResult[] = [];
   let thinking = "";
 
-  try {
-    console.log("[GodAgent] Calling Gemini...");
+  const baseMessages: Array<{ role: "user" | "assistant"; content: string }> = [
+    ...state.conversationHistory.slice(-10).map((h) => ({
+      role: h.role as "user" | "assistant",
+      content: h.content,
+    })),
+    { role: "user" as const, content: prompt },
+  ];
 
-    const messages: Array<{ role: "user" | "assistant"; content: string }> = [
-      ...state.conversationHistory.slice(-10).map((h) => ({
-        role: h.role as "user" | "assistant",
-        content: h.content,
-      })),
-      { role: "user" as const, content: prompt },
-    ];
+  const maxAttempts = 3;
+  let lastResponse: any = null;
+  let lastError: unknown = null;
 
-    const response = await generateText({
-      model,
-      system: systemPrompt,
-      messages,
-      tools,
-      stopWhen: stepCountIs(15),
-    });
-    console.log("[GodAgent] Gemini response received");
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`[GodAgent] Calling Gemini... (attempt ${attempt}/${maxAttempts})`);
 
-    if (response.reasoningText) {
-      thinking = response.reasoningText;
-      console.log(
-        "[GodAgent] Reasoning:",
-        response.reasoningText.slice(0, 500) + "..."
-      );
-    }
+      const response = await generateText({
+        model,
+        system: systemPrompt,
+        messages: baseMessages,
+        tools: attempt === 1 ? tools : coreTools,
+        stopWhen: stepCountIs(15),
+        temperature: attempt === 1 ? 0.6 : 0.2,
+      });
+      lastResponse = response;
+      console.log("[GodAgent] Gemini response received");
 
-    if (response.text) {
-      thinking += "\n\n" + response.text;
-      console.log("[GodAgent] Response:", response.text);
-    }
+      thinking = "";
+      if (response.reasoningText) thinking = response.reasoningText;
+      if (response.text) thinking += (thinking ? "\n\n" : "") + response.text;
 
-    if (response.steps) {
-      for (const step of response.steps) {
-        if (step.toolCalls) {
+      const attemptActions: ToolResult[] = [];
+
+      if (response.steps) {
+        for (const step of response.steps) {
+          if (!step.toolCalls || !step.toolResults) continue;
           for (const tc of step.toolCalls) {
-            if (step.toolResults) {
-              const result = step.toolResults.find(
-                (r: any) => r.toolCallId === tc.toolCallId
-              );
-              if (result) {
-                actions.push(result.output as ToolResult);
-                const toolResult = result.output as ToolResult;
-                if (
-                  toolResult.success &&
-                  ![
-                    "recordMemory",
-                    "searchMemories",
-                    "reflect",
-                    "makePlan",
-                    "advancePlanStep",
-                    "getActivePlanStatus",
-                    "abandonCurrentPlan",
-                  ].includes(tc.toolName)
-                ) {
-                  addMemory(
-                    state,
-                    "action",
-                    `${tc.toolName}: ${JSON.stringify((tc as any).input).slice(
-                      0,
-                      100
-                    )}`,
-                    {
-                      importance: 5,
-                      tags: ["tool", tc.toolName],
-                    }
-                  );
+            const result = step.toolResults.find(
+              (r: any) => r.toolCallId === tc.toolCallId
+            );
+            if (!result) continue;
+
+            attemptActions.push(result.output as ToolResult);
+            const toolResult = result.output as ToolResult;
+            if (
+              toolResult.success &&
+              ![
+                "recordMemory",
+                "searchMemories",
+                "reflect",
+                "makePlan",
+                "advancePlanStep",
+                "getActivePlanStatus",
+                "abandonCurrentPlan",
+              ].includes(tc.toolName)
+            ) {
+              addMemory(
+                state,
+                "action",
+                `${tc.toolName}: ${JSON.stringify((tc as any).input).slice(0, 100)}`,
+                {
+                  importance: 5,
+                  tags: ["tool", tc.toolName],
                 }
-              }
+              );
             }
           }
         }
       }
-    }
 
-    // Log warning if no tools were called - helps debug LLM issues
-    if (actions.length === 0) {
+      actions.push(...attemptActions);
+
+      // If we got tool results, we're done.
+      if (attemptActions.length > 0) break;
+
+      // Retry on common Gemini tool-call failures (e.g., MALFORMED_FUNCTION_CALL).
+      const rawFinishReason = response?.steps?.[0]?.rawFinishReason;
+      const finishReason = response?.steps?.[0]?.finishReason;
+      const shouldRetry = rawFinishReason === "MALFORMED_FUNCTION_CALL" || finishReason === "error";
+
       console.warn("[GodAgent] WARNING: No tool calls in response!");
-      console.warn(
-        "[GodAgent] Response text:",
-        response.text?.slice(0, 500) || "(no text)"
-      );
+      console.warn("[GodAgent] Response text:", response.text?.slice(0, 500) || "(no text)");
       console.warn("[GodAgent] Steps:", response.steps?.length || 0);
       if (response.steps && response.steps.length > 0) {
-        console.warn(
-          "[GodAgent] First step:",
-          JSON.stringify(response.steps[0]).slice(0, 300)
-        );
+        console.warn("[GodAgent] First step:", JSON.stringify(response.steps[0]).slice(0, 300));
       }
+
+      if (!shouldRetry || attempt === maxAttempts) break;
+
+      // Mutate the final user message (same prompt) with an explicit tool-call requirement.
+      const retrySuffix = [
+        "",
+        "IMPORTANT: Your previous response contained no usable tool calls.",
+        "You MUST respond by calling tools (no free-form prose) until the task is completed.",
+        "If a tool call fails, correct it and retry with a valid tool call payload.",
+        rawFinishReason ? `rawFinishReason: ${rawFinishReason}` : "",
+      ].filter(Boolean).join("\n");
+      (baseMessages[baseMessages.length - 1] as any).content = `${prompt}\n\n${retrySuffix}`;
+    } catch (error) {
+      lastError = error;
+      console.error(`[GodAgent] Error (attempt ${attempt}/${maxAttempts}):`, error);
+      thinking = `Error: ${error}`;
+      if (attempt < maxAttempts) continue;
+
+      addMemory(state, "observation", `Error occurred: ${error}`, {
+        importance: 8,
+        tags: ["error"],
+      });
     }
-  } catch (error) {
-    console.error("[GodAgent] Error:", error);
-    thinking = `Error: ${error}`;
-    addMemory(state, "observation", `Error occurred: ${error}`, {
+  }
+
+  if (actions.length === 0 && lastError) {
+    addMemory(state, "observation", `Error occurred: ${lastError}`, {
       importance: 8,
       tags: ["error"],
     });
@@ -7458,8 +7692,20 @@ export async function godCommand(
   state: GodAgentState,
   command: string
 ): Promise<ToolResult[]> {
-  const { actions } = await godThink(state, command);
-  return actions;
+  const prev = (state._commandLock ?? Promise.resolve()).catch(() => {});
+  let release: (() => void) | null = null;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  state._commandLock = prev.then(() => current);
+
+  await prev;
+  try {
+    const { actions } = await godThink(state, command, { mode: "execute" });
+    return actions;
+  } finally {
+    release?.();
+  }
 }
 
 export function tickWorld(
@@ -7467,21 +7713,34 @@ export function tickWorld(
   delta: number = 1000
 ): Array<{ type: string; data: any; timestamp: number }> {
   state.tick++;
+  return runWorldTickAt(state, state.tick, delta);
+}
+
+/**
+ * Run a world tick at an explicit tick number.
+ * This is useful for dual-loop runtimes that own the tick counter externally.
+ */
+export function runWorldTickAt(
+  state: GodAgentState,
+  tick: number,
+  delta: number = 1000
+): Array<{ type: string; data: any; timestamp: number }> {
+  state.tick = tick;
   // Run baked systems from registry
-  runSystems(state.world, state.systemRegistry, state.tick, delta);
-  runAsyncSystems(state.world, state.systemRegistry, state.tick, delta);
+  runSystems(state.world, state.systemRegistry, tick, delta);
+  runAsyncSystems(state.world, state.systemRegistry, tick, delta);
   // Run file-based systems (NeedsDecay, SeekNeeds, RandomWander, etc.)
   if (state.fileSystems.length > 0) {
     runLoadedSystems(
       state.world,
       state.fileSystems,
       state.systemRegistry,
-      state.tick,
+      tick,
       delta
     );
   }
   // Run interventions - event-driven precondition→effect rules
-  runInterventions(state.world, state.interventionRegistry, state.tick);
+  runInterventions(state.world, state.interventionRegistry, tick);
   return consumeEvents(state.systemRegistry);
 }
 

@@ -327,8 +327,10 @@ export function sendMessage(
   // Add to recipient's inbox
   if (toSpirit) {
     toSpirit.inbox.push(message);
-  } else if (to === registry.godAgentEid) {
-    // Message to GodAI - add to registry queue for GodAI to process
+  }
+  if (to === registry.godAgentEid) {
+    // Message to GodAI - always add to registry queue for GodAI to process, even if
+    // a spirit entity somehow exists with the same eid (defensive against id collisions).
     registry.messageQueue.push(message);
   }
 

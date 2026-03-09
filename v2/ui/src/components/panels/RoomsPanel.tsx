@@ -4,14 +4,14 @@
 
 import { useState, useMemo } from "react";
 import { MapPin, Users, Zap, Info, MessageSquare, Activity, Eye, Radio, User, ArrowRight, ArrowLeft } from "lucide-react";
-import { useSimulationStore, type RoomSummary, type StimulusSourceSummary, type AgentSummary } from "../../store/simulation";
-import type { RoomEvent, AgentEvent } from "../../types/events";
+import { useSimulationStore, type RoomSummary, type StimulusSourceSummary, type AgentSummary, type EntitySummary } from "../../store/simulation";
 
 export function RoomsPanel() {
   const {
     rooms,
     stimulusSources,
     agents,
+    entities,
     selectedRoom,
     setSelectedRoom,
     roomEvents,
@@ -19,26 +19,15 @@ export function RoomsPanel() {
     events,
   } = useSimulationStore();
 
-  if (rooms.length === 0) {
-    return (
-      <div className="h-full flex items-center justify-center">
-        <div className="text-center">
-          <MapPin className="w-12 h-12 text-argos-text-muted mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-argos-text-primary mb-2">No Rooms Yet</h2>
-          <p className="text-argos-text-muted">
-            Create a simulation using the presets or God commands to create rooms.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   const selected = rooms.find(r => r.name === selectedRoom);
   const roomSources = selected
     ? stimulusSources.filter(s => s.room === selected.name)
     : [];
   const roomAgents = selected
     ? agents.filter(a => a.room === selected.name)
+    : [];
+  const roomEntities = selected
+    ? entities.filter(e => e.room === selected.name)
     : [];
 
   // Get activity for selected room - both room events and agent events in this room
@@ -82,6 +71,20 @@ export function RoomsPanel() {
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, 50);
   }, [selected, roomEvents, agentEvents, events, roomAgents]);
+
+  if (rooms.length === 0) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="text-center">
+          <MapPin className="w-12 h-12 text-argos-text-muted mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-argos-text-primary mb-2">No Rooms Yet</h2>
+          <p className="text-argos-text-muted">
+            Create a simulation using the presets or God commands to create rooms.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex">
@@ -129,6 +132,7 @@ export function RoomsPanel() {
             room={selected}
             sources={roomSources}
             occupants={roomAgents}
+            entities={roomEntities}
             activity={roomActivity}
           />
         ) : (
@@ -199,11 +203,13 @@ function RoomDetail({
   room,
   sources,
   occupants,
+  entities,
   activity,
 }: {
   room: RoomSummary;
   sources: StimulusSourceSummary[];
   occupants: AgentSummary[];
+  entities: EntitySummary[];
   activity: any[];
 }) {
   const [viewMode, setViewMode] = useState<"overview" | "activity">("overview");
@@ -257,7 +263,7 @@ function RoomDetail({
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">
         {viewMode === "overview" ? (
-          <RoomOverview room={room} sources={sources} occupants={occupants} />
+          <RoomOverview room={room} sources={sources} occupants={occupants} entities={entities} />
         ) : (
           <RoomActivityFeed activity={activity} roomName={room.name} />
         )}
@@ -270,15 +276,17 @@ function RoomOverview({
   room,
   sources,
   occupants,
+  entities,
 }: {
   room: RoomSummary;
   sources: StimulusSourceSummary[];
   occupants: AgentSummary[];
+  entities: EntitySummary[];
 }) {
   return (
     <div className="space-y-6">
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div className="panel">
           <div className="p-4">
             <div className="w-10 h-10 rounded-lg bg-argos-agent/10 text-argos-agent flex items-center justify-center mb-3">
@@ -304,6 +312,15 @@ function RoomOverview({
             </div>
             <p className="text-xs text-argos-text-muted">Stimuli</p>
             <p className="text-lg font-semibold text-argos-text-primary">{sources.length}</p>
+          </div>
+        </div>
+        <div className="panel">
+          <div className="p-4">
+            <div className="w-10 h-10 rounded-lg bg-argos-system/10 text-argos-system flex items-center justify-center mb-3">
+              <Info className="w-5 h-5" />
+            </div>
+            <p className="text-xs text-argos-text-muted">Entities</p>
+            <p className="text-lg font-semibold text-argos-text-primary">{entities.length}</p>
           </div>
         </div>
       </div>
@@ -347,6 +364,32 @@ function RoomOverview({
                   <p className="text-xs text-argos-text-muted">{source.type}</p>
                   {source.description && (
                     <p className="text-xs text-argos-text-secondary mt-1">{source.description}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Non-agent entities */}
+      {entities.length > 0 && (
+        <div className="panel">
+          <div className="panel-header">
+            <span className="panel-title flex items-center gap-2">
+              <Info className="w-4 h-4 text-argos-system" />
+              Dynamic Entities ({entities.length})
+            </span>
+          </div>
+          <div className="panel-content space-y-2">
+            {entities.map((entity) => (
+              <div key={entity.id} className="flex items-start gap-3 p-3 bg-argos-bg-tertiary rounded-lg border border-argos-border/50">
+                <Info className="w-5 h-5 text-argos-system flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-argos-text-primary">{entity.name}</p>
+                  <p className="text-xs text-argos-text-muted capitalize">{entity.type}</p>
+                  {entity.description && (
+                    <p className="text-xs text-argos-text-secondary mt-1">{entity.description}</p>
                   )}
                 </div>
               </div>

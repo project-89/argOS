@@ -14,9 +14,11 @@
 
 import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
+import { hasComponent, query } from "bitecs";
 import type { SpiritRegistry } from "./spirit-registry";
 import { createSpirit } from "./spirit-registry";
 import type { SpiritDefinition, SpiritState, DivineMessage } from "./types";
+import { Name, Room, Traits } from "../ecs/components";
 import { worldSchema, type ObjectTypeDefinition, type StimulusDefinition, type StateDefinition } from "../world/schema";
 import { ObjectManager } from "../world/object-manager";
 
@@ -204,6 +206,7 @@ const ROOM_TEMPLATES: Record<string, {
 interface StewardState {
   pendingRequests: RoomCreationRequest[];
   completedRooms: PopulatedRoom[];
+  completedSchemaRooms: SchemaPopulatedRoom[];
   systemRequests: SystemRequest[];
   roomInventory: Map<string, string[]>; // roomName -> entity names
 }
@@ -211,6 +214,7 @@ interface StewardState {
 let stewardState: StewardState = {
   pendingRequests: [],
   completedRooms: [],
+  completedSchemaRooms: [],
   systemRequests: [],
   roomInventory: new Map(),
 };
@@ -223,6 +227,7 @@ export function resetStewardState(): void {
   stewardState = {
     pendingRequests: [],
     completedRooms: [],
+    completedSchemaRooms: [],
     systemRequests: [],
     roomInventory: new Map(),
   };
@@ -652,7 +657,7 @@ export async function populateRoomViaSchema(
   const template = ROOM_TEMPLATES[request.roomType.toLowerCase().replace(/\s+/g, "_")];
 
   // First, check what types already exist in WorldSchema
-  const existingTypes = worldSchema.getAllObjectTypes().map(t => t.name);
+  const existingTypes = worldSchema.getAllObjectTypeIds();
 
   const prompt = `You are The Steward, populating a room using the WorldSchema system.
 
@@ -663,7 +668,7 @@ CONTEXT:
 - Economy level: ${request.context.economyLevel || "modest"}
 - Primary function: ${request.context.primaryFunction || `A working ${request.roomType}`}
 
-EXISTING OBJECT TYPES IN SCHEMA:
+EXISTING OBJECT TYPE IDS IN SCHEMA (use these IDs verbatim in "entities[].type"):
 ${existingTypes.join(", ")}
 
 ${template ? `
@@ -673,15 +678,19 @@ TEMPLATE HINTS for ${request.roomType}:
 ` : ""}
 
 RULES:
-1. For each entity, either USE an existing type OR DEFINE a new one
-2. Each new type definition must include:
+1. Prefer USING existing schema types whenever possible
+2. For edible food, ALWAYS use the existing type "food_item" with properties.foodType (e.g. "bread", "cheese") and state "fresh"|"stale"|"rotten"
+3. Do NOT define new edible food types unless truly necessary; if you define a new edible type, it MUST include "fresh"|"stale"|"rotten" states and decay transitions
+4. Every "entities[].type" MUST either be an existing type ID OR be defined in "newTypes[].name"
+5. For each entity, either USE an existing type OR DEFINE a new one
+6. Each new type definition must include:
    - name (snake_case)
    - description (can use {variable} placeholders)
    - traits (what can be done with it)
    - states with stimuli (what agents perceive in each state)
    - category
-3. Stimuli are how agents PERCEIVE - each state should emit sensory data (visual, smell, sound, heat, etc.)
-4. Generate 8-15 entities total
+7. Stimuli are how agents PERCEIVE - each state should emit sensory data (visual, smell, sound, heat, etc.)
+8. Generate 8-15 entities total
 
 Respond with JSON:
 {
@@ -733,84 +742,8 @@ Respond with JSON:
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
-    const result: SchemaPopulatedRoom = {
-      roomName: request.roomName,
-      roomType: request.roomType,
-      entityIds: [],
-      registeredTypes: [],
-      ambientEntityIds: [],
-    };
-
-    // Register new types with WorldSchema
-    if (parsed.newTypes && Array.isArray(parsed.newTypes)) {
-      for (const typeDef of parsed.newTypes) {
-        // Convert to proper ObjectTypeDefinition format
-        const fullDef: ObjectTypeDefinition = {
-          name: typeDef.name,
-          description: typeDef.description,
-          traits: typeDef.traits || [],
-          states: typeDef.states || { normal: { description: "A " + typeDef.name } },
-          defaultState: typeDef.defaultState || "normal",
-          category: typeDef.category,
-          variables: typeDef.variables,
-          transitions: typeDef.transitions,
-          defaultComponents: typeDef.defaultComponents,
-        };
-
-        // Only register if not already in schema
-        if (!worldSchema.getObjectType(typeDef.name)) {
-          worldSchema.defineObjectType(fullDef);
-          result.registeredTypes.push(typeDef.name);
-          console.log(`[Steward] Registered new type: ${typeDef.name}`);
-        }
-      }
-    }
-
-    // Spawn entities via ObjectManager
-    if (parsed.entities && Array.isArray(parsed.entities)) {
-      for (const entitySpec of parsed.entities) {
-        const typeId = entitySpec.type;
-        const typeDef = worldSchema.getObjectType(typeId);
-
-        if (!typeDef) {
-          console.warn(`[Steward] Unknown type: ${typeId}, skipping`);
-          continue;
-        }
-
-        const eid = objectManager.spawn(typeId, {
-          containedIn: roomEid,
-          state: entitySpec.state,
-          properties: entitySpec.properties,
-        });
-
-        if (eid !== null) {
-          result.entityIds.push(eid);
-        }
-      }
-    }
-
-    // Create ambient stimulus sources (room-level stimuli)
-    if (parsed.ambientStimuli && Array.isArray(parsed.ambientStimuli)) {
-      for (const ambientStim of parsed.ambientStimuli) {
-        // Create a simple stimulus source entity for ambient effects
-        const eid = objectManager.spawnCustom({
-          name: `ambient_${ambientStim.type}_${Date.now()}`,
-          description: ambientStim.template,
-          traits: ["ambient", "stimulus_source"],
-          containedIn: roomEid,
-        });
-        result.ambientEntityIds.push(eid);
-      }
-    }
-
+    const result = materializeRoomFromSchemaPlan(world, request, roomEid, parsed, objectManager);
     console.log(`[Steward] Schema-populated ${request.roomName}: ${result.entityIds.length} entities, ${result.registeredTypes.length} new types`);
-
-    // Track in steward state
-    stewardState.roomInventory.set(request.roomName, result.entityIds.map(e => `eid_${e}`));
-
-    // Remove from pending
-    stewardState.pendingRequests = stewardState.pendingRequests.filter(r => r.id !== request.id);
-
     return result;
   } catch (error) {
     console.error("[Steward] Error in schema population:", error);
@@ -818,14 +751,270 @@ Respond with JSON:
   }
 }
 
+function parseTraitsJson(active: string | undefined): string[] {
+  try {
+    const parsed = JSON.parse(active || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function shouldEnsureFood(roomType: string): boolean {
+  const t = roomType.toLowerCase();
+  return (
+    t.includes("bakery") ||
+    t.includes("tavern") ||
+    t.includes("inn") ||
+    t.includes("kitchen") ||
+    t.includes("market") ||
+    t.includes("store")
+  );
+}
+
+function defaultFoodTypeForRoom(roomType: string): string {
+  const t = roomType.toLowerCase();
+  if (t.includes("bakery")) return "bread";
+  if (t.includes("tavern") || t.includes("inn")) return "stew";
+  if (t.includes("market")) return "fruit";
+  return "bread";
+}
+
+function resolveObjectTypeId(typeId: string): string | undefined {
+  if (worldSchema.getObjectType(typeId)) return typeId;
+
+  // Allow referring to a type by its display name (ObjectTypeDefinition.name), not just its ID key.
+  // Example: base type ID is "food_item" but its display name is "food".
+  const needle = typeId.trim().toLowerCase();
+  if (!needle) return undefined;
+
+  for (const id of worldSchema.getAllObjectTypeIds()) {
+    const def = worldSchema.getObjectType(id);
+    if (!def) continue;
+    if (def.name.trim().toLowerCase() === needle) return id;
+  }
+
+  return undefined;
+}
+
+function toSnakeCaseId(value: string): string {
+  const s = value
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+  return s || "object";
+}
+
+function guessCategoryAndTraits(typeId: string): { category: string; traits: string[]; isContainer?: boolean; capacity?: number } {
+  const t = typeId.toLowerCase();
+  const traits = new Set<string>(["examinable"]);
+
+  const containerHints = ["chest", "box", "bag", "sack", "basket", "barrel", "jar", "bottle", "crate", "cabinet", "drawer"];
+  const furnitureHints = ["table", "chair", "bed", "counter", "shelf", "rack", "stool", "bench"];
+  const workstationHints = ["forge", "oven", "anvil", "hearth", "kiln"];
+  const toolHints = ["hammer", "tongs", "bellows", "knife", "saw", "spoon", "ladle", "needle"];
+  const resourceHints = ["coal", "flour", "grain", "water", "salt", "yeast", "honey", "oil"];
+
+  if (containerHints.some(h => t.includes(h))) {
+    traits.add("container");
+    traits.add("openable");
+    return { category: "container", traits: Array.from(traits), isContainer: true, capacity: 20 };
+  }
+
+  if (workstationHints.some(h => t.includes(h))) {
+    traits.add("workstation");
+    traits.add("interactable");
+    return { category: "workstation", traits: Array.from(traits) };
+  }
+
+  if (furnitureHints.some(h => t.includes(h))) {
+    traits.add("furniture");
+    return { category: "furniture", traits: Array.from(traits) };
+  }
+
+  if (toolHints.some(h => t.includes(h))) {
+    traits.add("takeable");
+    traits.add("tool");
+    traits.add("usable");
+    return { category: "tool", traits: Array.from(traits) };
+  }
+
+  if (resourceHints.some(h => t.includes(h))) {
+    traits.add("takeable");
+    return { category: "resource", traits: Array.from(traits) };
+  }
+
+  // Generic fallback: portable unless it looks like furniture/structure.
+  traits.add("takeable");
+  return { category: "object", traits: Array.from(traits) };
+}
+
+function autoDefineMissingType(typeIdRaw: string): string | undefined {
+  const id = toSnakeCaseId(typeIdRaw);
+  if (worldSchema.getObjectType(id)) return id;
+
+  const { category, traits, isContainer, capacity } = guessCategoryAndTraits(id);
+
+  const def: ObjectTypeDefinition = {
+    name: id,
+    description: `A ${id.replace(/_/g, " ")}`,
+    traits,
+    states: {
+      normal: {
+        description: `A ${id.replace(/_/g, " ")}.`,
+        stimuli: [{ type: "visual", template: `A ${id.replace(/_/g, " ")} is here`, intensity: 0.4 }],
+      },
+    },
+    defaultState: "normal",
+    category,
+    isContainer: Boolean(isContainer),
+    containerCapacity: capacity,
+  };
+
+  worldSchema.defineObjectType(def);
+  return id;
+}
+
+export function materializeRoomFromSchemaPlan(
+  world: any,
+  request: RoomCreationRequest,
+  roomEid: number,
+  plan: any,
+  objectManager: ObjectManager = new ObjectManager(world)
+): SchemaPopulatedRoom {
+  const result: SchemaPopulatedRoom = {
+    roomName: request.roomName,
+    roomType: request.roomType,
+    entityIds: [],
+    registeredTypes: [],
+    ambientEntityIds: [],
+  };
+
+  // Register new types with WorldSchema
+  if (plan?.newTypes && Array.isArray(plan.newTypes)) {
+    for (const typeDef of plan.newTypes) {
+      if (!typeDef?.name || typeof typeDef.name !== "string") continue;
+
+      const fullDef: ObjectTypeDefinition = {
+        name: typeDef.name,
+        description: typeDef.description,
+        traits: typeDef.traits || [],
+        states: typeDef.states || { normal: { description: "A " + typeDef.name } },
+        defaultState: typeDef.defaultState || "normal",
+        category: typeDef.category,
+        variables: typeDef.variables,
+        transitions: typeDef.transitions,
+        defaultComponents: typeDef.defaultComponents,
+      };
+
+      if (!worldSchema.getObjectType(typeDef.name)) {
+        worldSchema.defineObjectType(fullDef);
+        result.registeredTypes.push(typeDef.name);
+        console.log(`[Steward] Registered new type: ${typeDef.name}`);
+      }
+    }
+  }
+
+  // Spawn entities via ObjectManager
+  if (plan?.entities && Array.isArray(plan.entities)) {
+    for (const entitySpec of plan.entities) {
+      const typeIdRaw = entitySpec?.type;
+      if (!typeIdRaw || typeof typeIdRaw !== "string") continue;
+
+      const typeId = resolveObjectTypeId(typeIdRaw) ?? autoDefineMissingType(typeIdRaw);
+      if (!typeId) {
+        console.warn(`[Steward] Unknown type: ${typeIdRaw}, skipping`);
+        continue;
+      }
+      const typeDef = worldSchema.getObjectType(typeId);
+
+      if (!typeDef) {
+        console.warn(`[Steward] Unknown type: ${typeId}, skipping`);
+        continue;
+      }
+
+      const eid = objectManager.spawn(typeId, {
+        containedIn: roomEid,
+        state: entitySpec.state,
+        properties: entitySpec.properties,
+      });
+
+      if (eid !== null) {
+        result.entityIds.push(eid);
+      }
+    }
+  }
+
+  // Create ambient stimulus sources (room-level stimuli)
+  if (plan?.ambientStimuli && Array.isArray(plan.ambientStimuli)) {
+    for (const ambientStim of plan.ambientStimuli) {
+      const template = ambientStim?.template;
+      const type = ambientStim?.type;
+      if (!template || typeof template !== "string" || !type || typeof type !== "string") continue;
+
+      const eid = objectManager.spawnCustom({
+        name: `ambient_${type}_${Date.now()}`,
+        description: template,
+        traits: ["ambient", "stimulus_source"],
+        containedIn: roomEid,
+      });
+      result.ambientEntityIds.push(eid);
+    }
+  }
+
+  // Ensure grounded affordance substrate for basic needs (deterministic fallback)
+  if (shouldEnsureFood(request.roomType)) {
+    const hasEdible = result.entityIds.some(eid => {
+      if (!hasComponent(world, eid, Traits)) return false;
+      return parseTraitsJson(Traits.active[eid]).includes("edible");
+    });
+
+    if (!hasEdible) {
+      const foodEid = objectManager.spawn("food_item", {
+        containedIn: roomEid,
+        state: "fresh",
+        properties: { foodType: defaultFoodTypeForRoom(request.roomType), adjective: "fresh" },
+      });
+      if (foodEid !== null) {
+        result.entityIds.push(foodEid);
+      }
+    }
+  }
+
+  // Track in steward state (IDs for schema-spawned entities)
+  stewardState.roomInventory.set(request.roomName, result.entityIds.map(e => `eid_${e}`));
+  stewardState.completedSchemaRooms.push(result);
+
+  // Remove from pending
+  stewardState.pendingRequests = stewardState.pendingRequests.filter(r => r.id !== request.id);
+
+  return result;
+}
+
 // =============================================================================
 // MAIN CYCLE
 // =============================================================================
+
+function findRoomEidByName(world: any, roomName: string): number | undefined {
+  const rooms = Array.from(query(world, [Room]));
+  for (const roomEid of rooms) {
+    if (Name.value[roomEid] === roomName) return roomEid;
+  }
+  const needle = roomName.trim().toLowerCase();
+  if (!needle) return undefined;
+  for (const roomEid of rooms) {
+    if ((Name.value[roomEid] || "").trim().toLowerCase() === needle) return roomEid;
+  }
+  return undefined;
+}
 
 /**
  * Run The Steward's main cycle
  */
 export async function runStewardCycle(
+  world: any,
   registry: SpiritRegistry
 ): Promise<{
   roomsPopulated: number;
@@ -837,10 +1026,16 @@ export async function runStewardCycle(
 
   // Process pending room requests
   for (const request of [...stewardState.pendingRequests]) {
-    const populatedRoom = await generateRoomPopulation(request);
-    if (populatedRoom) {
+    const roomEid = findRoomEidByName(world, request.roomName);
+    if (roomEid === undefined) {
+      console.warn(`[Steward] Room entity not found for '${request.roomName}', skipping population`);
+      continue;
+    }
+
+    const populated = await populateRoomViaSchema(world, request, roomEid);
+    if (populated) {
       roomsPopulated++;
-      entitiesGenerated += populatedRoom.entities.length;
+      entitiesGenerated += populated.entityIds.length + populated.ambientEntityIds.length;
     }
   }
 
@@ -922,6 +1117,7 @@ export function getStewardSummary(): string {
     "=== The Steward Status ===",
     `Pending requests: ${stewardState.pendingRequests.length}`,
     `Completed rooms: ${stewardState.completedRooms.length}`,
+    `Schema-populated rooms: ${stewardState.completedSchemaRooms.length}`,
     `System requests: ${stewardState.systemRequests.length}`,
     `Rooms tracked: ${stewardState.roomInventory.size}`,
   ];

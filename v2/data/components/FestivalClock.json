@@ -1,0 +1,8 @@
+{
+  "name": "FestivalClock",
+  "description": "Global clock for the festival.",
+  "properties": {
+    "currentTick": "number",
+    "nextEventTick": "number"
+  }
+}

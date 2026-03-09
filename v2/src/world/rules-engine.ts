@@ -11,7 +11,7 @@
  * Rules execute REAL effects that modify component data.
  */
 
-import { query, hasComponent, addComponent, removeComponent } from "bitecs";
+import { query, hasComponent, addComponent, removeComponent, getRelationTargets } from "bitecs";
 import {
   ObjectType,
   ObjectState,
@@ -26,10 +26,10 @@ import {
   RuleDefinition,
   RuleCondition,
   RuleEffect,
-  ContainedIn,
   EffectDefinition,
 } from "./schema";
 import { ObjectManager } from "./object-manager";
+import { LocatedIn } from "../ecs/relations";
 import {
   getDynamicComponent,
   getDynamicComponentValue,
@@ -316,8 +316,19 @@ export class RulesEngine {
           this.effectTransitionState(targetEid, effect.params);
           break;
 
+        case "set_state": {
+          // Common alias produced by LLMs (matches EffectDefinition naming).
+          const state = effect.params?.state ?? effect.params?.newState;
+          this.effectTransitionState(targetEid, { ...(effect.params || {}), state });
+          break;
+        }
+
         case "modify_value":
           this.effectModifyValue(targetEid, effect.params);
+          break;
+
+        case "emit_stimulus":
+          this.effectEmitStimulus(sourceEid, targetEid, effect);
           break;
 
         case "emit_event":
@@ -374,9 +385,12 @@ export class RulesEngine {
     sourceEid: number,
     queryDef?: RuleEffect["query"]
   ): number[] {
+    // Canonical proximity should never "go blind" due to grid/room drift.
+    // We always include containment-based proximity (same direct container),
+    // and *also* include GridPosition-based proximity when available.
+    const nearby = new Set<number>(this.queryInSameContainer(sourceEid, queryDef));
     if (!hasComponent(this.world, sourceEid, GridPosition)) {
-      // If no position, try containment-based proximity
-      return this.queryInSameContainer(sourceEid, queryDef);
+      return Array.from(nearby);
     }
 
     const sourceX = GridPosition.x[sourceEid];
@@ -385,7 +399,7 @@ export class RulesEngine {
 
     // Get all entities with positions
     const allEntities = query(this.world, [GridPosition, ObjectType]);
-    const nearby: number[] = [];
+    const gridNearby: number[] = [];
 
     for (const eid of allEntities) {
       if (eid === sourceEid) continue;
@@ -410,11 +424,12 @@ export class RulesEngine {
           }
         }
 
-        nearby.push(eid);
+        gridNearby.push(eid);
       }
     }
 
-    return nearby;
+    for (const eid of gridNearby) nearby.add(eid);
+    return Array.from(nearby);
   }
 
   /**
@@ -424,15 +439,17 @@ export class RulesEngine {
     sourceEid: number,
     queryDef?: RuleEffect["query"]
   ): number[] {
-    // Find what container the source is in
-    // This is simplified - would need proper relation query
-    const allEntities = query(this.world, [ObjectType]);
+    // Direct-container proximity: entities directly LocatedIn the same container.
+    // This intentionally does NOT traverse nested containers.
+    const sourceContainer = getRelationTargets(this.world, sourceEid, LocatedIn)[0];
+    if (sourceContainer === undefined) return [];
+
+    const candidates = Array.from(query(this.world, [LocatedIn(sourceContainer), ObjectType]));
     const nearby: number[] = [];
 
-    for (const eid of allEntities) {
+    for (const eid of candidates) {
       if (eid === sourceEid) continue;
 
-      // Check trait requirements
       if (queryDef?.has || queryDef?.not) {
         const traits = this.objectManager.getTraits(eid);
 
@@ -467,6 +484,13 @@ export class RulesEngine {
 
   private effectTransitionState(eid: number, params: Record<string, any> | undefined): void {
     if (!params?.state) return;
+    const typeId = ObjectType.typeId[eid];
+    const typeDef = typeId ? worldSchema.getObjectType(typeId) : undefined;
+    // Avoid noisy invalid-transition spam from LLM-authored rules: if the state isn't defined
+    // for this type, treat it as a no-op at the rules layer.
+    if (typeDef && !typeDef.states[params.state]) {
+      return;
+    }
     this.objectManager.transitionState(eid, params.state, "rule");
   }
 
@@ -508,10 +532,11 @@ export class RulesEngine {
     params: Record<string, any> | undefined,
     context: RuleContext
   ): void {
-    if (!params?.event) return;
+    const eventType = params?.event || params?.type;
+    if (!eventType) return;
 
     const event: RuleEvent = {
-      type: params.event,
+      type: eventType,
       timestamp: context.tick,
     };
 
@@ -520,9 +545,32 @@ export class RulesEngine {
       event.data = {
         entityInfo: this.objectManager.getInfo(eid),
       };
+    } else if (params && typeof params === "object") {
+      // If not including entityInfo, still pass through any extra data so downstream
+      // systems (and new rules) can react deterministically.
+      const { event: _event, type: _type, includeEntity: _includeEntity, ...rest } = params as any;
+      if (Object.keys(rest).length > 0) event.data = rest;
     }
 
     this.pendingEvents.push(event);
+  }
+
+  private effectEmitStimulus(sourceEid: number, targetEid: number, effect: RuleEffect): void {
+    const params = effect.params || {};
+    const stimulusType = params.stimulusType || params.type || "event";
+    const stimulusContent = params.stimulusContent || params.content || "";
+    const stimulusRadius = params.stimulusRadius || params.radius;
+
+    const mapped: EffectDefinition = {
+      type: "emit_stimulus",
+      target: effect.target === "nearby" ? "nearby" : "target",
+      stimulusType,
+      stimulusContent,
+      stimulusRadius,
+    };
+
+    const ctx = this.createEffectContext(sourceEid, targetEid);
+    executeEffect(mapped, ctx);
   }
 
   private effectSpawn(

@@ -22,6 +22,7 @@ import {
   getSystem,
   activateSystem,
   deactivateSystem,
+  getSystemTelemetrySnapshot,
 } from "../ecs/dynamic-systems";
 import type { SpiritRegistry } from "./spirit-registry";
 import { reportToSuperior } from "./spirit-registry";
@@ -57,6 +58,9 @@ export interface SystemDiagnosis {
     lastRun: number;
     frequency: number;
     active: boolean;
+    lastDurationMs?: number;
+    totalEmits?: number;
+    totalLogs?: number;
   };
   recommendation: "none" | "monitor" | "repair" | "disable" | "investigate";
 }
@@ -163,17 +167,18 @@ export function inspectSystem(
   const system = getSystem(systemRegistry, systemName);
   if (!system) return null;
 
-  const errorLog = getSystemErrorLog(systemName);
+  const telemetry = getSystemTelemetrySnapshot().find(t => t.systemName === systemName);
+  const errorCount = systemRegistry.errorCounts.get(systemName) || 0;
+  const now = Date.now();
+  const recentErrors = systemRegistry.errors
+    .filter(e => e.systemName === systemName && now - e.timestamp < 300000); // last 5 min
   const issues: SystemIssue[] = [];
   let status: SystemDiagnosis["status"] = "healthy";
 
-  const now = Date.now();
   const timeSinceLastRun = now - (system.lastRun || 0);
 
   // Check for errors
-  if (errorLog && errorLog.totalErrors > 0) {
-    const recentErrors = errorLog.errors.filter(e => now - e.timestamp < 300000); // Last 5 min
-
+  if (errorCount > 0) {
     if (recentErrors.length > 10) {
       issues.push({
         type: "error",
@@ -221,6 +226,29 @@ export function inspectSystem(
     });
   }
 
+  // Check for systems that appear to do nothing observable (no emits/logs) despite running repeatedly.
+  // This is a heuristic: some silent systems may still mutate state. Treat as low severity unless paired with other issues.
+  if (system.active && telemetry && telemetry.runs >= 10 && telemetry.totalEmits + telemetry.totalLogs === 0) {
+    issues.push({
+      type: "logic",
+      severity: "low",
+      description: `System has run ${telemetry.runs} times with no observable emits/logs`,
+      suggestedFix: "Consider adding ctx.emit() instrumentation or validate that the system actually mutates state",
+      autoFixable: false,
+    });
+  }
+
+  if (system.active && telemetry && telemetry.lastDurationMs > 50) {
+    issues.push({
+      type: "performance",
+      severity: telemetry.lastDurationMs > 200 ? "high" : "medium",
+      description: `System last run took ${telemetry.lastDurationMs}ms`,
+      suggestedFix: "Reduce per-tick work (query less, early-exit, cache lookups)",
+      autoFixable: false,
+    });
+    if (status === "healthy") status = "warning";
+  }
+
   // Check for systems with no compiled function
   if (!system.compiledFn && !system.code) {
     issues.push({
@@ -248,11 +276,14 @@ export function inspectSystem(
     status,
     issues,
     metrics: {
-      executionCount: systemRegistry.systems.get(systemName)?.lastRun ? 1 : 0, // Simplified
-      errorCount: errorLog?.totalErrors || 0,
+      executionCount: telemetry?.runs || 0,
+      errorCount,
       lastRun: system.lastRun,
       frequency: system.frequency,
       active: system.active,
+      lastDurationMs: telemetry?.lastDurationMs,
+      totalEmits: telemetry?.totalEmits,
+      totalLogs: telemetry?.totalLogs,
     },
     recommendation,
   };
@@ -628,7 +659,7 @@ export function analyzeSystemComplexity(
     // Good patterns - signs of proper ECS usage
     hasStateReads: /\w+\.\w+\[eid\]/.test(code) && !/Name\.value\[eid\]/.test(code.replace(/Name\.value\[eid\]/g, '')),
     hasStateWrites: /\w+\.\w+\[eid\]\s*=/.test(code) && !/ctx\.emit/.test(code.split(/\w+\.\w+\[eid\]\s*=/)[0]),
-    usesRelations: /getRelationTargets|OccupiesRoom|Knows|Contains|HasMemory|HasGoal/.test(code),
+    usesRelations: /getRelationTargets|LocatedIn|Knows|HasMemory|HasGoal|ctx\.location\./.test(code),
     hasConditionalLogic: /if\s*\(.*\w+\.\w+\[/.test(code),  // if statement using component data
     hasMultipleFactors: (code.match(/\w+\.\w+\[eid\]/g) || []).length >= 3,
     emitsEvents: /ctx\.emit\(/.test(code),
@@ -662,8 +693,8 @@ export function analyzeSystemComplexity(
     score += 15;
     improvements.push("Good use of relations for spatial/social awareness");
   } else if (code.includes("Room") || code.includes("room")) {
-    issues.push("System references rooms but doesn't use OccupiesRoom relation");
-    improvements.push("Use ctx.getRelationTargets(world, eid, OccupiesRoom) instead of Room component");
+    issues.push("System references rooms but doesn't use the canonical location model");
+    improvements.push("Use ctx.location.getRoomForEntity(world, eid) (or LocatedIn + listDirectContents) instead of Room component fields");
   }
 
   if (patterns.hasConditionalLogic) {
@@ -765,7 +796,7 @@ export function generateImprovementPrompt(analysis: ComplexityAnalysis): string 
     "The improved system MUST:",
     "1. Read multiple component values to make decisions",
     "2. Write new values to components (actual state mutation)",
-    "3. Use relations correctly (OccupiesRoom, Knows, etc.)",
+    "3. Use the canonical location model (LocatedIn + ctx.location helpers)",
     "4. Handle edge cases (null checks, bounds clamping)",
     "5. NOT just emit text - must transform ECS state",
   ];
@@ -925,6 +956,13 @@ export async function runArtificerWithTools(
 
   // Get current system state for context
   const systemHealth = getSystemHealthSummary(systemRegistry);
+  const telemetry = getSystemTelemetrySnapshot();
+  const slowest = [...telemetry]
+    .sort((a, b) => (b.lastDurationMs || 0) - (a.lastDurationMs || 0))
+    .slice(0, 5);
+  const silent = telemetry
+    .filter(t => t.runs >= 10 && t.totalEmits + t.totalLogs === 0)
+    .slice(0, 8);
   const recentEvents = getRecentEvents(10).filter(e =>
     e.type.includes("system") || e.type.includes("error")
   );
@@ -936,10 +974,16 @@ Your job is to:
 2. Repair broken systems
 3. Adjust system frequencies if needed
 4. Disable critically broken systems
-5. Report issues you can't fix to GodAI
+5. Evaluate EFFECTIVENESS (not just errors): look for systems that run but don't seem to change anything meaningful
+6. Report issues you can't fix to GodAI
 
 Current System Health:
 ${systemHealth}
+
+Runtime Telemetry (heuristics, for effectiveness/performance):
+${slowest.length > 0 ? `Slowest last-run systems:\n${slowest.map(s => `- ${s.systemName}: last=${s.lastDurationMs}ms runs=${s.runs} emits=${s.totalEmits} logs=${s.totalLogs}`).join("\n")}` : "No telemetry yet"}
+
+${silent.length > 0 ? `\nSystems that appear 'silent' (runs>=10, emits+logs=0):\n${silent.map(s => `- ${s.systemName}: runs=${s.runs}`).join("\n")}` : ""}
 
 Recent Events:
 ${recentEvents.map(e => `- ${e.type}: ${JSON.stringify(e.data || {})}`).join("\n") || "No recent system events"}

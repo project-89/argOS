@@ -2,11 +2,22 @@
  * Dashboard panel - Force graph visualization with simulation controls
  */
 
-import { Play, Wand2, X, ChevronUp } from "lucide-react";
+import {
+  Play,
+  Wand2,
+  X,
+  ChevronUp,
+  Sparkles,
+  Ghost,
+  Users,
+  MapPin,
+  Cpu,
+  BookOpenText,
+} from "lucide-react";
 import { useSimulationStore } from "../../store/simulation";
 import { useSimulationBusContext } from "../../contexts/SimulationBusContext";
 import { ForceGraphView } from "./ForceGraphView";
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 // Simulation preset definitions
 const SIMULATION_PRESETS = [
@@ -91,17 +102,345 @@ The victim was found in the library. Everyone is a suspect.`,
   },
 ];
 
+type LiveFeedItem = {
+  id: string;
+  title: string;
+  body: string;
+  meta?: string;
+  timestamp?: number;
+  onOpen?: () => void;
+};
+
 export function Dashboard() {
-  const { agentCount, roomCount } = useSimulationStore();
-  const { sendGodCommand } = useSimulationBusContext();
+  const {
+    agentCount,
+    entityCount,
+    roomCount,
+    systemCount,
+    spiritCount,
+    daemonCount,
+    simulationStatus,
+    spiritEvents,
+    systemLogs,
+    agentEvents,
+    roomEvents,
+    daemonEvents,
+    daemons,
+    setActivePanel,
+    setSelectedAgent,
+    setSelectedRoom,
+    setSelectedSystem,
+    setSelectedSpirit,
+    setSelectedDaemon,
+  } = useSimulationStore();
+  const { sendGodCommand, inject } = useSimulationBusContext();
   const [loadingPreset, setLoadingPreset] = useState<string | null>(null);
   const [showPresets, setShowPresets] = useState(true);
 
   const isEmptySimulation = agentCount === 0 && roomCount === 0;
 
+  const spiritFeed = useMemo<LiveFeedItem[]>(() => {
+    const items: LiveFeedItem[] = [];
+    for (const event of spiritEvents) {
+      const data = event as any;
+      if (event.type === "spirit:observe") {
+        const spiritName = data.spiritName || "Spirit";
+        items.push({
+          id: `spirit-observe-${event.timestamp}-${spiritName}`,
+          title: `${spiritName} observed`,
+          body: data.observation || data.content || "Observation recorded.",
+          meta: Array.isArray(data.recommendations) && data.recommendations.length > 0
+            ? `${data.recommendations.length} recommendations`
+            : undefined,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            setSelectedSpirit(spiritName);
+            setActivePanel("spirits");
+          },
+        });
+      } else if (event.type === "spirit:message") {
+        const messageType = String(data.messageType || "message").replace(/_/g, " ");
+        const spiritName =
+          data.spiritName ||
+          data.spirit ||
+          (data.messageType === "story" ? "The Narrator" : "Spirit");
+        items.push({
+          id: `spirit-message-${event.timestamp}-${spiritName}-${messageType}`,
+          title:
+            data.messageType === "story"
+              ? `${spiritName} narrative beat`
+              : `${spiritName} ${messageType}`,
+          body: data.content || data.subject || "Message delivered.",
+          meta: data.priority ? `priority: ${data.priority}` : undefined,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            if (spiritName) {
+              setSelectedSpirit(spiritName);
+            }
+            setActivePanel("spirits");
+          },
+        });
+      } else if (event.type === "spirit:intervention") {
+        const spiritName = data.spiritName || "Spirit";
+        const action = data.action ? String(data.action).replace(/_/g, " ") : "intervened";
+        items.push({
+          id: `spirit-intervention-${event.timestamp}-${spiritName}`,
+          title: `${spiritName} ${action}`,
+          body: data.reason || "Intervention recorded.",
+          meta: data.target ? `target: ${data.target}` : undefined,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            setSelectedSpirit(spiritName);
+            setActivePanel("spirits");
+          },
+        });
+      }
+      if (items.length >= 8) break;
+    }
+    return items;
+  }, [spiritEvents, setActivePanel, setSelectedSpirit]);
+
+  const daemonNarrativeFeed = useMemo<LiveFeedItem[]>(() => {
+    const items: LiveFeedItem[] = [];
+    const daemonStories = [...daemons]
+      .filter((daemon) => Boolean(daemon.latestPovStory))
+      .sort(
+        (a, b) =>
+          Math.max(b.lastReport, b.lastObservation, b.lastWhisper) -
+          Math.max(a.lastReport, a.lastObservation, a.lastWhisper)
+      );
+
+    for (const daemon of daemonStories.slice(0, 4)) {
+      items.push({
+        id: `daemon-story-${daemon.agentEid}`,
+        title: `${daemon.agentName} POV`,
+        body: daemon.latestPovStory || "Narrative pending",
+        meta: daemon.arcStatus
+          ? `arc: ${daemon.arcStatus}${daemon.arcTension !== undefined ? ` (${Math.round(daemon.arcTension * 100)}% tension)` : ""}`
+          : undefined,
+        timestamp: Math.max(daemon.lastReport, daemon.lastObservation, daemon.lastWhisper),
+        onOpen: () => {
+          setSelectedDaemon(daemon.agentName);
+          setActivePanel("daemons");
+        },
+      });
+    }
+
+    for (const event of daemonEvents) {
+      const data = event as any;
+      if (event.type === "daemon:observe") {
+        items.push({
+          id: `daemon-observe-${event.timestamp}-${data.agentName || "daemon"}`,
+          title: `${data.agentName || "Daemon"} observed`,
+          body: data.observation || "Observation logged.",
+          timestamp: event.timestamp,
+          onOpen: () => {
+            if (data.agentName) {
+              setSelectedDaemon(data.agentName);
+            }
+            setActivePanel("daemons");
+          },
+        });
+      } else if (event.type === "daemon:whisper") {
+        items.push({
+          id: `daemon-whisper-${event.timestamp}-${data.agentName || "daemon"}`,
+          title: `${data.agentName || "Daemon"} whisper`,
+          body: data.content || "Whisper delivered.",
+          meta: data.whisperType ? String(data.whisperType).replace(/_/g, " ") : undefined,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            if (data.agentName) {
+              setSelectedDaemon(data.agentName);
+            }
+            setActivePanel("daemons");
+          },
+        });
+      } else if (event.type === "daemon:report") {
+        items.push({
+          id: `daemon-report-${event.timestamp}-${data.agentName || "daemon"}`,
+          title: `${data.agentName || "Daemon"} report`,
+          body: data.summary || data.subject || "Report filed.",
+          meta: data.urgency ? `urgency: ${data.urgency}` : undefined,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            if (data.agentName) {
+              setSelectedDaemon(data.agentName);
+            }
+            setActivePanel("daemons");
+          },
+        });
+      } else if (event.type === "daemon:nudge") {
+        items.push({
+          id: `daemon-nudge-${event.timestamp}-${data.agentName || "daemon"}`,
+          title: `${data.agentName || "Daemon"} nudge`,
+          body: data.action || data.reason || "Nudge dispatched.",
+          meta: data.nudgeType ? String(data.nudgeType).replace(/_/g, " ") : undefined,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            if (data.agentName) {
+              setSelectedDaemon(data.agentName);
+            }
+            setActivePanel("daemons");
+          },
+        });
+      }
+      if (items.length >= 8) break;
+    }
+
+    return items
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+      .slice(0, 8);
+  }, [daemons, daemonEvents, setActivePanel, setSelectedDaemon]);
+
+  const npcActionFeed = useMemo<LiveFeedItem[]>(() => {
+    const items: LiveFeedItem[] = [];
+    for (const event of agentEvents) {
+      const data = event as any;
+      if (event.type === "agent:action") {
+        const agentName = data.agentName || "Agent";
+        const action = String(data.action || "acted").replace(/_/g, " ");
+        items.push({
+          id: `agent-action-${event.timestamp}-${agentName}-${action}`,
+          title: `${agentName} ${action}`,
+          body:
+            data.content ||
+            data.result ||
+            (data.target ? `Target: ${data.target}` : "Action executed."),
+          meta:
+            typeof data.action === "string" && data.action.includes("move")
+              ? "movement"
+              : data.target
+              ? `target: ${data.target}`
+              : undefined,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            setSelectedAgent(agentName);
+            setActivePanel("agents");
+          },
+        });
+      } else if (event.type === "agent:think") {
+        const agentName = data.agentName || "Agent";
+        items.push({
+          id: `agent-think-${event.timestamp}-${agentName}`,
+          title: `${agentName} thought`,
+          body: data.thought || "Thought logged.",
+          meta: data.thoughtType ? String(data.thoughtType) : undefined,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            setSelectedAgent(agentName);
+            setActivePanel("agents");
+          },
+        });
+      } else if (event.type === "agent:emotion") {
+        const agentName = data.agentName || "Agent";
+        const intensity =
+          typeof data.intensity === "number"
+            ? `${Math.round(data.intensity * 100)}%`
+            : undefined;
+        items.push({
+          id: `agent-emotion-${event.timestamp}-${agentName}`,
+          title: `${agentName} emotion shift`,
+          body: data.emotion ? `${data.emotion}` : "Emotion updated.",
+          meta: intensity,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            setSelectedAgent(agentName);
+            setActivePanel("agents");
+          },
+        });
+      }
+      if (items.length >= 8) break;
+    }
+    return items;
+  }, [agentEvents, setActivePanel, setSelectedAgent]);
+
+  const roomFeed = useMemo<LiveFeedItem[]>(() => {
+    const items: LiveFeedItem[] = [];
+    for (const event of roomEvents) {
+      const data = event as any;
+      if (event.type === "room:activity") {
+        const roomName = data.roomName || "Room";
+        const activityType = data.activityType
+          ? String(data.activityType).replace(/_/g, " ")
+          : "activity";
+        items.push({
+          id: `room-activity-${event.timestamp}-${roomName}-${activityType}`,
+          title: `${roomName} ${activityType}`,
+          body: data.content || "Room activity detected.",
+          meta: data.actor ? `actor: ${data.actor}` : undefined,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            setSelectedRoom(roomName);
+            setActivePanel("rooms");
+          },
+        });
+      } else if (event.type === "room:state") {
+        const roomName = data.roomName || "Room";
+        const occupants = Array.isArray(data.occupants) ? data.occupants.length : 0;
+        items.push({
+          id: `room-state-${event.timestamp}-${roomName}`,
+          title: `${roomName} state`,
+          body: data.ambience || "State snapshot updated.",
+          meta: `${occupants} occupants`,
+          timestamp: event.timestamp,
+          onOpen: () => {
+            setSelectedRoom(roomName);
+            setActivePanel("rooms");
+          },
+        });
+      }
+      if (items.length >= 8) break;
+    }
+    return items;
+  }, [roomEvents, setActivePanel, setSelectedRoom]);
+
+  const systemFeed = useMemo<LiveFeedItem[]>(() => {
+    const latestLogs: Array<{
+      systemName: string;
+      log: {
+        id: string;
+        timestamp: number;
+        type: "created" | "executed" | "error" | "log";
+        message: string;
+        duration?: number;
+        entitiesProcessed?: number;
+        tick?: number;
+      };
+    }> = [];
+
+    for (const [systemName, logs] of Object.entries(systemLogs)) {
+      for (const log of logs.slice(0, 4)) {
+        latestLogs.push({ systemName, log });
+      }
+    }
+
+    latestLogs.sort((a, b) => b.log.timestamp - a.log.timestamp);
+
+    return latestLogs.slice(0, 8).map(({ systemName, log }) => ({
+      id: log.id,
+      title: `${systemName} ${log.type}`,
+      body: log.message || "System event recorded.",
+      meta:
+        log.duration !== undefined
+          ? `${log.duration.toFixed(1)}ms`
+          : log.entitiesProcessed !== undefined
+          ? `${log.entitiesProcessed} entities`
+          : log.tick !== undefined
+          ? `tick ${log.tick}`
+          : undefined,
+      timestamp: log.timestamp,
+      onOpen: () => {
+        setSelectedSystem(systemName);
+        setActivePanel("systems");
+      },
+    }));
+  }, [systemLogs, setActivePanel, setSelectedSystem]);
+
   const handlePresetClick = (preset: (typeof SIMULATION_PRESETS)[number]) => {
     setLoadingPreset(preset.id);
     sendGodCommand(preset.command);
+    // Ensure the dev server unpauses so the deterministic ECS substrate runs
+    inject({ type: "inject:simulation_resume" });
     // Hide presets after starting
     setTimeout(() => {
       setShowPresets(false);
@@ -169,9 +508,73 @@ export function Dashboard() {
 
       {/* Stats overlay when simulation is running - pointer-events-none to not block graph */}
       {!isEmptySimulation && (
-        <div className="absolute top-4 left-4 flex gap-2 z-10 pointer-events-none">
+        <div className="absolute top-4 left-4 flex flex-wrap gap-2 max-w-[60vw] z-10 pointer-events-none">
           <StatBadge label="Agents" value={agentCount} color="agent" />
+          <StatBadge label="Entities" value={entityCount} color="system" />
           <StatBadge label="Rooms" value={roomCount} color="room" />
+          <StatBadge label="Systems" value={systemCount} color="system" />
+          <StatBadge label="Spirits" value={spiritCount} color="spirit" />
+          <StatBadge label="Daemons" value={daemonCount} color="daemon" />
+          <SimulationStatusBadge status={simulationStatus} />
+        </div>
+      )}
+
+      {/* Live simulation streams */}
+      {!isEmptySimulation && (
+        <div className="absolute top-4 right-4 bottom-4 w-[24rem] z-10 pointer-events-none hidden xl:block">
+          <div className="h-full overflow-y-auto pr-1 space-y-3 pointer-events-auto">
+            <LiveFeedCard
+              title="Spirit Cognition"
+              icon={<Sparkles className="w-4 h-4 text-argos-spirit" />}
+              count={spiritEvents.length}
+              onOpenPanel={() => setActivePanel("spirits")}
+              items={spiritFeed}
+              emptyMessage="No spirit events yet."
+            />
+            <LiveFeedCard
+              title="Daemon Narratives"
+              icon={<Ghost className="w-4 h-4 text-argos-agent" />}
+              count={daemonEvents.length}
+              onOpenPanel={() => setActivePanel("daemons")}
+              items={daemonNarrativeFeed}
+              emptyMessage="Daemon POV and reports will appear here."
+            />
+            <LiveFeedCard
+              title="NPC Actions"
+              icon={<Users className="w-4 h-4 text-argos-agent" />}
+              count={agentEvents.length}
+              onOpenPanel={() => setActivePanel("agents")}
+              items={npcActionFeed}
+              emptyMessage="Agent actions and thoughts will stream here."
+            />
+            <LiveFeedCard
+              title="Room Streams"
+              icon={<MapPin className="w-4 h-4 text-argos-world" />}
+              count={roomEvents.length}
+              onOpenPanel={() => setActivePanel("rooms")}
+              items={roomFeed}
+              emptyMessage="Room activity has not started yet."
+            />
+            <LiveFeedCard
+              title="System Runtime"
+              icon={<Cpu className="w-4 h-4 text-argos-system" />}
+              count={Object.keys(systemLogs).length}
+              onOpenPanel={() => setActivePanel("systems")}
+              items={systemFeed}
+              emptyMessage="System logs will appear here when systems execute."
+            />
+            <div className="panel bg-argos-bg-secondary/95 backdrop-blur-sm border-argos-border/80">
+              <div className="panel-content p-3">
+                <button
+                  onClick={() => setActivePanel("timeline")}
+                  className="w-full text-xs font-semibold uppercase tracking-wide text-argos-text-secondary hover:text-argos-text-primary transition-colors flex items-center justify-center gap-2"
+                >
+                  <BookOpenText className="w-4 h-4" />
+                  Open Full Timeline
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -186,12 +589,14 @@ function StatBadge({
 }: {
   label: string;
   value: number;
-  color: "agent" | "room" | "system";
+  color: "agent" | "room" | "system" | "spirit" | "daemon";
 }) {
   const colorClasses = {
     agent: "bg-argos-agent/20 text-argos-agent border-argos-agent/30",
     room: "bg-argos-world/20 text-argos-world border-argos-world/30",
     system: "bg-argos-system/20 text-argos-system border-argos-system/30",
+    spirit: "bg-argos-spirit/20 text-argos-spirit border-argos-spirit/30",
+    daemon: "bg-argos-agent/20 text-argos-agent-light border-argos-agent/30",
   };
 
   return (
@@ -202,6 +607,111 @@ function StatBadge({
       <span className="font-semibold">{value}</span>
     </div>
   );
+}
+
+function SimulationStatusBadge({ status }: { status: "running" | "paused" | "stopped" }) {
+  const colorClasses = {
+    running: "bg-green-500/20 text-green-400 border-green-500/30",
+    paused: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+    stopped: "bg-argos-bg-secondary/80 text-argos-text-muted border-argos-border",
+  };
+
+  return (
+    <div className={`px-3 py-1.5 rounded-lg border backdrop-blur-sm ${colorClasses[status]}`}>
+      <span className="text-xs uppercase tracking-wide font-semibold">{status}</span>
+    </div>
+  );
+}
+
+function LiveFeedCard({
+  title,
+  icon,
+  items,
+  emptyMessage,
+  count,
+  onOpenPanel,
+}: {
+  title: string;
+  icon: ReactNode;
+  items: LiveFeedItem[];
+  emptyMessage: string;
+  count: number;
+  onOpenPanel?: () => void;
+}) {
+  return (
+    <div className="panel bg-argos-bg-secondary/95 backdrop-blur-sm border-argos-border/80 shadow-lg">
+      <div className="panel-header p-3">
+        <span className="panel-title flex items-center gap-2 !text-xs">
+          {icon}
+          {title}
+        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-argos-text-muted">{count}</span>
+          {onOpenPanel && (
+            <button
+              onClick={onOpenPanel}
+              className="text-[11px] uppercase tracking-wide text-argos-text-secondary hover:text-argos-text-primary transition-colors"
+            >
+              Open
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="panel-content p-3 space-y-2">
+        {items.length === 0 ? (
+          <p className="text-xs text-argos-text-muted italic">{emptyMessage}</p>
+        ) : (
+          items.slice(0, 4).map((item) => (
+            <LiveFeedRow key={item.id} item={item} />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LiveFeedRow({ item }: { item: LiveFeedItem }) {
+  if (item.onOpen) {
+    return (
+      <button
+        onClick={item.onOpen}
+        className="w-full text-left p-2 rounded-lg bg-argos-bg-tertiary/70 hover:bg-argos-bg-tertiary transition-colors border border-transparent hover:border-argos-border"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-xs font-medium text-argos-text-primary leading-tight">{item.title}</p>
+          {item.timestamp && (
+            <span className="text-[10px] text-argos-text-muted whitespace-nowrap">
+              {formatRelativeTime(item.timestamp)}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-argos-text-secondary mt-1 line-clamp-2 leading-relaxed">{item.body}</p>
+        {item.meta && <p className="text-[10px] text-argos-text-muted mt-1 uppercase tracking-wide">{item.meta}</p>}
+      </button>
+    );
+  }
+
+  return (
+    <div className="p-2 rounded-lg bg-argos-bg-tertiary/70">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-xs font-medium text-argos-text-primary leading-tight">{item.title}</p>
+        {item.timestamp && (
+          <span className="text-[10px] text-argos-text-muted whitespace-nowrap">
+            {formatRelativeTime(item.timestamp)}
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-argos-text-secondary mt-1 line-clamp-2 leading-relaxed">{item.body}</p>
+      {item.meta && <p className="text-[10px] text-argos-text-muted mt-1 uppercase tracking-wide">{item.meta}</p>}
+    </div>
+  );
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 3600)}h`;
 }
 
 // Preset card component

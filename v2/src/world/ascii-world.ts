@@ -1,7 +1,6 @@
 import type { World } from "../ecs/world";
-import { query, addEntity, addComponent, getRelationTargets } from "bitecs";
+import { query, addEntity, addComponent } from "bitecs";
 import { Name, GridPosition, Sprite, WorldMap, Agent, Room } from "../ecs/components";
-import { OccupiesRoom } from "../ecs/relations";
 
 export interface AsciiCell {
   char: string;

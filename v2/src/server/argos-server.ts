@@ -25,7 +25,7 @@ import {
   StimulusSource, Visual, Thought, Perception
 } from "../ecs/components";
 import { getDynamicComponentValues } from "../ecs/dynamic-components";
-import { OccupiesRoom } from "../ecs/relations";
+import { getRoomForEntity } from "../ecs/location";
 import { renderAsciiWorld } from "../world/ascii-world";
 import { getAgentKnowledge } from "../cognition/knowledge-graph";
 import { getAgentMemory, getAgentThoughts, getAgentPerceptions, getAgentConversation } from "../cognition/agent-mind";
@@ -158,7 +158,7 @@ interface ServerMessage {
 // SERVER
 // =============================================================================
 
-export function createArgosServer(port: number = 3000) {
+export function createArgosServer(port: number = 3456) {
   const app = express();
   const server = createServer(app);
   const wss = new WebSocketServer({ server });
@@ -867,8 +867,7 @@ Respond with JSON analysis of social dynamics and any interventions needed.`,
     for (const eid of agents) {
       if (!entityExists(world, eid)) continue;
 
-      const roomTargets = safeGetRelationTargets(world, eid, OccupiesRoom);
-      const roomEid = roomTargets[0];
+      const roomEid = getRoomForEntity(world, eid);
       const memory = getAgentMemory(world, eid);
       const knowledge = getAgentKnowledge(world, eid);
 
@@ -905,8 +904,7 @@ Respond with JSON analysis of social dynamics and any interventions needed.`,
     for (const eid of sources) {
       if (!entityExists(world, eid)) continue;
 
-      const roomTargets = safeGetRelationTargets(world, eid, OccupiesRoom);
-      const firstRoom = roomTargets[0];
+      const firstRoom = getRoomForEntity(world, eid);
       entities.push({
         id: eid,
         type: "stimulus_source",
@@ -928,8 +926,7 @@ Respond with JSON analysis of social dynamics and any interventions needed.`,
       const name = Name.value[eid];
       if (!name) continue;
 
-      const roomTargets = safeGetRelationTargets(world, eid, OccupiesRoom);
-      const firstRoom = roomTargets[0];
+      const firstRoom = getRoomForEntity(world, eid);
 
       // Get dynamic component data
       const dynamicData = getDynamicComponentValues(world, eid);
@@ -1051,6 +1048,6 @@ Respond with JSON analysis of social dynamics and any interventions needed.`,
 // In ESM, we check if this is the entry point by looking at the process args
 const isDirectRun = process.argv[1]?.includes('argos-server');
 if (isDirectRun) {
-  const server = createArgosServer(3000);
+  const server = createArgosServer(3456);
   server.start();
 }

@@ -46,7 +46,7 @@ export interface TaskQueueStats {
 const DEFAULT_CONFIG: TaskQueueConfig = {
   maxConcurrent: 3,
   processInterval: 100,
-  taskTimeout: 120000,  // 2 minutes
+  taskTimeout: 300000,  // 5 minutes (system baking can be slow)
 };
 
 // =============================================================================
@@ -345,10 +345,14 @@ async function runTask(task: AsyncTask): Promise<void> {
 
   } catch (error) {
     task.status = "failed";
-    task.error = error instanceof Error ? error.message : String(error);
+    task.error = error instanceof Error ? (error.stack || error.message) : String(error);
     task.completedAt = Date.now();
 
-    console.error(`[TaskQueue] Failed: ${task.name} (${task.id}):`, task.error);
+    if (error instanceof Error) {
+      console.error(`[TaskQueue] Failed: ${task.name} (${task.id})`, error);
+    } else {
+      console.error(`[TaskQueue] Failed: ${task.name} (${task.id}):`, task.error);
+    }
 
     // Call error callback
     if (task.onError) {

@@ -7,13 +7,13 @@ import { fileURLToPath } from "url";
 import type { World } from "../ecs/world";
 import type { SystemRegistry } from "../ecs/dynamic-systems";
 import type { GodAgentState } from "../god/god-agent";
-import { query, getRelationTargets, entityExists } from "bitecs";
+import { query, entityExists } from "bitecs";
 import { AllComponents, Name, Description, Agent, Mind, Room, Position, StimulusSource, Visual, Connection, GridPosition, Sprite, WorldMap } from "../ecs/components";
 import { PixiSprite, AnimatedSprite } from "../rendering/components";
 import { getCharacterRig, listCharacterRigs } from "../rendering/character-rig";
 import { SpriteRegistry } from "../rendering/sprite-registry";
 import { renderAsciiWorld } from "../world/ascii-world";
-import { AllRelations, OccupiesRoom } from "../ecs/relations";
+import { getRoomForEntity } from "../ecs/location";
 import { getAgentKnowledge, getKnowledgeSummary } from "../cognition/knowledge-graph";
 import { getAgentMemory } from "../cognition/agent-mind";
 import { listSystems } from "../ecs/dynamic-systems";
@@ -58,7 +58,7 @@ export interface ServerMessage {
   timestamp: number;
 }
 
-export function createSimulationServer(port: number = 3000) {
+export function createSimulationServer(port: number = 3456) {
   const app = express();
   const server = createServer(app);
 
@@ -326,8 +326,7 @@ export function createSimulationServer(port: number = 3000) {
 
     const stimulusSources = Array.from(query(world, [StimulusSource]));
     for (const eid of stimulusSources) {
-      const roomTargets = getRelationTargets(world, eid, OccupiesRoom);
-      const roomEid = roomTargets[0];
+      const roomEid = getRoomForEntity(world, eid);
       entities.push({
         id: eid,
         type: "stimulus_source",
@@ -346,8 +345,7 @@ export function createSimulationServer(port: number = 3000) {
     }
 
     for (const eid of agents) {
-      const roomTargets = getRelationTargets(world, eid, OccupiesRoom);
-      const roomEid = roomTargets[0];
+      const roomEid = getRoomForEntity(world, eid);
       const memory = getAgentMemory(world, eid);
       const knowledge = getAgentKnowledge(world, eid);
 
@@ -414,8 +412,7 @@ export function createSimulationServer(port: number = 3000) {
       eid => !agents.includes(eid) && !rooms.includes(eid) && !stimulusSources.includes(eid)
     );
     for (const eid of mechanicalEntities) {
-      const roomTargets = getRelationTargets(world, eid, OccupiesRoom);
-      const roomEid = roomTargets[0];
+      const roomEid = getRoomForEntity(world, eid);
       entities.push({
         id: eid,
         type: "entity",
@@ -441,8 +438,7 @@ export function createSimulationServer(port: number = 3000) {
       .filter(eid => Name.value[eid] && !includedEids.has(eid) && entityExists(world, eid));
     
     for (const eid of allNamedEntities) {
-      const roomTargets = getRelationTargets(world, eid, OccupiesRoom);
-      const roomEid = roomTargets[0];
+      const roomEid = getRoomForEntity(world, eid);
       entities.push({
         id: eid,
         type: "object",

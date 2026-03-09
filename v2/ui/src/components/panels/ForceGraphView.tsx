@@ -14,7 +14,7 @@
  * - Navigate to full detail panels
  */
 
-import { useRef, useCallback, useState, useEffect, useMemo } from "react";
+import { useRef, useCallback, useState, useEffect, useMemo, type ReactNode } from "react";
 import ForceGraph2D, { type ForceGraphMethods, type NodeObject } from "react-force-graph-2d";
 import {
   X,
@@ -91,22 +91,12 @@ const COLORS = {
 
 // Force rebuild: v2
 export function ForceGraphView() {
-  // Log on every render with timestamp
-  console.log("[ForceGraphView] Rendering at", new Date().toISOString());
-
   const graphRef = useRef<ForceGraphMethods<NodeObject<GraphNode>> | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
-
-  // Track drag state to differentiate clicks from drags
-  const dragStateRef = useRef<{ isDragging: boolean; startX: number; startY: number }>({
-    isDragging: false,
-    startX: 0,
-    startY: 0,
-  });
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   // Stable graph data reference - mutated in place to avoid reinitialization
   const graphDataRef = useRef<GraphData>({ nodes: [], links: [] });
@@ -114,6 +104,7 @@ export function ForceGraphView() {
 
   const {
     agents,
+    entities,
     rooms,
     stimulusSources,
     spirits,
@@ -127,6 +118,7 @@ export function ForceGraphView() {
     roomEvents,
     setActivePanel,
     setSelectedAgent,
+    setSelectedEntity,
     setSelectedRoom,
     setSelectedSpirit,
   } = useSimulationStore();
@@ -282,6 +274,28 @@ export function ForceGraphView() {
       }
     });
 
+    // Add non-agent dynamic entities
+    entities.forEach((entity) => {
+      const nodeId = `entity-${entity.id}`;
+      upsertNode({
+        id: nodeId,
+        name: entity.name,
+        type: "entity",
+        description: entity.description || entity.type,
+        room: entity.room,
+        color: COLORS.entity,
+        size: 8,
+        entityId: entity.id,
+      });
+
+      if (entity.room) {
+        const roomNode = rooms.find((r) => r.name === entity.room);
+        if (roomNode) {
+          upsertLink(nodeId, `room-${roomNode.id}`, "connected", COLORS.link.connected);
+        }
+      }
+    });
+
     // Remove nodes that no longer exist
     data.nodes = data.nodes.filter((n) => newNodeIds.has(n.id));
 
@@ -294,54 +308,26 @@ export function ForceGraphView() {
 
     // Force component re-render without changing the data reference
     forceUpdate((n) => n + 1);
-  }, [agents, rooms, stimulusSources, spirits]);
+  }, [agents, entities, rooms, stimulusSources, spirits]);
 
-  // Get current graph data
+  // Keep selected node id valid when graph updates.
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    const exists = graphDataRef.current.nodes.some((node) => node.id === selectedNodeId);
+    if (!exists) setSelectedNodeId(null);
+  }, [selectedNodeId, tick, agents.length, entities.length, rooms.length, spirits.length, stimulusSources.length]);
+
   const graphData = graphDataRef.current;
+  const selectedNode = selectedNodeId
+    ? graphData.nodes.find((node) => node.id === selectedNodeId) ?? null
+    : null;
 
   // Handle node click - select node to show in sidebar
   // Using functional update to avoid stale closures (no deps = stable reference)
   const handleNodeClick = useCallback((node: GraphNode) => {
-    console.log("[ForceGraph] Node clicked:", node.type, node.name);
     // Toggle selection if clicking same node, using functional update
-    setSelectedNode((current) => (current?.id === node.id ? null : node));
+    setSelectedNodeId((current) => (current === node.id ? null : node.id));
   }, []);
-
-  // Track drag to differentiate clicks from drags
-  const handleNodeDrag = useCallback((node: any) => {
-    // Record first drag position
-    if (!dragStateRef.current.isDragging) {
-      dragStateRef.current = {
-        isDragging: true,
-        startX: node.x,
-        startY: node.y,
-      };
-    }
-  }, []);
-
-  // Handle drag end - if barely moved, treat as click
-  // Stable reference since handleNodeClick is now stable
-  const handleNodeDragEnd = useCallback(
-    (node: any) => {
-      const { isDragging, startX, startY } = dragStateRef.current;
-
-      if (isDragging) {
-        const dx = Math.abs(node.x - startX);
-        const dy = Math.abs(node.y - startY);
-        const dragDistance = Math.sqrt(dx * dx + dy * dy);
-
-        // If drag distance is very small (< 5 pixels), treat as click
-        if (dragDistance < 5) {
-          console.log("[ForceGraph] Short drag detected as click:", node.name, "distance:", dragDistance);
-          // Use functional update directly to avoid stale closure issues
-          setSelectedNode((current) => (current?.id === node.id ? null : node));
-        }
-      }
-
-      dragStateRef.current.isDragging = false;
-    },
-    []
-  );
 
   // Navigate to full detail panel for selected node
   const navigateToDetail = useCallback(() => {
@@ -351,6 +337,10 @@ export function ForceGraphView() {
       case "agent":
         setSelectedAgent(selectedNode.name);
         setActivePanel("agents");
+        break;
+      case "entity":
+        setSelectedEntity(selectedNode.name);
+        setActivePanel("entities");
         break;
       case "room":
         setSelectedRoom(selectedNode.name);
@@ -368,12 +358,11 @@ export function ForceGraphView() {
         setActivePanel("spirits");
         break;
     }
-  }, [selectedNode, setActivePanel, setSelectedAgent, setSelectedRoom, setSelectedSpirit]);
+  }, [selectedNode, setActivePanel, setSelectedAgent, setSelectedEntity, setSelectedRoom, setSelectedSpirit]);
 
   // Handle background click - deselect node
   const handleBackgroundClick = useCallback(() => {
-    console.log("[ForceGraph] onBackgroundClick - deselecting");
-    setSelectedNode(null);
+    setSelectedNodeId(null);
   }, []);
 
   // Handle node hover
@@ -514,6 +503,9 @@ export function ForceGraphView() {
         const agent = agents.find((a) => a.name === selectedNode.name);
         const daemon = daemons.find((d) => d.agentName === selectedNode.name);
         return { agent, daemon };
+      case "entity":
+        const entity = entities.find((e) => e.name === selectedNode.name);
+        return { entity };
       case "room":
         const room = rooms.find((r) => r.name === selectedNode.name);
         const occupants = agents.filter((a) => a.room === selectedNode.name);
@@ -526,10 +518,10 @@ export function ForceGraphView() {
       default:
         return null;
     }
-  }, [selectedNode, agents, rooms, spirits, daemons, tension]);
+  }, [selectedNode, agents, entities, rooms, spirits, daemons, tension]);
 
   // Check if we have any data to show (spirits always exist from startup)
-  const isEmpty = agents.length === 0 && rooms.length === 0 && spirits.length === 0;
+  const isEmpty = agents.length === 0 && entities.length === 0 && rooms.length === 0 && spirits.length === 0;
 
   // Calculate graph dimensions accounting for sidebar
   const graphWidth = selectedNode ? dimensions.width - 400 : dimensions.width;
@@ -580,11 +572,7 @@ export function ForceGraphView() {
               ctx.fillStyle = color;
               ctx.fill();
             }}
-            // Enable node dragging - we use drag end to detect clicks
-            enableNodeDrag={true}
-            // Track drag to differentiate clicks from actual drags
-            onNodeDrag={handleNodeDrag}
-            onNodeDragEnd={handleNodeDragEnd}
+            enableNodeDrag={false}
             // Primary click handlers - use stable callbacks to avoid stale closures
             onNodeClick={handleNodeClick as any}
             onBackgroundClick={handleBackgroundClick}
@@ -603,7 +591,6 @@ export function ForceGraphView() {
             // Zoom and pan settings
             enableZoomInteraction={true}
             enablePanInteraction={true}
-            // Increase min click distance so short drags register as clicks
             minZoom={0.5}
             maxZoom={8}
           />
@@ -647,7 +634,7 @@ export function ForceGraphView() {
           node={selectedNode}
           entityData={selectedEntityData}
           events={filteredEvents}
-          onClose={() => setSelectedNode(null)}
+          onClose={() => setSelectedNodeId(null)}
           onNavigate={navigateToDetail}
         />
       )}
@@ -862,7 +849,7 @@ function NodeInfoSidebar({
     entity: "Entity",
   };
 
-  const typeIcons: Record<NodeType, React.ReactNode> = {
+  const typeIcons: Record<NodeType, ReactNode> = {
     god: <Sparkles className="w-5 h-5" />,
     spirit: <Sparkles className="w-5 h-5" />,
     room: <MapPin className="w-5 h-5" />,

@@ -30,14 +30,16 @@
 import "dotenv/config";
 import { createArgosWorld, type WorldContext } from "./ecs/world";
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "./ecs/prefabs";
-import { createGodAgent, godCommand, getWorldState, tickWorld, type GodAgentState, type GodAgentConfig } from "./god/god-agent";
+import { createGodAgent, godCommand, getWorldState, tickWorld, runWorldTickAt, type GodAgentState, type GodAgentConfig } from "./god/god-agent";
 import { createPrebakePreset, getAvailablePresets, type PrebakePreset } from "./god/system-baker";
 import { runCognitionCycle, executeActions, broadcastToRoom, queueStimulus } from "./cognition/cognition-system";
+import { bridgeWorldEventsToStimuli } from "./cognition/world-event-bridge";
 import { registerAllBuiltinSystems, createMovementSystem, createRoomArrivalSystem } from "./systems/builtin-systems";
+import { fixAllQueuedSystems, getSystemsNeedingFix } from "./systems/system-loader";
 import { createSimulationServer } from "./server/simulation-server";
 import { query, addComponent } from "bitecs";
 import { Agent, Name, Mind, Room } from "./ecs/components";
-import { OccupiesRoom } from "./ecs/relations";
+import { getDirectContainer, setLocatedIn } from "./ecs/location";
 import { initializeAllSchedules } from "./cognition/schedule-system";
 import { generateText } from "ai";
 import { google } from "@ai-sdk/google";
@@ -112,13 +114,31 @@ import {
   stopSpiritSystem,
   tickSpiritSystem,
   getSpiritSystemState,
+  setGodAgentCallback,
   type SpiritSystemState,
 } from "./spirits";
+import { createSpiritRegistry } from "./spirits/spirit-registry";
 import { runWorldCrafterCycle, getPendingInteractions } from "./spirits/world-crafter-spirit";
 import { runStewardCycle, requestRoomPopulation, getPendingRoomRequests } from "./spirits/steward-spirit";
 import { RulesEngine } from "./world/rules-engine";
 import { ObjectManager } from "./world/object-manager";
 import { worldSchema } from "./world/schema";
+import {
+  initializeGodAutopilot,
+  enqueueSpiritMessages,
+  runGodAutopilotCycle,
+  type GodAutopilotConfig,
+} from "./god/god-autopilot";
+import {
+  createSimulation as createRuntimeSimulation,
+  registerFastSystem,
+  registerAIOperation,
+  startSimulation as startRuntimeSimulation,
+  stopSimulation as stopRuntimeSimulation,
+  pauseSimulation as pauseRuntimeSimulation,
+  resumeSimulation as resumeRuntimeSimulation,
+  type SimulationState as RuntimeSimulationState,
+} from "./runtime/simulation-loop";
 
 // ============================================================================
 // Types
@@ -175,7 +195,7 @@ export interface SimulationConfig {
   timeScale?: number;
   /** Enable web server for visualization (default: false) */
   enableServer?: boolean;
-  /** Server port (default: 3000) */
+  /** Server port (default: 3456) */
   serverPort?: number;
   /** Auto-generate schedules for agents using LLM (default: false) */
   generateSchedules?: boolean;
@@ -183,10 +203,31 @@ export interface SimulationConfig {
   useGodCommand?: boolean;
   /** Natural language setup command (requires useGodCommand: true) */
   setupCommand?: string;
+  /** Disable all LLM-powered cognition/spirits/god commands for deterministic runs */
+  enableAI?: boolean;
+  /**
+   * Enable the planning phase inside the cognition loop (LLM-heavy).
+   * - `true` (default): agents with goals may generate multi-step plans
+   * - `false`: skip plan generation (use policies/procedures/LLM action selection only)
+   */
+  enablePlanning?: boolean;
   /** Enable spirit system (Narrator, Arbiter, Crafter, Steward, Weaver) - default: true */
   enableSpirits?: boolean;
   /** Auto-populate rooms with entities via The Steward - default: true when roomType is provided */
   autoPopulateRooms?: boolean;
+  /** Use the dual-loop runtime (fast ECS tick + async AI tasks) */
+  dualLoop?: boolean;
+  /** ECS tick rate (ticks per second) when dual-loop is enabled (default: ~0.33 to match legacy pacing) */
+  ecsTickRate?: number;
+  /** Delta passed to deterministic ECS systems (ms) when dual-loop is enabled (default: 5000 for legacy pacing) */
+  ecsDeltaMs?: number;
+  /**
+   * Enable GodAI autopilot to consume spirit/daemon reports and act autonomously.
+   * - `true`: enable with safe defaults (high-priority messages only + throttling)
+   * - `false`: disable (messages are still captured into inbox for manual review)
+   * - object: enable + override config
+   */
+  godAutopilot?: boolean | Partial<GodAutopilotConfig>;
 }
 
 export interface SimulationStats {
@@ -341,9 +382,16 @@ export interface ArgosSimulation {
  * ```
  */
 export async function createSimulation(config: SimulationConfig): Promise<ArgosSimulation> {
-  // Validate API key
-  if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-    throw new Error("GOOGLE_GENERATIVE_AI_API_KEY environment variable is required");
+  const aiEnabled = config.enableAI !== false;
+
+  // Validate API key only when LLM features are enabled
+  if (aiEnabled && !process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    throw new Error("GOOGLE_GENERATIVE_AI_API_KEY environment variable is required (or set enableAI:false)");
+  }
+
+  if (!aiEnabled) {
+    if (config.useGodCommand) throw new Error("useGodCommand requires enableAI:true");
+    if (config.generateSchedules) throw new Error("generateSchedules requires enableAI:true");
   }
 
   console.log(`\n╔══════════════════════════════════════════════════════════════╗`);
@@ -352,6 +400,9 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
 
   // Create world
   const world = createArgosWorld(config.name);
+  // Expose key runtime flags to ECS systems via the world context.
+  (world as any).meta.aiEnabled = aiEnabled;
+  (world as any).meta.generateSchedules = Boolean(config.generateSchedules);
   initializePrefabs(world);
 
   // Create god agent
@@ -375,8 +426,8 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
     console.warn(`⚠️  Prebake warnings: ${prebakeResult.errors.join(", ")}`);
   }
 
-  // Initialize spirit system (default: enabled)
-  const spiritsEnabled = config.enableSpirits !== false;
+  // Initialize spirit system (default: enabled, but requires AI)
+  const spiritsEnabled = aiEnabled && (config.enableSpirits !== false);
   let spiritSystem: SpiritSystemState | null = null;
   if (spiritsEnabled) {
     console.log(`👁️  Initializing spirit system...`);
@@ -388,6 +439,29 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
     createStandardHierarchy(god.eid);
     startSpiritSystem();
     console.log(`   Spirits: Narrator, Arbiter, Crafter, Steward, Weaver, Tinker`);
+
+    // --- GodAI Autopilot wiring ---
+    // Always capture spirit messages (prevents message loss even if autopilot disabled).
+    const autopilotSetting = config.godAutopilot;
+    const autopilotEnabled =
+      autopilotSetting === undefined
+        ? true
+        : typeof autopilotSetting === "boolean"
+          ? autopilotSetting
+          : autopilotSetting.enabled !== false;
+
+    const autopilotOverrides =
+      typeof autopilotSetting === "object" ? autopilotSetting : {};
+
+    initializeGodAutopilot(god, { ...autopilotOverrides, enabled: autopilotEnabled });
+
+    setGodAgentCallback(async (messages) => {
+      // Fast callback: just enqueue, do not call LLM here.
+      enqueueSpiritMessages(god, messages, (fromEid) => {
+        const spirit = spiritSystem?.registry.spirits.get(fromEid);
+        return spirit?.definition.name || `Spirit#${fromEid}`;
+      });
+    });
   }
 
   // Initialize ObjectManager and RulesEngine for deterministic world behavior
@@ -441,9 +515,9 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
       });
       console.log(`   - ${agentConfig.name} (${agentConfig.role})`);
 
-      // If agent has start room but didn't get roomId, assign manually
-      if (agentConfig.startRoom && roomEid) {
-        addComponent(world, agentEid, OccupiesRoom(roomEid));
+      // Ensure canonical containment is set exactly once.
+      if (agentConfig.startRoom && roomEid && getDirectContainer(world, agentEid) === undefined) {
+        setLocatedIn(world, agentEid, roomEid);
       }
     }
   }
@@ -484,20 +558,24 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
     90000   // 90 second report cooldown
   );
 
-  // Create daemons for all agents
-  const daemonCount = createDaemonsForAllAgents(daemonRegistry, world);
-  console.log(`   Created ${daemonCount} guardian daemons`);
+  if (aiEnabled) {
+    // Create daemons for all agents
+    const daemonCount = createDaemonsForAllAgents(daemonRegistry, world);
+    console.log(`   Created ${daemonCount} guardian daemons`);
 
-  // Set god agent as superior for daemons
-  setDaemonSuperior(daemonRegistry, god.eid);
+    // Set god agent as superior for daemons
+    setDaemonSuperior(daemonRegistry, god.eid);
 
-  // Initialize simulation tension at low level
-  setSimulationTension(daemonRegistry, 0.1);
+    // Initialize simulation tension at low level
+    setSimulationTension(daemonRegistry, 0.1);
+  } else {
+    console.log(`   (enableAI:false) Skipping daemon creation`);
+  }
 
   // Setup web server if enabled
   let server: ReturnType<typeof createSimulationServer> | null = null;
   if (config.enableServer) {
-    const port = config.serverPort || 3000;
+    const port = config.serverPort || 3456;
     server = createSimulationServer(port);
     server.setSimulationState({
       world,
@@ -569,11 +647,14 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
     }
   });
 
+  const dualLoopEnabled = config.dualLoop !== false;
+
   // Build simulation state
   let running = false;
   let paused = false;
   let tick = 0;
   let loopTimeout: NodeJS.Timeout | null = null;
+  let runtime: RuntimeSimulationState | null = null;
 
   const simulation: ArgosSimulation = {
     world,
@@ -589,6 +670,165 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
       running = true;
       simulation.running = true;
       console.log(`\n🎭 Starting simulation loop...\n`);
+
+	      if (dualLoopEnabled) {
+	        if (!runtime) {
+	          const spiritRegistry = spiritSystem?.registry ?? createSpiritRegistry(world);
+	          runtime = createRuntimeSimulation(world, god.systemRegistry, spiritRegistry, {
+	            ecsTickRate: config.ecsTickRate ?? (1 / 3),
+	            logTickStats: false,
+	          });
+
+          // Fast deterministic tick (no awaits)
+          registerFastSystem(runtime, {
+            name: "WorldTick",
+            execute: (_w, _delta, t) => {
+              const worldEvents = runWorldTickAt(god, t, config.ecsDeltaMs ?? 5000);
+              bridgeWorldEventsToStimuli(world, worldEvents);
+              simulation.tick = t;
+              simulation.running = running;
+              simulation.paused = paused;
+
+              // Run deterministic rules (fire spreads, decay, etc.)
+              const ruleEvents = rulesEngine.processTick(t);
+              if (ruleEvents.length > 0) {
+                for (const event of ruleEvents) {
+                  bus.emit({
+                    type: "world:state",
+                    timestamp: event.timestamp,
+                    tick: t,
+                    agentCount: 0,
+                    roomCount: 0,
+                    systemCount: 0,
+                    daemonCount: 0,
+                    ...(event.type && { ruleEvent: event.type, ruleEntityId: event.entityId }),
+                  } as unknown as SimulationEvent);
+                }
+              }
+
+              // Emit world state through bus (coarse)
+              const agentCountNow = Array.from(query(world, [Agent])).length;
+              const roomCountNow = Array.from(query(world, [Room])).length;
+              bus.emit({
+                type: "world:state",
+                timestamp: Date.now(),
+                tick: t,
+                agentCount: agentCountNow,
+                roomCount: roomCountNow,
+                systemCount: god.systemRegistry.systems.size,
+                daemonCount: daemonRegistry.daemons.size,
+              } as SimulationEvent);
+
+              // Update server state (if enabled)
+              if (server) {
+                server.setSimulationState({
+                  world,
+                  registry: god.systemRegistry,
+                  tick: t,
+                  events: worldEvents.slice(-50),
+                  logs: god.systemRegistry.logs.slice(-50),
+                });
+                server.updateState();
+              }
+            },
+          });
+
+	          if (aiEnabled) {
+	            // Async cognition (LLM) – queued; never blocks fast tick
+	            registerAIOperation(runtime, {
+	              name: "AgentCognition",
+	              interval: 1,
+	              priority: "high",
+	              execute: async () => {
+	                const actions = await runCognitionCycle(world, god.systemRegistry, {
+	                  enablePlanning: config.enablePlanning !== false,
+	                });
+
+	                for (const { eid, action } of actions) {
+	                  const name = Name.value[eid];
+	                  if (server) server.pushAgentAction(name, action);
+	                  bus.emit({
+	                    type: "agent:action",
+	                    timestamp: Date.now(),
+	                    agentId: eid,
+	                    agentName: name,
+	                    action: action.type,
+	                    target: action.target,
+	                    content: action.content,
+	                  } as SimulationEvent);
+	                }
+
+	                executeActions(world, actions, god.systemRegistry);
+	              },
+	            });
+
+	            // Auto-fix file-based systems that error inside the fast tick.
+	            // Note: the fast tick uses `runWorldTickAt` (sync), so runtime fixes must happen here (async).
+	            registerAIOperation(runtime, {
+	              name: "FileSystemAutoFixer",
+	              interval: 10,
+	              priority: "normal",
+	              execute: async () => {
+	                if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim()) return;
+	                const queued = getSystemsNeedingFix();
+	                if (queued.length === 0) return;
+	                const res = await fixAllQueuedSystems(god.fileSystems);
+	                if (res.fixed.length > 0) {
+	                  god.systemRegistry.logs.push(`[AutoFix] Fixed file systems: ${res.fixed.join(", ")}`);
+	                }
+	                if (res.failed.length > 0) {
+	                  god.systemRegistry.logs.push(`[AutoFix] Failed to fix file systems: ${res.failed.join(", ")}`);
+	                }
+	              },
+	            });
+
+	            // Daemon observations (async)
+	            registerAIOperation(runtime, {
+	              name: "DaemonSystem",
+	              interval: 1,
+	              priority: "normal",
+	              execute: async () => {
+	                await runDaemonSystem(world, daemonRegistry, spiritSystem?.registry);
+	              },
+	            });
+
+	            // Spirits + materialization (async)
+	            registerAIOperation(runtime, {
+	              name: "SpiritSystem",
+	              interval: 1,
+	              priority: "normal",
+	              execute: async () => {
+	                if (!spiritsEnabled || !spiritSystem) return;
+
+	                await tickSpiritSystem(world, god.registry);
+
+	                await runWorldCrafterCycle(world, spiritSystem.registry, god);
+
+	                const pendingRooms = getPendingRoomRequests();
+	                if (pendingRooms.length > 0) {
+	                  await runStewardCycle(world, spiritSystem.registry);
+	                }
+	              },
+	            });
+
+              // GodAI Autopilot (async)
+              // Consumes spirit/daemon reports from the inbox and issues godCommand calls under throttling.
+              registerAIOperation(runtime, {
+                name: "GodAutopilot",
+                interval: 1,
+                priority: "high",
+                execute: async () => {
+                  if (!spiritsEnabled) return;
+                  if (!god.autopilot) return;
+                  await runGodAutopilotCycle(god);
+                },
+              });
+	          }
+	        }
+
+        startRuntimeSimulation(runtime);
+        return;
+      }
 
       const runLoop = async () => {
         if (!running) return;
@@ -616,31 +856,39 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
         clearTimeout(loopTimeout);
         loopTimeout = null;
       }
+      if (dualLoopEnabled && runtime) {
+        stopRuntimeSimulation(runtime);
+      }
       console.log(`\n🛑 Simulation stopped.`);
     },
 
     pause: () => {
       paused = true;
       simulation.paused = true;
+      if (dualLoopEnabled && runtime) pauseRuntimeSimulation(runtime);
       console.log(`⏸️  Simulation paused.`);
     },
 
     resume: () => {
       paused = false;
       simulation.paused = false;
+      if (dualLoopEnabled && runtime) resumeRuntimeSimulation(runtime);
       console.log(`▶️  Simulation resumed.`);
     },
 
-    step: async () => {
-      tick++;
-      simulation.tick = tick;
-      console.log(`\n--- Tick ${tick} ---`);
+	    step: async () => {
+	      tick++;
+	      simulation.tick = tick;
+	      console.log(`\n--- Tick ${tick} ---`);
 
       // Update god systems
-      tickWorld(god, 5000);
+      const worldEvents = tickWorld(god, 5000);
+      bridgeWorldEventsToStimuli(world, worldEvents);
 
-      // Run cognition cycle
-      const actions = await runCognitionCycle(world, god.systemRegistry);
+	      // Run cognition cycle (AI)
+	      const actions = aiEnabled
+	        ? await runCognitionCycle(world, god.systemRegistry, { enablePlanning: config.enablePlanning !== false })
+	        : [];
 
       // Log actions and emit events
       for (const { eid, action } of actions) {
@@ -691,20 +939,22 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
           world,
           registry: god.systemRegistry,
           tick,
-          events: god.systemRegistry.events.slice(-50),
+          events: worldEvents.slice(-50),
           logs: god.systemRegistry.logs.slice(-50),
         });
         server.updateState();
       }
 
-      // Run daemon observation system
-      const daemonResult = await runDaemonSystem(world, daemonRegistry);
-      if (daemonResult.observations > 0) {
-        console.log(`  [Daemons] ${daemonResult.observations} observations, ${daemonResult.whispers} whispers, ${daemonResult.challenges} challenges, ${daemonResult.reports} reports`);
-      }
+	      // Run daemon observation system (AI)
+	      if (aiEnabled) {
+	        const daemonResult = await runDaemonSystem(world, daemonRegistry, spiritSystem?.registry);
+	        if (daemonResult.observations > 0) {
+	          console.log(`  [Daemons] ${daemonResult.observations} observations, ${daemonResult.whispers} whispers, ${daemonResult.challenges} challenges, ${daemonResult.reports} reports`);
+	        }
+	      }
 
-      // Run spirit system (Narrator, Crafter, Steward, etc.)
-      if (spiritsEnabled && spiritSystem) {
+	      // Run spirit system (AI)
+	      if (aiEnabled && spiritsEnabled && spiritSystem) {
         // Tick spirits (Narrator, Arbiter, etc.)
         const spiritResult = await tickSpiritSystem(world, god.registry);
         if (spiritResult.spiritsProcessed > 0) {
@@ -720,7 +970,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
         // Run The Steward (room population)
         const pendingRooms = getPendingRoomRequests();
         if (pendingRooms.length > 0) {
-          const stewardResult = await runStewardCycle(spiritSystem.registry);
+          const stewardResult = await runStewardCycle(world, spiritSystem.registry);
           if (stewardResult.roomsPopulated > 0) {
             console.log(`  [Steward] Populated ${stewardResult.roomsPopulated} rooms with ${stewardResult.entitiesGenerated} entities`);
           }
@@ -756,9 +1006,12 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
       };
     },
 
-    command: async (cmd: string) => {
-      await godCommand(god, cmd);
-    },
+	    command: async (cmd: string) => {
+	      if (!aiEnabled) {
+	        throw new Error("Simulation.command is disabled when enableAI:false");
+	      }
+	      await godCommand(god, cmd);
+	    },
 
     broadcast: (roomName: string, content: string, type: string = "environmental") => {
       const rooms = Array.from(query(world, [Room]));

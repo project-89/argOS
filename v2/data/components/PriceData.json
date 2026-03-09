@@ -1,0 +1,10 @@
+{
+  "name": "PriceData",
+  "description": "Current price and market data for an item",
+  "properties": {
+    "supply": "number",
+    "basePrice": "number",
+    "currentPrice": "number",
+    "demand": "number"
+  }
+}

@@ -13,7 +13,8 @@
 import type { World } from "../ecs/world";
 import { query, getRelationTargets, entityExists } from "bitecs";
 import { Name, Agent, Mind, Schedule, Goal, Needs, Room } from "../ecs/components";
-import { HasSchedule, HasGoal, OccupiesRoom } from "../ecs/relations";
+import { HasSchedule, HasGoal } from "../ecs/relations";
+import { getRoomForEntity } from "../ecs/location";
 import type { SystemDefinition } from "../ecs/dynamic-systems";
 import {
   getSchedule,
@@ -34,7 +35,9 @@ export const ADAPTATION_CHECK_INTERVAL = 30000; // Every 30 seconds
 export const NEED_OVERRIDE_THRESHOLDS = {
   hunger: 0.8, // Very hungry overrides schedule
   energy: 0.2, // Very tired overrides schedule
-  social: 0.8, // Very lonely (high need) overrides schedule
+  // Social is tracked as "social satisfaction" (0..1 after normalization).
+  // Low satisfaction indicates loneliness.
+  social: 0.2, // Very lonely (low satisfaction) can override schedule
 };
 
 /** Goal priority threshold that overrides schedule */
@@ -106,24 +109,20 @@ export function buildAdaptationContext(world: World, agentEid: number): Adaptati
   }
 
   // Get social context
-  const rooms = getRelationTargets(world, agentEid, OccupiesRoom);
+  const roomEid = getRoomForEntity(world, agentEid);
   let othersInRoom = 0;
   let roomAmbience = "neutral";
 
-  if (rooms.length > 0) {
-    const roomEid = rooms[0];
-    if (entityExists(world, roomEid)) {
-      roomAmbience = Room.ambience[roomEid] || "neutral";
+  if (roomEid !== undefined && entityExists(world, roomEid)) {
+    roomAmbience = Room.ambience[roomEid] || "neutral";
 
-      // Count other agents in same room
-      const allAgents = Array.from(query(world, [Agent, Mind]));
-      for (const otherEid of allAgents) {
-        if (otherEid === agentEid) continue;
-        if (!entityExists(world, otherEid)) continue;
-        const otherRooms = getRelationTargets(world, otherEid, OccupiesRoom);
-        if (otherRooms.includes(roomEid)) {
-          othersInRoom++;
-        }
+    // Count other agents in same room
+    const allAgents = Array.from(query(world, [Agent, Mind]));
+    for (const otherEid of allAgents) {
+      if (otherEid === agentEid) continue;
+      if (!entityExists(world, otherEid)) continue;
+      if (getRoomForEntity(world, otherEid) === roomEid) {
+        othersInRoom++;
       }
     }
   }
@@ -175,8 +174,8 @@ function checkNeedOverride(context: AdaptationContext): AdaptationDecision | nul
     };
   }
 
-  // Social need check (social need increases when alone)
-  if (needs.social > NEED_OVERRIDE_THRESHOLDS.social && flexibility > 0.3) {
+  // Social satisfaction check (low satisfaction indicates loneliness)
+  if (needs.social < NEED_OVERRIDE_THRESHOLDS.social && flexibility > 0.3) {
     return {
       shouldAdapt: true,
       reason: "Feeling lonely - seeking social interaction",

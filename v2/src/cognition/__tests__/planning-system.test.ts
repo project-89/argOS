@@ -12,7 +12,7 @@ import "dotenv/config";
 import { addEntity, addComponent, query, hasComponent, getRelationTargets } from "bitecs";
 import { createArgosWorld } from "../../ecs/world";
 import { Name, Description, Agent, Mind, Goal, Plan, Room } from "../../ecs/components";
-import { HasGoal, HasPlan, OccupiesRoom } from "../../ecs/relations";
+import { HasGoal, HasPlan, LocatedIn } from "../../ecs/relations";
 import {
   generatePlanForGoal,
   createPlanEntity,
@@ -338,7 +338,7 @@ describe("Planning System", () => {
       const world = createTestWorld();
       const roomEid = createTestRoom(world, "Village Square");
       const agentEid = createTestAgent(world, "Luna", "merchant");
-      addComponent(world, agentEid, OccupiesRoom(roomEid));
+      addComponent(world, agentEid, LocatedIn(roomEid));
 
       const goalEid = createTestGoal(world, agentEid, "Sell goods at the market");
 
@@ -361,8 +361,8 @@ describe("Planning System", () => {
       // Create agents with goals
       const agent1 = createTestAgent(world, "Agent1");
       const agent2 = createTestAgent(world, "Agent2");
-      addComponent(world, agent1, OccupiesRoom(roomEid));
-      addComponent(world, agent2, OccupiesRoom(roomEid));
+      addComponent(world, agent1, LocatedIn(roomEid));
+      addComponent(world, agent2, LocatedIn(roomEid));
 
       createTestGoal(world, agent1, "Find a job");
       createTestGoal(world, agent2, "Make friends");

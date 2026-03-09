@@ -450,7 +450,7 @@ This section details how agent cognition fits into the world-building architectu
 │     │ buildAgentContext():                                    │ │
 │     │ - Identity (Name, Description, role, systemPrompt)      │ │
 │     │ - Current state (location, mode, arousal, focus)        │ │
-│     │ - Others present (via OccupiesRoom relation)            │ │
+│     │ - Others present (via LocatedIn chain / getRoomForEntity)│ │
 │     │ - Recent perceptions (last 5)                           │ │
 │     │ - Recent thoughts (last 3)                              │ │
 │     │ - Knowledge summary (memories, beliefs, impressions)    │ │

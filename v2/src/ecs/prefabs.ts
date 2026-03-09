@@ -8,8 +8,8 @@ import {
   onGet,
 } from "bitecs";
 import type { World } from "./world";
-import { Name, Description, Agent, Mind, Room, PhysicalObject, StimulusSource, GodAgent, Position, GridPosition, Needs, Health, Inventory } from "./components";
-import { OccupiesRoom, BelongsTo } from "./relations";
+import { Name, Description, Agent, Mind, Room, PhysicalObject, StimulusSource, GodAgent, Position, GridPosition, Needs, Health, Inventory, ObjectType, ObjectState, Traits } from "./components";
+import { setLocatedIn } from "./location";
 import {
   getDynamicComponent,
   setDynamicComponentValue,
@@ -110,6 +110,9 @@ export function initializePrefabs(world: World): void {
   addComponent(world, AgentPrefab, Needs);
   addComponent(world, AgentPrefab, Health);
   addComponent(world, AgentPrefab, Inventory);
+  addComponent(world, AgentPrefab, ObjectType);
+  addComponent(world, AgentPrefab, ObjectState);
+  addComponent(world, AgentPrefab, Traits);
 
   RoomPrefab = addPrefab(world);
   addComponent(world, RoomPrefab, Name);
@@ -117,12 +120,18 @@ export function initializePrefabs(world: World): void {
   addComponent(world, RoomPrefab, Room);
   addComponent(world, RoomPrefab, Position);
   addComponent(world, RoomPrefab, GridPosition); // For movement system targeting
+  addComponent(world, RoomPrefab, ObjectType);
+  addComponent(world, RoomPrefab, ObjectState);
+  addComponent(world, RoomPrefab, Traits);
 
   ObjectPrefab = addPrefab(world);
   addComponent(world, ObjectPrefab, Name);
   addComponent(world, ObjectPrefab, Description);
   addComponent(world, ObjectPrefab, PhysicalObject);
   addComponent(world, ObjectPrefab, GridPosition); // For movement system targeting
+  addComponent(world, ObjectPrefab, ObjectType);
+  addComponent(world, ObjectPrefab, ObjectState);
+  addComponent(world, ObjectPrefab, Traits);
 
   StimulusSourcePrefab = addPrefab(world);
   addComponent(world, StimulusSourcePrefab, Name);
@@ -159,15 +168,29 @@ export function createAgentEntity(
   Mind.focus[eid] = "";
   Mind.lastUpdate[eid] = Date.now();
 
-  // Initialize GridPosition for movement system
-  GridPosition.x[eid] = config.gridPosition?.x ?? Math.floor(Math.random() * 20);
-  GridPosition.y[eid] = config.gridPosition?.y ?? Math.floor(Math.random() * 20);
-  GridPosition.facing[eid] = "south";
+  // Initialize GridPosition for movement system.
+  // If the agent spawns in a room and no explicit gridPosition is provided, inherit the room's GridPosition
+  // so RoomArrival doesn't immediately clear LocatedIn due to distance.
+  if (config.gridPosition) {
+    GridPosition.x[eid] = config.gridPosition.x;
+    GridPosition.y[eid] = config.gridPosition.y;
+    GridPosition.facing[eid] = "south";
+  } else if (config.roomId !== undefined && GridPosition.x[config.roomId] !== undefined) {
+    GridPosition.x[eid] = GridPosition.x[config.roomId] + Math.floor(Math.random() * 3) - 1;
+    GridPosition.y[eid] = GridPosition.y[config.roomId] + Math.floor(Math.random() * 3) - 1;
+    GridPosition.facing[eid] = "south";
+  } else {
+    GridPosition.x[eid] = Math.floor(Math.random() * 20);
+    GridPosition.y[eid] = Math.floor(Math.random() * 20);
+    GridPosition.facing[eid] = "south";
+  }
 
   // Initialize Needs for hunger/energy systems
   Needs.hunger[eid] = 0;      // 0 = not hungry, increases over time
   Needs.energy[eid] = 100;    // 100 = full energy, decreases over time
-  Needs.social[eid] = 0;      // 0 = socially satisfied
+  // Social is tracked as "social satisfaction" on a 0..100 scale (higher = better).
+  // Some deterministic systems treat low social satisfaction as loneliness.
+  Needs.social[eid] = 60;     // 60 = moderately socially satisfied
   Needs.comfort[eid] = 100;   // 100 = comfortable
 
   // Initialize Health for survival systems
@@ -183,14 +206,22 @@ export function createAgentEntity(
   Inventory.maxWeight[eid] = 50;
 
   // Set default agent traits for affordance system
-  // Agents are talkable, observable, and attackable by default
+  // Canonical: ObjectType/ObjectState/Traits in ECS
+  ObjectType.typeId[eid] = "npc";
+  ObjectType.instanceName[eid] = config.name;
+  ObjectState.current[eid] = "idle";
+  ObjectState.previous[eid] = "";
+  ObjectState.lockedUntil[eid] = 0;
+  Traits.active[eid] = JSON.stringify(["talkable", "examinable", "attackable", "alive"]);
+
+  // Legacy mirror (compat)
   ensureObjectMetaComponent();
-  setDynamicComponentValue("ObjectMeta", eid, "type", "agent");
-  setDynamicComponentValue("ObjectMeta", eid, "state", "active");
+  setDynamicComponentValue("ObjectMeta", eid, "type", "npc");
+  setDynamicComponentValue("ObjectMeta", eid, "state", "idle");
   setDynamicComponentValue("ObjectMeta", eid, "traits", "talkable,examinable,attackable,alive");
 
   if (config.roomId !== undefined) {
-    addComponent(world, eid, OccupiesRoom(config.roomId));
+    setLocatedIn(world, eid, config.roomId);
   }
 
   return eid;
@@ -250,6 +281,14 @@ export function createRoomEntity(
   GridPosition.y[eid] = Math.floor((config.y ?? 50 + row * 200) / 20);
   GridPosition.facing[eid] = "center";
 
+  // Canonical: treat rooms as schema "room" objects
+  ObjectType.typeId[eid] = "room";
+  ObjectType.instanceName[eid] = config.name;
+  ObjectState.current[eid] = "normal";
+  ObjectState.previous[eid] = "";
+  ObjectState.lockedUntil[eid] = 0;
+  Traits.active[eid] = JSON.stringify(["container", "location"]);
+
   roomPositionCounter++;
 
   return eid;
@@ -277,19 +316,29 @@ export function createObjectEntity(
   PhysicalObject.weight[eid] = config.weight ?? 1;
   PhysicalObject.portable[eid] = config.portable ?? true;
 
-  // Set default object traits for affordance system
-  ensureObjectMetaComponent();
+  // Canonical object identity for generic objects created outside schema types
+  ObjectType.typeId[eid] = "object";
+  ObjectType.instanceName[eid] = config.name;
+  ObjectState.current[eid] = "normal";
+  ObjectState.previous[eid] = "";
+  ObjectState.lockedUntil[eid] = 0;
+
+  // Set default object traits for affordance system (canonical Traits component)
   const defaultTraits = ["examinable"];
   if (config.portable !== false) {
     defaultTraits.push("takeable");
   }
   const allTraits = [...defaultTraits, ...(config.traits || [])];
+  Traits.active[eid] = JSON.stringify(allTraits);
+
+  // Legacy mirror (compat)
+  ensureObjectMetaComponent();
   setDynamicComponentValue("ObjectMeta", eid, "type", "object");
   setDynamicComponentValue("ObjectMeta", eid, "state", "normal");
   setDynamicComponentValue("ObjectMeta", eid, "traits", allTraits.join(","));
 
   if (config.roomId !== undefined) {
-    addComponent(world, eid, OccupiesRoom(config.roomId));
+    setLocatedIn(world, eid, config.roomId);
     // Inherit GridPosition from room if not specified
     if (!config.gridPosition && GridPosition.x[config.roomId] !== undefined) {
       // Place near the room's center with small offset
@@ -334,7 +383,7 @@ export function createStimulusSourceEntity(
   StimulusSource.lastEmit[eid] = 0;
 
   if (config.roomId !== undefined) {
-    addComponent(world, eid, OccupiesRoom(config.roomId));
+    setLocatedIn(world, eid, config.roomId);
   }
 
   return eid;

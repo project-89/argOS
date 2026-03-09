@@ -20,7 +20,7 @@ import { google } from "@ai-sdk/google";
 import type { World } from "../ecs/world";
 import { addEntity, addComponent, query, getRelationTargets, hasComponent, removeEntity } from "bitecs";
 import { Name, Description, Agent, Mind, Schedule, Goal, Room } from "../ecs/components";
-import { HasSchedule, HasGoal, OccupiesRoom } from "../ecs/relations";
+import { HasSchedule, HasGoal } from "../ecs/relations";
 import { getKnowledgeSummary } from "./knowledge-graph";
 
 const model = google("gemini-2.0-flash");
@@ -39,6 +39,23 @@ export interface DailySchedule {
   activities: ScheduledActivity[];
   flexibility: number;     // 0-1, how strictly to follow
   personality: string;     // Brief personality description used in generation
+}
+
+function workLocationKeywordForRole(role: string): string | undefined {
+  const r = String(role || "").toLowerCase();
+  // Fantasy / village archetypes
+  if (r.includes("baker")) return "bakery";
+  if (r.includes("smith") || r.includes("blacksmith")) return "forge";
+  if (r.includes("healer") || r.includes("cleric")) return "temple";
+  if (r.includes("merchant") || r.includes("trader")) return "market";
+  if (r.includes("scholar") || r.includes("librarian")) return "library";
+  // Office archetypes
+  if (r.includes("engineer") || r.includes("developer") || r.includes("programmer")) return "office";
+  if (r.includes("designer")) return "studio";
+  if (r.includes("research")) return "lab";
+  // Generic
+  if (r.includes("npc") || r.includes("villager")) return "square";
+  return "work";
 }
 
 /**
@@ -72,6 +89,7 @@ export function initializeSchedule(
   Schedule.currentActivity[scheduleEid] = "";
   Schedule.nextTransition[scheduleEid] = 0;
   Schedule.flexibility[scheduleEid] = flexibility;
+  Schedule.plannedDay[scheduleEid] = getCurrentDay(world);
   Schedule.lastUpdated[scheduleEid] = Date.now();
 
   return scheduleEid;
@@ -229,6 +247,7 @@ Create a realistic daily schedule that fits this character's personality and rol
 export async function generateSchedule(world: World, agentEid: number): Promise<DailySchedule | null> {
   const context = buildScheduleContext(world, agentEid);
   const agentName = Name.value[agentEid];
+  const agentRole = Agent.role[agentEid];
 
   const prompt = `Create a realistic daily schedule for this agent.
 
@@ -270,9 +289,49 @@ Hours are 0-23. Duration is in hours. Priority is 1-10.`;
       return null;
     }
 
-    const schedule = JSON.parse(jsonMatch[0]) as DailySchedule;
-    console.log(`[Schedule] Generated ${schedule.activities.length}-activity schedule for ${agentName}`);
-    return schedule;
+    const raw = JSON.parse(jsonMatch[0]) as Partial<DailySchedule>;
+
+    const cleaned: ScheduledActivity[] = Array.isArray(raw.activities)
+      ? raw.activities
+          .map((a: any): ScheduledActivity | null => {
+            if (!a || typeof a !== "object") return null;
+            const name = String(a.name || "").trim();
+            const startHour = Number(a.startHour);
+            const duration = Number(a.duration);
+            if (!name) return null;
+            if (!Number.isFinite(startHour) || startHour < 0 || startHour > 23) return null;
+            if (!Number.isFinite(duration) || duration <= 0 || duration > 24) return null;
+            const priority = Number.isFinite(Number(a.priority)) ? Math.max(1, Math.min(10, Number(a.priority))) : 5;
+            const interruptible = a.interruptible === false ? false : true;
+            const location = typeof a.location === "string" && a.location.trim().length > 0 ? a.location.trim() : undefined;
+            const description = typeof a.description === "string" ? a.description : undefined;
+            return { name, startHour: Math.floor(startHour), duration: Math.floor(duration), priority, interruptible, ...(location ? { location } : {}), ...(description ? { description } : {}) };
+          })
+          .filter((x: ScheduledActivity | null): x is ScheduledActivity => x !== null)
+      : [];
+
+    // Normalize to contract: 5–8 activities.
+    cleaned.sort((a, b) => a.startHour - b.startHour);
+    let activities = cleaned.slice(0, 8);
+    if (activities.length < 5) {
+      const defaults = createDefaultSchedule(agentRole);
+      const existing = new Set(activities.map((a) => a.name));
+      for (const d of defaults) {
+        if (activities.length >= 5) break;
+        if (existing.has(d.name)) continue;
+        activities.push(d);
+        existing.add(d.name);
+      }
+      activities.sort((a, b) => a.startHour - b.startHour);
+      activities = activities.slice(0, 8);
+    }
+
+    const flexibilityRaw = Number((raw as any).flexibility);
+    const flexibility = Number.isFinite(flexibilityRaw) ? Math.max(0, Math.min(1, flexibilityRaw)) : 0.5;
+    const personality = typeof (raw as any).personality === "string" ? (raw as any).personality : "";
+
+    console.log(`[Schedule] Generated ${activities.length}-activity schedule for ${agentName}`);
+    return { activities, flexibility, personality };
   } catch (error) {
     console.error("[Schedule] Error generating schedule:", error);
     return null;
@@ -283,6 +342,7 @@ Hours are 0-23. Duration is in hours. Priority is 1-10.`;
  * Create a default schedule for an agent (without LLM)
  */
 export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
+  const workLoc = workLocationKeywordForRole(agentRole);
   const baseSchedule: ScheduledActivity[] = [
     {
       name: "sleep",
@@ -290,6 +350,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 8,
       priority: 9,
       interruptible: false,
+      location: "home",
       description: "Resting and recovering energy",
     },
     {
@@ -298,6 +359,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 7,
       interruptible: true,
+      location: "home",
       description: "Waking up and preparing for the day",
     },
     {
@@ -306,6 +368,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 6,
       interruptible: true,
+      location: "tavern",
       description: "Eating the first meal of the day",
     },
     {
@@ -314,6 +377,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 4,
       priority: 8,
       interruptible: true,
+      ...(workLoc ? { location: workLoc } : {}),
       description: "Primary daily activities and responsibilities",
     },
     {
@@ -322,6 +386,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 6,
       interruptible: true,
+      location: "tavern",
       description: "Midday meal and break",
     },
     {
@@ -330,6 +395,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 4,
       priority: 7,
       interruptible: true,
+      ...(workLoc ? { location: workLoc } : {}),
       description: "Continuing daily activities",
     },
     {
@@ -338,6 +404,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 3,
       priority: 4,
       interruptible: true,
+      location: "square",
       description: "Personal time and relaxation",
     },
     {
@@ -346,6 +413,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 6,
       interruptible: true,
+      location: "tavern",
       description: "Evening meal",
     },
     {
@@ -354,6 +422,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 5,
       interruptible: true,
+      location: "home",
       description: "Winding down before bed",
     },
   ];
@@ -471,4 +540,59 @@ export async function initializeAllSchedules(world: World, useLLM: boolean = fal
       console.log(`[Schedule] Created default schedule for ${agentName}`);
     }
   }
+}
+
+/**
+ * Ensure every active agent has a schedule planned for the current simulation day.
+ *
+ * - If an agent has no schedule: create one (default or LLM).
+ * - If an agent's schedule is for a previous day: regenerate it.
+ * - Optional throttling via `maxAgents` to avoid bursting LLM calls.
+ */
+export async function ensureSchedulesForCurrentDay(
+  world: World,
+  opts: { useLLM?: boolean; maxAgents?: number } = {}
+): Promise<{ processed: number; created: number; regenerated: number }> {
+  const useLLM = opts.useLLM === true;
+  const maxAgents = Number.isFinite(opts.maxAgents) ? Math.max(1, Math.floor(opts.maxAgents!)) : Infinity;
+  const currentDay = getCurrentDay(world);
+
+  const agents = query(world, [Agent, Mind]);
+  let processed = 0;
+  let created = 0;
+  let regenerated = 0;
+
+  for (const agentEid of agents) {
+    if (!Agent.active[agentEid]) continue;
+    if (processed >= maxAgents) break;
+
+    const scheduleEid = getSchedule(world, agentEid);
+    const needsNew = scheduleEid === undefined;
+    const plannedDay = scheduleEid !== undefined ? Schedule.plannedDay[scheduleEid] : undefined;
+    const needsRegen = scheduleEid !== undefined && plannedDay !== undefined && plannedDay !== currentDay;
+
+    if (!needsNew && !needsRegen) continue;
+
+    const agentName = Name.value[agentEid] || `Agent_${agentEid}`;
+    const agentRole = Agent.role[agentEid] || "agent";
+
+    processed++;
+
+    if (useLLM) {
+      console.log(`[Schedule] Planning day ${currentDay} for ${agentName}...`);
+      const generated = await generateSchedule(world, agentEid);
+      if (generated) {
+        initializeSchedule(world, agentEid, generated.activities, generated.flexibility);
+      } else {
+        initializeSchedule(world, agentEid, createDefaultSchedule(agentRole), 0.5);
+      }
+    } else {
+      initializeSchedule(world, agentEid, createDefaultSchedule(agentRole), 0.5);
+    }
+
+    if (needsNew) created++;
+    else regenerated++;
+  }
+
+  return { processed, created, regenerated };
 }

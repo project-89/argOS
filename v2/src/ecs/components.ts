@@ -112,10 +112,179 @@ export const Belief = {
 
 export const Goal = {
   description: [] as string[],
+  // Typed goal contract (optional, backward-compatible with description-only goals)
+  kind: [] as string[],        // e.g. "move_to_room", "use_affordance", "custom"
+  paramsJson: [] as string[],  // stable JSON string (kind-specific parameters)
+  successJson: [] as string[], // stable JSON string (success criteria)
+  signature: [] as string[],   // stable identifier derived from kind+params+success
   priority: [] as number[],
   status: [] as string[],
   progress: [] as number[],
   deadline: [] as number[],
+  createdAt: [] as number[],
+};
+
+export const LastAction = {
+  type: [] as string[],
+  target: [] as string[],
+  content: [] as string[],
+  success: [] as boolean[],
+  timestamp: [] as number[],
+};
+
+export const LastToolResult = {
+  toolId: [] as string[],
+  command: [] as string[],
+  ok: [] as boolean[],
+  exitCode: [] as number[],
+  summary: [] as string[],
+  stdout: [] as string[],
+  stderr: [] as string[],
+  timestamp: [] as number[],
+};
+
+/**
+ * Marks an in-flight async office tool job for an agent (non-blocking terminal/CLI work).
+ *
+ * - Prevents re-submitting the same command every tick.
+ * - Allows job completion to advance the current plan step automatically.
+ */
+export const PendingToolJob = {
+  jobId: [] as string[],
+  toolId: [] as string[],
+  command: [] as string[],
+  startedAt: [] as number[],
+  // Logging/throttling helpers (optional): avoid emitting "waiting..." stimuli every tick.
+  lastNotifyAt: [] as number[],
+  lastNotifyJobId: [] as string[],
+};
+
+/**
+ * Per-invocation tool evidence (append-only log via HasToolResult relation).
+ *
+ * Motivation:
+ * - `LastToolResult` is a single slot and breaks multi-step goal contracts (a later tool call overwrites evidence).
+ * - ToolResult entities let goal evaluation reason over multiple tool calls during a goal.
+ */
+export const ToolResult = {
+  toolId: [] as string[],
+  command: [] as string[],
+  ok: [] as boolean[],
+  exitCode: [] as number[],
+  summary: [] as string[],
+  stdout: [] as string[],
+  stderr: [] as string[],
+  timestamp: [] as number[],
+  goalEid: [] as number[],
+  deviceEid: [] as number[],
+};
+
+// -----------------------------------------------------------------------------
+// Optional organization / coordination artifacts (used by office-style sims)
+// -----------------------------------------------------------------------------
+
+export const KanbanBoard = {
+  project: [] as string[],
+  createdAt: [] as number[],
+};
+
+export const KanbanColumn = {
+  name: [] as string[],
+  position: [] as number[],
+  createdAt: [] as number[],
+};
+
+export const KanbanCard = {
+  title: [] as string[],
+  description: [] as string[],
+  ownerEid: [] as number[],
+  createdAt: [] as number[],
+  updatedAt: [] as number[],
+};
+
+export const WikiDoc = {
+  title: [] as string[],
+  body: [] as string[],
+  status: [] as string[],
+  createdAt: [] as number[],
+  updatedAt: [] as number[],
+};
+
+export const OrgGovernance = {
+  enabled: [] as boolean[],
+  requireTicketForWork: [] as boolean[],
+  wipLimit: [] as number[],
+  doneRequiresToolId: [] as string[],
+  doneRequiresCommandIncludes: [] as string[],
+  /** Optional: require a Review step before Done. */
+  doneRequiresReview: [] as boolean[],
+  /** Optional: which column counts as "review" for the Done gate. Defaults to "Review". */
+  reviewColumnName: [] as string[],
+};
+
+/**
+ * Optional staffing/delegation governor for "useful work" org simulations.
+ *
+ * If enabled, a deterministic system can:
+ * - Observe kanban backlog
+ * - Spawn/hire agents (up to maxAgents)
+ * - Assign ticket ownership + create ticket goals/contracts
+ *
+ * This component is intentionally optional so other simulations can omit it entirely.
+ */
+export const OrgStaffingGovernor = {
+  enabled: [] as boolean[],
+  boardName: [] as string[],
+  spawnRoomName: [] as string[],
+  defaultRole: [] as string[],
+  maxAgents: [] as number[],
+  wipPerAgent: [] as number[],
+  /** Optional prefix filter for cards this governor should claim (e.g. "[ENG]", "[QA]") */
+  claimTitlePrefix: [] as string[],
+};
+
+// -----------------------------------------------------------------------------
+// Optional repo/PR substrate (used by swarm "useful work" simulations)
+// -----------------------------------------------------------------------------
+
+/**
+ * A shared repo service snapshot backed by a device sandbox directory.
+ *
+ * Agents typically:
+ * - checkout repo → work in their own device sandbox
+ * - submit PRs as patches
+ * - integrator system tests + merges passing PRs back into this repo base
+ */
+export const Repo = {
+  repoId: [] as string[],
+  baseDeviceEid: [] as number[],
+  fixtureId: [] as string[],
+  ciCommand: [] as string[],
+  createdAt: [] as number[],
+  lastUpdatedAt: [] as number[],
+};
+
+/**
+ * Pull request record (patch-based). Status is advanced by RepoIntegratorSystem.
+ */
+export const PullRequest = {
+  repoEid: [] as number[],
+  prId: [] as string[],
+  title: [] as string[],
+  description: [] as string[],
+  authorEid: [] as number[],
+  patch: [] as string[],
+  status: [] as string[], // "open" | "applying" | "testing" | "merging" | "merged" | "failed" | "needs_rebase"
+  workDir: [] as string[],
+  pendingPhase: [] as string[], // "apply" | "ci" | "merge"
+  pendingToolId: [] as string[],
+  pendingJobId: [] as string[],
+  pendingStartedAt: [] as number[],
+  lastExitCode: [] as number[],
+  lastStdout: [] as string[],
+  lastStderr: [] as string[],
+  createdAt: [] as number[],
+  lastUpdatedAt: [] as number[],
 };
 
 export const Impression = {
@@ -304,7 +473,14 @@ export const Schedule = {
   currentActivity: [] as string[],   // Current activity name
   nextTransition: [] as number[],    // When to switch to next activity (world time)
   flexibility: [] as number[],       // 0-1, how strictly agent follows schedule
+  plannedDay: [] as number[],        // Simulation day this schedule was planned for
   lastUpdated: [] as number[],       // When schedule was last generated
+};
+
+/** Per-agent day-plan bookkeeping (used to seed queued scheduled activities once per day). */
+export const DayPlanState = {
+  plannedDay: [] as number[],        // Simulation day the day-plan was seeded for
+  lastPlannedAt: [] as number[],     // Wall-clock timestamp
 };
 
 /** Scheduled activity within a Schedule */
@@ -324,6 +500,23 @@ export const ReflectionState = {
   reflectionThreshold: [] as number[], // Threshold to trigger reflection (default 100)
   reflectionCount: [] as number[],   // Total reflections performed
   insights: [] as string[],          // JSON array of recent insights
+};
+
+/** Active procedural execution state for an agent (multi-step habits/macros). */
+export const ProcedureState = {
+  signature: [] as string[],         // ProceduralSkillV1.signature
+  stepIndex: [] as number[],         // Current step index in skill.steps
+  status: [] as string[],            // "active" | "completed" | "failed"
+  startedAt: [] as number[],         // When execution began
+  lastUpdatedAt: [] as number[],     // Last progress update time
+};
+
+/** Optional deterministic behavior policy (behavior tree / policy graph) for an agent. */
+export const BehaviorPolicy = {
+  enabled: [] as boolean[],
+  treeJson: [] as string[],          // JSON-encoded behavior tree
+  version: [] as number[],           // Bump when updated (helps debugging)
+  lastUpdatedAt: [] as number[],
 };
 
 export const Interactable = {
@@ -479,6 +672,8 @@ export const AllComponents = {
   Memory,
   Belief,
   Goal,
+  LastAction,
+  LastToolResult,
   Impression,
   Action,
   CognitiveEvent,
@@ -509,12 +704,15 @@ export const AllComponents = {
   // Planning & reflection
   Plan,
   Schedule,
-  ScheduledActivity,
-  ReflectionState,
-  // Object system components
-  ObjectType,
-  ObjectState,
-  Traits,
+  DayPlanState,
+	  ScheduledActivity,
+	  ReflectionState,
+	  ProcedureState,
+	  BehaviorPolicy,
+	  // Object system components
+	  ObjectType,
+	  ObjectState,
+	  Traits,
   Durability,
   Fuel,
   Container,

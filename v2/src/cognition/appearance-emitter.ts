@@ -9,8 +9,7 @@
 import type { World } from "../ecs/world";
 import { query, entityExists } from "bitecs";
 import { Agent, Mind, Name, Appearance } from "../ecs/components";
-import { OccupiesRoom } from "../ecs/relations";
-import { safeGetRelationTargets } from "../ecs/dynamic-systems";
+import { getRoomForEntity } from "../ecs/location";
 import {
   hasAppearance,
   getAppearanceDescription,
@@ -133,8 +132,7 @@ export function runAppearanceEmitter(world: World): void {
 
   for (const eid of agents) {
     const name = Name.value[eid] || `Entity ${eid}`;
-    const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
-    const roomEid = rooms[0];
+    const roomEid = getRoomForEntity(world, eid);
 
     // Skip if not in a room
     if (roomEid === undefined) continue;
@@ -189,8 +187,7 @@ export function broadcastAppearanceChange(
   if (!hasAppearance(eid) || !entityExists(world, eid)) return;
 
   const name = Name.value[eid] || `Entity ${eid}`;
-  const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
-  const roomEid = rooms[0];
+  const roomEid = getRoomForEntity(world, eid);
 
   if (roomEid === undefined) return;
 
@@ -216,8 +213,7 @@ export function broadcastExpressionChange(
   if (oldExpression === newExpression) return;
 
   const name = Name.value[eid] || `Entity ${eid}`;
-  const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
-  const roomEid = rooms[0];
+  const roomEid = getRoomForEntity(world, eid);
 
   if (roomEid === undefined) return;
 

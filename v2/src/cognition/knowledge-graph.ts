@@ -7,6 +7,11 @@ import { HasMemory, HasBelief, HasImpression } from "../ecs/relations";
 
 const model = google("gemini-2.5-flash");
 
+function hasGoogleApiKey(): boolean {
+  const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  return typeof key === "string" && key.trim().length > 0;
+}
+
 export interface MemoryData {
   type: "episodic" | "semantic" | "procedural";
   content: string;
@@ -246,7 +251,15 @@ export async function extractKnowledgeFromInteraction(
     context: string;
   }
 ): Promise<void> {
-  const agentName = Name.value[agentEid];
+  // Unit tests should be deterministic and must not trigger network-backed extraction.
+  // Allow explicit override for ad-hoc LLM experiments.
+  if (process.env.NODE_ENV === "test" && process.env.ARGOS_ENABLE_LLM_IN_TESTS !== "1") return;
+  if (process.env.ARGOS_DISABLE_KNOWLEDGE_EXTRACTION === "1") return;
+
+  // In deterministic/unit-test runs (or misconfigured env), skip LLM-backed extraction rather than error-spam.
+  if (!hasGoogleApiKey()) return;
+
+  const agentName = Name.value[agentEid] || "Agent";
 
   try {
     const { text } = await generateText({
@@ -332,6 +345,13 @@ export function getKnowledgeSummary(world: World, agentEid: number): string {
   if (memoryEids.length > 0) {
     lines.push("MEMORIES:");
     const recentMemories = memoryEids
+      .filter((eid) => {
+        const type = String(Memory.type[eid] || "");
+        if (type === "procedural") return false; // Procedural skills are rendered separately
+        const content = String(Memory.content[eid] || "").trim();
+        if (content.startsWith("[ProcedureV1]")) return false;
+        return true;
+      })
       .sort((a, b) => (Memory.timestamp[b] || 0) - (Memory.timestamp[a] || 0))
       .slice(0, 5);
     for (const eid of recentMemories) {

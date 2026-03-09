@@ -8,16 +8,18 @@
  */
 
 import type { World } from "../ecs/world";
-import { query, hasComponent, getRelationTargets, addEntity, addComponent, removeComponent } from "bitecs";
 import {
   Agent, Mind, Name, Needs, GridPosition, Goal, Plan, Schedule, Room,
   AllComponents
 } from "../ecs/components";
 import {
-  OccupiesRoom, HasGoal, HasPlan, HasSchedule, AllRelations
+  LocatedIn, HasGoal, HasPlan, HasSchedule, AllRelations
 } from "../ecs/relations";
 import type { SystemContext } from "../ecs/dynamic-systems";
 import { ActionRegistry } from "../cognition/action-registry";
+import { setGoalContract } from "../cognition/goal-contract";
+import { getRoomForEntity } from "../ecs/location";
+import { setLocatedIn } from "../ecs/location";
 
 // =============================================================================
 // REGISTER SYSTEM-PROVIDED ACTIONS
@@ -58,12 +60,35 @@ ActionRegistry.registerSystemActions("DeterministicBehavior", [
  */
 export function scheduleExecutionSystem(world: World, ctx: SystemContext): void {
   const { Agent: AgentComp, Mind: MindComp, Name: NameComp, Schedule: ScheduleComp, Goal: GoalComp, Room: RoomComp } = ctx.components;
-  const { OccupiesRoom: OccupiesRoomRel, HasGoal: HasGoalRel, HasSchedule: HasScheduleRel } = ctx.relations;
+  const { HasGoal: HasGoalRel, HasSchedule: HasScheduleRel } = ctx.relations;
 
-  // Get current hour from world time (assuming ctx.elapsed is in ms)
-  const currentHour = Math.floor((ctx.elapsed / (1000 * 60 * 60)) % 24);
+  // Authoritative simulation time comes from the world context (TimeProgression system).
+  const worldContext = world as any;
+  const currentHour = typeof worldContext.time?.simulationHour === "number" ? worldContext.time.simulationHour : 8;
 
   const agents = Array.from(ctx.query(world, [Agent, Name]));
+  const allRooms = Array.from(ctx.query(world, [Room, Name]));
+
+  const findRoomMatching = (needle: string): number | undefined => {
+    const wanted = needle.trim().toLowerCase();
+    if (!wanted) return undefined;
+    return (
+      allRooms.find((roomEid) => String(NameComp.value[roomEid] || "").trim().toLowerCase() === wanted) ??
+      allRooms.find((roomEid) => String(NameComp.value[roomEid] || "").trim().toLowerCase().includes(wanted))
+    );
+  };
+
+  const isHourInActivity = (hour: number, startHour: number, duration: number): boolean => {
+    const dur = Math.max(1, Math.min(24, Math.floor(duration || 1)));
+    const start = ((startHour % 24) + 24) % 24;
+    const end = (start + dur) % 24;
+
+    if (start <= end) {
+      return hour >= start && hour < end;
+    }
+    // Spans midnight.
+    return hour >= start || hour < end;
+  };
 
   for (const eid of agents) {
     // Get agent's schedule
@@ -85,22 +110,28 @@ export function scheduleExecutionSystem(world: World, ctx: SystemContext): void 
     }
 
     // Find current activity
-    const currentActivity = activities.find(act => {
-      const endHour = act.startHour + (act.duration || 1);
-      return currentHour >= act.startHour && currentHour < endHour;
+    const currentActivity = activities.find((act) => {
+      const startHour = Number(act.startHour);
+      const duration = Number(act.duration ?? 1);
+      if (!Number.isFinite(startHour) || !Number.isFinite(duration)) return false;
+      return isHourInActivity(currentHour, Math.floor(startHour), Math.floor(duration));
     });
 
     if (!currentActivity || !currentActivity.location) continue;
+    const targetLocation = String(currentActivity.location || "").trim();
+    if (!targetLocation) continue;
+
+    // If no room exists that matches this location string, don't create a thrashy goal.
+    const targetRoomEid = findRoomMatching(targetLocation);
+    if (targetRoomEid === undefined) continue;
 
     // Get agent's current room
-    const currentRooms = ctx.getRelationTargets(world, eid, OccupiesRoom);
-    if (currentRooms.length === 0) continue;
-
-    const currentRoomEid = currentRooms[0];
+    const currentRoomEid = getRoomForEntity(world, eid);
+    if (currentRoomEid === undefined) continue;
     const currentRoomName = NameComp.value[currentRoomEid] || "";
 
-    // Check if agent is already at scheduled location
-    if (currentRoomName.toLowerCase().includes(currentActivity.location.toLowerCase())) {
+    // Check if agent is already at scheduled location.
+    if (currentRoomEid === targetRoomEid || currentRoomName.toLowerCase().includes(targetLocation.toLowerCase())) {
       continue; // Already there
     }
 
@@ -109,13 +140,17 @@ export function scheduleExecutionSystem(world: World, ctx: SystemContext): void 
     const hasMovementGoal = existingGoals.some(goalEid => {
       if (!ctx.hasComponent(world, goalEid, Goal)) return false;
       const desc = GoalComp.description[goalEid] || "";
-      return desc.includes("Go to") && desc.toLowerCase().includes(currentActivity.location!.toLowerCase());
+      const wanted = targetLocation.toLowerCase();
+      const wantedRoom = String(NameComp.value[targetRoomEid] || "").toLowerCase();
+      return desc.includes("Go to") && (desc.toLowerCase().includes(wanted) || (wantedRoom && desc.toLowerCase().includes(wantedRoom)));
     });
 
     if (hasMovementGoal) continue; // Already has goal
 
     // Calculate urgency based on how late
-    const minutesIntoActivity = (currentHour - currentActivity.startHour) * 60;
+    const start = Math.floor(Number(currentActivity.startHour));
+    const hoursIntoActivity = (currentHour - start + 24) % 24;
+    const minutesIntoActivity = hoursIntoActivity * 60;
     const urgency = Math.min(10, Math.floor(minutesIntoActivity / 10) + 3);
 
     // Create movement goal
@@ -123,14 +158,22 @@ export function scheduleExecutionSystem(world: World, ctx: SystemContext): void 
     ctx.addComponent(world, goalEid, Goal);
     ctx.addComponent(world, eid, HasGoal(goalEid));
 
-    GoalComp.description[goalEid] = `Go to ${currentActivity.location} for ${currentActivity.name}`;
+    GoalComp.description[goalEid] = `Go to ${NameComp.value[targetRoomEid] || targetLocation} for ${currentActivity.name}`;
     GoalComp.priority[goalEid] = urgency;
     GoalComp.status[goalEid] = "active";
     GoalComp.progress[goalEid] = 0;
     GoalComp.deadline[goalEid] = ctx.elapsed + (currentActivity.duration || 1) * 60 * 60 * 1000;
+    (GoalComp as any).createdAt[goalEid] = Date.now();
+    setGoalContract(world, goalEid, {
+      version: 1,
+      kind: "move_to_room",
+      params: { roomName: NameComp.value[targetRoomEid] || targetLocation, reason: `for ${currentActivity.name}` },
+      success: { type: "in_room", roomName: NameComp.value[targetRoomEid] || targetLocation },
+      description: GoalComp.description[goalEid],
+    });
 
     // Update mind focus
-    MindComp.focus[eid] = `going to ${currentActivity.location}`;
+    MindComp.focus[eid] = `going to ${NameComp.value[targetRoomEid] || targetLocation}`;
     MindComp.arousal[eid] = Math.min(1, (MindComp.arousal[eid] || 0.5) + 0.1);
 
     ctx.emit("goal_created", {
@@ -158,15 +201,22 @@ export function scheduleExecutionSystem(world: World, ctx: SystemContext): void 
  * 4. Advance to next step when complete
  */
 export function goalPursuitSystem(world: World, ctx: SystemContext): void {
-  const { Agent: AgentComp, Mind: MindComp, Name: NameComp, Goal: GoalComp, Plan: PlanComp, Room: RoomComp } = ctx.components;
-  const { OccupiesRoom: OccupiesRoomRel, HasGoal: HasGoalRel, HasPlan: HasPlanRel } = ctx.relations;
+  const {
+    Agent: AgentComp,
+    Mind: MindComp,
+    Name: NameComp,
+    Goal: GoalComp,
+    Plan: PlanComp,
+    Room: RoomComp,
+    GridPosition: GridPositionComp,
+  } = ctx.components;
+  const { HasGoal: HasGoalRel, HasPlan: HasPlanRel } = ctx.relations;
 
   const agents = Array.from(ctx.query(world, [Agent, Mind, Name]));
 
   for (const eid of agents) {
     // Skip if agent is not active or is highly aroused (let them calm down)
     if (!AgentComp.active[eid]) continue;
-    if ((MindComp.arousal[eid] || 0) > 0.9) continue;
 
     // Get active goals sorted by priority
     const goalEids = ctx.getRelationTargets(world, eid, HasGoal);
@@ -176,28 +226,54 @@ export function goalPursuitSystem(world: World, ctx: SystemContext): void {
 
     if (activeGoals.length === 0) continue;
 
-    const topGoal = activeGoals[0];
+    // Prefer movement goals if any exist.
+    // Cognition often creates movement goals as sub-steps toward higher-level goals,
+    // so movement goals must be executable even when a higher-priority non-movement goal exists.
+    const movementGoal = activeGoals.find((geid) => {
+      const kind = String((GoalComp as any).kind?.[geid] || "");
+      if (kind === "move_to_room") return true;
+      const desc = GoalComp.description[geid] || "";
+      return /Go to /i.test(desc);
+    });
+
+    const topGoal = movementGoal ?? activeGoals[0];
     const goalDesc = GoalComp.description[topGoal] || "";
 
-    // Check for movement goals (format: "Go to <location>..." or "Go to <location> to...")
-    const moveMatch = goalDesc.match(/Go to ([^.]+)/i);
-    if (moveMatch) {
-      // Remove "for activity" or "to activity" part - split on " for " or " to "
-      let targetLocation = moveMatch[1].trim();
-      const forIndex = targetLocation.indexOf(" for ");
-      const toIndex = targetLocation.indexOf(" to ");
+    // Execute movement goals.
+    let targetLocation: string | null = null;
+    const topKind = String((GoalComp as any).kind?.[topGoal] || "");
+    if (topKind === "move_to_room") {
+      try {
+        const raw = String((GoalComp as any).paramsJson?.[topGoal] || "").trim();
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const roomName = typeof parsed?.roomName === "string" ? parsed.roomName : "";
+          if (roomName.trim()) targetLocation = roomName.trim();
+        }
+      } catch {}
+    }
 
-      if (forIndex !== -1) {
-        targetLocation = targetLocation.substring(0, forIndex);
-      } else if (toIndex !== -1) {
-        targetLocation = targetLocation.substring(0, toIndex);
+    if (!targetLocation) {
+      // Legacy: parse description (format: "Go to <location>..." or "Go to <location> to...")
+      const moveMatch = goalDesc.match(/Go to ([^.]+)/i);
+      if (moveMatch) {
+        targetLocation = moveMatch[1].trim();
+        const forIndex = targetLocation.indexOf(" for ");
+        const toIndex = targetLocation.indexOf(" to ");
+
+        if (forIndex !== -1) {
+          targetLocation = targetLocation.substring(0, forIndex);
+        } else if (toIndex !== -1) {
+          targetLocation = targetLocation.substring(0, toIndex);
+        }
       }
+    }
+
+    if (targetLocation) {
 
       // Get current room
-      const currentRooms = ctx.getRelationTargets(world, eid, OccupiesRoom);
-      if (currentRooms.length === 0) continue;
-
-      const currentRoomEid = currentRooms[0];
+      const currentRoomEid = getRoomForEntity(world, eid);
+      if (currentRoomEid === undefined) continue;
       const currentRoomName = NameComp.value[currentRoomEid] || "";
 
       // Check if we're at target
@@ -208,6 +284,15 @@ export function goalPursuitSystem(world: World, ctx: SystemContext): void {
 
         MindComp.focus[eid] = "arrived";
         MindComp.arousal[eid] = Math.max(0, (MindComp.arousal[eid] || 0.5) - 0.1);
+
+        // Success feedback for cognition/harness metrics.
+        ctx.emit("stimulus", {
+          targetEid: eid,
+          type: "action_result",
+          modality: "cognitive",
+          content: `You are already at ${targetLocation}.`,
+          source: "movement",
+        });
 
         ctx.emit("goal_completed", {
           agent: NameComp.value[eid],
@@ -222,10 +307,10 @@ export function goalPursuitSystem(world: World, ctx: SystemContext): void {
       const { Room: RoomComponent, Name: NameComponent } = ctx.components;
       const allRooms = Array.from(ctx.query(world, [RoomComponent, NameComponent]));
 
-      const targetRoom = allRooms.find(roomEid => {
-        const roomName = NameComp.value[roomEid] || "";
-        return roomName.toLowerCase().includes(targetLocation.toLowerCase());
-      });
+      const wanted = targetLocation.toLowerCase();
+      const targetRoom =
+        allRooms.find((roomEid) => String(NameComp.value[roomEid] || "").trim().toLowerCase() === wanted) ??
+        allRooms.find((roomEid) => String(NameComp.value[roomEid] || "").trim().toLowerCase().includes(wanted));
 
       if (!targetRoom) {
         // Can't find room - fail goal
@@ -239,8 +324,7 @@ export function goalPursuitSystem(world: World, ctx: SystemContext): void {
       // Broadcast departure to agents in current room (visual stimulus)
       const agentsInCurrentRoom = Array.from(ctx.query(world, [Agent])).filter(otherEid => {
         if (otherEid === eid) return false;
-        const otherRooms = ctx.getRelationTargets(world, otherEid, OccupiesRoom);
-        return otherRooms.includes(currentRoomEid);
+        return getRoomForEntity(world, otherEid) === currentRoomEid;
       });
 
       for (const otherEid of agentsInCurrentRoom) {
@@ -252,15 +336,21 @@ export function goalPursuitSystem(world: World, ctx: SystemContext): void {
         });
       }
 
-      // Execute movement
-      removeComponent(world, eid, OccupiesRoom(currentRoomEid));
-      addComponent(world, eid, OccupiesRoom(targetRoom));
+      // Execute movement (canonical: `LocatedIn` is exclusive)
+      setLocatedIn(world, eid, targetRoom);
+
+      // Keep grid position consistent with room occupancy so RoomArrival doesn't immediately undo this.
+      const roomX = GridPositionComp?.x?.[targetRoom];
+      const roomY = GridPositionComp?.y?.[targetRoom];
+      if (typeof roomX === "number" && typeof roomY === "number") {
+        GridPositionComp.x[eid] = roomX;
+        GridPositionComp.y[eid] = roomY;
+      }
 
       // Broadcast arrival to agents in new room (visual stimulus)
       const agentsInTargetRoom = Array.from(ctx.query(world, [Agent])).filter(otherEid => {
         if (otherEid === eid) return false;
-        const otherRooms = ctx.getRelationTargets(world, otherEid, OccupiesRoom);
-        return otherRooms.includes(targetRoom);
+        return getRoomForEntity(world, otherEid) === targetRoom;
       });
 
       for (const otherEid of agentsInTargetRoom) {
@@ -275,9 +365,10 @@ export function goalPursuitSystem(world: World, ctx: SystemContext): void {
       // Notify the moving agent they've arrived (cognitive feedback)
       ctx.emit("stimulus", {
         targetEid: eid,
-        type: "cognitive",
+        type: "action_result",
+        modality: "cognitive",
         content: `You have arrived at ${targetRoomName}.`,
-        source: "self",
+        source: "movement",
       });
 
       // Update progress - complete since we're at destination now
@@ -316,7 +407,7 @@ export function goalPursuitSystem(world: World, ctx: SystemContext): void {
  */
 export function needsBasedMovementSystem(world: World, ctx: SystemContext): void {
   const { Agent: AgentComp, Mind: MindComp, Name: NameComp, Needs: NeedsComp, Goal: GoalComp, Room: RoomComp } = ctx.components;
-  const { OccupiesRoom: OccupiesRoomRel, HasGoal: HasGoalRel } = ctx.relations;
+  const { HasGoal: HasGoalRel } = ctx.relations;
 
   const agents = Array.from(ctx.query(world, [Agent, Needs, Name]));
 
@@ -329,27 +420,31 @@ export function needsBasedMovementSystem(world: World, ctx: SystemContext): void
 
   for (const eid of agents) {
     // Check needs thresholds
+    // Canonical needs scale:
+    // - hunger: 0..100 (higher = worse)
+    // - energy: 0..100 (lower = worse)
+    // - social: 0..100 (lower = worse; social satisfaction)
     const hunger = NeedsComp.hunger[eid] || 0;
-    const energy = NeedsComp.energy[eid] || 1;
-    const social = NeedsComp.social[eid] || 0.5;
+    const energy = NeedsComp.energy[eid] ?? 100;
+    const social = NeedsComp.social[eid] ?? 50;
 
     let criticalNeed: string | null = null;
     let needPriority = 0;
 
-    // Hunger > 0.8 is critical
-    if (hunger > 0.8) {
+    // Hunger >= 75 is critical
+    if (hunger >= 75) {
       criticalNeed = "hunger";
-      needPriority = Math.floor(hunger * 10);
+      needPriority = Math.min(10, Math.max(1, Math.floor(hunger / 10)));
     }
-    // Energy < 0.2 is critical
-    else if (energy < 0.2) {
+    // Energy <= 25 is critical
+    else if (energy <= 25) {
       criticalNeed = "energy";
-      needPriority = Math.floor((1 - energy) * 10);
+      needPriority = Math.min(10, Math.max(1, Math.floor((100 - energy) / 10)));
     }
-    // Social need check (for extroverts)
-    else if (social < 0.2) {
+    // Social satisfaction <= 25 suggests loneliness / need for company
+    else if (social <= 25) {
       criticalNeed = "social";
-      needPriority = Math.floor((1 - social) * 8);
+      needPriority = Math.min(8, Math.max(1, Math.floor((30 - social) / 5)));
     }
 
     if (!criticalNeed) continue;
@@ -370,15 +465,16 @@ export function needsBasedMovementSystem(world: World, ctx: SystemContext): void
 
     const targetRoom = allRooms.find(roomEid => {
       const roomName = (NameComp.value[roomEid] || "").toLowerCase();
-      return possibleLocations.some(loc => roomName.includes(loc));
+      const ambience = String(RoomComp.ambience?.[roomEid] || "").toLowerCase();
+      return possibleLocations.some(loc => roomName.includes(loc) || ambience.includes(loc));
     });
 
     if (!targetRoom) continue;
 
     // Get current room
-    const currentRooms = ctx.getRelationTargets(world, eid, OccupiesRoom);
-    if (currentRooms.length > 0) {
-      const currentRoomName = NameComp.value[currentRooms[0]] || "";
+    const currentRoomEid = getRoomForEntity(world, eid);
+    if (currentRoomEid !== undefined) {
+      const currentRoomName = NameComp.value[currentRoomEid] || "";
       const targetRoomName = NameComp.value[targetRoom] || "";
 
       // Skip if already there
@@ -400,6 +496,14 @@ export function needsBasedMovementSystem(world: World, ctx: SystemContext): void
     GoalComp.priority[goalEid] = needPriority;
     GoalComp.status[goalEid] = "active";
     GoalComp.progress[goalEid] = 0;
+    (GoalComp as any).createdAt[goalEid] = Date.now();
+    setGoalContract(world, goalEid, {
+      version: 1,
+      kind: "move_to_room",
+      params: { roomName: NameComp.value[targetRoom], reason: `need:${criticalNeed}` },
+      success: { type: "in_room", roomName: NameComp.value[targetRoom] },
+      description: GoalComp.description[goalEid],
+    });
 
     // Update mind state
     MindComp.focus[eid] = needDescriptions[criticalNeed];
@@ -412,7 +516,7 @@ export function needsBasedMovementSystem(world: World, ctx: SystemContext): void
       destination: NameComp.value[targetRoom],
     });
 
-    ctx.log(`[NeedsMovement] ${NameComp.value[eid]} needs to ${needDescriptions[criticalNeed]} (${criticalNeed}: ${criticalNeed === "hunger" ? hunger.toFixed(2) : criticalNeed === "energy" ? energy.toFixed(2) : social.toFixed(2)})`);
+    ctx.log(`[NeedsMovement] ${NameComp.value[eid]} needs to ${needDescriptions[criticalNeed]} (${criticalNeed}: ${criticalNeed === "hunger" ? hunger.toFixed(0) : criticalNeed === "energy" ? energy.toFixed(0) : social.toFixed(0)})`);
   }
 }
 
@@ -477,25 +581,30 @@ export function needsDecaySystem(world: World, ctx: SystemContext): void {
   const agents = Array.from(ctx.query(world, [Agent, Needs]));
   const deltaSeconds = ctx.delta / 1000;
 
-  // Decay rates per second
-  const HUNGER_RATE = 0.001;   // Gets hungry slowly
-  const ENERGY_RATE = 0.0005;  // Energy depletes very slowly
-  const SOCIAL_RATE = 0.0008;  // Social need grows moderately
+  // Canonical needs scale:
+  // - hunger: 0..100 (higher = worse)
+  // - energy: 0..100 (lower = worse)
+  // - social: 0..100 (lower = worse; satisfaction decays over time)
+  //
+  // Rates are per second.
+  const HUNGER_RATE = 0.02;   // +0.02 hunger per second
+  const ENERGY_RATE = 0.01;   // -0.01 energy per second (scaled by arousal)
+  const SOCIAL_RATE = 0.01;   // -0.01 social satisfaction per second
 
   for (const eid of agents) {
     // Hunger increases over time
     const oldHunger = NeedsComp.hunger[eid] || 0;
-    NeedsComp.hunger[eid] = Math.min(1, oldHunger + HUNGER_RATE * deltaSeconds);
+    NeedsComp.hunger[eid] = Math.min(100, oldHunger + HUNGER_RATE * 100 * deltaSeconds);
 
     // Energy decreases over time (affected by arousal)
     const arousal = MindComp.arousal[eid] || 0.5;
-    const oldEnergy = NeedsComp.energy[eid] || 1;
-    const energyDrain = ENERGY_RATE * (1 + arousal) * deltaSeconds; // More active = more drain
+    const oldEnergy = NeedsComp.energy[eid] ?? 100;
+    const energyDrain = ENERGY_RATE * (1 + arousal) * 100 * deltaSeconds; // More active = more drain
     NeedsComp.energy[eid] = Math.max(0, oldEnergy - energyDrain);
 
     // Social need increases (faster for extroverts if we had personality)
-    const oldSocial = NeedsComp.social[eid] || 0.5;
-    NeedsComp.social[eid] = Math.max(0, Math.min(1, oldSocial - SOCIAL_RATE * deltaSeconds));
+    const oldSocial = NeedsComp.social[eid] ?? 50;
+    NeedsComp.social[eid] = Math.max(0, Math.min(100, oldSocial - SOCIAL_RATE * 100 * deltaSeconds));
   }
 }
 
@@ -510,15 +619,14 @@ export function needsDecaySystem(world: World, ctx: SystemContext): void {
  */
 export function locationNeedSatisfactionSystem(world: World, ctx: SystemContext): void {
   const { Agent: AgentComp, Needs: NeedsComp, Name: NameComp, Room: RoomComp } = ctx.components;
-  const { OccupiesRoom: OccupiesRoomRel } = ctx.relations;
 
   const agents = Array.from(ctx.query(world, [Agent, Needs]));
   const deltaSeconds = ctx.delta / 1000;
 
-  // Satisfaction rates per second
-  const HUNGER_SATISFY_RATE = 0.01;
-  const ENERGY_SATISFY_RATE = 0.005;
-  const SOCIAL_SATISFY_RATE = 0.003;
+  // Satisfaction rates per second (normalized 0..1, then scaled to 0..100 points).
+  const HUNGER_SATISFY_RATE = 0.04; // ~4 hunger points per second in food locations
+  const ENERGY_SATISFY_RATE = 0.03; // ~3 energy points per second in rest locations
+  const SOCIAL_SATISFY_RATE = 0.02; // ~2 social points per second per nearby agent
 
   // Location keywords that satisfy needs
   const hungerLocations = ["kitchen", "tavern", "dining", "bakery", "inn"];
@@ -526,19 +634,18 @@ export function locationNeedSatisfactionSystem(world: World, ctx: SystemContext)
   const socialLocations = ["square", "tavern", "market", "temple", "hall", "inn"];
 
   for (const eid of agents) {
-    const roomTargets = ctx.getRelationTargets(world, eid, OccupiesRoom);
-    if (roomTargets.length === 0) continue;
-
-    const roomEid = roomTargets[0];
+    const roomEid = getRoomForEntity(world, eid);
+    if (roomEid === undefined) continue;
     const roomName = (NameComp.value[roomEid] || "").toLowerCase();
 
     // Check if location satisfies hunger
     if (hungerLocations.some(loc => roomName.includes(loc))) {
       const oldHunger = NeedsComp.hunger[eid] || 0;
       if (oldHunger > 0) {
-        NeedsComp.hunger[eid] = Math.max(0, oldHunger - HUNGER_SATISFY_RATE * deltaSeconds);
+        const drop = HUNGER_SATISFY_RATE * 100 * deltaSeconds;
+        NeedsComp.hunger[eid] = Math.max(0, oldHunger - drop);
 
-        if (oldHunger > 0.5 && NeedsComp.hunger[eid] <= 0.5) {
+        if (oldHunger >= 60 && NeedsComp.hunger[eid] < 60) {
           ctx.emit("need_satisfied", {
             agent: NameComp.value[eid],
             need: "hunger",
@@ -550,11 +657,12 @@ export function locationNeedSatisfactionSystem(world: World, ctx: SystemContext)
 
     // Check if location restores energy
     if (energyLocations.some(loc => roomName.includes(loc))) {
-      const oldEnergy = NeedsComp.energy[eid] || 1;
-      if (oldEnergy < 1) {
-        NeedsComp.energy[eid] = Math.min(1, oldEnergy + ENERGY_SATISFY_RATE * deltaSeconds);
+      const oldEnergy = NeedsComp.energy[eid] ?? 100;
+      if (oldEnergy < 100) {
+        const gain = ENERGY_SATISFY_RATE * 100 * deltaSeconds;
+        NeedsComp.energy[eid] = Math.min(100, oldEnergy + gain);
 
-        if (oldEnergy < 0.5 && NeedsComp.energy[eid] >= 0.5) {
+        if (oldEnergy <= 40 && NeedsComp.energy[eid] > 40) {
           ctx.emit("need_satisfied", {
             agent: NameComp.value[eid],
             need: "energy",
@@ -569,14 +677,13 @@ export function locationNeedSatisfactionSystem(world: World, ctx: SystemContext)
       // Also check if there are other agents here
       const otherAgents = Array.from(ctx.query(world, [Agent])).filter(otherEid => {
         if (otherEid === eid) return false;
-        const otherRooms = ctx.getRelationTargets(world, otherEid, OccupiesRoom);
-        return otherRooms.includes(roomEid);
+        return getRoomForEntity(world, otherEid) === roomEid;
       });
 
       if (otherAgents.length > 0) {
-        const oldSocial = NeedsComp.social[eid] || 0.5;
-        const socialGain = SOCIAL_SATISFY_RATE * (1 + otherAgents.length * 0.5) * deltaSeconds;
-        NeedsComp.social[eid] = Math.min(1, oldSocial + socialGain);
+        const oldSocial = NeedsComp.social[eid] ?? 50;
+        const socialGain = SOCIAL_SATISFY_RATE * 100 * otherAgents.length * deltaSeconds;
+        NeedsComp.social[eid] = Math.min(100, oldSocial + socialGain);
       }
     }
   }

@@ -6,5 +6,5 @@ if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
   process.exit(1);
 }
 
-const server = createArgosServer(3000);
+const server = createArgosServer(3456);
 server.start();

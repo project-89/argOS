@@ -256,6 +256,10 @@ interface FileOutputs {
   rawLogBuffer: Array<{timestamp: number; type: string; data: any}>;
 }
 
+function canWriteStream(stream: fs.WriteStream): boolean {
+  return !stream.destroyed && !stream.writableEnded;
+}
+
 function initFileOutputs(outputDir: string): FileOutputs {
   // Create output directory
   if (!fs.existsSync(outputDir)) {
@@ -288,23 +292,29 @@ function initFileOutputs(outputDir: string): FileOutputs {
 }
 
 function closeFileOutputs(outputs: FileOutputs): void {
-  outputs.narrativeStream.write("\n" + "═".repeat(70) + "\n");
-  outputs.narrativeStream.write("THE END\n");
-  outputs.narrativeStream.write("═".repeat(70) + "\n");
-  outputs.narrativeStream.end();
+  if (canWriteStream(outputs.narrativeStream)) {
+    outputs.narrativeStream.write("\n" + "═".repeat(70) + "\n");
+    outputs.narrativeStream.write("THE END\n");
+    outputs.narrativeStream.write("═".repeat(70) + "\n");
+    outputs.narrativeStream.end();
+  }
 
   // Finalize JSON array
-  outputs.rawLogStream.write("\n]");
-  outputs.rawLogStream.end();
+  if (canWriteStream(outputs.rawLogStream)) {
+    outputs.rawLogStream.write("\n]");
+    outputs.rawLogStream.end();
+  }
 }
 
 function writeNarrative(outputs: FileOutputs, prose: string): void {
+  if (!canWriteStream(outputs.narrativeStream)) return;
   const formatted = `${prose}\n\n`;
   outputs.narrativeStream.write(formatted);
   outputs.narrativeBuffer.push(prose);
 }
 
 function writeRawLog(outputs: FileOutputs, type: string, data: any): void {
+  if (!canWriteStream(outputs.rawLogStream)) return;
   const entry = { timestamp: Date.now(), type, data };
   const needsComma = outputs.rawLogBuffer.length > 0;
   outputs.rawLogStream.write((needsComma ? ",\n" : "") + JSON.stringify(entry));
@@ -1903,10 +1913,8 @@ async function run(state: StressTestState): Promise<void> {
   stopSimulation(state.simulation);
   await new Promise(resolve => setTimeout(resolve, 2000));
 
-  // Close file outputs
-  closeFileOutputs(state.outputs);
-
   printFinalReport(state);
+  closeFileOutputs(state.outputs);
 }
 
 async function main(): Promise<void> {

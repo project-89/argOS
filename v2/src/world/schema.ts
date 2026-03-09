@@ -7,27 +7,13 @@
  * - State transition rules
  * - The bridge between semantic descriptions and ECS entities
  */
-
-import { createRelation } from "bitecs";
+import { AdjacentTo, ContainedIn, OccupiedBy, OnTopOf, OwnedBy } from "../ecs/relations";
 
 // ============================================================================
 // RELATIONS - Spatial and ownership connections between entities
 // ============================================================================
 
-/** Entity is contained inside another (item in chest, object in room) */
-export const ContainedIn = createRelation({ autoRemoveSubject: true });
-
-/** Entity is on top of another (book on table, cat on bed) */
-export const OnTopOf = createRelation();
-
-/** Entity is occupied by another (bed occupied by sleeper) */
-export const OccupiedBy = createRelation({ exclusive: true });
-
-/** Entity is owned by another (farmer owns the barn) */
-export const OwnedBy = createRelation();
-
-/** Entity is adjacent to another (for spatial queries) */
-export const AdjacentTo = createRelation();
+export { ContainedIn, OnTopOf, OccupiedBy, OwnedBy, AdjacentTo };
 
 // ============================================================================
 // EFFECT SYSTEM - Real changes to ECS data (used by affordances AND rules)
@@ -50,12 +36,13 @@ export interface EffectDefinition {
   /** What kind of effect */
   type:
     | "modify_component"   // Change component data
-    | "set_state"          // Change ObjectMeta.state (recalculates traits)
+    | "set_state"          // Change ObjectState.current (recalculates traits/description)
     | "add_trait"          // Add a trait
     | "remove_trait"       // Remove a trait
     | "destroy"            // Remove entity from world
     | "spawn"              // Create a new entity
     | "emit_stimulus"      // Broadcast perception to nearby agents
+    | "run_tool"           // Execute a tool (terminal, repo ops, web, etc.)
     | "transfer"           // Move item to container/inventory
     | "add_relation"       // Create relation between entities
     | "remove_relation";   // Remove relation
@@ -81,6 +68,27 @@ export interface EffectDefinition {
   stimulusType?: string;
   stimulusContent?: string;
   stimulusRadius?: number;
+
+  /** For run_tool */
+  toolId?: string;
+  /**
+   * Tool input source. When "affordanceArgs", tool input comes from whatever
+   * text follows the affordance name (e.g., interact.content = "run_command npm test").
+   */
+  toolInputFrom?: "affordanceArgs" | "affordanceArgsJson" | "static";
+  /** Static tool input (used when toolInputFrom="static") */
+  toolInput?: any;
+  /** Emit tool results as a stimulus to this target (default: actor) */
+  toolResultTarget?: EffectTarget;
+  /** Stimulus type for tool results (default: "tool_result") */
+  toolResultType?: string;
+  /**
+   * Whether a tool returning `ok:false` should fail the affordance.
+   *
+   * Default: true (preserves legacy behavior).
+   * For workflows like running tests, a non-zero exit code is evidence and should not fail the action.
+   */
+  failOnToolError?: boolean;
 
   /** For transfer */
   containerName?: string;
@@ -140,20 +148,18 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
     blockedBy: ["tooHeavy", "fixed"],
     descriptionTemplate: "{actor.name} picks up {target.name}.",
     effects: [
-      { type: "add_trait", target: "target", trait: "held" },
-      { type: "add_relation", target: "target", relation: "HeldBy", relatedEntity: "{actor}" },
-      { type: "remove_trait", target: "target", trait: "takeable" },
+      // Canonical: move target into actor (inventory/holding is derived from LocatedIn)
+      { type: "transfer", target: "target", containerName: "actor" },
     ],
   },
 
   drop: {
     name: "drop",
-    requires: ["held"],
+    requires: [],
     descriptionTemplate: "{actor.name} drops {target.name}.",
     effects: [
-      { type: "remove_trait", target: "target", trait: "held" },
-      { type: "remove_relation", target: "target", relation: "HeldBy", relatedEntity: "{actor}" },
-      { type: "add_trait", target: "target", trait: "takeable" },
+      // Canonical: move target into actor's room (on the ground)
+      { type: "transfer", target: "target", containerName: "room" },
     ],
   },
 
@@ -266,6 +272,256 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
       { type: "emit_stimulus", target: "target", stimulusType: "speech", stimulusContent: "{actor.name} wants to talk to you." },
     ],
   },
+
+  // ==========================================================================
+  // DEVICE AFFORDANCES - For technology objects
+  // ==========================================================================
+
+  power_on: {
+    name: "power_on",
+    requires: ["device"],
+    blockedBy: ["powered_on", "broken"],
+    descriptionTemplate: "{actor.name} turns on {target.name}.",
+    effects: [
+      { type: "set_state", target: "target", state: "powered_on" },
+    ],
+  },
+
+  power_off: {
+    name: "power_off",
+    requires: ["device"],
+    blockedBy: ["powered_off"],
+    descriptionTemplate: "{actor.name} turns off {target.name}.",
+    effects: [
+      { type: "set_state", target: "target", state: "powered_off" },
+    ],
+  },
+
+  use_phone: {
+    name: "use_phone",
+    requires: ["communication", "usable"],
+    descriptionTemplate: "{actor.name} uses their phone.",
+    effects: [
+      { type: "emit_stimulus", target: "actor", stimulusType: "device", stimulusContent: "{actor.name} is using their phone." },
+    ],
+  },
+
+  answer_call: {
+    name: "answer_call",
+    requires: ["answerable"],
+    descriptionTemplate: "{actor.name} answers the phone.",
+    effects: [
+      { type: "set_state", target: "target", state: "in_call" },
+      { type: "emit_stimulus", target: "nearby", stimulusType: "speech", stimulusContent: "{actor.name} answers the phone: 'Hello?'" },
+    ],
+  },
+
+  make_call: {
+    name: "make_call",
+    requires: ["callable"],
+    descriptionTemplate: "{actor.name} makes a phone call.",
+    effects: [
+      { type: "set_state", target: "target", state: "in_call" },
+      { type: "emit_stimulus", target: "nearby", stimulusType: "speech", stimulusContent: "{actor.name} dials a number on their phone." },
+    ],
+  },
+
+  end_call: {
+    name: "end_call",
+    requires: ["in_use"],
+    descriptionTemplate: "{actor.name} ends the call.",
+    effects: [
+      { type: "set_state", target: "target", state: "powered_on" },
+      { type: "emit_stimulus", target: "nearby", stimulusType: "speech", stimulusContent: "{actor.name} hangs up the phone." },
+    ],
+  },
+
+  send_text: {
+    name: "send_text",
+    requires: ["textable"],
+    descriptionTemplate: "{actor.name} sends a text message.",
+    effects: [
+      { type: "emit_stimulus", target: "actor", stimulusType: "device", stimulusContent: "Message sent." },
+    ],
+  },
+
+  use_computer: {
+    name: "use_computer",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} uses the computer.",
+    effects: [
+      { type: "set_state", target: "target", state: "in_use" },
+      { type: "emit_stimulus", target: "nearby", stimulusType: "sound", stimulusContent: "Keyboard clicks come from {actor.name}'s direction." },
+    ],
+  },
+
+  browse_web: {
+    name: "browse_web",
+    requires: ["browsable"],
+    descriptionTemplate: "{actor.name} browses the web.",
+    effects: [
+      { type: "emit_stimulus", target: "actor", stimulusType: "device", stimulusContent: "Web browser displays search results." },
+    ],
+  },
+
+  send_email: {
+    name: "send_email",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} sends an email.",
+    effects: [
+      { type: "emit_stimulus", target: "actor", stimulusType: "device", stimulusContent: "Email sent successfully." },
+    ],
+  },
+
+  check_email: {
+    name: "check_email",
+    requires: ["usable", "browsable"],
+    descriptionTemplate: "{actor.name} checks their email.",
+    effects: [
+      { type: "emit_stimulus", target: "actor", stimulusType: "device", stimulusContent: "Checking email inbox..." },
+    ],
+  },
+
+  search_files: {
+    name: "search_files",
+    requires: ["searchable"],
+    descriptionTemplate: "{actor.name} searches through files.",
+    effects: [
+      { type: "emit_stimulus", target: "actor", stimulusType: "device", stimulusContent: "Searching files..." },
+    ],
+  },
+
+  run_command: {
+    name: "run_command",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} runs a command on {target.name}.",
+    effects: [
+      { type: "run_tool", toolId: "terminal.run", toolInputFrom: "affordanceArgs", toolResultType: "tool_result", failOnToolError: false },
+    ],
+  },
+
+  list_dir: {
+    name: "list_dir",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} checks files on {target.name}.",
+    effects: [
+      // Accept either JSON args or simple string args; see workspace.list_dir tool parser.
+      { type: "run_tool", toolId: "workspace.list_dir", toolInputFrom: "affordanceArgs", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  read_file: {
+    name: "read_file",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} reads a file on {target.name}.",
+    effects: [
+      // Accept either JSON args or simple string args; see workspace.read_file tool parser.
+      { type: "run_tool", toolId: "workspace.read_file", toolInputFrom: "affordanceArgs", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  write_file: {
+    name: "write_file",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} writes a file on {target.name}.",
+    effects: [
+      // Accept either JSON args or a multiline "<path>\\n<content>" format; see workspace.write_file tool parser.
+      { type: "run_tool", toolId: "workspace.write_file", toolInputFrom: "affordanceArgs", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  replace_in_file: {
+    name: "replace_in_file",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} edits a file on {target.name}.",
+    effects: [
+      { type: "run_tool", toolId: "workspace.replace_in_file", toolInputFrom: "affordanceArgs", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  init_workspace_fixture: {
+    name: "init_workspace_fixture",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} sets up a workspace on {target.name}.",
+    effects: [
+      { type: "run_tool", toolId: "workspace.init_fixture", toolInputFrom: "affordanceArgsJson", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  gemini_cli: {
+    name: "gemini_cli",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} consults a coding assistant on {target.name}.",
+    effects: [
+      // Provide plain args as both {input,command}. The office tool reads prompt from params.prompt/input/command.
+      { type: "run_tool", toolId: "gemini.cli", toolInputFrom: "affordanceArgs", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  generate_image: {
+    name: "generate_image",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} generates an image on {target.name}.",
+    effects: [
+      { type: "run_tool", toolId: "nano_banana.generate_image", toolInputFrom: "affordanceArgsJson", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  describe_image: {
+    name: "describe_image",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} inspects an image on {target.name}.",
+    effects: [
+      // Accept either JSON args or simple string args; see vision.describe_image tool parser.
+      { type: "run_tool", toolId: "vision.describe_image", toolInputFrom: "affordanceArgs", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  edit_image: {
+    name: "edit_image",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} edits an image on {target.name}.",
+    effects: [
+      { type: "run_tool", toolId: "nano_banana.edit_image", toolInputFrom: "affordanceArgsJson", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  git_apply_from_last_gemini: {
+    name: "git_apply_from_last_gemini",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} applies the last coding assistant patch on {target.name}.",
+    effects: [
+      // Args optionally include an allowlist of workspace-relative paths, e.g. "src/math.cjs src/service.cjs".
+      { type: "run_tool", toolId: "workspace.git_apply_from_last_gemini", toolInputFrom: "affordanceArgs", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  repo_init: {
+    name: "repo_init",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} initializes a repo service on {target.name}.",
+    effects: [
+      { type: "run_tool", toolId: "repo.init", toolInputFrom: "affordanceArgsJson", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  repo_checkout: {
+    name: "repo_checkout",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} checks out a repo onto {target.name}.",
+    effects: [
+      { type: "run_tool", toolId: "repo.checkout", toolInputFrom: "affordanceArgsJson", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
+
+  repo_submit_pr: {
+    name: "repo_submit_pr",
+    requires: ["usable", "typeable"],
+    descriptionTemplate: "{actor.name} submits a pull request from {target.name}.",
+    effects: [
+      { type: "run_tool", toolId: "repo.submit_pr", toolInputFrom: "affordanceArgsJson", toolResultType: "tool_result", failOnToolError: true },
+    ],
+  },
 };
 
 // ============================================================================
@@ -360,8 +616,78 @@ export interface ObjectTypeDefinition {
   }>;
 }
 
+function normalizeEdibleType(def: ObjectTypeDefinition): ObjectTypeDefinition {
+  if (!def.traits.includes("edible")) return def;
+
+  const states: Record<string, StateDefinition> = { ...(def.states || {}) };
+  const baseState =
+    states[def.defaultState] ||
+    states.fresh ||
+    states.normal || {
+      description: `A ${def.name}.`,
+      stimuli: [{ type: "visual", template: `A ${def.name} is here`, intensity: 0.4 }],
+    };
+
+  if (!states.fresh) {
+    states.fresh = {
+      ...baseState,
+      description: baseState.description || "It looks fresh.",
+      stimuli: baseState.stimuli || [{ type: "visual", template: `Fresh ${def.name} sits here`, intensity: 0.5 }],
+    };
+  }
+
+  if (!states.stale) {
+    states.stale = {
+      description: "It's a bit past its prime.",
+      stimuli: [{ type: "visual", template: `Slightly stale ${def.name} sits here`, intensity: 0.3 }],
+    };
+  }
+
+  if (!states.rotten) {
+    states.rotten = {
+      description: "It has gone bad.",
+      blockedTraits: ["edible"],
+      stimuli: [
+        { type: "visual", template: `Rotten ${def.name} sits here, unpleasant to behold`, intensity: 0.4 },
+        { type: "smell", template: "A foul stench rises from the rotten food", intensity: 0.8 },
+      ],
+    };
+  }
+
+  const transitions = [...(def.transitions || [])];
+  const hasFreshToStale = transitions.some(t => t.from === "fresh" && t.to === "stale" && t.trigger === "decay");
+  const hasStaleToRotten = transitions.some(t => t.from === "stale" && t.to === "rotten" && t.trigger === "decay");
+  if (!hasFreshToStale) transitions.push({ from: "fresh", to: "stale", trigger: "decay" });
+  if (!hasStaleToRotten) transitions.push({ from: "stale", to: "rotten", trigger: "decay" });
+
+  const defaultState = states[def.defaultState] ? def.defaultState : "fresh";
+
+  return { ...def, states, transitions, defaultState };
+}
+
 // Base object types (GodAI can add more)
 export const BASE_OBJECT_TYPES: Record<string, ObjectTypeDefinition> = {
+  // Generic object used for simple props created outside specialized schema types.
+  // Lets the engine keep ObjectType/ObjectState/Traits canonical even for “plain objects”.
+  object: {
+    name: "object",
+    description: "{name}",
+    traits: ["examinable"],
+    states: {
+      normal: { description: "{description}" },
+      occupied: {
+        description: "{name} is currently occupied.",
+        blockedTraits: ["sleepable", "sittable"],
+      },
+      empty: {
+        description: "{name} appears empty.",
+        blockedTraits: ["drinkable"],
+      },
+    },
+    defaultState: "normal",
+    category: "misc",
+  },
+
   bed: {
     name: "bed",
     description: "A {adjective} bed with a {material} frame",
@@ -657,6 +983,418 @@ export const BASE_OBJECT_TYPES: Record<string, ObjectTypeDefinition> = {
     containerCapacity: 100,
     category: "location",
   },
+
+  // ==========================================================================
+  // TECHNOLOGY - Objects that provide tool access
+  // ==========================================================================
+
+  phone: {
+    name: "phone",
+    description: "A {adjective} phone",
+    traits: ["takeable", "examinable", "device", "communication"],
+    states: {
+      powered_off: {
+        description: "The phone is turned off.",
+        stimuli: [
+          { type: "visual", template: "A phone lies here, screen dark", intensity: 0.2 },
+        ],
+      },
+      powered_on: {
+        description: "The phone is on, screen glowing softly.",
+        traits: ["usable"],
+        stimuli: [
+          { type: "visual", template: "A phone glows with its standby screen", intensity: 0.4 },
+          { type: "light", template: "Soft light emanates from the phone screen", intensity: 0.2, radius: 1 },
+        ],
+      },
+      ringing: {
+        description: "The phone is ringing!",
+        traits: ["answerable"],
+        stimuli: [
+          { type: "visual", template: "A phone buzzes and lights up with an incoming call", intensity: 0.8 },
+          { type: "sound", template: "A phone rings insistently", intensity: 0.9, radius: 8 },
+        ],
+      },
+      in_call: {
+        description: "The phone is connected to a call.",
+        traits: ["in_use"],
+        stimuli: [
+          { type: "visual", template: "A phone shows an active call in progress", intensity: 0.5 },
+        ],
+      },
+      low_battery: {
+        description: "The phone's battery is critically low.",
+        traits: ["usable"],
+        stimuli: [
+          { type: "visual", template: "A phone flashes a low battery warning", intensity: 0.6 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "powered_off", to: "powered_on", trigger: "power_on" },
+      { from: "powered_on", to: "powered_off", trigger: "power_off" },
+      { from: "powered_on", to: "ringing", trigger: "incoming_call" },
+      { from: "ringing", to: "in_call", trigger: "answer_call" },
+      { from: "ringing", to: "powered_on", trigger: "decline_call" },
+      { from: "in_call", to: "powered_on", trigger: "end_call" },
+      { from: "powered_on", to: "low_battery", trigger: "battery_drain" },
+      { from: "low_battery", to: "powered_off", trigger: "battery_dead" },
+    ],
+    defaultState: "powered_on",
+    defaultComponents: [
+      { name: "Battery", values: { current: 100, max: 100 }, dynamic: true, schema: { current: "number", max: "number" } },
+    ],
+    category: "technology",
+    variables: {
+      adjective: { type: "enum", default: "basic", options: ["basic", "old", "worn", "sleek"] },
+    },
+  },
+
+  smartphone: {
+    name: "smartphone",
+    description: "A {adjective} smartphone",
+    traits: ["takeable", "examinable", "device", "communication", "computer", "camera"],
+    states: {
+      powered_off: {
+        description: "The smartphone is turned off.",
+        stimuli: [
+          { type: "visual", template: "A smartphone lies here, screen dark", intensity: 0.2 },
+        ],
+      },
+      powered_on: {
+        description: "The smartphone glows with apps and notifications.",
+        traits: ["usable", "browsable", "callable", "textable"],
+        stimuli: [
+          { type: "visual", template: "A smartphone displays its home screen with various apps", intensity: 0.5 },
+          { type: "light", template: "The phone's bright screen illuminates the area", intensity: 0.3, radius: 1 },
+        ],
+      },
+      ringing: {
+        description: "The smartphone is ringing with an incoming call!",
+        traits: ["answerable"],
+        stimuli: [
+          { type: "visual", template: "A smartphone vibrates and displays an incoming call", intensity: 0.8 },
+          { type: "sound", template: "A phone rings with a digital ringtone", intensity: 0.9, radius: 8 },
+        ],
+      },
+      in_call: {
+        description: "The smartphone shows an active call.",
+        traits: ["in_use"],
+        stimuli: [
+          { type: "visual", template: "A smartphone shows call controls on its screen", intensity: 0.5 },
+        ],
+      },
+      notification: {
+        description: "The smartphone buzzes with a notification.",
+        traits: ["usable", "browsable", "callable", "textable"],
+        stimuli: [
+          { type: "visual", template: "A notification banner appears on the phone", intensity: 0.6 },
+          { type: "sound", template: "A soft notification chime sounds", intensity: 0.4, radius: 3 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "powered_off", to: "powered_on", trigger: "power_on" },
+      { from: "powered_on", to: "powered_off", trigger: "power_off" },
+      { from: "powered_on", to: "ringing", trigger: "incoming_call" },
+      { from: "ringing", to: "in_call", trigger: "answer_call" },
+      { from: "ringing", to: "powered_on", trigger: "decline_call" },
+      { from: "in_call", to: "powered_on", trigger: "end_call" },
+      { from: "powered_on", to: "notification", trigger: "receive_notification" },
+      { from: "notification", to: "powered_on", trigger: "dismiss" },
+    ],
+    defaultState: "powered_on",
+    defaultComponents: [
+      { name: "Battery", values: { current: 100, max: 100 }, dynamic: true, schema: { current: "number", max: "number" } },
+      { name: "Storage", values: { used: 20, max: 128 }, dynamic: true, schema: { used: "number", max: "number" } },
+    ],
+    category: "technology",
+    variables: {
+      adjective: { type: "enum", default: "modern", options: ["modern", "high-end", "budget", "cracked"] },
+    },
+  },
+
+  computer: {
+    name: "computer",
+    description: "A {adjective} computer with a {screenSize} monitor",
+    traits: ["examinable", "device", "computer", "workstation", "furniture"],
+    states: {
+      powered_off: {
+        description: "The computer is turned off, screen dark.",
+        stimuli: [
+          { type: "visual", template: "A computer sits here, monitor dark and silent", intensity: 0.2 },
+        ],
+      },
+      powered_on: {
+        description: "The computer hums quietly, desktop visible on screen.",
+        traits: ["usable", "browsable", "typeable"],
+        stimuli: [
+          { type: "visual", template: "A computer displays its desktop with icons and windows", intensity: 0.6 },
+          { type: "light", template: "The monitor casts a blue-white glow", intensity: 0.4, radius: 2 },
+          { type: "sound", template: "The computer hums softly with fans spinning", intensity: 0.2 },
+        ],
+      },
+      locked: {
+        description: "The computer shows a login screen.",
+        stimuli: [
+          { type: "visual", template: "A computer displays a password prompt", intensity: 0.5 },
+          { type: "light", template: "The login screen glows steadily", intensity: 0.3, radius: 2 },
+        ],
+      },
+      in_use: {
+        description: "Someone is actively using the computer.",
+        // "in_use" should not make the computer unusable for tool-backed actions (terminal/file/wiki/etc).
+        // Treat it as "powered_on + occupied" so multi-agent office scenarios can share a workstation.
+        traits: ["usable", "browsable", "typeable", "occupied"],
+        stimuli: [
+          { type: "visual", template: "The computer screen shows active work in progress", intensity: 0.6 },
+          { type: "sound", template: "Keyboard clicks echo from the workstation", intensity: 0.3 },
+        ],
+      },
+      error: {
+        description: "The computer displays an error message.",
+        stimuli: [
+          { type: "visual", template: "An error dialog flashes on the computer screen", intensity: 0.7 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "powered_off", to: "locked", trigger: "power_on" },
+      { from: "locked", to: "powered_on", trigger: "login" },
+      { from: "powered_on", to: "locked", trigger: "lock" },
+      { from: "powered_on", to: "powered_off", trigger: "shutdown" },
+      { from: "powered_on", to: "in_use", trigger: "start_using" },
+      { from: "in_use", to: "powered_on", trigger: "stop_using" },
+      { from: "powered_on", to: "error", trigger: "crash" },
+      { from: "error", to: "powered_off", trigger: "force_shutdown" },
+    ],
+    defaultState: "powered_off",
+    defaultComponents: [
+      { name: "ComputerSpec", values: { ram: 16, storage: 512 }, dynamic: true, schema: { ram: "number", storage: "number" } },
+    ],
+    category: "technology",
+    variables: {
+      adjective: { type: "enum", default: "standard", options: ["standard", "gaming", "office", "old", "high-end"] },
+      screenSize: { type: "enum", default: "24-inch", options: ["21-inch", "24-inch", "27-inch", "32-inch", "dual"] },
+    },
+  },
+
+  laptop: {
+    name: "laptop",
+    description: "A {adjective} laptop computer",
+    traits: ["takeable", "examinable", "device", "computer", "portable"],
+    states: {
+      closed: {
+        description: "The laptop is closed.",
+        stimuli: [
+          { type: "visual", template: "A closed laptop sits here", intensity: 0.2 },
+        ],
+      },
+      powered_off: {
+        description: "The laptop is open but powered off.",
+        stimuli: [
+          { type: "visual", template: "An open laptop with a dark screen", intensity: 0.3 },
+        ],
+      },
+      powered_on: {
+        description: "The laptop is on and ready for use.",
+        traits: ["usable", "browsable", "typeable"],
+        stimuli: [
+          { type: "visual", template: "A laptop displays its desktop, ready for use", intensity: 0.6 },
+          { type: "light", template: "Soft light glows from the laptop screen", intensity: 0.3, radius: 1 },
+        ],
+      },
+      in_use: {
+        description: "Someone is working on the laptop.",
+        traits: ["usable", "browsable", "typeable", "occupied"],
+        stimuli: [
+          { type: "visual", template: "The laptop shows active work in progress", intensity: 0.5 },
+          { type: "sound", template: "Soft typing sounds come from the laptop", intensity: 0.2 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "closed", to: "powered_off", trigger: "open" },
+      { from: "powered_off", to: "closed", trigger: "close" },
+      { from: "powered_off", to: "powered_on", trigger: "power_on" },
+      { from: "powered_on", to: "powered_off", trigger: "power_off" },
+      { from: "powered_on", to: "in_use", trigger: "start_using" },
+      { from: "in_use", to: "powered_on", trigger: "stop_using" },
+      { from: "powered_on", to: "closed", trigger: "close" },
+    ],
+    defaultState: "closed",
+    defaultComponents: [
+      { name: "Battery", values: { current: 80, max: 100 }, dynamic: true, schema: { current: "number", max: "number" } },
+    ],
+    category: "technology",
+    variables: {
+      adjective: { type: "enum", default: "modern", options: ["modern", "thin", "bulky", "gaming", "business"] },
+    },
+  },
+
+  workstation: {
+    name: "workstation",
+    description: "A {adjective} office workstation with computer, phone, and filing",
+    traits: ["examinable", "device", "computer", "workstation", "furniture", "office"],
+    states: {
+      powered_off: {
+        description: "The workstation is powered off.",
+        traits: ["powered_off"],
+        stimuli: [
+          { type: "visual", template: "A workstation sits here, screen dark", intensity: 0.3 },
+        ],
+      },
+      powered_on: {
+        description: "The workstation is powered on and ready for use.",
+        traits: ["usable", "browsable", "typeable", "powered_on"],
+        stimuli: [
+          { type: "visual", template: "An empty workstation with computer and phone awaits use", intensity: 0.4 },
+        ],
+      },
+      unoccupied: {
+        description: "The workstation is empty and ready for use.",
+        traits: ["usable", "browsable", "typeable"],
+        stimuli: [
+          { type: "visual", template: "An empty workstation with computer and phone awaits use", intensity: 0.4 },
+        ],
+      },
+      occupied: {
+        description: "Someone is working at the workstation.",
+        traits: ["in_use", "browsable", "typeable"],
+        stimuli: [
+          { type: "visual", template: "The workstation is occupied with active work", intensity: 0.5 },
+          { type: "sound", template: "Keyboard clicks and mouse movements come from the workstation", intensity: 0.3 },
+        ],
+      },
+      meeting: {
+        description: "A video call is in progress at the workstation.",
+        traits: ["in_use", "in_call", "browsable", "typeable"],
+        stimuli: [
+          { type: "visual", template: "A video conference is displayed on the workstation monitor", intensity: 0.6 },
+          { type: "sound", template: "Meeting voices come from the workstation speakers", intensity: 0.5, radius: 4 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "powered_off", to: "powered_on", trigger: "power_on" },
+      { from: "powered_on", to: "powered_off", trigger: "power_off" },
+    ],
+
+
+    defaultState: "unoccupied",
+    category: "technology",
+    variables: {
+      adjective: { type: "enum", default: "standard", options: ["standard", "executive", "corner", "standing"] },
+    },
+  },
+
+  filing_cabinet: {
+    name: "filing_cabinet",
+    description: "A {adjective} {material} filing cabinet",
+    traits: ["examinable", "openable", "container", "lockable", "furniture", "storage"],
+    states: {
+      closed: {
+        description: "The filing cabinet drawers are closed.",
+        traits: ["openable"],
+        stimuli: [
+          { type: "visual", template: "A filing cabinet stands here, drawers closed", intensity: 0.3 },
+        ],
+      },
+      open: {
+        description: "A drawer of the filing cabinet is open, revealing files.",
+        traits: ["searchable", "container"],
+        stimuli: [
+          { type: "visual", template: "Files are visible in the open filing cabinet drawer", intensity: 0.4 },
+        ],
+      },
+      locked: {
+        description: "The filing cabinet is locked.",
+        blockedTraits: ["openable", "searchable"],
+        stimuli: [
+          { type: "visual", template: "A locked filing cabinet stands here", intensity: 0.3 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "closed", to: "open", trigger: "open" },
+      { from: "open", to: "closed", trigger: "close" },
+      { from: "closed", to: "locked", trigger: "lock" },
+      { from: "locked", to: "closed", trigger: "unlock" },
+    ],
+    defaultState: "closed",
+    isContainer: true,
+    containerCapacity: 50,
+    category: "technology",
+    variables: {
+      adjective: { type: "enum", default: "metal", options: ["metal", "wooden", "modern", "old"] },
+      material: { type: "enum", default: "steel", options: ["steel", "wood", "plastic"] },
+    },
+  },
+
+  tree: {
+    name: "tree",
+    description: "A {adjective} tree",
+    traits: ["examinable", "tree", "plant", "scenery", "flammable"],
+    states: {
+      standing: {
+        description: "A {adjective} tree stands here, branches rustling softly.",
+        stimuli: [
+          { type: "visual", template: "A {adjective} tree stands here", intensity: 0.4 },
+          { type: "sound", template: "Leaves rustle in the wind", intensity: 0.2, radius: 3 },
+        ],
+      },
+      burning: {
+        description: "The tree is burning, flames licking up the trunk.",
+        traits: ["burning"],
+        stimuli: [
+          { type: "visual", template: "A tree burns fiercely", intensity: 0.7 },
+          { type: "light", template: "Firelight flickers from the burning tree", intensity: 0.6, radius: 5 },
+          { type: "sound", template: "Wood crackles as the tree burns", intensity: 0.5, radius: 5 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "standing", to: "burning", trigger: "ignite" },
+    ],
+    defaultState: "standing",
+    category: "nature",
+    variables: {
+      adjective: { type: "enum", default: "tall", options: ["tall", "gnarled", "young", "ancient", "lush"] },
+    },
+  },
+
+  house: {
+    name: "house",
+    description: "A {adjective} {material} house",
+    traits: ["examinable", "house", "building", "structure", "scenery"],
+    states: {
+      quiet: {
+        description: "A {adjective} {material} house. The windows are still and the door is shut.",
+        stimuli: [
+          { type: "visual", template: "A {adjective} {material} house sits here", intensity: 0.5 },
+        ],
+      },
+      occupied: {
+        description: "Light and movement suggest the house is occupied.",
+        traits: ["occupied"],
+        stimuli: [
+          { type: "visual", template: "A house with signs of activity inside", intensity: 0.6 },
+          { type: "sound", template: "Muffled voices and footsteps come from within the house", intensity: 0.3, radius: 4 },
+          { type: "light", template: "Warm lamplight glows from the windows", intensity: 0.3, radius: 2 },
+        ],
+      },
+    },
+    transitions: [
+      { from: "quiet", to: "occupied", trigger: "occupy" },
+      { from: "occupied", to: "quiet", trigger: "vacate" },
+    ],
+    defaultState: "quiet",
+    category: "structure",
+    variables: {
+      adjective: { type: "enum", default: "small", options: ["small", "modest", "sturdy", "weathered", "cozy"] },
+      material: { type: "enum", default: "wooden", options: ["wooden", "stone", "brick"] },
+    },
+  },
 };
 
 // ============================================================================
@@ -815,8 +1553,9 @@ export class WorldSchema {
       this.affordances.set(name, aff);
     }
     for (const [name, obj] of Object.entries(BASE_OBJECT_TYPES)) {
-      this.objectTypes.set(name, obj);
-      obj.traits.forEach(t => this.traits.add(t));
+      const normalized = normalizeEdibleType(obj);
+      this.objectTypes.set(name, normalized);
+      normalized.traits.forEach(t => this.traits.add(t));
     }
     for (const rule of BASE_RULES) {
       this.rules.set(rule.name, rule);
@@ -844,12 +1583,17 @@ export class WorldSchema {
   }
 
   defineObjectType(def: ObjectTypeDefinition): void {
-    this.objectTypes.set(def.name, def);
-    def.traits.forEach(t => this.traits.add(t));
+    const normalized = normalizeEdibleType(def);
+    this.objectTypes.set(normalized.name, normalized);
+    normalized.traits.forEach(t => this.traits.add(t));
   }
 
   getAllObjectTypes(): ObjectTypeDefinition[] {
     return Array.from(this.objectTypes.values());
+  }
+
+  getAllObjectTypeIds(): string[] {
+    return Array.from(this.objectTypes.keys());
   }
 
   getObjectTypesByCategory(category: string): ObjectTypeDefinition[] {

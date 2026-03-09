@@ -3,10 +3,14 @@
  */
 
 import { Cpu, Clock, Play, Pause } from "lucide-react";
-import { useSimulationStore, type SystemSummary } from "../../store/simulation";
+import {
+  useSimulationStore,
+  type SystemSummary,
+  type SystemLogEntry,
+} from "../../store/simulation";
 
 export function SystemsPanel() {
-  const { systems, selectedSystem, setSelectedSystem } = useSimulationStore();
+  const { systems, systemLogs, selectedSystem, setSelectedSystem } = useSimulationStore();
 
   if (systems.length === 0) {
     return (
@@ -49,7 +53,7 @@ export function SystemsPanel() {
       {/* System Detail */}
       <div className="flex-1 overflow-auto">
         {selected ? (
-          <SystemDetail system={selected} />
+          <SystemDetail system={selected} logs={systemLogs[selected.name] || []} />
         ) : (
           <div className="h-full flex items-center justify-center">
             <p className="text-argos-text-muted">Select a system to view details</p>
@@ -98,7 +102,13 @@ function SystemListItem({
   );
 }
 
-function SystemDetail({ system }: { system: SystemSummary }) {
+function SystemDetail({
+  system,
+  logs,
+}: {
+  system: SystemSummary;
+  logs: SystemLogEntry[];
+}) {
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -171,6 +181,47 @@ function SystemDetail({ system }: { system: SystemSummary }) {
               {system.frequency < 100 ? "Fast (Deterministic)" : "Slow (AI/Async)"}
             </span>
           </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <span className="panel-title">Recent Logs</span>
+        </div>
+        <div className="panel-content">
+          {logs.length === 0 ? (
+            <p className="text-sm text-argos-text-muted italic">
+              No logs yet. System execution and output will appear here.
+            </p>
+          ) : (
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {logs.slice(0, 60).map((log) => (
+                <div
+                  key={log.id}
+                  className="p-2 rounded bg-argos-bg-tertiary border border-argos-border/40"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs text-argos-text-muted uppercase tracking-wide">
+                      {log.type}
+                    </span>
+                    <span className="text-xs text-argos-text-muted">
+                      {new Date(log.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p className="text-sm text-argos-text-secondary break-words mt-1">{log.message}</p>
+                  {(log.duration !== undefined || log.entitiesProcessed !== undefined) && (
+                    <div className="text-xs text-argos-text-muted mt-1 flex items-center gap-3">
+                      {log.duration !== undefined && <span>{log.duration.toFixed(1)}ms</span>}
+                      {log.entitiesProcessed !== undefined && (
+                        <span>{log.entitiesProcessed} entities</span>
+                      )}
+                      {log.tick !== undefined && <span>tick {log.tick}</span>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

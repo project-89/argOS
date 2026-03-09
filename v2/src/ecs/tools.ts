@@ -8,6 +8,7 @@ import {
   getRelationTargets,
   Wildcard,
   Not,
+  entityExists,
 } from "bitecs";
 import type { World } from "./world";
 import { AllComponents, Name, Description, GridPosition, Sprite, WorldMap } from "./components";
@@ -31,6 +32,7 @@ import {
   isWalkable,
 } from "../world/ascii-world";
 import { requestRoomPopulation } from "../spirits/steward-spirit";
+import { resolveEntityId, resolveEntityName, syncEntityRegistryFromWorld } from "./entity-lookup";
 
 export interface EntityRegistry {
   byName: Map<string, number>;
@@ -72,6 +74,9 @@ export type ToolResult = {
 };
 
 export function createEcsTools(world: World, registry: EntityRegistry) {
+  const resolveId = (name: string): number | undefined => resolveEntityId(world, registry, name);
+  const resolveName = (eid: number): string | undefined => resolveEntityName(world, registry, eid);
+
   return {
     createAgent: (params: {
       name: string;
@@ -232,7 +237,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
         AllComponents.Mind.lastUpdate[eid] = Date.now();
         
         if (roomId !== undefined) {
-          addComponent(world, eid, AllRelations.OccupiesRoom(roomId));
+          addComponent(world, eid, AllRelations.LocatedIn(roomId));
         }
         
         registerEntity(registry, params.name, eid);
@@ -427,7 +432,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
       relationName: string;
     }): ToolResult => {
       try {
-        const subjectId = lookupEntity(registry, params.subjectName);
+        const subjectId = resolveId(params.subjectName);
         if (subjectId === undefined) {
           return { success: false, result: null, error: `Entity not found: ${params.subjectName}` };
         }
@@ -436,7 +441,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
           return { success: false, result: null, error: `Relation not found: ${params.relationName}` };
         }
         const targets = getRelationTargets(world, subjectId, relation);
-        const targetNames = targets.map((tid) => lookupEntityName(registry, tid) ?? `entity:${tid}`);
+        const targetNames = targets.map((tid) => resolveName(tid) ?? `entity:${tid}`);
         return { success: true, result: { targets: targetNames, targetIds: targets } };
       } catch (e) {
         return { success: false, result: null, error: String(e) };
@@ -458,13 +463,18 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
 
         const queryTerms = [...components, ...notComponents];
         if (queryTerms.length === 0) {
-          return { success: false, result: null, error: "No valid query terms" };
+          // Friendly behavior: an empty query acts like listEntities(), which is what LLMs often intend.
+          syncEntityRegistryFromWorld(world, registry);
+          const entities = Array.from(query(world, [Name]))
+            .filter((eid: number) => entityExists(world, eid))
+            .map((eid: number) => ({ id: eid, name: resolveName(eid) ?? `entity:${eid}` }));
+          return { success: true, result: entities };
         }
 
         const entities = Array.from(query(world, queryTerms));
         const result = entities.map((eid: number) => ({
           id: eid,
-          name: lookupEntityName(registry, eid) ?? `entity:${eid}`,
+          name: resolveName(eid) ?? `entity:${eid}`,
         }));
 
         return { success: true, result };
@@ -474,7 +484,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
     },
 
     getEntityByName: (params: { name: string }): ToolResult => {
-      const eid = lookupEntity(registry, params.name);
+      const eid = resolveId(params.name);
       if (eid === undefined) {
         return { success: false, result: null, error: `Entity not found: ${params.name}` };
       }
@@ -482,7 +492,12 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
     },
 
     listEntities: (): ToolResult => {
-      const entities = Array.from(registry.byName.entries()).map(([name, id]) => ({ name, id }));
+      // World-backed list: avoids registry drift when entities are created outside tools.
+      syncEntityRegistryFromWorld(world, registry);
+      const entities = Array.from(query(world, [Name]))
+        .filter((eid: number) => entityExists(world, eid))
+        .map((eid: number) => ({ name: resolveName(eid) ?? `entity:${eid}`, id: eid }))
+        .sort((a, b) => a.name.localeCompare(b.name));
       return { success: true, result: entities };
     },
 

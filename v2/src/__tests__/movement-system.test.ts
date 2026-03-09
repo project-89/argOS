@@ -4,7 +4,7 @@
  * Tests the movement execution flow:
  * 1. setMovementTarget() adds agent to movement queue
  * 2. Movement system moves agents toward targets on grid
- * 3. RoomArrival system sets OccupiesRoom when agents arrive at rooms
+ * 3. RoomArrival system sets LocatedIn when agents arrive at rooms
  * 4. Move action handler uses grid-based movement for roomless agents
  */
 
@@ -22,7 +22,7 @@ import {
   createRoomEntity,
 } from "../ecs/prefabs";
 import { Agent, Mind, GridPosition, Room, Name } from "../ecs/components";
-import { OccupiesRoom } from "../ecs/relations";
+import { LocatedIn } from "../ecs/relations";
 import {
   setMovementTarget,
   getMovementTarget,
@@ -179,7 +179,7 @@ describe("Movement System", () => {
   });
 
   describe("RoomArrival System", () => {
-    it("should set OccupiesRoom when agent arrives at room GridPosition", () => {
+    it("should set LocatedIn when agent arrives at room GridPosition", () => {
       const agentId = createAgentEntity(world, {
         name: "ArrivingAgent",
         role: "test",
@@ -193,8 +193,8 @@ describe("Movement System", () => {
         y: 100, // GridPosition y: 5
       });
 
-      // Agent starts without OccupiesRoom
-      expect(getRelationTargets(world, agentId, OccupiesRoom)).toHaveLength(0);
+      // Agent starts without LocatedIn
+      expect(getRelationTargets(world, agentId, LocatedIn)).toHaveLength(0);
 
       // Move agent to room's grid position (within threshold)
       GridPosition.x[agentId] = GridPosition.x[roomId];
@@ -207,12 +207,12 @@ describe("Movement System", () => {
 
       runSystemsOnce();
 
-      // Agent should now occupy the room
-      const occupiedRooms = getRelationTargets(world, agentId, OccupiesRoom);
-      expect(occupiedRooms).toContain(roomId);
+      // Agent should now be directly located in the room
+      const locatedInTargets = getRelationTargets(world, agentId, LocatedIn);
+      expect(locatedInTargets).toContain(roomId);
     });
 
-    it("should update OccupiesRoom when agent moves between rooms", () => {
+    it("should update LocatedIn when agent moves between rooms", () => {
       const agentId = createAgentEntity(world, {
         name: "RoomSwitcher",
         role: "test",
@@ -243,9 +243,9 @@ describe("Movement System", () => {
       runSystemsOnce();
 
       // Should be in room1
-      let occupiedRooms = getRelationTargets(world, agentId, OccupiesRoom);
-      expect(occupiedRooms).toContain(room1);
-      expect(occupiedRooms).not.toContain(room2);
+      let locatedInTargets = getRelationTargets(world, agentId, LocatedIn);
+      expect(locatedInTargets).toContain(room1);
+      expect(locatedInTargets).not.toContain(room2);
 
       // Move to room2
       GridPosition.x[agentId] = GridPosition.x[room2];
@@ -256,11 +256,11 @@ describe("Movement System", () => {
       runSystemsOnce();
 
       // Should now be in room2
-      occupiedRooms = getRelationTargets(world, agentId, OccupiesRoom);
-      expect(occupiedRooms).toContain(room2);
+      locatedInTargets = getRelationTargets(world, agentId, LocatedIn);
+      expect(locatedInTargets).toContain(room2);
     });
 
-    it("should not set OccupiesRoom when agent is far from all rooms", () => {
+    it("should not set LocatedIn when agent is far from all rooms", () => {
       const agentId = createAgentEntity(world, {
         name: "LostAgent",
         role: "test",
@@ -281,9 +281,9 @@ describe("Movement System", () => {
 
       runSystemsOnce();
 
-      // Agent should NOT occupy any room
-      const occupiedRooms = getRelationTargets(world, agentId, OccupiesRoom);
-      expect(occupiedRooms).toHaveLength(0);
+      // Agent should NOT be located in any room
+      const locatedInTargets = getRelationTargets(world, agentId, LocatedIn);
+      expect(locatedInTargets).toHaveLength(0);
     });
   });
 
@@ -304,8 +304,8 @@ describe("Movement System", () => {
         y: 60, // GridPosition y: 3
       });
 
-      // Agent starts without OccupiesRoom
-      expect(getRelationTargets(world, agentId, OccupiesRoom)).toHaveLength(0);
+      // Agent starts without LocatedIn
+      expect(getRelationTargets(world, agentId, LocatedIn)).toHaveLength(0);
 
       // Set movement target (this is what the move action does for roomless agents)
       setMovementTarget(agentId, roomId);
@@ -334,9 +334,9 @@ describe("Movement System", () => {
       // Agent should be close to room (within arrival threshold)
       expect(distance).toBeLessThan(4);
 
-      // Agent should now occupy the room
-      const occupiedRooms = getRelationTargets(world, agentId, OccupiesRoom);
-      expect(occupiedRooms).toContain(roomId);
+      // Agent should now be directly located in the room
+      const locatedInTargets = getRelationTargets(world, agentId, LocatedIn);
+      expect(locatedInTargets).toContain(roomId);
     });
   });
 

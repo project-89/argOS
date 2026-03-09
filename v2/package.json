@@ -18,11 +18,15 @@
     "stress-test": "tsx src/behavioral-tests/10-full-simulation-stress-test.ts",
     "stress-test:short": "tsx src/behavioral-tests/10-full-simulation-stress-test.ts --duration=2",
     "stress-test:long": "tsx src/behavioral-tests/10-full-simulation-stress-test.ts --duration=30",
+    "stress-test:unified": "tsx src/behavioral-tests/19-unified-api-full-stress-test.ts",
+    "demo:godai": "tsx src/behavioral-tests/33-orchestration-eval-repair-harness.ts --durationSec=24 --seed=123 --evalMs=6000 --spiritMs=6000 --daemonPovMs=5000 --autopilotMs=7000",
+    "demo:godai:hard": "tsx src/behavioral-tests/19-unified-api-full-stress-test.ts --duration=0.25 --hardTask=full --hardTaskTimeoutMs=30000",
     "typecheck": "tsc --noEmit",
     "extract-sprites": "tsx src/scripts/extract-sprites.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.5",
+    "@slack/bolt": "^4.6.0",
     "ai": "^6.0.14",
     "bitecs": "^0.4.0",
     "dotenv": "^16.3.1",

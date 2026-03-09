@@ -7,10 +7,12 @@ import {
   Name, Description, Position, Room, Agent, Mind,
   Stimulus, KnowledgeNode, Memory, Belief, Goal, Impression,
   Action, CognitiveEvent, PhysicalObject, StimulusSource, GodAgent,
-  GridPosition, Sprite, WorldMap, Visual, CharacterRigConfig, Needs, Interactable
+  GridPosition, Sprite, WorldMap, Visual, CharacterRigConfig, Needs, Interactable,
+  BehaviorPolicy, ProcedureState
 } from "../ecs/components";
 import { createCharacterRig, getCharacterRig } from "../rendering/character-rig";
-import { AllRelations, OccupiesRoom, Knows, Contains, BelongsTo } from "../ecs/relations";
+import { LocatedIn, Knows, HasMemory } from "../ecs/relations";
+import { setLocatedIn } from "../ecs/location";
 import { getAgentKnowledge } from "../cognition/knowledge-graph";
 import { getAgentMemory } from "../cognition/agent-mind";
 import * as fs from "fs/promises";
@@ -60,6 +62,28 @@ const COMPONENT_SERIALIZERS: Record<string, (eid: number) => Record<string, any>
   Room: (eid) => Room.capacity[eid] !== undefined ? { capacity: Room.capacity[eid], ambience: Room.ambience[eid] } : null,
   Agent: (eid) => Agent.role[eid] ? { role: Agent.role[eid], systemPrompt: Agent.systemPrompt[eid], active: Agent.active[eid] } : null,
   Mind: (eid) => Mind.mode[eid] ? { mode: Mind.mode[eid], arousal: Mind.arousal[eid], focus: Mind.focus[eid], lastUpdate: Mind.lastUpdate[eid] } : null,
+  Memory: (eid) => Memory.type[eid] ? {
+    type: Memory.type[eid],
+    content: Memory.content[eid],
+    emotionalValence: Memory.emotionalValence[eid],
+    importance: Memory.importance[eid],
+    timestamp: Memory.timestamp[eid],
+    lastRecalled: Memory.lastRecalled[eid],
+    recallCount: Memory.recallCount[eid],
+  } : null,
+  ProcedureState: (eid) => ProcedureState.signature[eid] ? {
+    signature: ProcedureState.signature[eid],
+    stepIndex: ProcedureState.stepIndex[eid],
+    status: ProcedureState.status[eid],
+    startedAt: ProcedureState.startedAt[eid],
+    lastUpdatedAt: ProcedureState.lastUpdatedAt[eid],
+  } : null,
+  BehaviorPolicy: (eid) => BehaviorPolicy.treeJson[eid] ? {
+    enabled: BehaviorPolicy.enabled[eid],
+    treeJson: BehaviorPolicy.treeJson[eid],
+    version: BehaviorPolicy.version[eid],
+    lastUpdatedAt: BehaviorPolicy.lastUpdatedAt[eid],
+  } : null,
   StimulusSource: (eid) => StimulusSource.stimulusType[eid] ? { 
     stimulusType: StimulusSource.stimulusType[eid], 
     template: StimulusSource.template[eid], 
@@ -163,12 +187,12 @@ export function serializeWorld(
 
     const relations: SerializedEntity["relations"] = [];
 
-    // Use safeGetRelationTargets to avoid errors with stale entity references
-    const roomTargets = safeGetRelationTargets(world, eid, OccupiesRoom);
-    for (const targetId of roomTargets) {
+    // Canonical containment/location
+    const locatedInTargets = safeGetRelationTargets(world, eid, LocatedIn);
+    for (const targetId of locatedInTargets) {
       if (!entityExists(world, targetId)) continue;
       relations.push({
-        type: "OccupiesRoom",
+        type: "LocatedIn",
         targetId,
         targetName: entityIdToName.get(targetId) || `entity_${targetId}`,
       });
@@ -190,11 +214,11 @@ export function serializeWorld(
       });
     }
 
-    const containsTargets = safeGetRelationTargets(world, eid, Contains);
-    for (const targetId of containsTargets) {
+    const memoryTargets = safeGetRelationTargets(world, eid, HasMemory);
+    for (const targetId of memoryTargets) {
       if (!entityExists(world, targetId)) continue;
       relations.push({
-        type: "Contains",
+        type: "HasMemory",
         targetId,
         targetName: entityIdToName.get(targetId) || `entity_${targetId}`,
       });
@@ -280,6 +304,28 @@ const COMPONENT_DESERIALIZERS: Record<string, (eid: number, data: Record<string,
   Room: (eid, data) => { Room.capacity[eid] = data.capacity; Room.ambience[eid] = data.ambience; },
   Agent: (eid, data) => { Agent.role[eid] = data.role; Agent.systemPrompt[eid] = data.systemPrompt; Agent.active[eid] = data.active; },
   Mind: (eid, data) => { Mind.mode[eid] = data.mode; Mind.arousal[eid] = data.arousal; Mind.focus[eid] = data.focus; Mind.lastUpdate[eid] = data.lastUpdate; },
+  Memory: (eid, data) => {
+    Memory.type[eid] = data.type;
+    Memory.content[eid] = data.content;
+    Memory.emotionalValence[eid] = data.emotionalValence;
+    Memory.importance[eid] = data.importance;
+    Memory.timestamp[eid] = data.timestamp;
+    Memory.lastRecalled[eid] = data.lastRecalled;
+    Memory.recallCount[eid] = data.recallCount;
+  },
+  ProcedureState: (eid, data) => {
+    ProcedureState.signature[eid] = data.signature;
+    ProcedureState.stepIndex[eid] = data.stepIndex;
+    ProcedureState.status[eid] = data.status;
+    ProcedureState.startedAt[eid] = data.startedAt;
+    ProcedureState.lastUpdatedAt[eid] = data.lastUpdatedAt;
+  },
+  BehaviorPolicy: (eid, data) => {
+    BehaviorPolicy.enabled[eid] = data.enabled;
+    BehaviorPolicy.treeJson[eid] = data.treeJson;
+    BehaviorPolicy.version[eid] = data.version;
+    BehaviorPolicy.lastUpdatedAt[eid] = data.lastUpdatedAt;
+  },
   StimulusSource: (eid, data) => { 
     StimulusSource.stimulusType[eid] = data.stimulusType; 
     StimulusSource.template[eid] = data.template; 
@@ -371,8 +417,13 @@ export function deserializeWorld(
       const targetEid = oldToNewId.get(rel.targetId);
       if (!targetEid) continue;
       
-      if (rel.type === "OccupiesRoom") {
-        addComponent(world, eid, OccupiesRoom(targetEid));
+      if (rel.type === "LocatedIn") {
+        setLocatedIn(world, eid, targetEid);
+      } else if (rel.type === "OccupiesRoom") {
+        // Legacy: map room occupancy to canonical containment
+        setLocatedIn(world, eid, targetEid);
+      } else if (rel.type === "HasMemory") {
+        addComponent(world, eid, HasMemory(targetEid));
       } else if (rel.type === "Knows" && rel.data) {
         const store = Knows(targetEid);
         addComponent(world, eid, store);
@@ -380,7 +431,8 @@ export function deserializeWorld(
         store.sentiment[eid] = rel.data.sentiment;
         store.lastInteraction[eid] = rel.data.lastInteraction;
       } else if (rel.type === "Contains") {
-        addComponent(world, eid, Contains(targetEid));
+        // Legacy: invert container->child to child->container
+        setLocatedIn(world, targetEid, eid);
       }
     }
   }

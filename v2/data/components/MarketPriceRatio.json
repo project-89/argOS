@@ -1,0 +1,10 @@
+{
+  "name": "MarketPriceRatio",
+  "description": "Current market price and demand for a good",
+  "properties": {
+    "currentPrice": "number",
+    "supply": "number",
+    "demand": "number",
+    "basePrice": "number"
+  }
+}

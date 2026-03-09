@@ -13,6 +13,7 @@ import {
   ObjectType,
   ObjectState,
   Traits,
+  PhysicalObject,
   Durability,
   Fuel,
   Container,
@@ -24,7 +25,11 @@ import {
   StateTransition,
   StimulusSource,
 } from "../ecs/components";
-import { worldSchema, ContainedIn, OnTopOf, OccupiedBy, type ObjectTypeDefinition, type StimulusDefinition } from "./schema";
+import { LocatedIn } from "../ecs/relations";
+import { setLocatedIn } from "../ecs/location";
+import { worldSchema, OnTopOf, OccupiedBy, type ObjectTypeDefinition, type StimulusDefinition } from "./schema";
+
+const invalidStateTransitionWarned = new Set<string>();
 
 export interface SpawnOptions {
   /** Position in the world */
@@ -109,6 +114,12 @@ export class ObjectManager {
     addComponent(this.world, eid, Description);
     Description.value[eid] = description;
 
+    // Mark as a physical object so it participates in grounded queries/actions.
+    addComponent(this.world, eid, PhysicalObject);
+    PhysicalObject.material[eid] = options.properties?.material || "unknown";
+    PhysicalObject.weight[eid] = 1;
+    PhysicalObject.portable[eid] = traits.includes("takeable");
+
     // Set properties for template substitution
     if (options.properties) {
       addComponent(this.world, eid, ObjectProperties);
@@ -135,7 +146,19 @@ export class ObjectManager {
 
     // Set containment relation
     if (options.containedIn !== undefined) {
-      addComponent(this.world, eid, ContainedIn(options.containedIn));
+      setLocatedIn(this.world, eid, options.containedIn);
+    }
+
+    // If spawning into a container/room and no explicit position was provided,
+    // inherit the container's GridPosition so agents can navigate to the object.
+    if (!options.position && options.containedIn !== undefined) {
+      const containerEid = options.containedIn;
+      if (hasComponent(this.world, containerEid, GridPosition) && !hasComponent(this.world, eid, GridPosition)) {
+        addComponent(this.world, eid, GridPosition);
+        GridPosition.x[eid] = GridPosition.x[containerEid] + Math.floor(Math.random() * 3) - 1;
+        GridPosition.y[eid] = GridPosition.y[containerEid] + Math.floor(Math.random() * 3) - 1;
+        GridPosition.facing[eid] = "down";
+      }
     }
 
     // Set surface relation
@@ -323,6 +346,11 @@ export class ObjectManager {
     addComponent(this.world, eid, Description);
     Description.value[eid] = config.description;
 
+    addComponent(this.world, eid, PhysicalObject);
+    PhysicalObject.material[eid] = "unknown";
+    PhysicalObject.weight[eid] = 1;
+    PhysicalObject.portable[eid] = config.traits.includes("takeable");
+
     addComponent(this.world, eid, Traits);
     Traits.active[eid] = JSON.stringify(config.traits);
 
@@ -339,7 +367,17 @@ export class ObjectManager {
     }
 
     if (config.containedIn !== undefined) {
-      addComponent(this.world, eid, ContainedIn(config.containedIn));
+      setLocatedIn(this.world, eid, config.containedIn);
+    }
+
+    if (!config.position && config.containedIn !== undefined) {
+      const containerEid = config.containedIn;
+      if (hasComponent(this.world, containerEid, GridPosition) && !hasComponent(this.world, eid, GridPosition)) {
+        addComponent(this.world, eid, GridPosition);
+        GridPosition.x[eid] = GridPosition.x[containerEid] + Math.floor(Math.random() * 3) - 1;
+        GridPosition.y[eid] = GridPosition.y[containerEid] + Math.floor(Math.random() * 3) - 1;
+        GridPosition.facing[eid] = "down";
+      }
     }
 
     return eid;
@@ -358,7 +396,13 @@ export class ObjectManager {
 
     // Validate state exists (unless custom object)
     if (typeDef && !typeDef.states[newState]) {
-      console.error(`Invalid state '${newState}' for type '${typeId}'`);
+      // LLM-generated rules/systems can propose invalid states; avoid log-spam under tick-driven rules.
+      // Keep semantics grounded: do not transition if the state isn't part of the object type definition.
+      const key = `${typeId}::${newState}`;
+      if (!invalidStateTransitionWarned.has(key)) {
+        invalidStateTransitionWarned.add(key);
+        console.warn(`Invalid state '${newState}' for type '${typeId}'`);
+      }
       return false;
     }
 
@@ -499,7 +543,7 @@ export class ObjectManager {
    * Get all objects in a container/room
    */
   getContents(containerEid: number): number[] {
-    return [...query(this.world, [ContainedIn(containerEid)])];
+    return [...query(this.world, [LocatedIn(containerEid)])];
   }
 
   /**
@@ -513,9 +557,7 @@ export class ObjectManager {
    * Move object to a new container
    */
   moveToContainer(eid: number, containerEid: number): void {
-    // Remove from old container if any
-    // Note: bitECS relations handle this automatically with exclusive
-    addComponent(this.world, eid, ContainedIn(containerEid));
+    setLocatedIn(this.world, eid, containerEid);
 
     // Update container counts
     if (hasComponent(this.world, containerEid, Container)) {

@@ -1,0 +1,9 @@
+{
+  "name": "FestivalState",
+  "description": "Global festival state tracking",
+  "properties": {
+    "nextEventTick": "number",
+    "phase": "number",
+    "currentEvent": "string"
+  }
+}

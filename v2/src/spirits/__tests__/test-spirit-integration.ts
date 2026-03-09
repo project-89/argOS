@@ -13,7 +13,7 @@
 import { addEntity, addComponent, query } from "bitecs";
 import { createArgosWorld, type World } from "../../ecs/world";
 import { Name, Description, Agent, Mind, Room, GodAgent } from "../../ecs/components";
-import { OccupiesRoom } from "../../ecs/relations";
+import { LocatedIn } from "../../ecs/relations";
 import { createEntityRegistry, registerEntity, type EntityRegistry } from "../../ecs/tools";
 import { clearDynamicComponents } from "../../ecs/dynamic-components";
 
@@ -135,7 +135,7 @@ function createTestSimulation(): TestSimulation {
   Mind.focus[aliceEid] = "exploring";
   Mind.mode[aliceEid] = "deliberative";
   Agent.active[aliceEid] = true;
-  addComponent(world, aliceEid, OccupiesRoom(tavernEid));
+  addComponent(world, aliceEid, LocatedIn(tavernEid));
   registerEntity(registry, "Alice", aliceEid);
   agents.set("Alice", aliceEid);
 
@@ -148,7 +148,7 @@ function createTestSimulation(): TestSimulation {
   Mind.focus[bobEid] = "work";
   Mind.mode[bobEid] = "reactive";
   Agent.active[bobEid] = true;
-  addComponent(world, bobEid, OccupiesRoom(tavernEid));
+  addComponent(world, bobEid, LocatedIn(tavernEid));
   registerEntity(registry, "Bob", bobEid);
   agents.set("Bob", bobEid);
 
@@ -161,7 +161,7 @@ function createTestSimulation(): TestSimulation {
   Mind.focus[charlieEid] = "secrets";
   Mind.mode[charlieEid] = "deliberative";
   Agent.active[charlieEid] = true;
-  addComponent(world, charlieEid, OccupiesRoom(marketEid));
+  addComponent(world, charlieEid, LocatedIn(marketEid));
   registerEntity(registry, "Charlie", charlieEid);
   agents.set("Charlie", charlieEid);
 

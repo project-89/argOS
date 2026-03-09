@@ -9,7 +9,7 @@ export default defineConfig({
     proxy: {
       // Proxy WebSocket connections to the argos server
       '/bus': {
-        target: 'ws://localhost:3000',
+        target: 'ws://localhost:3456',
         ws: true,
         // Suppress connection errors during startup
         configure: (proxy) => {
@@ -20,6 +20,11 @@ export default defineConfig({
             }
           });
         },
+      },
+      // Proxy tileset requests to parent public folder
+      '/32x32': {
+        target: 'http://localhost:3456',
+        changeOrigin: true,
       },
     },
   },

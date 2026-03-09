@@ -13,7 +13,8 @@ import type { World } from "../ecs/world";
 import { query, entityExists, hasComponent } from "bitecs";
 import { AllComponents, Name, Agent, Description, GridPosition, Room, Memory, Thought, Belief, Goal, Mind, Personality } from "../ecs/components";
 import { listSystems, type SystemRegistry, type SystemDefinition, safeGetRelationTargets } from "../ecs/dynamic-systems";
-import { OccupiesRoom, HasMemory, HasThought, HasBelief, HasGoal } from "../ecs/relations";
+import { HasMemory, HasThought, HasBelief, HasGoal } from "../ecs/relations";
+import { getRoomForEntity } from "../ecs/location";
 
 // =============================================================================
 // ACTION INTROSPECTION
@@ -636,8 +637,8 @@ export function getAgentIntrospection(world: World, agentName: string): AgentInt
   const eid = getAgentByName(world, agentName);
   if (eid === null) return null;
 
-  const roomEids = safeGetRelationTargets(world, eid, OccupiesRoom);
-  const roomName = roomEids.length > 0 ? Name.value[roomEids[0]] : null;
+  const roomEid = getRoomForEntity(world, eid);
+  const roomName = roomEid !== undefined ? Name.value[roomEid] : null;
 
   const thoughts = getAgentThoughts(world, eid);
   const currentThought = thoughts.length > 0 ? thoughts[0].content : null;
@@ -722,8 +723,8 @@ export function getEntitySnapshots(world: World): EntitySnapshot[] {
     if (hasComponent(world, eid, AllComponents.Health)) components.push("Health");
     if (hasComponent(world, eid, AllComponents.GridPosition)) components.push("GridPosition");
 
-    const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
-    const roomName = rooms.length > 0 ? Name.value[rooms[0]] : undefined;
+    const roomEid = getRoomForEntity(world, eid);
+    const roomName = roomEid !== undefined ? Name.value[roomEid] : undefined;
 
     snapshots.push({
       eid,

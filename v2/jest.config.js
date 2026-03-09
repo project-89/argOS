@@ -6,6 +6,10 @@ export default {
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
+  modulePathIgnorePatterns: [
+    '<rootDir>/stress-test-output/',
+    '<rootDir>/saves/',
+  ],
   transform: {
     '^.+\\.tsx?$': [
       'ts-jest',

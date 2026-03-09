@@ -81,6 +81,7 @@ export {
   getSpiritSystemState,
   startSpiritSystem,
   stopSpiritSystem,
+  deliverPendingMessagesToGod,
   setGodAgentCallback,
   setGlobalContext,
   getGlobalContext,

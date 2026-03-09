@@ -9,7 +9,7 @@ import { addEntity, addComponent, query } from "bitecs";
 import { createArgosWorld, type WorldContext } from "../ecs/world";
 import { initializePrefabs, createAgentEntity, createRoomEntity } from "../ecs/prefabs";
 import { Agent, Mind, Memory, Belief, Schedule, Goal, Needs } from "../ecs/components";
-import { HasMemory, HasBelief, HasSchedule, HasGoal, OccupiesRoom } from "../ecs/relations";
+import { HasMemory, HasBelief, HasSchedule, HasGoal } from "../ecs/relations";
 
 // Memory Consolidation
 import {

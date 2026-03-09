@@ -1,0 +1,8 @@
+{
+  "name": "Spoilage",
+  "description": "Tracks the time until food spoils.",
+  "properties": {
+    "freshness": "number",
+    "spoilRate": "number"
+  }
+}

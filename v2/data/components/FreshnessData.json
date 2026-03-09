@@ -1,0 +1,8 @@
+{
+  "name": "FreshnessData",
+  "description": "Freshness tracking for perishable items",
+  "properties": {
+    "decayRate": "number",
+    "value": "number"
+  }
+}

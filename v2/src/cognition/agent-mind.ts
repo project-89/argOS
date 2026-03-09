@@ -1,9 +1,12 @@
 import { generateText } from "ai";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { google } from "@ai-sdk/google";
 import type { World } from "../ecs/world";
 import { addEntity, addComponent, removeEntity, query, getRelationTargets, hasComponent } from "bitecs";
-import { Name, Description, Agent, Mind, Room, Thought, Perception, ConversationTurn, Goal, Personality } from "../ecs/components";
-import { OccupiesRoom, HasThought, HasPerception, HasConversation, HasGoal } from "../ecs/relations";
+import { Name, Description, Agent, Mind, Room, Thought, Perception, ConversationTurn, Goal, Personality, KanbanCard, KanbanColumn, PendingToolJob } from "../ecs/components";
+import { HasThought, HasPerception, HasConversation, HasGoal } from "../ecs/relations";
+import { getDirectContainer, getRoomForEntity, listDirectContents } from "../ecs/location";
 import {
   getKnowledgeSummary,
   getRelevantMemories,
@@ -16,8 +19,228 @@ import { formatPlansForContext, getNextPlannedAction } from "./planning-system";
 import { formatInsightsForContext } from "./reflection-system";
 import { formatScheduleForContext, getCurrentActivity } from "./schedule-system";
 import { formatActionsForPrompt, getValidActionTypes } from "./action-registry";
+import { formatProceduralSkillsForContext, selectProceduralAction, tryStartProcedureExecution } from "./procedural-skills";
+import { evaluateBehaviorPolicy, formatBehaviorPolicyForContext } from "./behavior-policy";
+import { selectFailureRecoveryAction } from "./failure-recovery";
+import { selectContractDrivenAction } from "./contract-driven-actions";
+import { ensureOfficeDeviceSandboxDir } from "../office-tools/sandbox";
 
 const model = google("gemini-2.5-flash");
+
+function getConfiguredGeminiApiKey(): string {
+  const key = String(
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      ""
+  ).trim();
+  // ai-sdk/google expects GOOGLE_GENERATIVE_AI_API_KEY; mirror other common env var names into it.
+  if (key && !String(process.env.GOOGLE_GENERATIVE_AI_API_KEY || "").trim()) {
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY = key;
+  }
+  return key;
+}
+
+// Deterministic speech reply guard for "no-LLM" mode:
+// If an agent receives directed speech (Perception.type === "speech"), respond once to avoid dead conversations.
+const recentSpeechReplies = new Map<number, { signature: string; atMs: number }>();
+const SPEECH_REPLY_DEDUP_WINDOW_MS = 30_000;
+
+
+// Optional multimodal cognition: attach recently perceived image assets directly into Gemini context.
+// Off by default for stability + cost control.
+const recentMultimodalImageAttachment = new Map<number, { signature: string; atMs: number }>();
+const MULTIMODAL_IMAGE_DEDUP_WINDOW_MS = 60_000;
+
+// Optional image reflection: trigger a single short multimodal critique when a new image asset is perceived.
+// This is separate from action selection (plans/contracts still drive actions) and is off by default.
+const recentMultimodalImageReflection = new Map<number, { signature: string; atMs: number }>();
+const MULTIMODAL_IMAGE_REFLECTION_DEDUP_WINDOW_MS = 5 * 60_000;
+
+function parseCsvEnv(name: string): string[] {
+  const raw = String(process.env[name] || "");
+  return raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function shouldAttachMultimodalImages(agentEid: number): boolean {
+  if (process.env.COGNITION_ENABLE_MULTIMODAL_IMAGES !== "1") return false;
+  const roles = parseCsvEnv("COGNITION_MULTIMODAL_IMAGE_ROLES");
+  if (roles.length) {
+    const role = String(Agent.role[agentEid] || "").trim().toLowerCase();
+    if (!roles.includes(role)) return false;
+  }
+  return true;
+}
+
+function shouldGenerateImageReflection(agentEid: number): boolean {
+  if (process.env.COGNITION_ENABLE_IMAGE_REFLECTION !== "1") return false;
+  if (!shouldAttachMultimodalImages(agentEid)) return false;
+  const roles = parseCsvEnv("COGNITION_IMAGE_REFLECTION_ROLES");
+  const role = String(Agent.role[agentEid] || "").trim().toLowerCase();
+  if (roles.length) return roles.includes(role);
+  // Sensible default: keep it low-volume unless explicitly expanded.
+  return role === "ceo" || role === "designer";
+}
+
+function parseImageAssetStimulus(content: string): { deviceName?: string; paths: string[] } {
+  const text = String(content || "");
+  // Expected: "<actor> produced a new image asset on <Device>: path1, path2. ..."
+  const m = text.match(/image asset(?:\s+on\s+([^:]+))?:\s*(.+?)(?:\.\s|$)/i);
+  const deviceName = m && m[1] ? String(m[1]).trim() : undefined;
+  const list = m && m[2] ? String(m[2]) : "";
+  const paths = list
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((p) => (p.startsWith("workspace://") ? p.slice("workspace://".length) : p));
+  return { deviceName, paths };
+}
+
+function findDeviceInRoom(world: World, agentEid: number, deviceName: string): number | undefined {
+  const roomEid = getRoomForEntity(world as any, agentEid);
+  if (roomEid === undefined) return undefined;
+  const wanted = String(deviceName || "").trim().toLowerCase();
+  if (!wanted) return undefined;
+  for (const child of listDirectContents(world as any, roomEid)) {
+    const n = String(Name.value[child] || "").trim().toLowerCase();
+    if (n && n === wanted) return child;
+  }
+  return undefined;
+}
+
+function readWorkspaceImageBytes(world: World, deviceEid: number, relPath: string): { data: Buffer; mediaType: string } | null {
+  const base = ensureOfficeDeviceSandboxDir(world, deviceEid);
+  const cleaned = path.normalize(String(relPath || "").trim()).replace(/^(\.\.[/\\])+/, "");
+  const abs = path.resolve(base, cleaned);
+  if (!abs.startsWith(base + path.sep) && abs !== base) return null;
+
+  try {
+    const stat = fs.statSync(abs);
+    // Hard cap to avoid blowing up prompt sizes.
+    if (stat.size > 2 * 1024 * 1024) return null;
+    const data = fs.readFileSync(abs);
+    const ext = path.extname(cleaned).toLowerCase();
+    const mediaType =
+      ext == ".png"
+        ? "image/png"
+        : ext == ".jpg" || ext == ".jpeg"
+          ? "image/jpeg"
+          : ext == ".webp"
+            ? "image/webp"
+            : ext == ".gif"
+              ? "image/gif"
+              : "application/octet-stream";
+    return { data, mediaType };
+  } catch {
+    return null;
+  }
+}
+
+function buildUserContentWithImages(world: World, agentEid: number, prompt: string): { content: any; attached: string[] } {
+  if (!shouldAttachMultimodalImages(agentEid)) return { content: prompt, attached: [] };
+
+  const max = Number.isFinite(Number(process.env.COGNITION_MULTIMODAL_IMAGE_MAX))
+    ? Math.max(1, Math.min(3, Number(process.env.COGNITION_MULTIMODAL_IMAGE_MAX)))
+    : 1;
+
+  const now = Date.now();
+  const perceptions = getAgentPerceptions(world as any, agentEid)
+    .filter((peid) => String(Perception.type[peid] || "") === "image_asset")
+    .sort((a, b) => (Perception.timestamp[b] || 0) - (Perception.timestamp[a] || 0))
+    .slice(0, 3);
+
+  const parts: any[] = [{ type: "text", text: prompt }];
+  const attached: string[] = [];
+
+  for (const peid of perceptions) {
+    const at = Number(Perception.timestamp[peid] || 0);
+    if (!at || now - at > 120_000) continue;
+
+    const parsed = parseImageAssetStimulus(String(Perception.content[peid] || ""));
+    const deviceName = parsed.deviceName || "Workstation";
+    const deviceEid = findDeviceInRoom(world, agentEid, deviceName);
+    if (deviceEid === undefined) continue;
+
+    for (const relPath of parsed.paths) {
+      if (attached.length >= max) break;
+
+      const signature = `${deviceEid}|${relPath}`;
+      const prev = recentMultimodalImageAttachment.get(agentEid);
+      if (prev && prev.signature == signature && now - prev.atMs < MULTIMODAL_IMAGE_DEDUP_WINDOW_MS) continue;
+
+      const img = readWorkspaceImageBytes(world, deviceEid, relPath);
+      if (!img) continue;
+
+      parts.push({ type: "image", image: img.data, mediaType: img.mediaType });
+      attached.push(`${deviceName}:${relPath}`);
+      recentMultimodalImageAttachment.set(agentEid, { signature, atMs: now });
+    }
+
+    if (attached.length >= max) break;
+  }
+
+  if (attached.length === 0) return { content: prompt, attached };
+  return { content: parts, attached };
+}
+
+async function maybeAddImageReflectionThought(world: World, agentEid: number): Promise<void> {
+  if (!getConfiguredGeminiApiKey()) return;
+  if (process.env.COGNITION_DISABLE_LLM_IMAGE_REFLECTION === "1") return;
+  if (!shouldGenerateImageReflection(agentEid)) return;
+  if (hasComponent(world as any, agentEid, PendingToolJob as any)) return;
+
+  const now = Date.now();
+  const latest = getAgentPerceptions(world as any, agentEid)
+    .filter((peid) => String(Perception.type[peid] || "") === "image_asset")
+    .sort((a, b) => (Perception.timestamp[b] || 0) - (Perception.timestamp[a] || 0))[0];
+
+  if (typeof latest !== "number") return;
+  const at = Number(Perception.timestamp[latest] || 0);
+  if (!at || now - at > 120_000) return;
+
+  const parsedSig = parseImageAssetStimulus(String(Perception.content[latest] || ""));
+  const signature = `${String(Perception.source[latest] || "")}|${String(parsedSig.deviceName || "Workstation")}|${parsedSig.paths.slice(0, 3).join(",")}`;
+  const prev = recentMultimodalImageReflection.get(agentEid);
+  if (prev && prev.signature === signature && now - prev.atMs < MULTIMODAL_IMAGE_REFLECTION_DEDUP_WINDOW_MS) return;
+
+  const prompt =
+    `You have just perceived a new visual asset in your environment.
+` +
+    `Provide a short critique and 3 concrete suggestions to improve it for its intended product.
+` +
+    `Be specific (colors, shapes, legibility, brand fit). Keep it under 8 bullet points.`;
+
+  const mm = buildUserContentWithImages(world, agentEid, prompt);
+  if (mm.attached.length === 0) {
+    // Mark as handled to avoid noisy repeat attempts when the asset can't be attached.
+    recentMultimodalImageReflection.set(agentEid, { signature, atMs: now });
+    return;
+  }
+
+  const context = buildAgentContext(world, agentEid);
+  const loggedPrompt = `${prompt}
+
+[Images attached: ${mm.attached.join(", ")}]`;
+
+  try {
+    const { text } = await generateText({
+      model,
+      system: context,
+      messages: [{ role: "user" as const, content: mm.content }],
+    });
+
+    addConversationTurn(world, agentEid, "user", loggedPrompt);
+    addConversationTurn(world, agentEid, "assistant", text);
+    addThought(world, agentEid, { content: text, type: "visual_reflection" });
+    recentMultimodalImageReflection.set(agentEid, { signature, atMs: now });
+  } catch {
+    // Best-effort only: never block core simulation behavior on reflection.
+    recentMultimodalImageReflection.set(agentEid, { signature, atMs: now });
+  }
+}
 
 // Valid action types - expanded to match all handlers in cognition-system.ts
 export type ValidActionType =
@@ -30,6 +253,56 @@ export interface AgentAction {
   type: ValidActionType;
   target?: string;
   content?: string;
+}
+
+function normalizeSelectedAction(world: World, agentEid: number, action: AgentAction): AgentAction {
+  // Avoid common no-op loops: e.g. a policy repeatedly selecting "move -> <current room>".
+  // Returning "wait" keeps the event stream honest (no state change) and avoids thrash scoring.
+  if (action.type === "move" && action.target) {
+    // If this is the current plan step, keep it as-is so the plan advancement logic can
+    // treat the step as satisfied ("already there") and move on.
+    const planned = getNextPlannedAction(world as any, agentEid);
+    if (planned && planned.actionType === "move" && String(planned.target || "").trim().toLowerCase() === String(action.target || "").trim().toLowerCase()) {
+      return action;
+    }
+
+    const roomEid = getRoomForEntity(world as any, agentEid);
+    if (roomEid !== undefined) {
+      const currentRoomName = String(Name.value[roomEid] || "").trim().toLowerCase();
+      const wanted = String(action.target || "").trim().toLowerCase();
+      if (currentRoomName && wanted && currentRoomName === wanted) {
+        return { type: "wait" };
+      }
+    }
+  }
+
+
+  // Suppress duplicate async tool actions when a PendingToolJob is already in-flight.
+  // Without this, LLM agents may repeatedly choose the same tool action every tick while the job is running.
+  if (action.type === "interact" && typeof action.content === "string" && action.content.trim() && hasComponent(world as any, agentEid, PendingToolJob as any)) {
+    const token = action.content.trim().split(/\s+/)[0] || "";
+    const aff = token.trim().toLowerCase().replace(/[^a-z0-9_-]+$/g, "");
+    const expectedToolId =
+      aff === "run_command"
+        ? "terminal.run"
+        : aff === "gemini_cli"
+          ? "gemini.cli"
+          : aff === "generate_image"
+            ? "nano_banana.generate_image"
+            : aff === "edit_image"
+              ? "nano_banana.edit_image"
+              : aff === "describe_image"
+                ? "vision.describe_image"
+                : aff === "git_apply_from_last_gemini"
+                  ? "workspace.git_apply_from_last_gemini"
+                  : "";
+
+    if (expectedToolId && String(PendingToolJob.toolId[agentEid] || "") === expectedToolId) {
+      return { type: "wait" };
+    }
+  }
+
+  return action;
 }
 
 export function getAgentThoughts(world: World, agentEid: number): number[] {
@@ -172,6 +445,18 @@ function buildKnowledgeContext(world: World, eid: number, othersInRoom: string[]
     lines.push("LONG-TERM KNOWLEDGE:");
     lines.push(knowledgeSummary);
   }
+
+  const skills = formatProceduralSkillsForContext(world, eid);
+  if (skills) {
+    lines.push("");
+    lines.push(skills);
+  }
+
+  const policy = formatBehaviorPolicyForContext(world, eid);
+  if (policy) {
+    lines.push("");
+    lines.push(policy);
+  }
   
   if (othersInRoom.length > 0) {
     lines.push("\nIMPRESSIONS OF THOSE PRESENT:");
@@ -200,22 +485,21 @@ function buildAgentContext(world: World, eid: number): string {
   const arousal = Mind.arousal[eid];
   const focus = Mind.focus[eid];
 
-  const roomTargets = getRelationTargets(world, eid, OccupiesRoom);
+  const roomEid = getRoomForEntity(world, eid);
   let roomContext = "nowhere in particular";
   let roomAmbience = "";
   let othersInRoom: string[] = [];
 
-  if (roomTargets.length > 0) {
-    const roomEid = roomTargets[0];
+  if (roomEid !== undefined) {
     roomContext = Name.value[roomEid] || "an unknown room";
     roomAmbience = Room.ambience[roomEid] || "";
 
     const agents = Array.from(query(world, [Agent]));
     for (const otherEid of agents) {
       if (otherEid === eid) continue;
-      const otherRooms = getRelationTargets(world, otherEid, OccupiesRoom);
-      if (otherRooms.includes(roomEid)) {
-        othersInRoom.push(Name.value[otherEid]);
+      if (getRoomForEntity(world, otherEid) === roomEid) {
+        const otherName = Name.value[otherEid];
+        if (otherName) othersInRoom.push(otherName);
       }
     }
   }
@@ -312,6 +596,120 @@ ${formatInsightsForContext(world, eid)}`;
 }
 
 export async function agentThink(world: World, eid: number): Promise<AgentAction> {
+  const hasOwnedInProgressTicket = (): boolean => {
+    for (let cardEid = 0; cardEid < (Name.value as any).length; cardEid++) {
+      if (!hasComponent(world as any, cardEid, KanbanCard as any)) continue;
+      if (Number(KanbanCard.ownerEid[cardEid] ?? -1) !== Number(eid)) continue;
+      const colEid = getDirectContainer(world as any, cardEid);
+      if (colEid === undefined) continue;
+      if (!hasComponent(world as any, colEid, KanbanColumn as any)) continue;
+      const colName = String(Name.value[colEid] || KanbanColumn.name[colEid] || "");
+      if (colName === "In Progress" || colName === "Review") return true;
+    }
+    return false;
+  };
+
+  // Optional multimodal reflection: capture a brief critique when new image assets appear.
+  // This helps agents "see" Nano Banana output (and makes it inspectable in logs) without
+  // turning every tick into freeform LLM action selection.
+  await maybeAddImageReflectionThought(world, eid);
+
+  // Deterministic "skill reflex": if we already know a proven procedure for the next plan step,
+  // execute it without spending an LLM call.
+  const procedural = selectProceduralAction(world, eid);
+  if (procedural) {
+    const name = Name.value[eid];
+    console.log(`[${name}] uses skill: ${procedural.type}${procedural.target ? ` -> ${procedural.target}` : ""}`);
+    return normalizeSelectedAction(world, eid, procedural);
+  }
+
+  // Deterministic failure recovery: if the last action failed, change strategy immediately.
+  // This prevents thrashy loops like "pickup X" -> fail -> retry "take X" -> fail...
+  const recovery = selectFailureRecoveryAction(world as any, eid);
+  // If recovery can only suggest "wait" and we *do* have an LLM available, treat that as
+  // "no deterministic recovery found" so the agent can escalate to the LLM.
+  if (recovery && (recovery.type !== "wait" || !getConfiguredGeminiApiKey())) {
+    const name = Name.value[eid];
+    if (recovery.type !== "wait") {
+      console.log(
+        `[${name}] recovery: ${recovery.type}` +
+          ("target" in recovery && recovery.target ? ` -> ${recovery.target}` : "") +
+          ("content" in recovery && recovery.content ? ` (${recovery.content})` : "")
+      );
+    }
+    return normalizeSelectedAction(world, eid, recovery as any);
+  }
+
+  // Deterministic "directed speech" reply: when running without an LLM key, keep conversations alive.
+  // This is intentionally conservative: only trigger when we have an explicit directed speech perception.
+  if (!getConfiguredGeminiApiKey()) {
+    const reply = buildDeterministicSpeechReply(world, eid);
+    if (reply) return normalizeSelectedAction(world, eid, reply);
+  }
+
+  // Deterministic contract-driven *org* step selection:
+  // Prefer governance/coordination moves (kanban/wiki) before plan execution so agents can
+  // satisfy "claim ticket"/"move columns" gates that unlock work tools.
+  const contract = selectContractDrivenAction(world as any, eid);
+  if (contract && contract.type !== "wait") {
+    const name = Name.value[eid];
+    const content = (contract as any).content ? String((contract as any).content) : "";
+    const affordance = content.trim().split(/\s+/)[0] || "";
+    const isOrgTool = affordance.startsWith("kanban_") || affordance.startsWith("wiki_");
+    const shouldPrioritize = isOrgTool && (affordance === "kanban_move_card" || !hasOwnedInProgressTicket());
+    if (shouldPrioritize) {
+      console.log(`[${name}] contract: ${contract.type}${"target" in contract && contract.target ? ` -> ${contract.target}` : ""}`);
+      return normalizeSelectedAction(world, eid, contract as any);
+    }
+  }
+
+  // Deterministic plan execution: if an agent has an active plan for its highest-priority goal,
+  // follow the next step directly (LLM-free). This is the core "plans drive grounded action" bridge.
+  const nextPlanned = getNextPlannedAction(world, eid);
+  if (nextPlanned) {
+    return normalizeSelectedAction(world, eid, {
+      type: nextPlanned.actionType as any,
+      target: nextPlanned.target,
+      content: nextPlanned.content,
+    });
+  }
+
+  // Deterministic policy layer: optional behavior tree / policy graph. Runs before any LLM call.
+  const policy = evaluateBehaviorPolicy(world, eid);
+  if (policy.kind === "action") {
+    const name = Name.value[eid];
+    console.log(`[${name}] uses policy: ${policy.action.type}${policy.action.target ? ` -> ${policy.action.target}` : ""}`);
+    return normalizeSelectedAction(world, eid, policy.action as any);
+  }
+  if (policy.kind === "start_procedure") {
+    const name = Name.value[eid];
+    const ok = tryStartProcedureExecution(world, eid, policy.signature, { minSuccesses: policy.minSuccesses });
+    if (ok) {
+      console.log(`[${name}] starts procedure via policy: ${policy.signature}`);
+      const afterStart = selectProceduralAction(world, eid);
+      if (afterStart) return afterStart as any;
+      return { type: "wait" };
+    }
+  }
+
+  // Deterministic contract-driven action selection (non-org steps):
+  // Let plans/policies handle most work. Keep contract-driven non-org behavior as a fallback.
+  if (contract && contract.type !== "wait") {
+    const name = Name.value[eid];
+    console.log(`[${name}] contract: ${contract.type}${"target" in contract && contract.target ? ` -> ${contract.target}` : ""}`);
+    return normalizeSelectedAction(world, eid, contract as any);
+  }
+
+  // Deterministic mode: if no LLM key is configured, do not attempt generation.
+  if (!getConfiguredGeminiApiKey()) {
+    return { type: "wait" };
+  }
+
+  // Prefer planner-driven behavior for hard, benchmarked workflows; freeform per-tick LLM actions are optional.
+  if (process.env.COGNITION_DISABLE_LLM_ACTION_SELECTION === "1") {
+    return { type: "wait" };
+  }
+
   const context = buildAgentContext(world, eid);
   const name = Name.value[eid];
 
@@ -363,6 +761,12 @@ Respond with JSON only:
 
 Stay in character. Be concise. React naturally to your perceptions and surroundings.`;
 
+
+  const mm = buildUserContentWithImages(world, eid, prompt);
+  const userContent = mm.content;
+  const loggedPrompt = mm.attached.length ? `${prompt}
+
+[Images attached: ${mm.attached.join(", ")}]` : prompt;
   try {
     const { text } = await generateText({
       model,
@@ -371,7 +775,7 @@ Stay in character. Be concise. React naturally to your perceptions and surroundi
         ...conversationHistory,
         {
           role: "user" as const,
-          content: prompt,
+          content: userContent,
         },
       ],
     });
@@ -393,17 +797,51 @@ Stay in character. Be concise. React naturally to your perceptions and surroundi
       content: result.action?.content,
     };
 
-    addConversationTurn(world, eid, "user", prompt);
+    addConversationTurn(world, eid, "user", loggedPrompt);
     addConversationTurn(world, eid, "assistant", text);
 
     console.log(`[${name}] thinks: "${result.innerThought || ""}"`);
     console.log(`[${name}] action: ${action.type}${action.content ? ` - "${action.content}"` : ""}`);
 
-    return action;
+    return normalizeSelectedAction(world, eid, action);
   } catch (error) {
     console.error(`[${name}] cognition error:`, error);
     return { type: "wait" };
   }
+}
+
+function buildDeterministicSpeechReply(world: World, agentEid: number): AgentAction | null {
+  const perceptionEids = getAgentPerceptions(world, agentEid)
+    .filter((peid) => String(Perception.type[peid] || "") === "speech")
+    .sort((a, b) => (Perception.timestamp[b] || 0) - (Perception.timestamp[a] || 0))
+    .slice(0, 1);
+  const peid = perceptionEids[0];
+  if (typeof peid !== "number") return null;
+
+  const at = Perception.timestamp[peid] || 0;
+  // Only respond to recent speech.
+  if (at <= 0 || Date.now() - at > 15_000) return null;
+
+  const speaker = String(Perception.source[peid] || "").trim();
+  if (!speaker || speaker.toLowerCase() === "self") return null;
+
+  const content = String(Perception.content[peid] || "").trim();
+  const signature = `${speaker}|${content.slice(0, 200)}`;
+
+  const prev = recentSpeechReplies.get(agentEid);
+  if (prev && prev.signature === signature && Date.now() - prev.atMs < SPEECH_REPLY_DEDUP_WINDOW_MS) return null;
+
+  const greeting =
+    content.toLowerCase().includes("good morning") ? "Good morning" :
+    content.toLowerCase().includes("good evening") ? "Good evening" :
+    content.toLowerCase().includes("hello") ? "Hello" :
+    "Hi";
+
+  const reply = `${greeting}, ${speaker}.`;
+  recentSpeechReplies.set(agentEid, { signature, atMs: Date.now() });
+  Mind.focus[agentEid] = ""; // clear "respond to ..." focus once we answer
+
+  return { type: "speak", target: speaker, content: reply };
 }
 
 export async function processAgentCognition(

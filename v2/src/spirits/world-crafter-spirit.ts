@@ -16,11 +16,15 @@
 import { generateText } from "ai";
 import { spiritModel } from "../llm/config";
 import type { World } from "../ecs/world";
+import { query } from "bitecs";
 import type { SpiritState, DivineMessage } from "./types";
 import type { SpiritRegistry } from "./spirit-registry";
 import { reportToSuperior, getSpiritByName } from "./spirit-registry";
 import { createDynamicSpirit, type CreateSpiritConfig } from "./spirit-factory";
 import type { GodAgentState } from "../god/god-agent";
+import { Name, Room, Traits } from "../ecs/components";
+import { worldSchema, type ObjectTypeDefinition } from "../world/schema";
+import { ObjectManager } from "../world/object-manager";
 
 // =============================================================================
 // TYPES
@@ -258,6 +262,118 @@ export function registerResourceSource(resourceType: string, sourceName: string)
 export function hasResourceSource(resourceType: string): boolean {
   const sources = crafterState.context.resourceSources.get(resourceType.toLowerCase());
   return sources !== undefined && sources.length > 0;
+}
+
+function findRoomEidByName(world: World, roomName: string): number | undefined {
+  const rooms = Array.from(query(world, [Room]));
+  for (const roomEid of rooms) {
+    if (Name.value[roomEid] === roomName) return roomEid;
+  }
+  const needle = roomName.trim().toLowerCase();
+  if (!needle) return undefined;
+  for (const roomEid of rooms) {
+    if ((Name.value[roomEid] || "").trim().toLowerCase() === needle) return roomEid;
+  }
+  return undefined;
+}
+
+function toSnakeCaseId(value: string): string {
+  const s = value
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+  return s || "object";
+}
+
+function resolveObjectTypeId(typeId: string): string | undefined {
+  if (worldSchema.getObjectType(typeId)) return typeId;
+
+  const needle = typeId.trim().toLowerCase();
+  if (!needle) return undefined;
+
+  for (const id of worldSchema.getAllObjectTypeIds()) {
+    const def = worldSchema.getObjectType(id);
+    if (!def) continue;
+    if (def.name.trim().toLowerCase() === needle) return id;
+  }
+
+  return undefined;
+}
+
+function ensureDrinkableType(typeIdRaw: string): string {
+  const id = toSnakeCaseId(typeIdRaw);
+  if (worldSchema.getObjectType(id)) return id;
+
+  const def: ObjectTypeDefinition = {
+    name: id,
+    description: `A container of ${typeIdRaw}`,
+    traits: ["drinkable", "takeable", "examinable"],
+    states: {
+      full: {
+        description: `It contains ${typeIdRaw}.`,
+        stimuli: [
+          { type: "visual", template: `A ${typeIdRaw} is here, ready to drink`, intensity: 0.4 },
+        ],
+      },
+      empty: {
+        description: "It's empty.",
+        blockedTraits: ["drinkable"],
+        stimuli: [{ type: "visual", template: `An empty ${typeIdRaw} container is here`, intensity: 0.2 }],
+      },
+    },
+    transitions: [{ from: "full", to: "empty", trigger: "drink" }],
+    defaultState: "full",
+    category: "consumable",
+  };
+
+  worldSchema.defineObjectType(def);
+  return id;
+}
+
+function ensureGenericTypeFromSpec(spec: {
+  name: string;
+  description: string;
+  components: string[];
+  type: string;
+}): string {
+  const id = toSnakeCaseId(spec.name);
+  if (worldSchema.getObjectType(id)) return id;
+
+  const traits = new Set<string>(["examinable"]);
+  const category = spec.type?.toLowerCase() || "misc";
+
+  const wantsItem = spec.components?.includes("Item") ?? true;
+  const wantsContainer = spec.components?.includes("Container") ?? false;
+  const wantsConsumable = spec.components?.includes("Consumable") ?? false;
+  const wantsTool = spec.components?.includes("Tool") ?? false;
+  const wantsWeapon = spec.components?.includes("Weapon") ?? false;
+
+  if (wantsItem) traits.add("takeable");
+  if (wantsContainer) traits.add("container");
+  if (wantsConsumable) traits.add("edible");
+  if (wantsTool) traits.add("tool");
+  if (wantsWeapon) traits.add("weapon");
+
+  const def: ObjectTypeDefinition = {
+    name: id,
+    description: spec.description || `A ${spec.name}`,
+    traits: Array.from(traits),
+    states: {
+      normal: {
+        description: spec.description || `A ${spec.name}.`,
+        stimuli: [{ type: "visual", template: spec.description || `${spec.name} is here`, intensity: 0.4 }],
+      },
+    },
+    defaultState: "normal",
+    category,
+    isContainer: wantsContainer,
+    containerCapacity: wantsContainer ? 10 : undefined,
+  };
+
+  worldSchema.defineObjectType(def);
+  return id;
 }
 
 /**
@@ -941,37 +1057,95 @@ export async function createEntityViaGod(
     roomName: string;
   }
 ): Promise<boolean> {
-  try {
-    // Create the object
-    const result = godState.tools.createObject({
-      name: entitySpec.name,
-      description: entitySpec.description,
-      roomName: entitySpec.roomName,
+  // Deprecated path: Crafter now materializes directly via WorldSchema/ObjectManager for grounding.
+  // Kept as a compatibility stub for old call sites.
+  void godState;
+  void entitySpec;
+  console.warn("[WorldCrafter] createEntityViaGod is deprecated; use materializeEntityForInteraction");
+  return false;
+}
+
+export function materializeEntityForInteraction(
+  world: World,
+  interaction: FailedInteraction,
+  entitySpec?: { name: string; description: string; type: string; components: string[] }
+): { eid: number; typeId: string } | null {
+  const roomEid = findRoomEidByName(world, interaction.roomName);
+  if (roomEid === undefined) return null;
+
+  const objectManager = new ObjectManager(world);
+  const targetName = interaction.targetName?.trim() || "object";
+  const action = (interaction.actionType || "").toLowerCase();
+
+  // Deterministic grounding for basic needs:
+  // - eat -> food_item (edible)
+  // - drink -> drinkable type with full/empty states
+  if (action === "eat") {
+    const foodType = targetName.toLowerCase();
+    const eid = objectManager.spawn("food_item", {
+      containedIn: roomEid,
+      name: targetName,
+      state: "fresh",
+      properties: { foodType, adjective: "fresh" },
     });
-
-    if (!result.success) {
-      console.error("[WorldCrafter] Failed to create object:", result.error);
-      return false;
-    }
-
-    // Add Item component if it's pickupable
-    if (entitySpec.components.includes("Item")) {
-      godState.tools.addComponent({
-        entityName: entitySpec.name,
-        componentName: "Item",
-        values: {
-          type: entitySpec.type.toLowerCase(),
-          stackable: entitySpec.type === "Resource",
-        },
-      });
-    }
-
-    console.log(`[WorldCrafter] Created entity: ${entitySpec.name} in ${entitySpec.roomName}`);
-    return true;
-  } catch (error) {
-    console.error("[WorldCrafter] Error creating entity:", error);
-    return false;
+    return eid === null ? null : { eid, typeId: "food_item" };
   }
+
+  if (action === "drink") {
+    const typeId = ensureDrinkableType(targetName);
+    const eid = objectManager.spawn(typeId, {
+      containedIn: roomEid,
+      name: targetName,
+      state: "full",
+    });
+    return eid === null ? null : { eid, typeId };
+  }
+
+  // If LLM says it's Food/Consumable, prefer food_item (consistent decay rules).
+  const wantsFoodItem = (entitySpec?.type || "").toLowerCase() === "food" || (entitySpec?.components || []).includes("Consumable");
+  if (wantsFoodItem) {
+    const foodType = targetName.toLowerCase();
+    const eid = objectManager.spawn("food_item", {
+      containedIn: roomEid,
+      name: targetName,
+      state: "fresh",
+      properties: { foodType, adjective: "fresh" },
+    });
+    return eid === null ? null : { eid, typeId: "food_item" };
+  }
+
+  // Try to resolve to an existing schema type (by ID or display name).
+  const resolvedExisting = resolveObjectTypeId(toSnakeCaseId(targetName)) ?? resolveObjectTypeId(targetName);
+  if (resolvedExisting) {
+    const eid = objectManager.spawn(resolvedExisting, { containedIn: roomEid, name: targetName });
+    return eid === null ? null : { eid, typeId: resolvedExisting };
+  }
+
+  // Define and spawn a minimal type grounded in WorldSchema.
+  const typeId = ensureGenericTypeFromSpec({
+    name: entitySpec?.name || targetName,
+    description: entitySpec?.description || `A ${targetName}`,
+    components: entitySpec?.components || ["Item"],
+    type: entitySpec?.type || "Object",
+  });
+
+  const eid = objectManager.spawn(typeId, { containedIn: roomEid, name: targetName });
+  if (eid === null) return null;
+
+  // Ensure the spawned instance is immediately takeable when needed (traits are computed from type+state).
+  // If the schema type was created as an Item, it already includes takeable.
+  if ((entitySpec?.components || []).includes("Item")) {
+    try {
+      const traits = JSON.parse(Traits.active[eid] || "[]") as string[];
+      if (!traits.includes("takeable")) {
+        Traits.active[eid] = JSON.stringify([...traits, "takeable"]);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return { eid, typeId };
 }
 
 // =============================================================================
@@ -1084,16 +1258,14 @@ export async function runWorldCrafterCycle(
       continue;
     }
 
-    // Generate entity spec
-    const entitySpec = await generateEntityForInteraction(interaction);
-    if (!entitySpec) continue;
+    // Deterministic materialization for core needs/actions; otherwise use LLM spec as a hint.
+    const actionLower = (interaction.actionType || "").toLowerCase();
+    const entitySpec =
+      actionLower === "eat" || actionLower === "drink"
+        ? null
+        : await generateEntityForInteraction(interaction);
 
-    // Create the entity
-    const created = await createEntityViaGod(godState, {
-      ...entitySpec,
-      roomName: interaction.roomName,
-    });
-
+    const created = materializeEntityForInteraction(world, interaction, entitySpec || undefined);
     if (created) {
       entitiesCreated++;
 
@@ -1103,15 +1275,15 @@ export async function runWorldCrafterCycle(
       // Record creation for history
       crafterState.createdEntities.push({
         timestamp: Date.now(),
-        name: entitySpec.name,
-        type: entitySpec.type,
+        name: entitySpec?.name || interaction.targetName,
+        type: entitySpec?.type || created.typeId,
         roomName: interaction.roomName,
         createdFor: interaction.agentName,
-        components: entitySpec.components,
+        components: entitySpec?.components || [],
       });
 
       // Check if a system is needed
-      if (entitySpec.needsSystem) {
+      if (entitySpec?.needsSystem) {
         const existingSystems = crafterState.entityTypeToSystemMap.get(entitySpec.type);
         if (!existingSystems?.includes(entitySpec.needsSystem)) {
           createSystemRecommendation(
@@ -1124,6 +1296,8 @@ export async function runWorldCrafterCycle(
       }
     }
   }
+
+  void godState; // Crafter materializes directly now; retained for future messaging/evolution tools.
 
   if (skippedCount > 0) {
     console.log(`[WorldCrafter] Skipped ${skippedCount} items due to world constraints`);

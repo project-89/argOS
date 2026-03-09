@@ -15,11 +15,35 @@
 import type { World } from "../ecs/world";
 import { query, getRelationTargets, hasComponent, entityExists } from "bitecs";
 import { Name, Description, Agent, Mind, Room, StimulusSource, Traits, Inventory, ObjectState, ObjectType } from "../ecs/components";
-import { OccupiesRoom, Contains } from "../ecs/relations";
-import { getAvailableAffordances } from "./cognition-system";
+import { getRoomForEntity, listDirectContents } from "../ecs/location";
+import { getAvailableAffordances } from "../world/affordance-availability";
 import { getEffectiveActorTraits } from "../world/effect-executor";
 import { worldSchema } from "../world/schema";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
+
+function parseTraitsJson(raw: unknown): string[] {
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((t) => String(t)).map((t) => t.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function hasTrait(world: World, eid: number, trait: string): boolean {
+  const wanted = String(trait || "").trim().toLowerCase();
+  if (!wanted) return false;
+  if (!hasComponent(world, eid, Traits)) return false;
+  return parseTraitsJson(Traits.active[eid]).some((t) => t.toLowerCase() === wanted);
+}
+
+function isOpenContainer(world: World, eid: number): boolean {
+  const state = String(ObjectState?.current?.[eid] || "").toLowerCase();
+  if (state === "open") return true;
+  return hasTrait(world, eid, "open");
+}
 
 // ============================================================================
 // SENSORY MODALITIES
@@ -75,8 +99,7 @@ export function generateStimuliForAgent(
   if (!entityExists(world, agentEid)) return stimuli;
 
   const capabilities = getAgentCapabilities(world, agentEid);
-  const rooms = safeGetRelationTargets(world, agentEid, OccupiesRoom);
-  const roomEid = rooms[0];
+  const roomEid = getRoomForEntity(world, agentEid);
 
   if (roomEid === undefined || !entityExists(world, roomEid)) return stimuli;
 
@@ -195,8 +218,8 @@ function generateVisualStimuli(
     if (otherEid === agentEid) continue;
     if (!entityExists(world, otherEid)) continue;
 
-    const otherRooms = safeGetRelationTargets(world, otherEid, OccupiesRoom);
-    if (otherRooms.includes(roomEid)) {
+    const otherRoom = getRoomForEntity(world, otherEid);
+    if (otherRoom === roomEid) {
       const otherName = Name.value[otherEid] || "someone";
       const otherDesc = Description.value[otherEid];
       // Read state from ECS ObjectState component (not ObjectMeta)
@@ -223,7 +246,7 @@ function generateVisualStimuli(
   }
 
   // Objects in room
-  const contents = safeGetRelationTargets(world, roomEid, Contains);
+  const contents = listDirectContents(world, roomEid);
   const objectLines: string[] = [];
 
   for (const contentEid of contents) {
@@ -243,6 +266,19 @@ function generateVisualStimuli(
         objectLines.push(`- ${objName}${state}: ${objDesc}`);
       } else {
         objectLines.push(`- ${objName}${state}`);
+      }
+
+      // If this is an open container, show a small sample of its direct contents (grounding for container tasks).
+      if (isOpenContainer(world, contentEid)) {
+        const inner = listDirectContents(world, contentEid)
+          .filter((eid) => entityExists(world, eid) && !hasComponent(world, eid, Agent))
+          .slice(0, 6);
+        if (inner.length > 0) {
+          const innerNames = inner.map((eid) => Name.value[eid]).filter((n): n is string => typeof n === "string" && n.trim().length > 0);
+          if (innerNames.length > 0) {
+            objectLines.push(`  (inside ${objName}): ${innerNames.join(", ")}`);
+          }
+        }
       }
     }
   }
@@ -274,7 +310,7 @@ function generateAmbientAuditoryStimuli(
   if (!entityExists(world, roomEid)) return stimuli;
 
   // Find stimulus sources in room that emit sounds
-  const contents = safeGetRelationTargets(world, roomEid, Contains);
+  const contents = listDirectContents(world, roomEid);
 
   for (const contentEid of contents) {
     if (!entityExists(world, contentEid)) continue;
@@ -326,7 +362,7 @@ function generateOlfactoryStimuli(
   if (!entityExists(world, roomEid)) return stimuli;
 
   // Find things that smell
-  const contents = safeGetRelationTargets(world, roomEid, Contains);
+  const contents = listDirectContents(world, roomEid);
 
   for (const contentEid of contents) {
     if (!entityExists(world, contentEid)) continue;
@@ -395,7 +431,7 @@ function generateCognitiveStimuli(
   if (!entityExists(world, agentEid) || !entityExists(world, roomEid)) return stimuli;
 
   // Affordance awareness - what actions are possible
-  const contents = safeGetRelationTargets(world, roomEid, Contains);
+  const contents = listDirectContents(world, roomEid);
   const affordanceAwareness: string[] = [];
 
   // Check other agents for interaction possibilities
@@ -404,8 +440,8 @@ function generateCognitiveStimuli(
     if (otherEid === agentEid) continue;
     if (!entityExists(world, otherEid)) continue;
 
-    const otherRooms = safeGetRelationTargets(world, otherEid, OccupiesRoom);
-    if (otherRooms.includes(roomEid)) {
+    const otherRoom = getRoomForEntity(world, otherEid);
+    if (otherRoom === roomEid) {
       const otherName = Name.value[otherEid] || "someone";
       const affordances = getAvailableAffordances(world, agentEid, otherEid);
       if (affordances.length > 0) {
@@ -486,9 +522,15 @@ function generateCognitiveStimuli(
  * Example: Holding a sharp knife gives "knife" capability
  * Example: Holding an open spice jar gives "spices" capability
  */
-export function getAgentToolCapabilities(agentEid: number): string[] {
-  // Use dynamic resolution - capabilities come from what we're holding
-  const effectiveTraits = getEffectiveActorTraits(agentEid);
+export function getAgentToolCapabilities(agentEid: number): string[];
+export function getAgentToolCapabilities(world: World, agentEid: number): string[];
+export function getAgentToolCapabilities(arg1: World | number, arg2?: number): string[] {
+  // Canonical capability resolution requires the ECS `world` (traits/state/type are ECS components).
+  // If callers don't have a world (e.g. some unit tests), omit capabilities rather than guessing.
+  if (typeof arg1 === "number") return [];
+  if (arg2 === undefined) return [];
+
+  const effectiveTraits = getEffectiveActorTraits(arg1, arg2);
 
   return Array.from(effectiveTraits)
     .filter(t => t.startsWith("has"))
@@ -502,18 +544,16 @@ export function getAgentToolCapabilities(agentEid: number): string[] {
  * Get the names of items in an agent's inventory
  * Critical for preventing hallucination about what agent has
  */
-export function getInventoryItemNames(agentEid: number): string[] {
-  const itemsJson = Inventory?.items?.[agentEid];
-  if (!itemsJson) return [];
+export function getInventoryItemNames(agentEid: number): string[];
+export function getInventoryItemNames(world: World, agentEid: number): string[];
+export function getInventoryItemNames(arg1: World | number, arg2?: number): string[] {
+  if (typeof arg1 === "number") return [];
+  if (arg2 === undefined) return [];
 
-  try {
-    const itemIds = JSON.parse(itemsJson) as number[];
-    return itemIds
-      .map(eid => Name?.value?.[eid])
-      .filter((n): n is string => typeof n === "string" && n.length > 0);
-  } catch {
-    return [];
-  }
+  const itemIds = listDirectContents(arg1, arg2);
+  return itemIds
+    .map(eid => Name?.value?.[eid])
+    .filter((n): n is string => typeof n === "string" && n.length > 0);
 }
 
 // Track recent successful actions per agent for better memory
@@ -527,7 +567,7 @@ const MAX_RECENT_ACTIONS = 5;
  */
 export function getNotableObjectStates(world: World, roomEid: number): string[] {
   const notable: string[] = [];
-  const contents = safeGetRelationTargets(world, roomEid, Contains);
+  const contents = listDirectContents(world, roomEid);
 
   for (const eid of contents) {
     if (!entityExists(world, eid)) continue;
@@ -607,7 +647,7 @@ export function getRecentSuccesses(agentEid: number): string[] {
  * Action results/failures are shown FIRST and prominently to prevent hallucination
  * Optional agentEid enables showing current capabilities
  */
-export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number): string {
+export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number, world?: World): string {
   if (stimuli.length === 0 && !agentEid) return "You perceive nothing unusual.";
 
   // Group by modality
@@ -656,8 +696,8 @@ export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number): 
   // 🎒 SELF-AWARENESS - Show agent their ACTUAL state (prevents hallucination)
   // This section is CRITICAL - it shows undeniable facts about what the agent has
   if (agentEid !== undefined) {
-    const inventoryItems = getInventoryItemNames(agentEid);
-    const capabilities = getAgentToolCapabilities(agentEid);
+    const inventoryItems = world ? getInventoryItemNames(world, agentEid) : [];
+    const capabilities = world ? getAgentToolCapabilities(world, agentEid) : [];
     const recentActions = getRecentSuccesses(agentEid);
 
     // Always show inventory section - even if empty

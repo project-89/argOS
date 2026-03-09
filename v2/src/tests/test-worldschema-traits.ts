@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { createArgosWorld } from "../ecs/world";
 import { initializePrefabs } from "../ecs/prefabs";
-import { createGodAgent, godCommand, getWorldState } from "../god/god-agent";
+import { createGodAgent, godCommand } from "../god/god-agent";
 import { getDynamicComponentValues } from "../ecs/dynamic-components";
+import { ObjectState, ObjectType, Traits } from "../ecs/components";
 
 async function testWorldSchemaTraits() {
   console.log("=== WorldSchema Traits Test ===\n");
@@ -31,22 +32,36 @@ async function testWorldSchemaTraits() {
     Then use getAvailableActions on "Old Chest" to see what actions are available.
   `);
 
-  console.log("\n2. Verifying ObjectMeta was stored...");
+  console.log("\n2. Verifying canonical ECS state/traits were stored...");
 
   // Check if ObjectMeta component was created
   const chestEid = god.registry.byName.get("Old Chest");
   const torchEid = god.registry.byName.get("Dim Torch");
 
   if (chestEid !== undefined) {
+    const traits = Traits.active[chestEid];
+    console.log(
+      `   Old Chest: type=${ObjectType.typeId[chestEid]}, state=${ObjectState.current[chestEid]}, traits=${traits}`
+    );
+
     const chestMeta = getDynamicComponentValues("ObjectMeta", chestEid);
-    console.log(`   Old Chest: type=${chestMeta?.type}, state=${chestMeta?.state}, traits=${chestMeta?.traits}`);
+    if (chestMeta) {
+      console.log(`   (legacy mirror) ObjectMeta: type=${chestMeta.type}, state=${chestMeta.state}, traits=${chestMeta.traits}`);
+    }
   } else {
     console.log("   Old Chest not found in registry");
   }
 
   if (torchEid !== undefined) {
+    const traits = Traits.active[torchEid];
+    console.log(
+      `   Dim Torch: type=${ObjectType.typeId[torchEid]}, state=${ObjectState.current[torchEid]}, traits=${traits}`
+    );
+
     const torchMeta = getDynamicComponentValues("ObjectMeta", torchEid);
-    console.log(`   Dim Torch: type=${torchMeta?.type}, state=${torchMeta?.state}, traits=${torchMeta?.traits}`);
+    if (torchMeta) {
+      console.log(`   (legacy mirror) ObjectMeta: type=${torchMeta.type}, state=${torchMeta.state}, traits=${torchMeta.traits}`);
+    }
   } else {
     console.log("   Dim Torch not found in registry");
   }
@@ -59,8 +74,11 @@ async function testWorldSchemaTraits() {
 
   // Verify state change
   if (chestEid !== undefined) {
+    console.log(
+      `   Old Chest after transition: state=${ObjectState.current[chestEid]}, traits=${Traits.active[chestEid]}`
+    );
     const chestMeta = getDynamicComponentValues("ObjectMeta", chestEid);
-    console.log(`   Old Chest after transition: state=${chestMeta?.state}, traits=${chestMeta?.traits}`);
+    if (chestMeta) console.log(`   (legacy mirror) ObjectMeta: state=${chestMeta.state}, traits=${chestMeta.traits}`);
   }
 
   console.log("\n=== Test Complete ===");

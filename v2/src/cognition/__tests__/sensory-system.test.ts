@@ -12,7 +12,7 @@ import "dotenv/config";
 import { addEntity, addComponent, hasComponent } from "bitecs";
 import { createArgosWorld } from "../../ecs/world";
 import { Name, Description, Agent, Mind, Room, Inventory, ObjectState, ObjectType, Traits } from "../../ecs/components";
-import { OccupiesRoom, Contains } from "../../ecs/relations";
+import { LocatedIn } from "../../ecs/relations";
 import {
   generateStimuliForAgent,
   formatStimuliForPrompt,
@@ -63,8 +63,7 @@ function createTestRoom(world: ReturnType<typeof createArgosWorld>, name: string
 }
 
 function placeAgentInRoom(world: ReturnType<typeof createArgosWorld>, agentEid: number, roomEid: number) {
-  addComponent(world, agentEid, OccupiesRoom(roomEid));
-  addComponent(world, roomEid, Contains(agentEid));
+  addComponent(world, agentEid, LocatedIn(roomEid));
 }
 
 // =============================================================================

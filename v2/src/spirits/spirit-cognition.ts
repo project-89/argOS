@@ -10,7 +10,8 @@ import { google } from "@ai-sdk/google";
 import { query, getRelationTargets } from "bitecs";
 import type { World } from "../ecs/world";
 import { Name, Description, Agent, Mind, Room, Goal, Impression, StimulusSource } from "../ecs/components";
-import { OccupiesRoom, HasGoal, HasImpression } from "../ecs/relations";
+import { HasGoal, HasImpression } from "../ecs/relations";
+import { getRoomForEntity } from "../ecs/location";
 import { getDynamicComponentValues } from "../ecs/dynamic-components";
 import type { EntityRegistry } from "../ecs/tools";
 import type {
@@ -72,8 +73,8 @@ function collectAgentSnapshots(world: World, registry: EntityRegistry): AgentSna
 
   return agentEids.map(eid => {
     const name = Name.value[eid] || "Unknown";
-    const rooms = getRelationTargets(world, eid, OccupiesRoom);
-    const location = rooms.length > 0 ? (Name.value[rooms[0]] || "Unknown") : "Nowhere";
+    const roomEid = getRoomForEntity(world, eid);
+    const location = roomEid !== undefined ? (Name.value[roomEid] || "Unknown") : "Nowhere";
 
     const arousal = Mind.arousal[eid] ?? 0.5;
     const focus = Mind.focus[eid] || "";
@@ -112,8 +113,7 @@ function collectRoomSnapshots(world: World, registry: EntityRegistry): RoomSnaps
     const allAgents = Array.from(query(world, [Agent]));
     const occupants = allAgents
       .filter(aid => {
-        const rooms = getRelationTargets(world, aid, OccupiesRoom);
-        return rooms.includes(eid);
+        return getRoomForEntity(world, aid) === eid;
       })
       .map(aid => Name.value[aid] || "Unknown");
 
@@ -124,24 +124,9 @@ function collectRoomSnapshots(world: World, registry: EntityRegistry): RoomSnaps
       // Skip agents (they're in occupants)
       if (Agent.active[objEid] !== undefined) continue;
 
-      // Check if object is in this room via OccupiesRoom
-      const objRooms = getRelationTargets(world, objEid, OccupiesRoom);
-      if (objRooms.includes(eid)) {
+      if (getRoomForEntity(world, objEid) === eid) {
         const objName = Name.value[objEid];
         if (objName) objects.push(objName);
-        continue;
-      }
-
-      // Check if room contains this object via Contains relation
-      try {
-        const { Contains } = require("../ecs/relations");
-        const roomContents = getRelationTargets(world, eid, Contains);
-        if (roomContents.includes(objEid)) {
-          const objName = Name.value[objEid];
-          if (objName) objects.push(objName);
-        }
-      } catch {
-        // Contains relation might not be available
       }
     }
 
@@ -686,19 +671,35 @@ function parseSpiritResponse(
           case "escalate":
           case "create_event":
           case "suggest_beat":
-            // Report to GodAI with specific suggestion
-            output.reports.push({
-              id: `dir_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-              timestamp: Date.now(),
-              from: spirit.eid,
-              to: spirit.superiorEid || -1,
-              type: "report",
-              domain: "narrative",
-              priority: directive.type === "escalate" ? "high" : "normal",
-              subject: `[${directive.type.toUpperCase()}] ${directive.target}`,
-              content: `Suggested action: ${directive.action}\n\nReason: ${directive.reason}`,
-              requiresResponse: false,
-            });
+            {
+              const directiveType = String(directive.type || "").toLowerCase();
+              const priority: DivineMessage["priority"] =
+                directiveType === "escalate" || directiveType === "resolve_thread" || directiveType === "create_event"
+                  ? "high"
+                  : "normal";
+              const subject = `[NARRATIVE_DIRECTIVE:${directiveType}] ${directive.target}`;
+
+              // Report to GodAI with specific suggestion
+              output.reports.push({
+                id: `dir_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+                timestamp: Date.now(),
+                from: spirit.eid,
+                to: spirit.superiorEid || -1,
+                type: "report",
+                domain: "narrative",
+                priority,
+                subject,
+                content: `Target: ${directive.target}\nAction: ${directive.action}\nReason: ${directive.reason}`,
+                requiresResponse: false,
+                data: {
+                  source: "narrative_directive",
+                  directiveType,
+                  target: directive.target,
+                  action: directive.action,
+                  reason: directive.reason,
+                },
+              });
+            }
             break;
         }
       }

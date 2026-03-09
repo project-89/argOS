@@ -16,7 +16,7 @@ import "dotenv/config";
 import { addEntity, addComponent } from "bitecs";
 import { createArgosWorld, type World } from "../../ecs/world";
 import { Name, Description, Agent, Mind, Room, GodAgent } from "../../ecs/components";
-import { OccupiesRoom } from "../../ecs/relations";
+import { LocatedIn } from "../../ecs/relations";
 import { createEntityRegistry, registerEntity, type EntityRegistry } from "../../ecs/tools";
 import { clearDynamicComponents } from "../../ecs/dynamic-components";
 
@@ -134,7 +134,7 @@ function createDemoSimulation(): DemoSimulation {
 
     const roomEid = roomEids.get(char.location);
     if (roomEid) {
-      addComponent(world, eid, OccupiesRoom(roomEid));
+      addComponent(world, eid, LocatedIn(roomEid));
     }
 
     registerEntity(registry, char.name, eid);

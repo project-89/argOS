@@ -134,6 +134,8 @@ export interface SystemExecutedEvent extends BusEvent {
   systemName: string;
   duration: number;
   entitiesProcessed?: number;
+  logCount?: number;
+  tick?: number;
 }
 
 export interface SystemErrorEvent extends BusEvent {
@@ -144,7 +146,18 @@ export interface SystemErrorEvent extends BusEvent {
   disabled?: boolean;
 }
 
-export type SystemEvent = SystemCreatedEvent | SystemExecutedEvent | SystemErrorEvent;
+export interface SystemLogEvent extends BusEvent {
+  type: "system:log";
+  systemName: string;
+  message: string;
+  tick?: number;
+}
+
+export type SystemEvent =
+  | SystemCreatedEvent
+  | SystemExecutedEvent
+  | SystemErrorEvent
+  | SystemLogEvent;
 
 // World Events
 export interface EntityCreatedEvent extends BusEvent {
@@ -175,6 +188,101 @@ export interface WorldStateEvent extends BusEvent {
   agentCount: number;
   roomCount: number;
   systemCount: number;
+  spiritCount?: number;
+  daemonCount?: number;
+  tension?: number;
+  agents?: Array<{
+    id: number;
+    name: string;
+    description: string;
+    role: string;
+    room: string | null;
+    gridPosition?: { x: number; y: number; facing?: string } | null;
+    mind: { mode: string; arousal: number; focus: string };
+    memories?: Array<{
+      id: number;
+      type: string;
+      content: string;
+      importance: number;
+      emotionalValence: number;
+      timestamp: number;
+    }>;
+    currentThought?: string | null;
+  }>;
+  rooms?: Array<{
+    id: number;
+    name: string;
+    description: string;
+    capacity: number;
+    ambience: string;
+    occupants: string[];
+  }>;
+  stimulusSources?: Array<{
+    id: number;
+    name: string;
+    description: string;
+    room: string | null;
+    type: string;
+  }>;
+  entities?: Array<{
+    id: number;
+    name: string;
+    description: string;
+    room: string | null;
+    type: string;
+    gridPosition?: { x: number; y: number; facing?: string } | null;
+  }>;
+  systems?: Array<{
+    name: string;
+    description: string;
+    frequency: number;
+    active: boolean;
+  }>;
+  spirits?: Array<{
+    id: number;
+    name: string;
+    domain: string;
+    rank: string;
+    description: string;
+    observationInterval: number;
+    lastObservation: number;
+    inboxSize: number;
+    observationsCount: number;
+  }>;
+  daemons?: Array<{
+    agentEid: number;
+    agentName: string;
+    observationCount: number;
+    whisperCount: number;
+    reportCount: number;
+    concernLevel: number;
+    pendingNudges: number;
+    memory: {
+      thoughtCount: number;
+      memoryCount: number;
+      planCount: number;
+      characterMoments: number;
+      recentThoughts: Array<{
+        focus: string;
+        content: string;
+        emotionalTone: string;
+        timestamp: number;
+      }>;
+    };
+    growthMetrics: {
+      lastGoalChange: number;
+      lastBeliefChange: number;
+      lastRelationshipChange: number;
+      stagnationScore: number;
+    };
+    latestPovStory?: string;
+    arcStatus?: string;
+    arcTension?: number;
+    lastObservation: number;
+    lastWhisper: number;
+    lastReport: number;
+    active: boolean;
+  }>;
 }
 
 export type WorldEvent = EntityCreatedEvent | EntityRemovedEvent | TimeChangeEvent | WorldStateEvent;
@@ -237,6 +345,18 @@ export interface DaemonNudgeEvent extends BusEvent {
 
 export type DaemonEvent = DaemonObserveEvent | DaemonWhisperEvent | DaemonReportEvent | DaemonNudgeEvent;
 
+// Simulation Status Events
+export interface SimulationStatusEvent extends BusEvent {
+  type: "simulation:status";
+  status: "running" | "paused" | "stopped";
+  tick?: number;
+}
+
+export interface SimulationErrorEvent extends BusEvent {
+  type: "simulation:error";
+  error: string;
+}
+
 // All Events Union
 export type SimulationEvent =
   | GodEvent
@@ -245,7 +365,9 @@ export type SimulationEvent =
   | SystemEvent
   | WorldEvent
   | RoomEvent
-  | DaemonEvent;
+  | DaemonEvent
+  | SimulationStatusEvent
+  | SimulationErrorEvent;
 
 // Channel types
 export type ChannelType =
@@ -284,6 +406,7 @@ export interface GodCommandInjection {
 export interface SpiritMessageInjection {
   type: "inject:spirit_message";
   targetSpiritId?: number;
+  targetSpiritName?: string;
   targetSpiritType?: string;
   message: string;
   priority?: "low" | "normal" | "high" | "urgent";
@@ -307,11 +430,67 @@ export interface RoomBroadcastInjection {
   activityType?: string;
 }
 
+export interface SimulationPauseInjection {
+  type: "inject:simulation_pause";
+}
+
+export interface SimulationResumeInjection {
+  type: "inject:simulation_resume";
+}
+
+export interface SimulationStopInjection {
+  type: "inject:simulation_stop";
+}
+
+export interface SimulationStartInjection {
+  type: "inject:simulation_start";
+  map: {
+    id: string;
+    name: string;
+    grid: {
+      width: number;
+      height: number;
+      tileSize: number;
+    };
+    zones: Array<{
+      id: string;
+      name: string;
+      roomType?: string;
+      shape:
+        | { kind: "rect"; x: number; y: number; w: number; h: number }
+        | { kind: "poly"; points: Array<{ x: number; y: number }> }
+        | { kind: "polygon"; points: number[] };
+      meta?: Record<string, unknown>;
+    }>;
+    markers?: Array<{
+      id: string;
+      x: number;
+      y: number;
+      kind: "spawn" | "portal" | "event" | "label";
+      name?: string;
+      text?: string;
+      spawnType?: "agent" | "object";
+      typeId?: string;
+      traits?: string[];
+      agentDef?: string;
+      targetMapId?: string;
+      targetMarkerId?: string;
+      to?: { x: number; y: number };
+      bidirectional?: boolean;
+      meta?: Record<string, unknown>;
+    }>;
+  };
+}
+
 export type InjectionMessage =
   | GodCommandInjection
   | SpiritMessageInjection
   | AgentStimulusInjection
-  | RoomBroadcastInjection;
+  | RoomBroadcastInjection
+  | SimulationPauseInjection
+  | SimulationResumeInjection
+  | SimulationStopInjection
+  | SimulationStartInjection;
 
 // Helper to get event category
 export function getEventCategory(event: SimulationEvent): "god" | "spirit" | "agent" | "system" | "world" | "room" | "daemon" {

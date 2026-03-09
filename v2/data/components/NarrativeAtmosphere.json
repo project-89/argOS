@@ -1,0 +1,8 @@
+{
+  "name": "NarrativeAtmosphere",
+  "description": "Narrative environmental conditions that influence agent psychology and sensory perception.",
+  "properties": {
+    "intensity": "number",
+    "mood": "string"
+  }
+}

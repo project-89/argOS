@@ -1,0 +1,7 @@
+{
+  "name": "Price",
+  "description": "Current market price of an item",
+  "properties": {
+    "value": "number"
+  }
+}

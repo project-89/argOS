@@ -30,7 +30,6 @@ import { queueStimulus } from "../cognition/cognition-system";
 import { query } from "bitecs";
 import { Agent, Mind, Name } from "../ecs/components";
 import type { SpiritRegistry } from "./spirit-registry";
-import { recordSystemError, getSystemErrorLog, clearSystemErrors } from "./artificer-spirit";
 
 // =============================================================================
 // ARTIFICER TOOLS - System Maintenance
@@ -67,7 +66,11 @@ export function createArtificerTools(
         if (!system) {
           return { error: `System not found: ${systemName}` };
         }
-        const errorLog = getSystemErrorLog(systemName);
+        const now = Date.now();
+        const errorCount = systemRegistry.errorCounts.get(systemName) || 0;
+        const recentErrors = systemRegistry.errors
+          .filter(e => e.systemName === systemName && now - e.timestamp < 300000)
+          .slice(-5);
         return {
           name: system.name,
           description: system.description,
@@ -76,10 +79,7 @@ export function createArtificerTools(
           active: system.active,
           lastRun: system.lastRun,
           code: system.code?.slice(0, 500) + (system.code && system.code.length > 500 ? "..." : ""),
-          errorLog: errorLog ? {
-            totalErrors: errorLog.totalErrors,
-            recentErrors: errorLog.errors.slice(-5),
-          } : null,
+          errorLog: errorCount > 0 ? { totalErrors: errorCount, recentErrors } : null,
         };
       },
     }),
@@ -115,7 +115,8 @@ export function createArtificerTools(
           systemRegistry
         );
         if (result.success) {
-          clearSystemErrors(systemName);
+          systemRegistry.errorCounts.delete(systemName);
+          systemRegistry.errors = systemRegistry.errors.filter(e => e.systemName !== systemName);
         }
         return {
           success: result.success,
@@ -165,7 +166,8 @@ export function createArtificerTools(
         systemName: z.string().describe("Name of the system"),
       }),
       execute: async ({ systemName }) => {
-        clearSystemErrors(systemName);
+        systemRegistry.errorCounts.delete(systemName);
+        systemRegistry.errors = systemRegistry.errors.filter(e => e.systemName !== systemName);
         return { success: true, message: `Cleared error log for ${systemName}` };
       },
     }),

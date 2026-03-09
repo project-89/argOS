@@ -19,7 +19,7 @@ import {
   LightSource,
   Portal,
 } from "../ecs/components";
-import { ContainedIn, OnTopOf, OccupiedBy, worldSchema } from "./schema";
+import { OnTopOf, OccupiedBy, worldSchema } from "./schema";
 import { ObjectManager } from "./object-manager";
 
 export interface RenderOptions {

@@ -1,0 +1,9 @@
+{
+  "name": "FestivalTime",
+  "description": "Tracks the current time and phase of the festival.",
+  "properties": {
+    "phase": "string",
+    "tick": "number",
+    "hour": "number"
+  }
+}

@@ -15,7 +15,8 @@ import { generateText } from "ai";
 import { query, entityExists, hasComponent } from "bitecs";
 import type { World } from "../ecs/world";
 import { Name, Description, Agent, Mind, Goal, GridPosition, Health, Inventory } from "../ecs/components";
-import { OccupiesRoom, HasGoal, HasMemory, HasThought } from "../ecs/relations";
+import { HasGoal, HasMemory, HasThought } from "../ecs/relations";
+import { getRoomForEntity } from "../ecs/location";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
 import { queueStimulus } from "../cognition/cognition-system";
 import { daemonModel, THINKING_LEVELS } from "../llm/config";
@@ -446,6 +447,17 @@ export interface DaemonReport {
   concerns: DaemonConcern[];
   growthOpportunities: GrowthOpportunity[];  // For GodAI/Arbiter to create challenges
   priority: "low" | "normal" | "high";
+  timestamp: number;
+}
+
+export interface DaemonPovStory {
+  agentName: string;
+  prose: string;
+  signature: string;
+  arcStatus: DaemonNarrativeArc["status"];
+  tension: number;
+  concernLevel: number;
+  score: number;
   timestamp: number;
 }
 
@@ -936,8 +948,8 @@ export function getDaemonByAgentName(
 export function collectAgentState(world: World, agentEid: number): AgentStateSnapshot | null {
   if (!entityExists(world, agentEid)) return null;
 
-  const rooms = safeGetRelationTargets(world, agentEid, OccupiesRoom);
-  const roomName = rooms.length > 0 ? Name.value[rooms[0]] : undefined;
+  const roomEid = getRoomForEntity(world, agentEid);
+  const roomName = roomEid !== undefined ? Name.value[roomEid] : undefined;
 
   const goals = safeGetRelationTargets(world, agentEid, HasGoal);
   const thoughts = safeGetRelationTargets(world, agentEid, HasThought);
@@ -2198,6 +2210,37 @@ export function reportToSuperiorSpirit(
     lines.push(`- Health: ${observation.currentState.health}`);
   }
 
+  // Mini-narrator signal so GodAI can drive story progression intentionally.
+  const activePlan = daemon.memory.activePlans.find((p) => p.status === "active" || p.status === "planned");
+  const unresolvedMemory = daemon.memory.keyMemories.filter((m) => !m.resolved).slice(-1)[0];
+  const pendingNudge = daemon.pendingNudges[0];
+  if (
+    daemon.narrativeArc.status !== "dormant" ||
+    activePlan ||
+    unresolvedMemory ||
+    pendingNudge
+  ) {
+    lines.push("");
+    lines.push("### Character Story Arc (Daemon POV):");
+    lines.push(`- Arc: ${daemon.narrativeArc.theme || "daily life"} [${daemon.narrativeArc.status}]`);
+    lines.push(`- Arc tension: ${(daemon.narrativeArc.tension * 100).toFixed(0)}%`);
+    if (daemon.narrativeArc.drivingGoal) {
+      lines.push(`- Driving goal: ${daemon.narrativeArc.drivingGoal}`);
+    }
+    if (activePlan) {
+      lines.push(`- Active plan: ${activePlan.goal} [${activePlan.status}]`);
+    }
+    if (unresolvedMemory) {
+      lines.push(`- Unresolved thread: ${unresolvedMemory.content}`);
+    }
+    if (pendingNudge) {
+      lines.push(`- Immediate nudge: ${pendingNudge.type} -> ${pendingNudge.action}`);
+    }
+    if (daemon.narrativeArc.needsSelfResolution) {
+      lines.push("- Urgency: arc is stagnating and needs a forcing event");
+    }
+  }
+
   const report: DaemonReport = {
     daemonEid: daemon.daemonEid,
     agentName: daemon.agentName,
@@ -2395,4 +2438,106 @@ export function getDaemonDetailedSummary(daemon: DaemonState): string {
   }
 
   return lines.join("\n");
+}
+
+// =============================================================================
+// DAEMON POV NARRATIVE (Mini-Narrator Output)
+// =============================================================================
+
+function daemonMoodLabel(arousal: number): string {
+  if (arousal >= 0.8) return "frayed";
+  if (arousal >= 0.65) return "tense";
+  if (arousal >= 0.5) return "alert";
+  if (arousal >= 0.35) return "steady";
+  return "quiet";
+}
+
+function computeDaemonStoryScore(daemon: DaemonState): number {
+  let score = 0;
+  score += daemon.concernLevel * 0.35;
+  score += daemon.narrativeArc.tension * 0.35;
+  if (daemon.narrativeArc.needsSelfResolution) score += 0.2;
+  if (daemon.pendingNudges.length > 0) score += 0.15;
+  if (daemon.memory.keyMemories.some((m) => !m.resolved)) score += 0.1;
+  return score;
+}
+
+export function buildDaemonPovStory(daemon: DaemonState): DaemonPovStory | null {
+  if (!daemon.active) return null;
+
+  const state = daemon.lastAgentState;
+  const arc = daemon.narrativeArc;
+  const activePlan = daemon.memory.activePlans.find((p) => p.status === "active" || p.status === "planned");
+  const unresolved = daemon.memory.keyMemories.filter((m) => !m.resolved).slice(-1)[0];
+  const recentMoment = daemon.memory.characterMoments.slice(-1)[0];
+  const nudge = daemon.pendingNudges[0];
+  const arousal = state?.arousal ?? Math.min(1, 0.25 + daemon.concernLevel * 0.7);
+  const mood = daemonMoodLabel(arousal);
+  const room = state?.room || recentMoment?.location || "their corner of the world";
+  const focus = state?.focus || activePlan?.goal || arc.drivingGoal || "the day ahead";
+
+  const lines: string[] = [];
+  lines.push(`${daemon.agentName} moves through ${room} in a ${mood} rhythm, mind fixed on ${focus}.`);
+
+  if (unresolved) {
+    lines.push(`From the daemon's watch, one thread still bites: ${unresolved.content}.`);
+  } else if (recentMoment) {
+    lines.push(`A recent turn still lingers in their arc: ${recentMoment.description}.`);
+  } else if (daemon.concernLevel > 0.45 || arc.tension > 0.45) {
+    lines.push("The daemon can feel strain building beneath the routine, even if the cause is not yet visible.");
+  } else {
+    lines.push("The thread is quiet for now, but the daemon keeps watch for the next turn.");
+  }
+
+  if (activePlan) {
+    lines.push(`Their next move is clear enough: ${activePlan.goal}.`);
+  } else if (arc.drivingGoal) {
+    lines.push(`The arc still points toward ${arc.drivingGoal}.`);
+  } else {
+    lines.push("No decisive plan has surfaced yet, so this moment reads as setup before the next push.");
+  }
+
+  if (arc.needsSelfResolution || nudge) {
+    const forcingAction = nudge?.action || "choose a decisive action instead of circling the same thought";
+    lines.push(`Pressure is building; the daemon wants a forcing beat: ${forcingAction}.`);
+  }
+
+  const prose = lines.slice(0, 3).join(" ");
+  const signature = [
+    daemon.agentName,
+    room,
+    focus,
+    arc.status,
+    activePlan?.goal || "",
+    unresolved?.content || "",
+    nudge?.type || "",
+  ].join("|");
+
+  return {
+    agentName: daemon.agentName,
+    prose,
+    signature,
+    arcStatus: arc.status,
+    tension: arc.tension,
+    concernLevel: daemon.concernLevel,
+    score: computeDaemonStoryScore(daemon),
+    timestamp: Date.now(),
+  };
+}
+
+export function collectDaemonPovStories(
+  registry: DaemonRegistry,
+  options: { maxStories?: number; minScore?: number } = {}
+): DaemonPovStory[] {
+  const maxStories = options.maxStories ?? 3;
+  const minScore = options.minScore ?? 0.05;
+
+  const stories = Array.from(registry.daemons.values())
+    .map((d) => buildDaemonPovStory(d))
+    .filter((s): s is DaemonPovStory => s !== null)
+    .filter((s) => s.score >= minScore)
+    .sort((a, b) => b.score - a.score || b.timestamp - a.timestamp)
+    .slice(0, maxStories);
+
+  return stories;
 }

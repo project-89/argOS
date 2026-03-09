@@ -316,7 +316,7 @@ function checkAIOperations(state: SimulationState): void {
           console.log(`[SimLoop] AI operation completed: ${op.name}`);
         },
         onError: (error) => {
-          console.error(`[SimLoop] AI operation failed: ${op.name}:`, error.message);
+          console.error(`[SimLoop] AI operation failed: ${op.name}`, error);
         },
       });
 

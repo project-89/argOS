@@ -1,27 +1,45 @@
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext, SystemRegistry } from "../ecs/dynamic-systems";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
-import { query, getRelationTargets, addComponent, removeComponent, hasComponent, entityExists } from "bitecs";
-import { Name, Agent, Mind, Room, Description, Portal, GridPosition, WorldMap, Health, CombatStats, InCombat, Inventory, Item, StimulusSource, PhysicalObject, Appearance, Traits, ObjectState } from "../ecs/components";
-import { OccupiesRoom, Contains } from "../ecs/relations";
+import { query, getRelationTargets, addComponent, removeComponent, hasComponent, entityExists, removeEntity } from "bitecs";
+import { Name, Agent, Mind, Room, Description, Portal, GridPosition, WorldMap, Health, CombatStats, InCombat, Inventory, Item, StimulusSource, PhysicalObject, Appearance, Traits, ObjectState, ObjectType, Memory } from "../ecs/components";
+import { LocatedIn } from "../ecs/relations";
+import { getDirectContainer, getRoomForEntity, listDirectContents, setLocatedIn } from "../ecs/location";
+import {
+  addToInventory,
+  formatInventory,
+  getInventoryItems,
+  hasInventory,
+  hasItem,
+  initializeInventory,
+  removeFromInventory,
+  syncInventoryCache,
+} from "../ecs/inventory";
 import {
   processAgentCognition,
   addPerception,
   getAgentMemory,
   type AgentAction
 } from "./agent-mind";
-import { extractKnowledgeFromInteraction } from "./knowledge-graph";
-import { executeAffordance, canUseAffordance, transferToolTraits, type EffectContext } from "../world/effect-executor";
-import { worldSchema, type AffordanceDefinition } from "../world/schema";
+import { addMemory, extractKnowledgeFromInteraction, getAgentMemories } from "./knowledge-graph";
+import { executeAffordance, type EffectContext } from "../world/effect-executor";
+import { worldSchema } from "../world/schema";
+import { getAvailableAffordances } from "../world/affordance-availability";
+import {
+  queueStimulus,
+  queueStimulusForAgent,
+  broadcastToRoom,
+  drainPendingStimuli,
+  type PendingStimulus,
+} from "./stimulus-queue";
 import {
   generateStimuliForAgent,
   formatStimuliForPrompt,
   eventToStimulus,
   recordSuccessfulAction,
-  type SensoryModality,
   type Stimulus,
 } from "./sensory-system";
-import { setMovementTarget } from "../systems/builtin-systems";
+import { getMovementTarget, setMovementTarget } from "../systems/builtin-systems";
 import {
   isValidAction,
   suggestValidAction,
@@ -30,11 +48,16 @@ import {
   type ValidAction,
 } from "../spirits/consistency-spirit";
 import { recordFailedInteraction } from "../spirits/world-crafter-spirit";
+import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "./procedural-skills";
+import { compileCompletedPlanToProceduralMacro } from "./plan-compiler";
+import { setGoalContract } from "./goal-contract";
 import {
   runPlanningSystem,
   advancePlanStep,
   getPlanForGoal,
   getNextPlannedAction,
+  getCurrentStep,
+  failPlan,
 } from "./planning-system";
 import {
   runReflectionSystem,
@@ -53,23 +76,43 @@ import {
   cleanupAppearanceState,
 } from "./appearance-emitter";
 import { HasGoal, HasPlan } from "../ecs/relations";
-import { Goal, Plan } from "../ecs/components";
+import { Goal, Plan, PendingToolJob } from "../ecs/components";
+import { LastAction } from "../ecs/components";
 import { addEntity as bitAddEntity } from "bitecs";
 
-export interface PendingStimulus {
-  targetEid: number;
-  type: string;
-  content: string;
-  source: string;
-  modality?: SensoryModality;  // Optional for backwards compatibility
-  intensity?: number;          // Stimulus intensity (0-1), defaults to 0.7
-}
+export { getAvailableAffordances };
+export { queueStimulus, queueStimulusForAgent, broadcastToRoom };
 
-const pendingStimuli: PendingStimulus[] = [];
 const pendingActions: Array<{ eid: number; action: AgentAction }> = [];
 
 // Staggered processing state - prevents timeout from processing all agents at once
 let agentProcessingIndex = 0;
+
+// Recent failure guard: prevent agents from hammering the same failing action loop.
+// This is deliberately local/deterministic (no LLM) and only blocks immediate repeats.
+const recentFailedActions = new Map<number, { signature: string; count: number; lastAtMs: number }>();
+const REPEAT_FAILURE_WINDOW_MS = 5000;
+const MAX_REPEAT_FAILURES_BEFORE_BLOCK = 1;
+
+// Plan-step failure guard: when the *current plan step* fails repeatedly, fail the plan so
+// the planning system can regenerate a corrected plan.
+const recentPlanStepFailures = new Map<number, { signature: string; count: number; lastAtMs: number }>();
+function stripControlAndAnsi(input: string): string {
+  const s = String(input ?? "");
+  // Strip ANSI CSI sequences: ESC [ ... finalByte
+  const noAnsi = s.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+  // Strip remaining C0/C1 control chars (keep \t, \n, \r).
+  return noAnsi.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "");
+}
+
+const PLAN_STEP_FAILURE_WINDOW_MS = 30_000;
+const MAX_PLAN_STEP_FAILURES_BEFORE_REPLAN = 2;
+
+// Deterministic learning hook: persist certain high-signal stimuli as explicit long-term memories,
+// even when LLM-backed knowledge extraction is disabled.
+const MEMORY_CAPTURE_TYPES = new Set<string>(["tool_result", "action_failed"]);
+const recentStimulusMemoryCaptures = new Map<number, { signature: string; atMs: number }>();
+const STIMULUS_MEMORY_DEDUP_WINDOW_MS = 60_000;
 
 // Tune these based on your API rate limits:
 // - Free tier: PARALLEL_BATCH_SIZE = 4-5
@@ -93,6 +136,60 @@ function shouldAgentThink(eid: number, tick: number): boolean {
 
   // Low arousal (<0.4): think every 3 ticks
   return tick % 3 === eid % 3;
+}
+
+function maybeCaptureStimulusAsMemory(world: World, stimulus: PendingStimulus): void {
+  if (!MEMORY_CAPTURE_TYPES.has(stimulus.type)) return;
+  if (!entityExists(world, stimulus.targetEid)) return;
+  if (!hasComponent(world, stimulus.targetEid, Agent)) return;
+  if (!Agent.active[stimulus.targetEid]) return;
+
+  const raw = (stimulus.content || "").trim();
+  if (!raw) return;
+
+  // Avoid turning explicit note-taking UX into double-memories:
+  // notes.append already writes a dedicated `[Note] ...` memory entry.
+  if (stimulus.type === "tool_result" && raw.startsWith("[Tool:notes.")) return;
+
+  const maxLen = 500;
+  const clipped = raw.length > maxLen ? raw.slice(0, maxLen) + "\n…(truncated)" : raw;
+
+  const signature = `${stimulus.type}|${stimulus.source}|${clipped.slice(0, 240)}`;
+  const now = Date.now();
+  const prev = recentStimulusMemoryCaptures.get(stimulus.targetEid);
+  if (prev && prev.signature === signature && now - prev.atMs < STIMULUS_MEMORY_DEDUP_WINDOW_MS) return;
+
+  // Avoid spamming exact duplicates already present in the most recent memories.
+  const recent = getAgentMemories(world, stimulus.targetEid)
+    .sort((a, b) => (Memory.timestamp[b] || 0) - (Memory.timestamp[a] || 0))
+    .slice(0, 12);
+  for (const memEid of recent) {
+    const existing = (Memory.content[memEid] || "").trim();
+    if (existing === clipped) {
+      recentStimulusMemoryCaptures.set(stimulus.targetEid, { signature, atMs: now });
+      return;
+    }
+  }
+
+  if (stimulus.type === "tool_result") {
+    addMemory(world, stimulus.targetEid, {
+      type: "semantic",
+      content: clipped,
+      importance: 0.7,
+      emotionalValence: 0,
+      timestamp: now,
+    });
+  } else if (stimulus.type === "action_failed") {
+    addMemory(world, stimulus.targetEid, {
+      type: "episodic",
+      content: clipped,
+      importance: 0.9,
+      emotionalValence: -0.2,
+      timestamp: now,
+    });
+  }
+
+  recentStimulusMemoryCaptures.set(stimulus.targetEid, { signature, atMs: now });
 }
 
 // Entity registry for name lookups (shared with effect executor)
@@ -152,10 +249,30 @@ export function createMovementGoal(
     if (!hasComponent(world, goalEid, Goal)) continue;
     const desc = Goal.description[goalEid] || "";
     const status = Goal.status[goalEid];
-    if (status === "active" &&
-        desc.toLowerCase().includes("go to") &&
-        desc.toLowerCase().includes(destination.toLowerCase())) {
-      // Already has this goal
+    if (status !== "active") continue;
+
+    // Prefer typed movement goals (robust): don't accidentally treat arbitrary goals that contain "go to"
+    // as a movement goal (this can stall movement entirely).
+    const kind = String((Goal as any).kind?.[goalEid] || "");
+    if (kind === "move_to_room") {
+      try {
+        const raw = String((Goal as any).paramsJson?.[goalEid] || "").trim();
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const roomName = typeof parsed?.roomName === "string" ? parsed.roomName : "";
+          if (roomName.trim().toLowerCase() === destination.trim().toLowerCase()) {
+            console.log(`[Goal] ${agentName} already has goal to go to ${destination}`);
+            return undefined;
+          }
+          continue;
+        }
+      } catch {
+        // Fall through to legacy description matching if paramsJson isn't usable.
+      }
+    }
+
+    // Legacy fallback: older movement goals were only described in text.
+    if (desc.toLowerCase().startsWith("go to ") && desc.toLowerCase().includes(destination.toLowerCase())) {
       console.log(`[Goal] ${agentName} already has goal to go to ${destination}`);
       return undefined;
     }
@@ -176,6 +293,16 @@ export function createMovementGoal(
   Goal.status[goalEid] = "active";
   Goal.progress[goalEid] = 0;
   Goal.deadline[goalEid] = Date.now() + 5 * 60 * 1000; // 5 minute deadline
+  Goal.createdAt[goalEid] = Date.now();
+
+  // Typed contract: allows downstream systems (and learning) to key off a stable signature.
+  setGoalContract(world, goalEid, {
+    version: 1,
+    kind: "move_to_room",
+    params: { roomName: destination, reason: reason || undefined },
+    success: { type: "in_room", roomName: destination },
+    description: goalDescription,
+  });
 
   console.log(`🎯 ${agentName} created goal: "${goalDescription}" (priority: ${priority})`);
 
@@ -210,6 +337,15 @@ export function createIntentGoal(
   Goal.status[goalEid] = "active";
   Goal.progress[goalEid] = 0;
   Goal.deadline[goalEid] = Date.now() + 10 * 60 * 1000; // 10 minute deadline
+  Goal.createdAt[goalEid] = Date.now();
+
+  setGoalContract(world, goalEid, {
+    version: 1,
+    kind: "custom",
+    params: { description },
+    success: { type: "custom", description: "complete when satisfied by deterministic systems or plan" },
+    description,
+  });
 
   console.log(`🎯 ${agentName} created intent goal: "${description}" (priority: ${priority})`);
 
@@ -226,7 +362,8 @@ export function hasActiveMovementGoal(world: World, agentEid: number): boolean {
     if (!hasComponent(world, goalEid, Goal)) continue;
     const desc = Goal.description[goalEid] || "";
     const status = Goal.status[goalEid];
-    if (status === "active" && desc.toLowerCase().includes("go to")) {
+    const kind = String(Goal.kind[goalEid] || "");
+    if (status === "active" && (kind === "move_to_room" || desc.toLowerCase().includes("go to"))) {
       return true;
     }
   }
@@ -330,122 +467,9 @@ export function dealDamage(
 // INVENTORY HELPERS
 // ============================================================================
 
-/**
- * Initialize an entity's inventory
- */
-export function initializeInventory(eid: number, maxSlots: number = 10, maxWeight: number = 50): void {
-  Inventory.items[eid] = "[]";
-  Inventory.maxSlots[eid] = maxSlots;
-  Inventory.weight[eid] = 0;
-  Inventory.maxWeight[eid] = maxWeight;
-  console.log(`[Inventory] Initialized inventory for entity ${eid} (${maxSlots} slots, ${maxWeight} weight)`);
-}
-
-/**
- * Check if entity has inventory
- */
-export function hasInventory(eid: number): boolean {
-  return Inventory.items[eid] !== undefined;
-}
-
-/**
- * Get items in an entity's inventory
- */
-export function getInventoryItems(eid: number): number[] {
-  const itemsJson = Inventory.items[eid];
-  if (!itemsJson) return [];
-  try {
-    return JSON.parse(itemsJson);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Add an item to an entity's inventory
- * @returns true if successful, false if inventory full or item can't be picked up
- */
-export function addToInventory(world: World, holderEid: number, itemEid: number): boolean {
-  if (!hasInventory(holderEid)) {
-    console.warn(`[Inventory] Entity ${holderEid} has no inventory`);
-    return false;
-  }
-
-  // Check if item can be picked up (has Item component or is a PhysicalObject)
-  const itemWeight = Item.weight[itemEid] ?? 1;
-
-  // Check capacity
-  const currentItems = getInventoryItems(holderEid);
-  if (currentItems.length >= Inventory.maxSlots[holderEid]) {
-    console.warn(`[Inventory] Inventory full for entity ${holderEid}`);
-    return false;
-  }
-
-  // Check weight
-  const currentWeight = Inventory.weight[holderEid] || 0;
-  if (currentWeight + itemWeight > Inventory.maxWeight[holderEid]) {
-    console.warn(`[Inventory] Too heavy for entity ${holderEid}`);
-    return false;
-  }
-
-  // Add item
-  currentItems.push(itemEid);
-  Inventory.items[holderEid] = JSON.stringify(currentItems);
-  Inventory.weight[holderEid] = currentWeight + itemWeight;
-
-  const holderName = Name.value[holderEid] || `Entity ${holderEid}`;
-  const itemName = Name.value[itemEid] || `Item ${itemEid}`;
-  console.log(`[Inventory] ${holderName} picked up ${itemName}`);
-
-  return true;
-}
-
-/**
- * Remove an item from an entity's inventory
- * @returns true if successful
- */
-export function removeFromInventory(holderEid: number, itemEid: number): boolean {
-  const currentItems = getInventoryItems(holderEid);
-  const index = currentItems.indexOf(itemEid);
-
-  if (index === -1) {
-    console.warn(`[Inventory] Item ${itemEid} not in inventory of entity ${holderEid}`);
-    return false;
-  }
-
-  currentItems.splice(index, 1);
-  Inventory.items[holderEid] = JSON.stringify(currentItems);
-
-  // Update weight
-  const itemWeight = Item.weight[itemEid] ?? 1;
-  Inventory.weight[holderEid] = Math.max(0, (Inventory.weight[holderEid] || 0) - itemWeight);
-
-  const holderName = Name.value[holderEid] || `Entity ${holderEid}`;
-  const itemName = Name.value[itemEid] || `Item ${itemEid}`;
-  console.log(`[Inventory] ${holderName} dropped ${itemName}`);
-
-  return true;
-}
-
-/**
- * Check if entity has a specific item
- */
-export function hasItem(holderEid: number, itemEid: number): boolean {
-  return getInventoryItems(holderEid).includes(itemEid);
-}
-
-/**
- * Get inventory contents as formatted string for prompts
- */
-export function formatInventory(eid: number): string {
-  const items = getInventoryItems(eid);
-  if (items.length === 0) {
-    return "Your inventory is empty.";
-  }
-
-  const itemNames = items.map(itemEid => Name.value[itemEid] || `Unknown Item`);
-  return `You are carrying: ${itemNames.join(", ")}`;
-}
+// Inventory helpers live in `src/ecs/inventory.ts` so the world layer (effects/rules)
+// and cognition can share the same canonical logic without circular imports.
+export { initializeInventory, hasInventory, getInventoryItems, addToInventory, removeFromInventory, hasItem, formatInventory };
 
 // ============================================================================
 // APPEARANCE HELPERS - NPC physical appearance system
@@ -561,13 +585,13 @@ export function setVisiblyHolding(eid: number, itemName: string): void {
 /**
  * Sync visiblyHolding with the first item in inventory (or clear it)
  */
-export function syncVisiblyHoldingFromInventory(eid: number): void {
-  if (!hasInventory(eid)) {
+export function syncVisiblyHoldingFromInventory(world: World, eid: number): void {
+  if (!hasInventory(world, eid)) {
     Appearance.visiblyHolding[eid] = "";
     return;
   }
 
-  const items = getInventoryItems(eid);
+  const items = getInventoryItems(world, eid);
   if (items.length > 0) {
     // Show the first/primary item as what they're holding
     const firstItem = items[0];
@@ -824,8 +848,8 @@ export function createPerceivableObject(
     GridPosition.y[eid] = options.gridY;
   }
 
-  // Add to room (using Contains relation)
-  addComponent(world, roomEid, Contains(eid));
+  // Add to room (canonical: LocatedIn)
+  addComponent(world, eid, LocatedIn(roomEid));
 
   // Register for lookups
   registerEntity(eid, name);
@@ -841,30 +865,19 @@ export function createPerceivableObject(
 export function getObjectsInRoom(world: World, roomEid: number): { eid: number; name: string; description: string }[] {
   const objects: { eid: number; name: string; description: string }[] = [];
 
-  // Get all entities with StimulusSource that are in this room
-  const stimulusSources = Array.from(query(world, [StimulusSource]));
+  // Canonical: direct contents of the room via LocatedIn.
+  // Nested items (e.g., items inside a backpack) are not returned here.
+  const contents = listDirectContents(world, roomEid);
+  for (const eid of contents) {
+    if (!entityExists(world, eid)) continue;
+    if (hasComponent(world, eid, Agent)) continue;
+    if (!hasComponent(world, eid, StimulusSource)) continue;
 
-  for (const eid of stimulusSources) {
-    // Check if it's in this room (via OccupiesRoom or Contains)
-    const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
-    if (rooms.includes(roomEid)) {
-      objects.push({
-        eid,
-        name: Name.value[eid] || `Object ${eid}`,
-        description: Description.value[eid] || "",
-      });
-      continue;
-    }
-
-    // Also check Contains relation (room contains object)
-    const contents = safeGetRelationTargets(world, roomEid, Contains);
-    if (contents.includes(eid)) {
-      objects.push({
-        eid,
-        name: Name.value[eid] || `Object ${eid}`,
-        description: Description.value[eid] || "",
-      });
-    }
+    objects.push({
+      eid,
+      name: Name.value[eid] || `Object ${eid}`,
+      description: Description.value[eid] || "",
+    });
   }
 
   return objects;
@@ -873,67 +886,198 @@ export function getObjectsInRoom(world: World, roomEid: number): { eid: number; 
 /**
  * Find an entity by name (with fuzzy matching for natural language)
  */
-export function findEntityByName(world: World, name: string): number | undefined {
-  // First check registry
-  const registered = entityRegistry.byName.get(name);
-  if (registered !== undefined) return registered;
+export function findEntityByName(
+  world: World,
+  name: string,
+  options?: { preferRoomEid?: number }
+): number | undefined {
+  return findEntityByNameWithScope(world, name, options);
+}
 
-  // Fall back to searching all entities with Name component
-  const allEntities = Array.from(query(world, []));
-  const nameLower = name.toLowerCase().trim();
+function normalizeEntitySearchText(raw: string): {
+  variants: string[];
+  stateHints: string[];
+} {
+  const stateHints: string[] = [];
+  const base = (raw || "")
+    .trim()
+    .replace(/^[-•]\s*/g, "") // list bullets from sensory output
+    .replace(/^["']+|["']+$/g, "") // surrounding quotes
+    .replace(/\s+/g, " ");
 
-  // Normalize: remove trailing 's' for plural handling (trees -> tree)
-  const singularized = nameLower.endsWith('s') ? nameLower.slice(0, -1) : nameLower;
-  // Also handle "ies" -> "y" (berries -> berry)
-  const singularizedIes = nameLower.endsWith('ies') ? nameLower.slice(0, -3) + 'y' : singularized;
+  // Strip bracket/paren state annotations commonly produced by sensory output: `food [fresh]`, `Silas (sleeping)`
+  let withoutState = base
+    .replace(/\[([^\]]+)\]/g, (_m, inner) => {
+      if (typeof inner === "string" && inner.trim().length > 0) stateHints.push(inner.trim().toLowerCase());
+      return " ";
+    })
+    .replace(/\(([^)]+)\)/g, (_m, inner) => {
+      if (typeof inner === "string" && inner.trim().length > 0) stateHints.push(inner.trim().toLowerCase());
+      return " ";
+    });
 
-  // Exact match first
-  for (const eid of allEntities) {
-    const entityName = Name.value[eid];
-    if (entityName?.toLowerCase() === nameLower) {
-      return eid;
+  // Remove punctuation that commonly appears in prose references.
+  withoutState = withoutState.replace(/[.,!?;:]+/g, " ").replace(/\s+/g, " ").trim();
+
+  // Remove leading articles.
+  withoutState = withoutState.replace(/^(the|a|an)\s+/i, "");
+
+  const lowered = withoutState.toLowerCase().trim();
+  if (lowered.length === 0) return { variants: [], stateHints };
+
+  // Normalize underscores/spaces so `iron_ingot` and `iron ingot` both work.
+  const asSpaces = lowered.replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  const asUnderscore = lowered.replace(/\s+/g, "_").replace(/_+/g, "_").trim();
+
+  // Plural handling: trees -> tree, berries -> berry
+  const singularS = asSpaces.endsWith("s") ? asSpaces.slice(0, -1) : asSpaces;
+  const singularIes = asSpaces.endsWith("ies") ? asSpaces.slice(0, -3) + "y" : singularS;
+
+  const variants = Array.from(
+    new Set(
+      [
+        lowered,
+        asSpaces,
+        asUnderscore,
+        singularS,
+        singularIes,
+        singularS.replace(/\s+/g, "_"),
+        singularIes.replace(/\s+/g, "_"),
+      ].filter((v) => v.length > 0)
+    )
+  );
+
+  return { variants, stateHints: Array.from(new Set(stateHints)) };
+}
+
+function getEntityNameCandidates(world: World, eid: number): string[] {
+  const candidates: string[] = [];
+  const entityName = Name.value[eid];
+  if (typeof entityName === "string" && entityName.trim().length > 0) {
+    candidates.push(entityName);
+    candidates.push(entityName.replace(/_/g, " "));
+  }
+
+  if (hasComponent(world, eid, ObjectType)) {
+    const typeId = ObjectType.typeId[eid];
+    if (typeof typeId === "string" && typeId.trim().length > 0) {
+      candidates.push(typeId);
+      candidates.push(typeId.replace(/_/g, " "));
     }
   }
 
-  // Try partial match (entity name contains search term)
-  for (const eid of allEntities) {
-    const entityName = Name.value[eid]?.toLowerCase();
-    if (!entityName) continue;
+  return Array.from(new Set(candidates.map((c) => c.toLowerCase().trim()).filter(Boolean)));
+}
 
-    // Check if search term is in entity name OR singularized version matches
-    if (entityName.includes(nameLower) ||
-        entityName.includes(singularized) ||
-        entityName.includes(singularizedIes)) {
-      return eid;
-    }
+function scoreNameMatch(
+  search: ReturnType<typeof normalizeEntitySearchText>,
+  entityCandidates: string[],
+  entityEid: number,
+  world: World,
+  options?: { preferRoomEid?: number }
+): number {
+  let score = 0;
 
-    // Also check if entity name starts with search term (tree matches "Tree 1")
-    if (entityName.startsWith(singularized) || entityName.startsWith(singularizedIes)) {
-      return eid;
+  // Prefer matches that are physically co-located when a room hint exists.
+  if (options?.preferRoomEid !== undefined) {
+    const room = getRoomForEntity(world, entityEid);
+    if (room === options.preferRoomEid) score += 20;
+  }
+
+  // Reward state matches when the search included a `[state]` annotation.
+  if (search.stateHints.length > 0 && hasComponent(world, entityEid, ObjectState)) {
+    const st = ObjectState.current[entityEid];
+    const stateLower = typeof st === "string" ? st.toLowerCase() : "";
+    if (stateLower && search.stateHints.includes(stateLower)) score += 15;
+  }
+
+  for (const v of search.variants) {
+    for (const cand of entityCandidates) {
+      if (cand === v) score = Math.max(score, 100);
+      else if (cand.startsWith(v)) score = Math.max(score, 80);
+      else if (cand.includes(v)) score = Math.max(score, 65);
+      else if (v.includes(cand) && cand.length >= 3) score = Math.max(score, 55);
     }
+  }
+
+  return score;
+}
+
+export function findEntityByNameWithScope(
+  world: World,
+  name: string,
+  options?: { preferRoomEid?: number }
+): number | undefined {
+  // First check registry for exact hit (fast path).
+  const registered = entityRegistry.byName.get(name);
+  if (registered !== undefined) {
+    if (entityExists(world, registered)) return registered;
+    // Registry can become stale if entities are removed without unregistering.
+    entityRegistry.byName.delete(name);
+    const prevName = entityRegistry.byId.get(registered);
+    if (prevName) entityRegistry.byName.delete(prevName);
+    entityRegistry.byId.delete(registered);
+  }
+
+  const search = normalizeEntitySearchText(name);
+  if (search.variants.length === 0) return undefined;
+
+  // Prefer searching local room contents + agents in room first (prevents matching remote entities).
+  const scopedEids: number[] = [];
+  if (options?.preferRoomEid !== undefined) {
+    for (const eid of listDirectContents(world, options.preferRoomEid)) {
+      if (!entityExists(world, eid)) continue;
+      scopedEids.push(eid);
+    }
+    for (const agentEid of Array.from(query(world, [Agent]))) {
+      if (!entityExists(world, agentEid)) continue;
+      if (getRoomForEntity(world, agentEid) !== options.preferRoomEid) continue;
+      scopedEids.push(agentEid);
+    }
+  }
+
+  const evalPool = (pool: number[]): { bestEid: number | undefined; bestScore: number } => {
+    let bestEid: number | undefined;
+    let bestScore = 0;
+    for (const eid of pool) {
+      if (!entityExists(world, eid)) continue;
+      const entityCandidates = getEntityNameCandidates(world, eid);
+      if (entityCandidates.length === 0) continue;
+      const s = scoreNameMatch(search, entityCandidates, eid, world, options);
+      if (s > bestScore) {
+        bestScore = s;
+        bestEid = eid;
+      }
+    }
+    return { bestEid, bestScore };
+  };
+
+  // If we have a room hint, prefer local matches even if they are imperfect.
+  // This avoids "ghost object" failure modes where a remote or stale name wins.
+  if (scopedEids.length > 0) {
+    const local = evalPool(Array.from(new Set(scopedEids)));
+    if (local.bestEid !== undefined && local.bestScore >= 55) return local.bestEid;
+  }
+
+  // Global fallback: include multiple common component pools (some entities have Name.value set
+  // but may be missing the Name component, so querying only [Name] is insufficient).
+  const allCandidateEids = new Set<number>();
+  for (const eid of Array.from(query(world, [Name]))) allCandidateEids.add(eid);
+  for (const eid of Array.from(query(world, [ObjectType]))) allCandidateEids.add(eid);
+  for (const eid of Array.from(query(world, [PhysicalObject]))) allCandidateEids.add(eid);
+  for (const eid of Array.from(query(world, [Agent]))) allCandidateEids.add(eid);
+  for (const eid of Array.from(query(world, [Room]))) allCandidateEids.add(eid);
+
+  const global = evalPool(Array.from(allCandidateEids));
+  if (global.bestEid !== undefined && global.bestScore > 0) {
+    // Cache the lookup for future fast-path hits.
+    const canonical = Name.value[global.bestEid] || name;
+    registerEntity(global.bestEid, canonical);
+    if (canonical !== name) entityRegistry.byName.set(name, global.bestEid);
+    return global.bestEid;
   }
 
   return undefined;
-}
-
-/**
- * Get available affordances for a target entity
- */
-export function getAvailableAffordances(
-  world: World,
-  actorEid: number,
-  targetEid: number
-): AffordanceDefinition[] {
-  const available: AffordanceDefinition[] = [];
-
-  for (const affordance of worldSchema.getAllAffordances()) {
-    const check = canUseAffordance(affordance, actorEid, targetEid);
-    if (check.available) {
-      available.push(affordance);
-    }
-  }
-
-  return available;
 }
 
 /**
@@ -948,8 +1092,8 @@ export function findObjectsWithAffordance(
 ): string[] {
   const validTargets: string[] = [];
 
-  // Get room contents
-  const contents = safeGetRelationTargets(world, roomEid, Contains);
+  // Get direct room contents (canonical: LocatedIn)
+  const contents = listDirectContents(world, roomEid);
 
   for (const contentEid of contents) {
     if (!entityExists(world, contentEid)) continue;
@@ -977,7 +1121,7 @@ export function findItemWithTrait(
   roomEid: number,
   traitName: string
 ): string | null {
-  const contents = safeGetRelationTargets(world, roomEid, Contains);
+  const contents = listDirectContents(world, roomEid);
 
   for (const contentEid of contents) {
     if (!entityExists(world, contentEid)) continue;
@@ -1005,42 +1149,6 @@ export function findItemWithTrait(
  */
 export function getEntityRegistry() {
   return entityRegistry;
-}
-
-export function queueStimulus(stimulus: PendingStimulus): void {
-  pendingStimuli.push(stimulus);
-}
-
-export function queueStimulusForAgent(
-  world: World,
-  agentName: string,
-  stimulus: { type: string; content: string; source: string; modality?: SensoryModality }
-): void {
-  const agents = Array.from(query(world, [Agent]));
-  for (const eid of agents) {
-    if (Name.value[eid] === agentName) {
-      pendingStimuli.push({ targetEid: eid, ...stimulus });
-      return;
-    }
-  }
-}
-
-export function broadcastToRoom(
-  world: World,
-  roomEid: number,
-  stimulus: { type: string; content: string; source: string; modality?: SensoryModality; intensity?: number },
-  excludeEid?: number
-): void {
-  if (!entityExists(world, roomEid)) return;
-
-  const agents = Array.from(query(world, [Agent])).filter(eid => entityExists(world, eid));
-  for (const eid of agents) {
-    if (eid === excludeEid) continue;
-    const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
-    if (rooms.includes(roomEid)) {
-      pendingStimuli.push({ targetEid: eid, ...stimulus });
-    }
-  }
 }
 
 /**
@@ -1081,20 +1189,25 @@ export function broadcastVisual(
 
 export function findRoomByName(world: World, roomName: string): number | undefined {
   const rooms = Array.from(query(world, [Room]));
-  const nameLower = roomName.toLowerCase();
+  const wanted = roomName.toLowerCase();
 
-  // Try exact match first
+  const roomNameLower = (eid: number) => String(Name.value[eid] || "").toLowerCase();
+  const roomAmbienceLower = (eid: number) => String((Room as any).ambience?.[eid] || "").toLowerCase();
+
+  // Try exact match first (name, then ambience)
   for (const eid of rooms) {
-    if (Name.value[eid]?.toLowerCase() === nameLower) {
-      return eid;
-    }
+    if (roomNameLower(eid) === wanted) return eid;
+  }
+  for (const eid of rooms) {
+    if (roomAmbienceLower(eid) === wanted) return eid;
   }
 
-  // Try partial match
+  // Try partial match (name, then ambience)
   for (const eid of rooms) {
-    if (Name.value[eid]?.toLowerCase().includes(nameLower)) {
-      return eid;
-    }
+    if (roomNameLower(eid).includes(wanted)) return eid;
+  }
+  for (const eid of rooms) {
+    if (roomAmbienceLower(eid).includes(wanted)) return eid;
   }
 
   return undefined;
@@ -1194,8 +1307,8 @@ export function renderRoomPerception(
     if (otherEid === agentEid) continue;
     if (!entityExists(world, otherEid)) continue;
 
-    const otherRooms = safeGetRelationTargets(world, otherEid, OccupiesRoom);
-    if (otherRooms.includes(roomEid)) {
+    const otherRoom = getRoomForEntity(world, otherEid);
+    if (otherRoom === roomEid) {
       // Get available affordances for interacting with this agent
       const availableAffordances = getAvailableAffordances(world, agentEid, otherEid);
       const affordanceNames = availableAffordances.map(a => a.name);
@@ -1208,8 +1321,8 @@ export function renderRoomPerception(
         // Fallback: basic name + inventory
         const otherName = Name.value[otherEid] || "someone";
         const heldItems: string[] = [];
-        if (hasInventory(otherEid)) {
-          const items = getInventoryItems(otherEid);
+        if (hasInventory(world, otherEid)) {
+          const items = getInventoryItems(world, otherEid);
           for (const itemEid of items) {
             const itemName = Name.value[itemEid];
             if (itemName) heldItems.push(itemName);
@@ -1240,8 +1353,8 @@ export function renderRoomPerception(
     }
   }
 
-  // Find objects/items in room (via Contains relation)
-  const contents = safeGetRelationTargets(world, roomEid, Contains);
+  // Find objects/items in room (canonical: direct LocatedIn contents)
+  const contents = listDirectContents(world, roomEid);
   const objectEntries: Array<{ name: string; desc?: string; affordances: string[] }> = [];
 
   for (const contentEid of contents) {
@@ -1341,13 +1454,16 @@ export async function runCognitionCycle(
   // Collect pending event-based stimuli by agent
   const eventsByAgent = new Map<number, PendingStimulus[]>();
 
+  const pendingStimuli = drainPendingStimuli();
+  for (const stimulus of pendingStimuli) {
+    maybeCaptureStimulusAsMemory(world, stimulus);
+  }
   for (const stimulus of pendingStimuli) {
     if (!eventsByAgent.has(stimulus.targetEid)) {
       eventsByAgent.set(stimulus.targetEid, []);
     }
     eventsByAgent.get(stimulus.targetEid)!.push(stimulus);
   }
-  pendingStimuli.length = 0;
 
   const allActiveAgents = Array.from(query(world, [Agent, Mind])).filter(
     eid => Agent.active[eid]
@@ -1395,17 +1511,26 @@ export async function runCognitionCycle(
       // Generate all stimuli for this agent (visual, auditory, cognitive, etc.)
       const allStimuli = generateStimuliForAgent(world, eid, pendingEvents);
 
-      // Format stimuli for the agent prompt (include agentEid for self-awareness)
-      const perceptionText = formatStimuliForPrompt(allStimuli, eid);
+	      // Format stimuli for the agent prompt (include agentEid for self-awareness)
+	      const perceptionText = formatStimuliForPrompt(allStimuli, eid, world);
 
-      // Pass formatted perception to cognition
-      const action = await processAgentCognition(
-        world,
-        eid,
-        [{ type: "perception", content: perceptionText, source: "senses" }]
-      );
-      return { eid, action };
-    }));
+	      // Pass *structured* pending events (tool_result, action_failed, speech, etc.) into Perception storage,
+	      // and also pass the formatted summary for the LLM prompt.
+	      const structuredPerceptions = pendingEvents.map(s => ({
+	        type: s.type,
+	        content: s.content,
+	        source: s.source,
+	      }));
+	      structuredPerceptions.push({ type: "perception", content: perceptionText, source: "senses" });
+
+	      // Pass perceptions to cognition
+	      const action = await processAgentCognition(
+	        world,
+	        eid,
+	        structuredPerceptions
+	      );
+	      return { eid, action };
+	    }));
 
     results.push(...batchResults);
   }
@@ -1511,6 +1636,217 @@ function normalizeActionType(actionType: string): ValidAction | null {
   return null;
 }
 
+function getVisibleNamesInRoom(
+  world: World,
+  roomEid: number,
+  options: { excludeEid?: number; limit?: number } = {}
+): string[] {
+  const excludeEid = options.excludeEid;
+  const limit = options.limit ?? 8;
+  const names: string[] = [];
+
+  for (const contentEid of listDirectContents(world, roomEid)) {
+    if (!entityExists(world, contentEid)) continue;
+    if (excludeEid !== undefined && contentEid === excludeEid) continue;
+    const n = Name.value[contentEid];
+    if (n) names.push(n);
+  }
+
+  for (const agentEid of Array.from(query(world, [Agent]))) {
+    if (!entityExists(world, agentEid)) continue;
+    if (excludeEid !== undefined && agentEid === excludeEid) continue;
+    if (getRoomForEntity(world, agentEid) !== roomEid) continue;
+    const n = Name.value[agentEid];
+    if (n) names.push(n);
+  }
+
+  const unique = Array.from(new Set(names));
+  return unique.slice(0, limit);
+}
+
+function isDescendantContainedIn(world: World, containerEid: number, targetEid: number, maxNodes: number = 256): boolean {
+  if (containerEid === targetEid) return true;
+
+  const visited = new Set<number>();
+  const stack: number[] = [containerEid];
+
+  while (stack.length > 0 && visited.size < maxNodes) {
+    const current = stack.pop()!;
+    if (visited.has(current)) continue;
+    visited.add(current);
+
+    for (const child of listDirectContents(world, current)) {
+      if (!entityExists(world, child)) continue;
+      if (child === targetEid) return true;
+      stack.push(child);
+    }
+  }
+
+  return false;
+}
+
+function parseTraitsJson(raw: unknown): string[] {
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((t) => String(t)).map((t) => t.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function hasTrait(world: World, eid: number, trait: string): boolean {
+  const wanted = String(trait || "").trim().toLowerCase();
+  if (!wanted) return false;
+  if (!hasComponent(world as any, eid, Traits as any)) return false;
+  return parseTraitsJson(Traits.active[eid]).some((t) => t.toLowerCase() === wanted);
+}
+
+function isOpenContainer(world: World, eid: number): boolean {
+  const state = String(ObjectState?.current?.[eid] || "").toLowerCase();
+  if (state === "open") return true;
+  return hasTrait(world, eid, "open");
+}
+
+function isAccessibleViaOpenContainer(world: World, roomEid: number | undefined, targetEid: number, maxDepth: number = 32): boolean {
+  if (roomEid === undefined) return false;
+  let current = targetEid;
+  for (let depth = 0; depth < maxDepth; depth++) {
+    const container = getDirectContainer(world, current);
+    if (container === undefined) return false;
+    if (container === roomEid) return true;
+
+    // If the item is inside a container, that container must be open to access its contents.
+    // Walk up the chain; if we ever encounter a closed container, the target is not accessible.
+    if (!isOpenContainer(world, container)) return false;
+
+    current = container;
+  }
+  return false;
+}
+
+function isInteractTargetAccessible(world: World, actorEid: number, roomEid: number | undefined, targetEid: number): boolean {
+  // Interactions are grounded in physical accessibility:
+  // - direct room contents (on the ground / in the same room)
+  // - anything the actor contains (inventory tree: held items, bags, nested contents)
+  // - anything inside an OPEN container that is in the same room
+  // This prevents "interact" from silently targeting remote entities or whole rooms.
+  if (roomEid !== undefined && targetEid === roomEid) return false;
+  if (roomEid !== undefined && getDirectContainer(world, targetEid) === roomEid) return true;
+  if (isAccessibleViaOpenContainer(world, roomEid, targetEid)) return true;
+  return isDescendantContainedIn(world, actorEid, targetEid);
+}
+
+function getKnownRoomNames(world: World, limit: number = 12): string[] {
+  const rooms = Array.from(query(world, [Room]));
+  const names = rooms
+    .map((eid) => Name.value[eid])
+    .filter((n): n is string => typeof n === "string" && n.trim().length > 0);
+  return Array.from(new Set(names)).slice(0, limit);
+}
+
+function addCriticalActionFailure(
+  world: World,
+  agentEid: number,
+  message: string,
+  source: string = "self"
+): void {
+  addPerception(world, agentEid, {
+    type: "action_failed",
+    content: `🚨 CRITICAL - YOUR LAST ACTION FAILED\n${message}\n⛔ DO NOT proceed as if this action succeeded.`,
+    source,
+    intensity: 1,
+  });
+}
+
+function actionSignature(action: { type: string; target?: string; content?: string }, roomEid: number | undefined): string {
+  return JSON.stringify({
+    type: action.type,
+    target: (action.target || "").trim(),
+    content: (action.content || "").trim(),
+    roomEid: roomEid ?? null,
+  });
+}
+
+function recordFailedActionAttempt(agentEid: number, signature: string): void {
+  const now = Date.now();
+  const prev = recentFailedActions.get(agentEid);
+  if (!prev || prev.signature !== signature || now - prev.lastAtMs > REPEAT_FAILURE_WINDOW_MS) {
+    recentFailedActions.set(agentEid, { signature, count: 1, lastAtMs: now });
+    return;
+  }
+  recentFailedActions.set(agentEid, { signature, count: prev.count + 1, lastAtMs: now });
+}
+
+function clearFailedActionAttempt(agentEid: number): void {
+  recentFailedActions.delete(agentEid);
+}
+
+function shouldBlockRepeatedFailedAction(agentEid: number, signature: string): boolean {
+  const now = Date.now();
+  const prev = recentFailedActions.get(agentEid);
+  if (!prev) return false;
+  if (prev.signature !== signature) return false;
+  if (now - prev.lastAtMs > REPEAT_FAILURE_WINDOW_MS) return false;
+  return prev.count >= MAX_REPEAT_FAILURES_BEFORE_BLOCK;
+}
+
+function normalizeAffordanceToken(raw: string): string {
+  // LLMs sometimes emit punctuation or quoting around affordance names, e.g. "run_command:" or "`run_command`".
+  // Normalize so the affordance system stays robust without needing prompt-perfect outputs.
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    // Strip trailing punctuation/symbols but preserve common identifier characters.
+    // Use unicode properties to catch non-ASCII punctuation like fullwidth colons.
+    .replace(/[^\p{L}\p{N}_-]+$/gu, "");
+}
+
+function normalizePlanContent(raw: string): string {
+  return String(raw || "")
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function doesActionSatisfyPlanStep(
+  action: ValidAction,
+  step: { actionType: string; target?: string; content?: string }
+): boolean {
+  const typeMatches = String(action.type || "") === String(step.actionType || "");
+  if (!typeMatches) return false;
+
+  const stepTarget = String(step.target || "").trim();
+  if (stepTarget) {
+    const actionTarget = String(action.target || "").trim();
+    if (!actionTarget) return false;
+    if (actionTarget.toLowerCase() !== stepTarget.toLowerCase()) return false;
+  }
+
+  const stepContent = normalizePlanContent(step.content || "");
+  if (!stepContent) return true;
+
+  const actionContent = normalizePlanContent(action.content || "");
+  if (!actionContent) return false;
+
+  if (String(step.actionType) === "interact") {
+    const stepAff = normalizeAffordanceToken(stepContent.split(/\s+/)[0] || "");
+    const actionAff = normalizeAffordanceToken(actionContent.split(/\s+/)[0] || "");
+    if (stepAff && actionAff && stepAff !== actionAff) return false;
+
+    const stepArgs = normalizePlanContent(stepContent.split(/\s+/).slice(1).join(" "));
+    if (!stepArgs) return true;
+    const actionArgs = normalizePlanContent(actionContent.split(/\s+/).slice(1).join(" "));
+    if (!actionArgs) return false;
+
+    return actionArgs.includes(stepArgs) || stepArgs.includes(actionArgs);
+  }
+
+  return actionContent.includes(stepContent) || stepContent.includes(actionContent);
+}
+
 export function executeActions(
   world: World,
   actions: Array<{ eid: number; action: AgentAction }>,
@@ -1521,8 +1857,7 @@ export function executeActions(
     if (!entityExists(world, eid)) continue;
 
     const name = Name.value[eid];
-    const rooms = safeGetRelationTargets(world, eid, OccupiesRoom);
-    const roomEid = rooms[0];
+    const roomEid = getRoomForEntity(world, eid);
 
     // Validate and normalize the action type
     const originalType = action.type;
@@ -1561,6 +1896,23 @@ export function executeActions(
       }
     }
 
+    // Used for plan advancement: do not advance a plan step if the action clearly failed,
+    // or if we're waiting on an async tool job to complete.
+    let actionSucceededForPlan = true;
+    let actionPendingForPlan = false;
+
+    const sig = actionSignature(validatedAction, roomEid);
+    if (shouldBlockRepeatedFailedAction(eid, sig)) {
+      addCriticalActionFailure(
+        world,
+        eid,
+        `FAILED: You are repeating the same action that just failed ("${validatedAction.type}"${validatedAction.target ? ` on "${validatedAction.target}"` : ""}).\nYou MUST change strategy: observe the room, inspect visible objects, or choose a different target.`,
+        "recovery"
+      );
+      Mind.focus[eid] = "recover";
+      continue;
+    }
+
     switch (validatedAction.type) {
       case "speak":
         if (validatedAction.content && roomEid !== undefined) {
@@ -1568,12 +1920,51 @@ export function executeActions(
           broadcastSound(world, roomEid, `${name} says: "${action.content}"`, name, eid);
           console.log(`💬 ${name}: "${action.content}"`);
 
+          // Success feedback for cognition/harness scoring.
+          queueStimulus({
+            targetEid: eid,
+            type: "action_result",
+            modality: "cognitive",
+            content: `You say: "${validatedAction.content}"`,
+            source: "speech",
+          });
+
+          // LastAction (ECS): used by deterministic goal evaluation.
+          if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
+          LastAction.type[eid] = "speak";
+          LastAction.target[eid] = validatedAction.target || "";
+          LastAction.content[eid] = validatedAction.content || "";
+          LastAction.success[eid] = true;
+          LastAction.timestamp[eid] = Date.now();
+
+          // If the speaker specified a target, send a direct "speech" stimulus to that agent.
+          // This acts as a high-priority interruption signal (distinct from generic room sound).
+          if (validatedAction.target) {
+            const targetEid = findEntityByName(world, validatedAction.target, { preferRoomEid: roomEid });
+            if (targetEid !== undefined && hasComponent(world, targetEid, Agent)) {
+              queueStimulus({
+                targetEid,
+                type: "speech",
+                modality: "auditory",
+                content: `${name} says to you: "${validatedAction.content}"`,
+                source: name,
+                intensity: 1.0,
+              });
+              // Nudge attention/arousal so the recipient is more likely to respond immediately.
+              Mind.arousal[targetEid] = Math.min(1, (Mind.arousal[targetEid] || 0.5) + 0.2);
+              Mind.focus[targetEid] = `respond to ${name}`;
+            }
+          }
+
           extractKnowledgeFromInteraction(world, eid, {
             type: "speech",
             content: action.content || "",
             context: `Speaking in ${Name.value[roomEid] || "a room"}`,
           }).catch(() => {});
+
+          onProcedureActionResult(world, eid, validatedAction, { success: true });
         }
+        clearFailedActionAttempt(eid);
         break;
 
       case "observe":
@@ -1582,39 +1973,89 @@ export function executeActions(
           console.log(`👁️ ${name} observes ${action.target}`);
 
           // Find the target and provide detailed observation
-          const observeTargetEid = findEntityByName(world, action.target);
-          if (observeTargetEid !== undefined) {
-            // Set movement target so agent moves towards what they're observing
-            setMovementTarget(eid, observeTargetEid);
-            const targetName = Name.value[observeTargetEid] || action.target;
-            const targetDesc = Description.value[observeTargetEid] || "You see nothing special.";
-            // Read state from ECS ObjectState component (not ObjectMeta)
-            const targetState = ObjectState?.current?.[observeTargetEid];
-
-            // Build detailed observation
-            const observationParts: string[] = [];
-            observationParts.push(`You examine ${targetName} closely.`);
-            observationParts.push(targetDesc);
-
-            if (targetState && targetState !== "normal") {
-              observationParts.push(`It appears to be ${targetState}.`);
-            }
-
-            // Get available affordances - examining reveals what you can do
-            const affordances = getAvailableAffordances(world, eid, observeTargetEid);
-            if (affordances.length > 0) {
-              observationParts.push(`You could: ${affordances.map(a => a.name).join(", ")}.`);
-            }
-
-            // Send detailed observation as cognitive stimulus
-            queueStimulus({
-              targetEid: eid,
-              type: "observation",
-              modality: "cognitive",
-              content: observationParts.join(" "),
-              source: "observation",
-            });
+          const observeTargetEid = findEntityByName(world, action.target, { preferRoomEid: roomEid });
+          if (observeTargetEid === undefined) {
+            actionSucceededForPlan = false;
+            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
+            addCriticalActionFailure(
+              world,
+              eid,
+              `FAILED: You tried to observe "${action.target}" but it doesn't exist as an entity here. ${hint}`,
+              "observation"
+            );
+            if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
+            LastAction.type[eid] = "observe";
+            LastAction.target[eid] = action.target || "";
+            LastAction.content[eid] = "";
+            LastAction.success[eid] = false;
+            LastAction.timestamp[eid] = Date.now();
+            recordFailedActionAttempt(eid, sig);
+            const issues = validateAgentAction(world, name, validatedAction.type, action.target, action.content);
+            for (const issue of issues) recordIssue(issue);
+            break;
           }
+
+          // Grounding: you can only observe things that are actually accessible here (room/held/open containers).
+          if (!isInteractTargetAccessible(world, eid, roomEid, observeTargetEid)) {
+            actionSucceededForPlan = false;
+            const targetName = Name.value[observeTargetEid] || action.target;
+            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
+            addCriticalActionFailure(
+              world,
+              eid,
+              `FAILED: You tried to observe "${targetName}" but it is not accessible/visible from here. ${hint}`,
+              "observation"
+            );
+            if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
+            LastAction.type[eid] = "observe";
+            LastAction.target[eid] = targetName || action.target || "";
+            LastAction.content[eid] = "";
+            LastAction.success[eid] = false;
+            LastAction.timestamp[eid] = Date.now();
+            recordFailedActionAttempt(eid, sig);
+            break;
+          }
+
+          // Set movement target so agent moves towards what they're observing
+          setMovementTarget(eid, observeTargetEid);
+          const targetName = Name.value[observeTargetEid] || action.target;
+          const targetDesc = Description.value[observeTargetEid] || "You see nothing special.";
+          // Read state from ECS ObjectState component (not ObjectMeta)
+          const targetState = ObjectState?.current?.[observeTargetEid];
+
+          // Build detailed observation
+          const observationParts: string[] = [];
+          observationParts.push(`You examine ${targetName} closely.`);
+          observationParts.push(targetDesc);
+
+          if (targetState && targetState !== "normal") {
+            observationParts.push(`It appears to be ${targetState}.`);
+          }
+
+          // Get available affordances - examining reveals what you can do
+          const affordances = getAvailableAffordances(world, eid, observeTargetEid);
+          if (affordances.length > 0) {
+            observationParts.push(`You could: ${affordances.map(a => a.name).join(", ")}.`);
+          }
+
+          // Send detailed observation as cognitive stimulus
+          queueStimulus({
+            targetEid: eid,
+            type: "observation",
+            modality: "cognitive",
+            content: observationParts.join(" "),
+            source: "observation",
+          });
+
+          // LastAction (ECS): used by deterministic goal evaluation.
+          if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
+          LastAction.type[eid] = "observe";
+          LastAction.target[eid] = targetName;
+          LastAction.content[eid] = "";
+          LastAction.success[eid] = true;
+          LastAction.timestamp[eid] = Date.now();
 
           extractKnowledgeFromInteraction(world, eid, {
             type: "observation",
@@ -1622,6 +2063,9 @@ export function executeActions(
             otherParty: action.target,
             context: `In ${Name.value[roomEid] || "a room"}`,
           }).catch(() => {});
+          clearFailedActionAttempt(eid);
+
+          onProcedureActionResult(world, eid, validatedAction, { success: true });
         }
         break;
 
@@ -1629,17 +2073,20 @@ export function executeActions(
         if (action.content) {
           console.log(`💭 ${name} thinks: "${action.content}"`);
         }
+        clearFailedActionAttempt(eid);
+        onProcedureActionResult(world, eid, validatedAction, { success: true });
         break;
 
       case "interact":
         if (validatedAction.target && validatedAction.content) {
           // Parse affordance name from content (e.g., "eat the apple" -> "eat")
-          const affordanceName = validatedAction.content.split(" ")[0].toLowerCase();
+          let affordanceName = normalizeAffordanceToken(validatedAction.content.split(/\s+/)[0] || "");
 
           // Find the target entity
-          const targetEid = findEntityByName(world, validatedAction.target);
+            const targetEid = findEntityByName(world, validatedAction.target, { preferRoomEid: roomEid });
 
           if (targetEid === undefined) {
+            actionSucceededForPlan = false;
             console.log(`❓ ${name} tried to interact with "${validatedAction.target}" but couldn't find it`);
             // Record failed interaction for World Crafter spirit
             const roomName = roomEid !== undefined ? (Name.value[roomEid] || "Unknown Room") : "Unknown Room";
@@ -1651,30 +2098,161 @@ export function executeActions(
               validatedAction.target,
               validatedAction.content
             );
+            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
+            addCriticalActionFailure(
+              world,
+              eid,
+              `FAILED: You tried to ${affordanceName} "${validatedAction.target}" but it doesn't exist as an entity here. ${hint}`,
+              "interaction"
+            );
+            recordFailedActionAttempt(eid, sig);
+            const issues = validateAgentAction(world, name, validatedAction.type, validatedAction.target, validatedAction.content);
+            for (const issue of issues) recordIssue(issue);
             break;
           }
 
-          // Set movement target so agent moves towards the object they're interacting with
-          setMovementTarget(eid, targetEid);
+          // Grounding: "interact" must target something physically accessible.
+          // We allow:
+          // - direct room contents (in the same room)
+          // - anything contained by the actor (inventory tree: bags, nested items)
+          // We reject interacting with whole rooms or remote entities.
+          if (!isInteractTargetAccessible(world, eid, roomEid, targetEid)) {
+            actionSucceededForPlan = false;
+            const targetName = Name.value[targetEid] || validatedAction.target;
+            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const inv = hasInventory(world, eid) ? formatInventory(world, eid) : "";
+            const hints: string[] = [];
+            const containerEid = getDirectContainer(world, targetEid);
+            if (containerEid !== undefined && roomEid !== undefined && containerEid !== roomEid) {
+              const containerName = Name.value[containerEid];
+              if (containerName) hints.push(`It appears to be inside "${containerName}".`);
+            }
+            if (visible.length > 0) hints.push(`Visible here: ${visible.join(", ")}.`);
+            if (inv.trim().length > 0) hints.push(`Inventory:\n${inv}`);
 
-          // Create effect context
-          const ctx: EffectContext = {
-            world,
-            actorEid: eid,
-            targetEid,
-            worldSchema,
-            registry: entityRegistry,
-          };
+            addCriticalActionFailure(
+              world,
+              eid,
+              `FAILED: You tried to ${affordanceName} "${targetName}" but it is not directly accessible here.\n${hints.join("\n") || "Try a different target that is actually present/held, or move first."}`,
+              "interaction"
+            );
+            recordFailedActionAttempt(eid, sig);
+            const issues = validateAgentAction(world, name, validatedAction.type, validatedAction.target, validatedAction.content);
+            for (const issue of issues) recordIssue(issue);
+            break;
+          }
 
-          // Execute the affordance
-          const result = executeAffordance(affordanceName, ctx);
+              // Heuristic grounding: if the agent omitted the affordance and typed a bare shell command
+              // (e.g., "node ci.cjs"), rewrite it to run_command <cmd> instead of failing with
+              // "Unknown affordance".
+              const rawContent = String(validatedAction.content || "").trim();
+              const looksLikeShellCmd = /^(node|npm|npx|pnpm|yarn|bash|sh|zsh|fish|ls|cat|rg|grep|git)\b/i.test(rawContent);
+              if (looksLikeShellCmd) {
+                const allowedAffordances = new Set(getAvailableAffordances(world, eid, targetEid).map((a) => normalizeAffordanceToken(a.name)));
+                if (!allowedAffordances.has(affordanceName) && allowedAffordances.has("run_command")) {
+                  affordanceName = "run_command";
+                  validatedAction = { ...validatedAction, content: `run_command ${rawContent}` };
+                }
+              }
+
+		          // Set movement target so agent moves towards the object they're interacting with
+		          setMovementTarget(eid, targetEid);
+
+		          // Create effect context
+	            const rawAffordanceArgs = (validatedAction.content || "").split(" ").slice(1).join(" ").trim();
+	            const affordanceArgs = stripControlAndAnsi(rawAffordanceArgs);
+
+	            // Async tool jobs: if the agent already has an in-flight job for this exact tool+command, wait.
+	            const expectedToolId =
+	              affordanceName === "run_command"
+	                ? "terminal.run"
+	                : affordanceName === "gemini_cli"
+	                  ? "gemini.cli"
+	                  : affordanceName === "generate_image"
+						? "nano_banana.generate_image"
+						: affordanceName === "edit_image"
+						  ? "nano_banana.edit_image"
+						  : affordanceName === "describe_image"
+						    ? "vision.describe_image"
+
+									: undefined;
+	            if (expectedToolId && hasComponent(world as any, eid, PendingToolJob as any)) {
+	              const pendingToolId = String(PendingToolJob.toolId[eid] || "");
+	              const pendingCmd = String(PendingToolJob.command[eid] || "");
+	              // Single in-flight job per tool per agent: don't allow spamming multiple terminal/gemini runs.
+	              // If the agent wants to change strategy, it should wait for the current job to finish and then decide.
+	              if (pendingToolId === expectedToolId) {
+	                actionSucceededForPlan = false;
+	                actionPendingForPlan = true;
+	                const detail = pendingCmd && pendingCmd !== affordanceArgs ? ` (pending: ${pendingCmd})` : "";
+	                // Avoid spamming identical "waiting" stimuli every tick.
+	                const now = Date.now();
+	                const lastAt = Number(PendingToolJob.lastNotifyAt[eid] || 0);
+	                const lastJob = String(PendingToolJob.lastNotifyJobId[eid] || "");
+	                if (lastJob !== String(PendingToolJob.jobId[eid] || "") || !lastAt || now - lastAt > 2000) {
+	                  PendingToolJob.lastNotifyAt[eid] = now;
+	                  PendingToolJob.lastNotifyJobId[eid] = String(PendingToolJob.jobId[eid] || "");
+	                  queueStimulus({
+	                    targetEid: eid,
+	                    type: "action_result",
+	                    modality: "cognitive",
+	                    content: `You are waiting for ${pendingToolId} to finish running${detail}.`,
+	                    source: "self",
+	                  });
+	                }
+	                break;
+	              }
+	            }
+
+	          const ctx: EffectContext = {
+	            world,
+	            actorEid: eid,
+	            targetEid,
+	            worldSchema,
+	            registry: entityRegistry,
+              affordanceArgs,
+	          };
+
+	          // Execute the affordance
+	          const result = executeAffordance(affordanceName, ctx);
+            const affordanceDef = worldSchema.getAffordance(affordanceName);
+            const toolChange = result.changes.find((c) => c.startsWith("tool: "));
+            const toolId = toolChange ? toolChange.slice("tool: ".length).trim() : undefined;
+            const toolJobChange = result.changes.find((c) => c.startsWith("tool_job: "));
+            const toolJobId = toolJobChange ? toolJobChange.slice("tool_job: ".length).trim() : "";
 
           if (result.success) {
-            const targetName = Name.value[targetEid] || action.target;
-            console.log(`🎯 ${name} ${affordanceName}s ${targetName}: ${result.changes.join(", ") || "success"}`);
+              if (toolJobId && toolId) {
+                actionSucceededForPlan = false;
+                actionPendingForPlan = true;
+                if (!hasComponent(world as any, eid, PendingToolJob as any)) addComponent(world as any, eid, PendingToolJob as any);
+                PendingToolJob.jobId[eid] = toolJobId;
+                PendingToolJob.toolId[eid] = toolId;
+                PendingToolJob.command[eid] = affordanceArgs;
+                PendingToolJob.startedAt[eid] = Date.now();
+                PendingToolJob.lastNotifyAt[eid] = 0;
+                PendingToolJob.lastNotifyJobId[eid] = "";
+              }
+	            const targetName = Name.value[targetEid] || action.target;
+	            console.log(`🎯 ${name} ${affordanceName}s ${targetName}: ${result.changes.join(", ") || "success"}`);
 
-            // Record successful action for memory/self-awareness
-            recordSuccessfulAction(eid, `${affordanceName} ${targetName}`);
+              // For async tool jobs (terminal/gemini), defer learning/procedure advancement until the tool_result arrives.
+              // Otherwise, we accidentally "learn" failing commands as successes and create self-reinforcing loops.
+              const learnNow = !(toolJobId && toolId);
+              if (learnNow) {
+                upsertProceduralSkillFromInteraction(world, eid, {
+                  affordance: affordanceName,
+                  args: affordanceArgs,
+                  toolId,
+                  requiredTraits: affordanceDef?.requires,
+                  targetName,
+                  success: true,
+                });
+              }
+
+	            // Record successful action for memory/self-awareness
+	            recordSuccessfulAction(eid, `${affordanceName} ${targetName}`);
 
             // Broadcast visual to others in room - they can see the interaction!
             if (roomEid !== undefined) {
@@ -1699,14 +2277,38 @@ export function executeActions(
               otherParty: targetName,
               context: `In ${Name.value[roomEid] || "a room"}. The action succeeded and changed the world state.`,
             }).catch(() => {});
-          } else {
-            // Action failed - notify actor with HELPFUL feedback
-            console.log(`❌ ${name} failed to ${affordanceName} ${action.target}: ${result.message}`);
+            clearFailedActionAttempt(eid);
 
-            // Build helpful error message with ACTIONABLE hints
-            const targetName = Name.value[targetEid] || action.target;
-            let helpfulMessage = `FAILED: You cannot ${affordanceName} ${targetName}.`;
-            const hints: string[] = [];
+            // LastAction (ECS): used by deterministic goal evaluation.
+            if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
+            LastAction.type[eid] = "interact";
+            LastAction.target[eid] = targetName;
+            LastAction.content[eid] = `${affordanceName}${affordanceArgs ? ` ${affordanceArgs}` : ""}`;
+            LastAction.success[eid] = true;
+            LastAction.timestamp[eid] = Date.now();
+
+            if (learnNow) onProcedureActionResult(world, eid, validatedAction, { success: true });
+          } else {
+            actionSucceededForPlan = false;
+	            // Action failed - notify actor with HELPFUL feedback
+	            console.log(`❌ ${name} failed to ${affordanceName} ${action.target}: ${result.message}`);
+
+	            // Build helpful error message with ACTIONABLE hints
+	            const targetName = Name.value[targetEid] || action.target;
+		            let helpfulMessage = `FAILED: You cannot ${affordanceName} ${targetName}.`;
+		            if (result.message && String(result.message).trim()) {
+		              helpfulMessage += `\nReason: ${String(result.message).trim()}`;
+		            }
+		            const hints: string[] = [];
+
+              upsertProceduralSkillFromInteraction(world, eid, {
+                affordance: affordanceName,
+                args: affordanceArgs,
+                toolId,
+                requiredTraits: affordanceDef?.requires,
+                targetName,
+                success: false,
+              });
 
             // Check if actor is missing a required trait (e.g., "hasMatches")
             const actorMissingMatch = result.message?.match(/Actor lacks trait: (has\w+)/);
@@ -1735,14 +2337,13 @@ export function executeActions(
               hints.push(`→ Available actions on ${targetName}: ${targetAffordances.map(a => a.name).join(", ")}`);
             }
 
-            // If the affordance exists, suggest valid targets
-            const affordanceDef = worldSchema.getAffordance(affordanceName);
-            if (affordanceDef && roomEid !== undefined) {
-              const validTargets = findObjectsWithAffordance(world, eid, roomEid, affordanceName);
-              if (validTargets.length > 0 && validTargets[0] !== targetName) {
-                hints.push(`→ TRY: ${affordanceName} "${validTargets[0]}" instead`);
-              }
-            }
+	            // If the affordance exists, suggest valid targets
+	            if (affordanceDef && roomEid !== undefined) {
+	              const validTargets = findObjectsWithAffordance(world, eid, roomEid, affordanceName);
+	              if (validTargets.length > 0 && validTargets[0] !== targetName) {
+	                hints.push(`→ TRY: ${affordanceName} "${validTargets[0]}" instead`);
+	              }
+	            }
 
             // Combine message with hints and an explicit warning
             if (hints.length > 0) {
@@ -1757,6 +2358,7 @@ export function executeActions(
               content: helpfulMessage,
               source: "self",
             });
+            recordFailedActionAttempt(eid, sig);
 
             // MEMORY FORMATION for failed actions - remember what didn't work!
             extractKnowledgeFromInteraction(world, eid, {
@@ -1765,6 +2367,16 @@ export function executeActions(
               otherParty: targetName,
               context: `In ${Name.value[roomEid] || "a room"}. This action failed - I should try a different approach.`,
             }).catch(() => {});
+
+            // LastAction (ECS): used by deterministic goal evaluation.
+            if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
+            LastAction.type[eid] = "interact";
+            LastAction.target[eid] = targetName;
+            LastAction.content[eid] = `${affordanceName}${affordanceArgs ? ` ${affordanceArgs}` : ""}`;
+            LastAction.success[eid] = false;
+            LastAction.timestamp[eid] = Date.now();
+
+            onProcedureActionResult(world, eid, validatedAction, { success: false });
           }
         }
         break;
@@ -1786,7 +2398,7 @@ export function executeActions(
 
             // Check if agent actually has a current room
             // If no room but has GridPosition, use grid-based movement instead
-            // GoalPursuitSystem can't move agents without OccupiesRoom relation
+            // GoalPursuitSystem can't move agents without a resolvable room (via LocatedIn chain)
             const hasCurrentRoom = roomEid !== undefined;
 
             if (hasCurrentRoom) {
@@ -1825,11 +2437,28 @@ export function executeActions(
                   content: `Planning to travel from ${sourceName} to ${destName}`,
                   context: `Currently in ${sourceName}`,
                 }).catch(() => {});
+              } else {
+                addPerception(world, eid, {
+                  type: "action_result",
+                  content: `You are already heading to ${destName}.`,
+                  source: "movement",
+                  intensity: 0.5,
+                });
               }
             } else if (hasGridPos && GridPosition.x[destRoom] !== undefined) {
               // Agent has NO room but has GridPosition - use grid-based movement to room
               // This is the key fix: agents stuck "somewhere" can now physically move to rooms
-              // Once they arrive at room's GridPosition, RoomArrival system will set OccupiesRoom
+              // Once they arrive at room's GridPosition, RoomArrival system will set LocatedIn(room)
+              if (getMovementTarget(eid) === destRoom) {
+                addPerception(world, eid, {
+                  type: "action_result",
+                  content: `You are already walking toward ${destName}.`,
+                  source: "movement",
+                  intensity: 0.4,
+                });
+                break;
+              }
+
               setMovementTarget(eid, destRoom);
               Mind.focus[eid] = `heading to ${destName}`;
               Mind.arousal[eid] = Math.min(1, (Mind.arousal[eid] || 0.5) + 0.1);
@@ -1851,39 +2480,80 @@ export function executeActions(
               createMovementGoal(world, eid, destName, reason, priority);
               console.log(`🎯 ${name} intends to go to ${destName} (goal created, hoping GoalPursuit can help)`);
             }
+          } else if (destRoom !== undefined && destRoom === roomEid) {
+            addPerception(world, eid, {
+              type: "action_result",
+              content: `You are already in ${Name.value[destRoom] || action.target}.`,
+              source: "movement",
+              intensity: 0.6,
+            });
           } else if (hasGridPos) {
             // Grid-based movement - find an entity to move towards
             // This still uses direct movement for grid-based (pathfinding separate concern)
             const targetEid = findEntityByName(world, action.target);
             if (targetEid !== undefined && GridPosition.x[targetEid] !== undefined) {
+              if (getMovementTarget(eid) === targetEid) {
+                addPerception(world, eid, {
+                  type: "action_result",
+                  content: `You are already moving toward ${action.target}.`,
+                  source: "movement",
+                  intensity: 0.4,
+                });
+                break;
+              }
               setMovementTarget(eid, targetEid);
               console.log(`🚶 ${name} starts moving towards ${action.target}`);
+              clearFailedActionAttempt(eid);
             } else {
-              // No valid target found - do random wandering
-              doRandomWander(world, eid, name);
+              const rooms = getKnownRoomNames(world);
+              const hint = rooms.length > 0 ? `Known places: ${rooms.join(", ")}.` : "No known places found.";
+              addCriticalActionFailure(
+                world,
+                eid,
+                `FAILED: You tried to move to "${action.target}" but no such room or entity exists. ${hint}`,
+                "movement"
+              );
+              recordFailedActionAttempt(eid, sig);
+              const issues = validateAgentAction(world, name, validatedAction.type, action.target, action.content);
+              for (const issue of issues) recordIssue(issue);
             }
           } else {
             // Neither room nor grid-based target found
             console.log(`❓ ${name} tried to move to "${action.target}" but couldn't find it`);
-
-            // Still give them a goal if we have a valid room name
-            // GoalPursuitSystem might find it even if we can't here
-            createMovementGoal(world, eid, action.target, action.content, 5);
+            const rooms = getKnownRoomNames(world);
+            const hint = rooms.length > 0 ? `Known places: ${rooms.join(", ")}.` : "No known places found.";
+            addCriticalActionFailure(
+              world,
+              eid,
+              `FAILED: You tried to move to "${action.target}" but no such room or entity exists. ${hint}`,
+              "movement"
+            );
+            recordFailedActionAttempt(eid, sig);
+            const issues = validateAgentAction(world, name, validatedAction.type, action.target, action.content);
+            for (const issue of issues) recordIssue(issue);
           }
         } else if (hasGridPos) {
           // No specific target - random wander (for grid-based only)
           doRandomWander(world, eid, name);
+          clearFailedActionAttempt(eid);
         }
         break;
 
       case "wait":
         // Agent is intentionally doing nothing
+        if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
+        LastAction.type[eid] = "wait";
+        LastAction.target[eid] = "";
+        LastAction.content[eid] = validatedAction.content || "";
+        LastAction.success[eid] = true;
+        LastAction.timestamp[eid] = Date.now();
+        onProcedureActionResult(world, eid, validatedAction, { success: true });
         break;
 
       case "attack":
         // Combat action - using Health component
         if (validatedAction.target) {
-          const targetEid = findEntityByName(world, validatedAction.target);
+          const targetEid = findEntityByName(world, validatedAction.target, { preferRoomEid: roomEid });
           if (targetEid !== undefined) {
             // Check if target has Health component
             const targetHealth = Health.current[targetEid];
@@ -1929,9 +2599,9 @@ export function executeActions(
                 console.log(`💀 ${targetName} has been defeated by ${name}!`);
 
                 // Broadcast the defeat
-                const rooms = getRelationTargets(world, eid, OccupiesRoom);
-                if (rooms.length > 0) {
-                  broadcastToRoom(world, rooms[0], {
+                const combatRoomEid = getRoomForEntity(world, eid);
+                if (combatRoomEid !== undefined) {
+                  broadcastToRoom(world, combatRoomEid, {
                     type: "combat",
                     content: `${targetName} has been defeated by ${name}!`,
                     source: "combat",
@@ -1961,18 +2631,29 @@ export function executeActions(
             }
           } else {
             console.log(`❓ ${name} tried to attack "${validatedAction.target}" but couldn't find it`);
+            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
+            addCriticalActionFailure(
+              world,
+              eid,
+              `FAILED: You tried to attack "${validatedAction.target}" but it doesn't exist as an entity here. ${hint}`,
+              "combat"
+            );
+            recordFailedActionAttempt(eid, sig);
+            const issues = validateAgentAction(world, name, validatedAction.type, validatedAction.target, validatedAction.content);
+            for (const issue of issues) recordIssue(issue);
           }
         }
         break;
 
-      case "pickup":
-        // Pick up an item from the ground
-        if (validatedAction.target) {
-          // Check if agent has inventory
-          if (!hasInventory(eid)) {
-            console.log(`❓ ${name} tried to pickup but has no inventory`);
-            recordIssue({
-              id: `inventory_${Date.now()}`,
+	      case "pickup":
+	        // Pick up an item from the ground
+	        if (validatedAction.target) {
+	          // Check if agent has inventory
+	          if (!hasInventory(world, eid)) {
+	            console.log(`❓ ${name} tried to pickup but has no inventory`);
+	            recordIssue({
+	              id: `inventory_${Date.now()}`,
               timestamp: Date.now(),
               severity: "medium",
               category: "missing_system",
@@ -1982,16 +2663,44 @@ export function executeActions(
               recommendation: `Call initializeInventory(${eid}) to give ${name} an inventory`,
               autoFixable: true,
             });
+            recordFailedActionAttempt(eid, sig);
             break;
           }
 
-          const itemEid = findEntityByName(world, validatedAction.target);
-          if (itemEid !== undefined) {
-            const itemName = Name.value[itemEid] || validatedAction.target;
+	          const itemEid = findEntityByName(world, validatedAction.target, { preferRoomEid: roomEid });
+	          if (itemEid !== undefined) {
+	            const itemName = Name.value[itemEid] || validatedAction.target;
 
-            // Check if item has the "takeable" trait
-            const itemTraitsJson = Traits?.active?.[itemEid];
-            let hasTakeable = false;
+	            // Grounding: pickup only works for items directly in your current room (on the ground).
+	            if (roomEid === undefined || !isAccessibleViaOpenContainer(world, roomEid, itemEid)) {
+	              console.log(`❌ ${name} cannot pick up ${itemName} - it's not directly accessible here`);
+                const containerEid = getDirectContainer(world, itemEid);
+                let where = "";
+                if (containerEid !== undefined) {
+                  const containerName = Name.value[containerEid];
+                  const inRoom = roomEid !== undefined && getDirectContainer(world, containerEid) === roomEid;
+                  if (containerName && inRoom) {
+                    where = isOpenContainer(world, containerEid)
+                      ? ` It is inside the OPEN "${containerName}".`
+                      : ` It appears to be inside "${containerName}".`;
+                  } else if (containerName) {
+                    where = ` It appears to be located in "${containerName}".`;
+                  }
+                }
+	              queueStimulus({
+	                targetEid: eid,
+	                type: "action_failed",
+	                modality: "cognitive",
+	                content: `FAILED: "${itemName}" is not directly accessible here (it may be inside something or carried by someone).${where} You do NOT have the ${itemName}.`,
+	                source: "inventory",
+	              });
+                recordFailedActionAttempt(eid, sig);
+	              break;
+	            }
+
+	            // Check if item has the "takeable" trait
+	            const itemTraitsJson = Traits?.active?.[itemEid];
+	            let hasTakeable = false;
             if (itemTraitsJson) {
               try {
                 const itemTraits = JSON.parse(itemTraitsJson) as string[];
@@ -2010,39 +2719,41 @@ export function executeActions(
                 content: `FAILED: You tried to take "${itemName}" but it cannot be taken right now. You do NOT have the ${itemName}. Check what conditions must be met first.`,
                 source: "inventory",
               });
+              recordFailedActionAttempt(eid, sig);
               break;
             }
 
             const success = addToInventory(world, eid, itemEid);
-            if (success) {
-              console.log(`📦 ${name} picked up ${itemName}`);
+	            if (success) {
+	              console.log(`📦 ${name} picked up ${itemName}`);
 
-              // Record successful action for memory/self-awareness
-              recordSuccessfulAction(eid, `picked up ${itemName}`);
+	              // Record successful action for memory/self-awareness
+	              recordSuccessfulAction(eid, `picked up ${itemName}`);
 
-              // Transfer tool traits from item to actor
-              const traitChanges: string[] = [];
-              transferToolTraits(eid, itemEid, traitChanges);
-              if (traitChanges.length > 0) {
-                console.log(`🔧 ${name} gained: ${traitChanges.join(", ")}`);
+	              // Update appearance - they're now visibly holding this item
+	              if (hasAppearance(eid)) {
+	                setVisiblyHolding(eid, itemName);
               }
 
-              // Update appearance - they're now visibly holding this item
-              if (hasAppearance(eid)) {
-                setVisiblyHolding(eid, itemName);
-              }
-
-              queueStimulus({
-                targetEid: eid,
-                type: "inventory",
-                modality: "tactile",
-                content: `You pick up the ${itemName}.`,
-                source: "inventory",
-              });
-              // Broadcast to others in the room so they can see the pickup!
-              if (roomEid !== undefined) {
-                broadcastVisual(world, roomEid, `${name} picks up the ${itemName}.`, name, eid);
-              }
+	              queueStimulus({
+	                targetEid: eid,
+	                type: "inventory",
+	                modality: "tactile",
+	                content: `You pick up the ${itemName}.`,
+	                source: "inventory",
+	              });
+	              queueStimulus({
+	                targetEid: eid,
+	                type: "action_result",
+	                modality: "cognitive",
+	                content: `You picked up ${itemName}.`,
+	                source: "inventory",
+	              });
+	              // Broadcast to others in the room so they can see the pickup!
+	              if (roomEid !== undefined) {
+	                broadcastVisual(world, roomEid, `${name} picks up the ${itemName}.`, name, eid);
+	              }
+              clearFailedActionAttempt(eid);
             } else {
               console.log(`❓ ${name} couldn't pick up ${itemName} (inventory full or too heavy)`);
               queueStimulus({
@@ -2052,6 +2763,7 @@ export function executeActions(
                 content: `FAILED: You tried to take "${itemName}" but your inventory is full or it's too heavy. You do NOT have the ${itemName}.`,
                 source: "inventory",
               });
+              recordFailedActionAttempt(eid, sig);
             }
           } else {
             console.log(`❓ ${name} tried to pickup "${validatedAction.target}" but couldn't find it`);
@@ -2072,37 +2784,58 @@ export function executeActions(
               content: `FAILED: "${validatedAction.target}" was not found here. You do NOT have it.`,
               source: "inventory",
             });
+            recordFailedActionAttempt(eid, sig);
           }
         }
         break;
 
-      case "drop":
-        // Drop an item from inventory
-        if (validatedAction.target) {
-          const itemEid = findEntityByName(world, validatedAction.target);
-          if (itemEid !== undefined && hasItem(eid, itemEid)) {
-            const itemName = Name.value[itemEid] || validatedAction.target;
-            const success = removeFromInventory(eid, itemEid);
-            if (success) {
-              console.log(`📦 ${name} dropped ${itemName}`);
+	      case "drop":
+	        // Drop an item from inventory
+	        if (validatedAction.target) {
+	          const itemEid = findEntityByName(world, validatedAction.target);
+	          if (itemEid !== undefined && hasItem(world, eid, itemEid)) {
+	            const itemName = Name.value[itemEid] || validatedAction.target;
+	            const dropRoom = roomEid ?? getRoomForEntity(world, eid);
+	            if (dropRoom === undefined) {
+	              queueStimulus({
+	                targetEid: eid,
+	                type: "action_failed",
+	                modality: "cognitive",
+	                content: `FAILED: You try to drop "${itemName}" but your location is unclear.`,
+	                source: "inventory",
+	              });
+                recordFailedActionAttempt(eid, sig);
+	              break;
+	            }
+	            const success = removeFromInventory(world, eid, itemEid, dropRoom);
+	            if (success) {
+	              console.log(`📦 ${name} dropped ${itemName}`);
 
-              // Update appearance - sync visiblyHolding with remaining inventory
-              if (hasAppearance(eid)) {
-                syncVisiblyHoldingFromInventory(eid);
-              }
+	              // Update appearance - sync visiblyHolding with remaining inventory
+	              if (hasAppearance(eid)) {
+	                syncVisiblyHoldingFromInventory(world, eid);
+	              }
 
-              queueStimulus({
-                targetEid: eid,
-                type: "inventory",
-                modality: "tactile",
-                content: `You drop the ${itemName}.`,
-                source: "inventory",
-              });
+	              queueStimulus({
+	                targetEid: eid,
+	                type: "inventory",
+	                modality: "tactile",
+	                content: `You drop the ${itemName}.`,
+	                source: "inventory",
+	              });
+	              queueStimulus({
+	                targetEid: eid,
+	                type: "action_result",
+	                modality: "cognitive",
+	                content: `You dropped ${itemName}.`,
+	                source: "inventory",
+	              });
 
-              // Broadcast to others in the room so they can see the drop
-              if (roomEid !== undefined) {
-                broadcastVisual(world, roomEid, `${name} drops the ${itemName}.`, name, eid);
-              }
+	              // Broadcast to others in the room so they can see the drop
+	              if (roomEid !== undefined) {
+	                broadcastVisual(world, roomEid, `${name} drops the ${itemName}.`, name, eid);
+	              }
+              clearFailedActionAttempt(eid);
             }
           } else {
             console.log(`❓ ${name} tried to drop "${validatedAction.target}" but doesn't have it`);
@@ -2113,17 +2846,18 @@ export function executeActions(
               content: `You don't have that item to drop.`,
               source: "inventory",
             });
+            recordFailedActionAttempt(eid, sig);
           }
         }
         break;
 
-      case "use":
-        // Use an item from inventory
-        if (validatedAction.target) {
-          const itemEid = findEntityByName(world, validatedAction.target);
-          if (itemEid !== undefined && hasItem(eid, itemEid)) {
-            const itemName = Name.value[itemEid] || validatedAction.target;
-            const itemCategory = Item.category[itemEid] || "misc";
+	      case "use":
+	        // Use an item from inventory
+	        if (validatedAction.target) {
+	          const itemEid = findEntityByName(world, validatedAction.target);
+	          if (itemEid !== undefined && hasItem(world, eid, itemEid)) {
+	            const itemName = Name.value[itemEid] || validatedAction.target;
+	            const itemCategory = Item.category[itemEid] || "misc";
 
             console.log(`🔧 ${name} uses ${itemName}`);
             queueStimulus({
@@ -2134,13 +2868,15 @@ export function executeActions(
               source: "inventory",
             });
 
-            // Handle different item categories
-            if (itemCategory === "food") {
-              // Consume food - remove from inventory
-              removeFromInventory(eid, itemEid);
-              console.log(`🍖 ${name} ate ${itemName}`);
-            }
-          } else if (itemEid !== undefined) {
+	            // Handle different item categories
+	            if (itemCategory === "food") {
+	              // Consume food - remove entity from world
+	              removeEntity(world, itemEid);
+	              syncInventoryCache(world, eid);
+	              if (hasAppearance(eid)) syncVisiblyHoldingFromInventory(world, eid);
+	              console.log(`🍖 ${name} ate ${itemName}`);
+	            }
+	          } else if (itemEid !== undefined) {
             // Item exists but not in inventory - can they use it directly?
             const itemName = Name.value[itemEid] || validatedAction.target;
             console.log(`🔧 ${name} uses ${itemName} (in environment)`);
@@ -2153,40 +2889,64 @@ export function executeActions(
             });
           } else {
             console.log(`❓ ${name} tried to use "${validatedAction.target}" but couldn't find it`);
+            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
+            addCriticalActionFailure(
+              world,
+              eid,
+              `FAILED: You tried to use "${validatedAction.target}" but it doesn't exist as an entity here. ${hint}`,
+              "inventory"
+            );
+            const issues = validateAgentAction(world, name, validatedAction.type, validatedAction.target, validatedAction.content);
+            for (const issue of issues) recordIssue(issue);
           }
         }
         break;
 
-      case "give":
-        // Give an item to another entity
-        if (validatedAction.target && validatedAction.content) {
-          // Parse target as recipient, content as item
-          const recipientEid = findEntityByName(world, validatedAction.target);
-          const itemEid = findEntityByName(world, validatedAction.content);
+	      case "give":
+	        // Give an item to another entity
+	        if (validatedAction.target && validatedAction.content) {
+	          // Parse target as recipient, content as item
+	          const recipientEid = findEntityByName(world, validatedAction.target);
+	          const itemEid = findEntityByName(world, validatedAction.content);
 
-          if (recipientEid !== undefined && itemEid !== undefined && hasItem(eid, itemEid)) {
-            const recipientName = Name.value[recipientEid] || validatedAction.target;
-            const itemName = Name.value[itemEid] || validatedAction.content;
+	          if (recipientEid !== undefined && itemEid !== undefined && hasItem(world, eid, itemEid)) {
+	            const recipientName = Name.value[recipientEid] || validatedAction.target;
+	            const itemName = Name.value[itemEid] || validatedAction.content;
 
-            // Check if recipient has inventory
-            if (!hasInventory(recipientEid)) {
-              console.log(`❓ ${recipientName} can't receive items (no inventory)`);
-              queueStimulus({
-                targetEid: eid,
+	            // Grounding: you can only give items to someone in the same room.
+	            const recipientRoom = getRoomForEntity(world, recipientEid);
+	            if (roomEid === undefined || recipientRoom !== roomEid) {
+	              queueStimulus({
+	                targetEid: eid,
+	                type: "action_failed",
+	                modality: "cognitive",
+	                content: `FAILED: You can't give "${itemName}" to ${recipientName} because they're not here.`,
+	                source: "inventory",
+	              });
+	              break;
+	            }
+
+	            // Check if recipient has inventory
+	            if (!hasInventory(world, recipientEid)) {
+	              console.log(`❓ ${recipientName} can't receive items (no inventory)`);
+	              queueStimulus({
+	                targetEid: eid,
                 type: "inventory",
                 modality: "cognitive",
                 content: `${recipientName} can't receive items.`,
                 source: "inventory",
               });
-              break;
-            }
+	              break;
+	            }
 
-            // Transfer item
-            if (removeFromInventory(eid, itemEid) && addToInventory(world, recipientEid, itemEid)) {
-              console.log(`🎁 ${name} gave ${itemName} to ${recipientName}`);
-              queueStimulus({
-                targetEid: eid,
-                type: "inventory",
+	            // Transfer item (canonical: move containment)
+	            if (addToInventory(world, recipientEid, itemEid)) {
+	              console.log(`🎁 ${name} gave ${itemName} to ${recipientName}`);
+	              if (hasAppearance(eid)) syncVisiblyHoldingFromInventory(world, eid);
+	              queueStimulus({
+	                targetEid: eid,
+	                type: "inventory",
                 modality: "tactile",
                 content: `You give the ${itemName} to ${recipientName}.`,
                 source: "inventory",
@@ -2201,6 +2961,32 @@ export function executeActions(
             }
           } else {
             console.log(`❓ ${name} tried to give but something went wrong`);
+            if (recipientEid === undefined && validatedAction.target) {
+              const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+              const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
+              addCriticalActionFailure(
+                world,
+                eid,
+                `FAILED: You tried to give something to "${validatedAction.target}" but that recipient doesn't exist as an entity here. ${hint}`,
+                "inventory"
+              );
+            } else if (itemEid === undefined && validatedAction.content) {
+              addCriticalActionFailure(
+                world,
+                eid,
+                `FAILED: You tried to give "${validatedAction.content}" but that item doesn't exist as an entity.`,
+                "inventory"
+              );
+            } else {
+              addCriticalActionFailure(
+                world,
+                eid,
+                `FAILED: Your give action could not be completed.`,
+                "inventory"
+              );
+            }
+            const issues = validateAgentAction(world, name, validatedAction.type, validatedAction.target, validatedAction.content);
+            for (const issue of issues) recordIssue(issue);
           }
         }
         break;
@@ -2212,17 +2998,44 @@ export function executeActions(
           console.log(`🔍 ${name} examines ${validatedAction.target}`);
           // Use observe logic
           const examineTargetEid = findEntityByName(world, validatedAction.target);
-          if (examineTargetEid !== undefined) {
-            const targetName = Name.value[examineTargetEid] || validatedAction.target;
-            const targetDesc = Description.value[examineTargetEid] || "You see nothing special.";
-            queueStimulus({
-              targetEid: eid,
-              type: "examination",
-              modality: "cognitive",
-              content: `You examine ${targetName} closely. ${targetDesc}`,
-              source: "examination",
-            });
+          if (examineTargetEid === undefined) {
+            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
+            addCriticalActionFailure(
+              world,
+              eid,
+              `FAILED: You tried to examine "${validatedAction.target}" but it doesn't exist as an entity here. ${hint}`,
+              "examination"
+            );
+            const issues = validateAgentAction(world, name, validatedAction.type, validatedAction.target, validatedAction.content);
+            for (const issue of issues) recordIssue(issue);
+            break;
           }
+
+          // Grounding: you can only examine things that are actually accessible here (room/held/open containers).
+          if (!isInteractTargetAccessible(world, eid, roomEid, examineTargetEid)) {
+            const targetName = Name.value[examineTargetEid] || validatedAction.target;
+            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
+            addCriticalActionFailure(
+              world,
+              eid,
+              `FAILED: You tried to examine "${targetName}" but it is not accessible/visible from here. ${hint}`,
+              "examination"
+            );
+            recordFailedActionAttempt(eid, sig);
+            break;
+          }
+
+          const targetName = Name.value[examineTargetEid] || validatedAction.target;
+          const targetDesc = Description.value[examineTargetEid] || "You see nothing special.";
+          queueStimulus({
+            targetEid: eid,
+            type: "examination",
+            modality: "cognitive",
+            content: `You examine ${targetName} closely. ${targetDesc}`,
+            source: "examination",
+          });
         }
         break;
 
@@ -2256,16 +3069,49 @@ export function executeActions(
     // This is crucial for multi-step goal execution!
     const nextStep = getNextPlannedAction(world, eid);
     if (nextStep) {
-      // Check if the action matches the current plan step
-      const actionMatchesPlan =
-        validatedAction.type === nextStep.actionType ||
-        (validatedAction.type === "interact" && nextStep.actionType === "interact") ||
-        (validatedAction.target?.toLowerCase() === nextStep.target?.toLowerCase());
-
-      if (actionMatchesPlan) {
+      if (actionPendingForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep)) {
+        // Waiting on an async tool job to complete; do not advance or count as failure.
+      } else if (actionSucceededForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep)) {
         const advanced = advanceAgentPlan(world, eid);
         if (advanced) {
           console.log(`📋 ${name} completed plan step: ${nextStep.description}`);
+        }
+      } else if (!actionSucceededForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep)) {
+        const now = Date.now();
+        const signature = `${nextStep.actionType}|${String(nextStep.target || "")}|${String(nextStep.content || "")}`;
+        const prev = recentPlanStepFailures.get(eid);
+        const within = prev && prev.signature === signature && now - prev.lastAtMs < PLAN_STEP_FAILURE_WINDOW_MS;
+        const count = within ? prev!.count + 1 : 1;
+        recentPlanStepFailures.set(eid, { signature, count, lastAtMs: now });
+
+        if (count >= MAX_PLAN_STEP_FAILURES_BEFORE_REPLAN) {
+          // Identify the active plan backing this step (best-effort).
+          let planEid: number | undefined;
+          const goalTargets = getRelationTargets(world, eid, HasGoal)
+            .filter((gid) => hasComponent(world, gid, Goal) && Goal.status[gid] === "active")
+            .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0));
+          for (const goalEid of goalTargets) {
+            const pid = getPlanForGoal(world, eid, goalEid);
+            if (!pid || !hasComponent(world, pid, Plan) || Plan.status[pid] !== "active") continue;
+            const cur = getCurrentStep(pid);
+            if (!cur) continue;
+            if (String(cur.description || "") === String(nextStep.description || "") && String(cur.actionType || "") === String(nextStep.actionType || "")) {
+              planEid = pid;
+              break;
+            }
+          }
+
+          if (planEid !== undefined) {
+            failPlan(planEid, `Repeated plan-step failure: ${nextStep.description}`);
+            queueStimulus({
+              targetEid: eid,
+              type: "planning",
+              modality: "cognitive",
+              content: `Plan step failed repeatedly ("${nextStep.description}"). Replanning.`,
+              source: "planning",
+            });
+          }
+          recentPlanStepFailures.delete(eid);
         }
       }
     }
@@ -2387,19 +3233,46 @@ export async function runFullCognitiveCycle(
 export function advanceAgentPlan(world: World, agentEid: number): boolean {
   const goalTargets = getRelationTargets(world, agentEid, HasGoal);
 
-  for (const goalEid of goalTargets) {
-    if (!hasComponent(world, goalEid, Goal)) continue;
-    if (Goal.status[goalEid] !== "active") continue;
+  const activeGoals = goalTargets
+    .filter((gid) => hasComponent(world, gid, Goal) && Goal.status[gid] === "active")
+    .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0));
 
+  for (const goalEid of activeGoals) {
     const planEid = getPlanForGoal(world, agentEid, goalEid);
     if (planEid && Plan.status[planEid] === "active") {
       const advanced = advancePlanStep(planEid);
       if (!advanced) {
-        // Plan completed - update goal progress
-        Goal.progress[goalEid] = 100;
-        Goal.status[goalEid] = "completed";
         const agentName = Name.value[agentEid];
-        console.log(`[Cognition] ${agentName} completed goal: ${Goal.description[goalEid]}`);
+
+        // If the goal has a *deterministically evaluable* success contract, do not auto-complete it
+        // just because the plan ran out of steps. The GoalEvaluationSystem will complete it based on ECS state.
+        const rawSuccess = String(Goal.successJson[goalEid] || "").trim();
+        let isEvaluable = false;
+        if (rawSuccess) {
+          try {
+            const parsed = JSON.parse(rawSuccess);
+            const t = String(parsed?.type || "");
+            isEvaluable = t !== "" && t !== "custom";
+          } catch {
+            isEvaluable = false;
+          }
+        }
+
+        if (isEvaluable) {
+          Goal.progress[goalEid] = Math.max(Goal.progress[goalEid] || 0, 90);
+          console.log(`[Cognition] ${agentName} completed plan for goal (pending eval): ${Goal.description[goalEid]}`);
+        } else {
+          // Legacy/custom goals: plan completion is treated as goal completion.
+          Goal.progress[goalEid] = 100;
+          Goal.status[goalEid] = "completed";
+          console.log(`[Cognition] ${agentName} completed goal: ${Goal.description[goalEid]}`);
+
+          // Learning: compile the successful plan into a reusable procedural macro.
+          const compiled = compileCompletedPlanToProceduralMacro(world, agentEid, goalEid, planEid);
+          if (compiled.ok) {
+            console.log(`[Learning] ${agentName} compiled plan into macro: ${compiled.signature}`);
+          }
+        }
       }
       return true;
     }

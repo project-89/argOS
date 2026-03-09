@@ -17,7 +17,7 @@
 import { generateText } from "ai";
 import type { World } from "../ecs/world";
 import { spiritModel } from "../llm/config";
-import type { SystemRegistry } from "../ecs/dynamic-systems";
+import { getSystemTelemetrySnapshot, type SystemRegistry, type SystemTelemetry } from "../ecs/dynamic-systems";
 import type { SpiritRegistry } from "./spirit-registry";
 import { reportToSuperior, sendMessage } from "./spirit-registry";
 import {
@@ -44,7 +44,7 @@ export interface SystemObservation {
 }
 
 export interface SystemAnomaly {
-  type: "performance" | "frequency" | "error" | "stagnation" | "overload";
+  type: "performance" | "frequency" | "error" | "stagnation" | "overload" | "missing_system";
   severity: "low" | "medium" | "high";
   description: string;
   data?: any;
@@ -166,50 +166,163 @@ export function observeSystems(
   watchConfig: WatchConfig
 ): SystemObservation[] {
   const observations: SystemObservation[] = [];
-  const targetSystems = watchConfig.targetSystems || getAllTrackedSystems();
+  const telemetryByName = new Map<string, SystemTelemetry>();
+  for (const t of getSystemTelemetrySnapshot()) {
+    telemetryByName.set(t.systemName, t);
+  }
+
+  const targetSystems = getTargetSystemNames(systemRegistry, watchConfig);
 
   for (const systemName of targetSystems) {
     const metrics = systemMetrics.get(systemName);
-    const observation = createSystemObservation(systemName, metrics, watchConfig);
+    const observation = createSystemObservation(systemName, metrics, telemetryByName.get(systemName), systemRegistry, watchConfig);
     observations.push(observation);
   }
 
   return observations;
 }
 
+function getTargetSystemNames(systemRegistry: SystemRegistry, watchConfig: WatchConfig): string[] {
+  const targets = (watchConfig.targetSystems || []).filter((s) => String(s || "").trim().length > 0);
+  if (targets.length > 0) return targets;
+
+  const names = new Set<string>();
+
+  // Prefer the canonical system registry list (baked systems).
+  for (const name of systemRegistry.systems.keys()) names.add(name);
+
+  // Include any names that have errored (file-based systems can show up here even if not registered).
+  for (const name of systemRegistry.errorCounts.keys()) names.add(name);
+
+  // Include explicit watcher instrumentation, if present.
+  for (const name of getAllTrackedSystems()) names.add(name);
+
+  return Array.from(names);
+}
+
 function createSystemObservation(
   systemName: string,
   metrics: SystemMetrics | undefined,
+  telemetry: SystemTelemetry | undefined,
+  systemRegistry: SystemRegistry,
   watchConfig: WatchConfig
 ): SystemObservation {
+  const now = Date.now();
+  const def = systemRegistry.systems.get(systemName);
+  const errorCount = systemRegistry.errorCounts.get(systemName) || 0;
+  const lastTelemetryAt = telemetry?.lastTimestamp || 0;
+  const lastExec = metrics?.lastExecution || 0;
+  const lastObservedRun = Math.max(lastTelemetryAt, lastExec);
+
+  const avgTimeFromTelemetry =
+    telemetry && telemetry.runs > 0
+      ? telemetry.totalDurationMs / telemetry.runs
+      : undefined;
+
   const observation: SystemObservation = {
     systemName,
     timestamp: Date.now(),
-    executionCount: metrics?.executionCount || 0,
-    lastExecutionTime: metrics?.lastExecution,
-    averageExecutionTime: metrics?.executionTimes.length
-      ? metrics.executionTimes.reduce((a, b) => a + b, 0) / metrics.executionTimes.length
-      : undefined,
-    entitiesProcessed: metrics?.entitiesProcessedHistory.length
-      ? metrics.entitiesProcessedHistory[metrics.entitiesProcessedHistory.length - 1]
-      : undefined,
+    executionCount: telemetry?.runs ?? metrics?.executionCount ?? 0,
+    lastExecutionTime: lastObservedRun || undefined,
+    averageExecutionTime:
+      avgTimeFromTelemetry !== undefined
+        ? avgTimeFromTelemetry
+        : metrics?.executionTimes.length
+          ? metrics.executionTimes.reduce((a, b) => a + b, 0) / metrics.executionTimes.length
+          : undefined,
+    // entitiesProcessed is not reliably available from the baked registry; keep best-effort watcher instrumentation.
+    entitiesProcessed:
+      metrics?.entitiesProcessedHistory.length
+        ? metrics.entitiesProcessedHistory[metrics.entitiesProcessedHistory.length - 1]
+        : undefined,
     anomalies: [],
     patterns: [],
   };
 
-  // Detect anomalies
+  // Detect anomalies (prefer registry/telemetry data; fall back to watcher-specific metrics)
+  observation.anomalies.push(...detectRegistryAnomalies(systemName, def, telemetry, errorCount, lastObservedRun, now, watchConfig));
   if (metrics) {
-    observation.anomalies = detectAnomalies(metrics, watchConfig);
+    observation.anomalies.push(...detectAnomalies(metrics, watchConfig));
     observation.patterns = detectPatterns(metrics);
-  } else {
+  } else if (!telemetry && def) {
     observation.anomalies.push({
       type: "stagnation",
       severity: "medium",
-      description: `System "${systemName}" has no execution metrics (never run or not tracked)`,
+      description: `System "${systemName}" has no execution telemetry (never run or not recorded)`,
+      data: { note: "No telemetry snapshot for this system." },
+    });
+  } else if (!def) {
+    // If it's not in the registry but appears in errorCounts/tracking, flag it explicitly.
+    observation.anomalies.push({
+      type: "missing_system",
+      severity: errorCount >= 3 ? "high" : errorCount > 0 ? "medium" : "low",
+      description: `System "${systemName}" is not registered but appears in telemetry/errors (likely a file-based generated system).`,
+      data: { errorCount },
     });
   }
 
   return observation;
+}
+
+function detectRegistryAnomalies(
+  systemName: string,
+  def: any | undefined,
+  telemetry: SystemTelemetry | undefined,
+  errorCount: number,
+  lastObservedRun: number,
+  now: number,
+  watchConfig: WatchConfig
+): SystemAnomaly[] {
+  const anomalies: SystemAnomaly[] = [];
+
+  // Errors (from registry.errorCounts) are the most important signal for governance.
+  if (errorCount > 0) {
+    anomalies.push({
+      type: "error",
+      severity: errorCount >= 3 ? "high" : errorCount >= 2 ? "medium" : "low",
+      description: `System "${systemName}" has errored ${errorCount} time(s) recently (may be auto-disabled after 3).`,
+      data: { errorCount },
+    });
+  }
+
+  // Disabled systems are suspicious; often due to repeated errors.
+  if (def && def.active === false) {
+    anomalies.push({
+      type: "stagnation",
+      severity: errorCount >= 3 ? "high" : "medium",
+      description: `System "${systemName}" is inactive/disabled.`,
+      data: { errorCount },
+    });
+  }
+
+  // Stagnation based on telemetry last run.
+  const stagnationMs = watchConfig?.alertThresholds?.stagnationMs ?? 60_000;
+  if (lastObservedRun > 0) {
+    const since = now - lastObservedRun;
+    if (since > stagnationMs) {
+      anomalies.push({
+        type: "stagnation",
+        severity: since > stagnationMs * 5 ? "high" : "medium",
+        description: `System "${systemName}" hasn't run in ${Math.round(since / 1000)}s (telemetry).`,
+        data: { timeSinceExecution: since },
+      });
+    }
+  }
+
+  // Performance degradation from telemetry last duration.
+  if (telemetry && telemetry.lastDurationMs > 0) {
+    const limitMs = 50;
+    if (telemetry.lastDurationMs >= limitMs) {
+      anomalies.push({
+        type: "performance",
+        severity: telemetry.lastDurationMs >= limitMs * 4 ? "high" : "medium",
+        description: `System "${systemName}" ran slowly (${telemetry.lastDurationMs}ms).`,
+        data: { lastDurationMs: telemetry.lastDurationMs, limitMs },
+      });
+    }
+  }
+
+  return anomalies;
 }
 
 function detectAnomalies(metrics: SystemMetrics, watchConfig: WatchConfig): SystemAnomaly[] {
@@ -366,14 +479,16 @@ async function analyzeObservations(
   let overallHealth: WatcherReport["overallHealth"] = "healthy";
   if (highSeverity > 0) {
     overallHealth = "critical";
-  } else if (mediumSeverity > 2 || allAnomalies.length > 5) {
+  } else if (mediumSeverity > 0 || allAnomalies.length > 0) {
     overallHealth = "warning";
   }
 
-  // Generate recommendations via LLM
-  let recommendations: string[] = [];
+  // Deterministic recommendations first (repeatable + cheap).
+  let recommendations: string[] = buildDeterministicRecommendations(allAnomalies);
 
-  if (allAnomalies.length > 0) {
+  // Optional LLM augmentation (disabled by default for repeatability/cost).
+  const useLlm = Boolean(process.env.ARGOS_WATCHER_USE_LLM?.trim());
+  if (useLlm && allAnomalies.length > 0) {
     try {
       const result = await generateText({
         model: spiritModel,
@@ -382,22 +497,21 @@ async function analyzeObservations(
 You observed these system anomalies:
 ${allAnomalies.map(a => `- [${a.severity}] ${a.type}: ${a.description}`).join("\n")}
 
-Based on these observations, provide 1-3 concise recommendations for the simulation.
-Format as a JSON array of strings.
-Example: ["Add more entities to balance load", "Investigate performance degradation"]`,
+Provide 1-3 concise, actionable recommendations for fixing/repairing the simulation.
+Return a JSON array of strings.`,
         maxTokens: 200,
       });
 
       try {
-        recommendations = JSON.parse(result.text.trim());
+        const parsed = JSON.parse(result.text.trim());
+        if (Array.isArray(parsed)) {
+          recommendations = dedupeRecommendations([...recommendations, ...parsed.map((s) => String(s))]).slice(0, 5);
+        }
       } catch {
-        // Extract recommendations from text if JSON fails
-        recommendations = [result.text.trim().slice(0, 200)];
+        recommendations = dedupeRecommendations([...recommendations, result.text.trim().slice(0, 220)]).slice(0, 5);
       }
-    } catch (error) {
-      recommendations = allAnomalies
-        .filter(a => a.severity === "high")
-        .map(a => `Address ${a.type}: ${a.description}`);
+    } catch {
+      // Keep deterministic recommendations.
     }
   }
 
@@ -409,6 +523,51 @@ Example: ["Add more entities to balance load", "Investigate performance degradat
     recommendations,
     requiresIntervention: overallHealth === "critical",
   };
+}
+
+function dedupeRecommendations(recs: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of recs) {
+    const s = String(r || "").trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+function buildDeterministicRecommendations(anomalies: SystemAnomaly[]): string[] {
+  const recs: string[] = [];
+  if (!anomalies.length) return recs;
+
+  const hasHighErrors = anomalies.some((a) => a.type === "error" && a.severity === "high");
+  const hasAnyErrors = anomalies.some((a) => a.type === "error");
+  const hasMissing = anomalies.some((a) => a.type === "missing_system");
+  const hasPerf = anomalies.some((a) => a.type === "performance");
+  const hasStagnation = anomalies.some((a) => a.type === "stagnation");
+
+  if (hasHighErrors) {
+    recs.push("Run the Artificer to disable or auto-fix repeatedly failing systems (>=3 errors), then verify errorCounts drop.");
+  } else if (hasAnyErrors) {
+    recs.push("Inspect recent system errors and either patch the failing system(s) or disable them before they spam the loop.");
+  }
+
+  if (hasMissing) {
+    recs.push("A system is erroring but not registered (likely generated/file-based). Confirm generated-system loading dir and disable/repair the offending file system.");
+  }
+
+  if (hasPerf) {
+    recs.push("Identify slow systems (high lastDurationMs) and reduce query scope / frequency or optimize component access.");
+  }
+
+  if (hasStagnation) {
+    recs.push("Ensure critical systems are active and scheduled; if a required system never runs, bake/activate a deterministic replacement.");
+  }
+
+  return dedupeRecommendations(recs).slice(0, 5);
 }
 
 function sendWatcherReport(

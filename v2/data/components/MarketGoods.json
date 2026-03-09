@@ -1,0 +1,9 @@
+{
+  "name": "MarketGoods",
+  "description": "Economic data for goods in the market.",
+  "properties": {
+    "supply": "number",
+    "price": "number",
+    "demand": "number"
+  }
+}

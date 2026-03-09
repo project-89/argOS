@@ -92,7 +92,7 @@ async function main() {
   };
 
   // Create server
-  const server = createSimulationServer(3000);
+  const server = createSimulationServer(3456);
 
   // Set up simulation state
   server.setSimulationState({
@@ -147,7 +147,7 @@ async function main() {
   runSimulation().catch(console.error);
 
   console.log("\n===========================================");
-  console.log("UI Server running at http://localhost:3000");
+  console.log("UI Server running at http://localhost:3456");
   console.log("Open in browser to view the simulation");
   console.log("Press Ctrl+C to stop");
   console.log("===========================================\n");

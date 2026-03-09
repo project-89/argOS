@@ -117,6 +117,19 @@ export function stopSpiritSystem(): void {
 }
 
 /**
+ * Deliver pending messages to GodAI without running a full spirit cognition tick.
+ * Useful for external loops that run watcher/maintainer logic out-of-band.
+ */
+export async function deliverPendingMessagesToGod(): Promise<number> {
+  if (!systemState) return 0;
+  const messagesForGodAI = getMessagesForGodAI(systemState.registry);
+  if (messagesForGodAI.length > 0 && systemState.godAgentCallback) {
+    await systemState.godAgentCallback(messagesForGodAI);
+  }
+  return messagesForGodAI.length;
+}
+
+/**
  * Register a callback for GodAI to receive messages
  */
 export function setGodAgentCallback(callback: (messages: DivineMessage[]) => Promise<void>): void {
@@ -202,7 +215,13 @@ export async function tickSpiritSystem(
 
   // Check if enough time has passed since last tick
   if (now - systemState.lastTick < systemState.tickInterval) {
-    return { spiritsProcessed: 0, messagesForGodAI: [], narrativeProse: [] };
+    // Still deliver pending messages even if we aren't running a full spirit cognition tick.
+    // Watchers/maintainers can enqueue urgent reports at any time; those should reach GodAI promptly.
+    const messagesForGodAI = getMessagesForGodAI(systemState.registry);
+    if (messagesForGodAI.length > 0 && systemState.godAgentCallback) {
+      await systemState.godAgentCallback(messagesForGodAI);
+    }
+    return { spiritsProcessed: 0, messagesForGodAI, narrativeProse: [] };
   }
 
   systemState.lastTick = now;

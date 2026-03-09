@@ -12,7 +12,7 @@ import "dotenv/config";
 import { addEntity, addComponent, hasComponent, getRelationTargets } from "bitecs";
 import { createArgosWorld } from "../../ecs/world";
 import { Name, Description, Agent, Mind, Schedule, Room } from "../../ecs/components";
-import { HasSchedule, OccupiesRoom } from "../../ecs/relations";
+import { HasSchedule, LocatedIn } from "../../ecs/relations";
 import {
   initializeSchedule,
   getSchedule,
@@ -111,13 +111,16 @@ describe("Schedule System", () => {
         { name: "new_activity", startHour: 0, duration: 24, priority: 5, interruptible: true },
       ], 0.8);
 
-      // Should have replaced
-      expect(schedule1).not.toBe(schedule2);
+      // Should have replaced contents (EID may be recycled in non-versioned worlds)
       expect(Schedule.flexibility[schedule2]).toBe(0.8);
+      const activities = JSON.parse(Schedule.activities[schedule2]) as ScheduledActivity[];
+      expect(activities.length).toBe(1);
+      expect(activities[0].name).toBe("new_activity");
 
       // Only one schedule linked
       const scheduleTargets = getRelationTargets(world, agentEid, HasSchedule);
       expect(scheduleTargets.length).toBe(1);
+      expect(scheduleTargets[0]).toBe(schedule2);
     });
 
     test("should get schedule for agent", () => {
@@ -344,7 +347,7 @@ describe("Schedule System", () => {
       const world = createTestWorld();
       const roomEid = createTestRoom(world, "Village");
       const agentEid = createTestAgent(world, "Tina", "blacksmith");
-      addComponent(world, agentEid, OccupiesRoom(roomEid));
+      addComponent(world, agentEid, LocatedIn(roomEid));
 
       const schedule = await generateSchedule(world, agentEid);
 
@@ -370,8 +373,8 @@ describe("Schedule System", () => {
 
       const agent1 = createTestAgent(world, "Uma");
       const agent2 = createTestAgent(world, "Victor");
-      addComponent(world, agent1, OccupiesRoom(roomEid));
-      addComponent(world, agent2, OccupiesRoom(roomEid));
+      addComponent(world, agent1, LocatedIn(roomEid));
+      addComponent(world, agent2, LocatedIn(roomEid));
 
       await initializeAllSchedules(world, false); // Use default schedules
 

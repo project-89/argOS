@@ -15,9 +15,9 @@ import {
   createRelationshipEvolutionSystem
 } from "./systems/builtin-systems";
 import { createSimulationServer } from "./server/simulation-server";
-import { query, getRelationTargets } from "bitecs";
+import { query } from "bitecs";
 import { Agent, Name, Mind } from "./ecs/components";
-import { OccupiesRoom } from "./ecs/relations";
+import { getRoomForEntity } from "./ecs/location";
 // Spirit System imports
 import {
   initializeSpiritSystem,
@@ -32,8 +32,10 @@ import {
   getPendingProposals,
   approveProposal,
   getApprovedProposals,
+  getSpiritsByType,
 } from "./spirits/spirit-factory";
-import { executeAllApprovedProposals } from "./spirits/architect-spirit";
+import { executeAllApprovedProposals, runArchitectCognition } from "./spirits/architect-spirit";
+import { runArtificerWithTools } from "./spirits/artificer-spirit";
 
 async function main() {
   console.log("╔══════════════════════════════════════════════════════════════╗");
@@ -45,7 +47,7 @@ async function main() {
     process.exit(1);
   }
 
-  const server = createSimulationServer(3000);
+  const server = createSimulationServer(3456);
 
   const world = createArgosWorld("The Realm");
   initializePrefabs(world);
@@ -65,7 +67,7 @@ Create a living, breathing world with interesting characters who have their own 
 
   // Initialize Spirit System with the celestial hierarchy
   const entityRegistry = createEntityRegistry();
-  initializeSpiritSystem(world, {
+  const spiritSystem = initializeSpiritSystem(world, {
     godAgentEid: 1, // GodAgent entity
     tickInterval: 10000, // Spirits think every 10 seconds
     autoCreateNarrator: true,
@@ -116,9 +118,9 @@ Create a living, breathing world with interesting characters who have their own 
   let innEid: number | undefined;
   
   for (const eid of agents) {
-    const rooms = getRelationTargets(world, eid, OccupiesRoom);
-    if (rooms.length > 0) {
-      innEid = rooms[0];
+    const roomEid = getRoomForEntity(world, eid);
+    if (roomEid !== undefined) {
+      innEid = roomEid;
       break;
     }
   }
@@ -126,6 +128,11 @@ Create a living, breathing world with interesting characters who have their own 
   console.log("\n🎭 Starting simulation loop...\n");
 
   let cycle = 0;
+  let lastArchitectRun = 0;
+  let lastArtificerRun = 0;
+  const architectCadenceMs = Math.max(5000, Number(process.env.SPIRIT_ARCHITECT_CADENCE_MS || 30000));
+  const artificerCadenceMs = Math.max(5000, Number(process.env.SPIRIT_ARTIFICER_CADENCE_MS || 45000));
+  const maxProposalExecPerCycle = Math.max(1, Number(process.env.SPIRIT_EXEC_BUDGET_PER_CYCLE || 1));
   
   async function simulationLoop() {
     if (server.isPaused()) {
@@ -187,14 +194,59 @@ Create a living, breathing world with interesting characters who have their own 
       console.log(`[Spirits→God] ${spiritResult.messagesForGodAI.length} messages queued`);
     }
 
-    // Process spirit proposals - auto-approve system proposals
+    const now = Date.now();
+    if (now - lastArchitectRun >= architectCadenceMs) {
+      const architects = getSpiritsByType("architect");
+      if (architects.length > 0) {
+        console.log(`[Architect] Running ${architects.length} architect cycle(s)...`);
+        for (const architect of architects) {
+          const proposals = await runArchitectCognition(
+            world,
+            god.systemRegistry,
+            spiritSystem.registry,
+            architect
+          );
+          if (proposals.length > 0) {
+            console.log(`  - ${architect.definition.name}: ${proposals.length} proposal(s)`);
+          }
+        }
+      }
+      lastArchitectRun = now;
+    }
+
+    if (now - lastArtificerRun >= artificerCadenceMs) {
+      const artificers = getSpiritsByType("artificer");
+      if (artificers.length > 0) {
+        console.log(`[Artificer] Running ${artificers.length} maintenance cycle(s)...`);
+        for (const artificer of artificers) {
+          const report = await runArtificerWithTools(
+            world,
+            god.systemRegistry,
+            spiritSystem.registry,
+            artificer
+          );
+          if (report.repairsAttempted.length > 0 || report.criticalSystems > 0) {
+            console.log(
+              `  - ${artificer.definition.name}: repairs=${report.repairsAttempted.length}, critical=${report.criticalSystems}`
+            );
+          }
+        }
+      }
+      lastArtificerRun = now;
+    }
+
+    // Process spirit proposals - auto-approve system/component/entity proposals
     const pendingProposals = getPendingProposals();
     if (pendingProposals.length > 0) {
       console.log(`[Proposals] ${pendingProposals.length} pending proposals`);
       for (const proposal of pendingProposals) {
-        // Auto-approve system proposals (could add more sophisticated logic here)
-        if (proposal.type === "system") {
-          approveProposal(proposal.id, 1); // GodAgent eid = 1
+        const autoApprove =
+          proposal.type === "system" ||
+          proposal.type === "component" ||
+          proposal.type === "entity";
+
+        if (autoApprove) {
+          approveProposal(proposal.id, god.eid);
           console.log(`[Proposals] ✅ Auto-approved: ${proposal.name} (${proposal.type})`);
           server.pushEvent("spirit", {
             type: "proposal_approved",
@@ -211,7 +263,9 @@ Create a living, breathing world with interesting characters who have their own 
     const approvedProposals = getApprovedProposals();
     if (approvedProposals.length > 0) {
       console.log(`[Proposals] Executing ${approvedProposals.length} approved proposals...`);
-      const { executed, failed } = await executeAllApprovedProposals(world, god.systemRegistry);
+      const { executed, failed } = await executeAllApprovedProposals(world, god.systemRegistry, {
+        maxProposals: maxProposalExecPerCycle,
+      });
       if (executed.length > 0) {
         console.log(`[Proposals] 🔧 Executed: ${executed.join(", ")}`);
         for (const name of executed) {

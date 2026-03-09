@@ -3,15 +3,39 @@
  */
 
 import { useState } from "react";
-import { Activity, Users, MapPin, Cpu, Send, Loader2 } from "lucide-react";
+import {
+  Activity,
+  Users,
+  MapPin,
+  Cpu,
+  Send,
+  Loader2,
+  Play,
+  Pause,
+  Square,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import { useSimulationStore } from "../../store/simulation";
+import { useSimulationBusContext } from "../../contexts/SimulationBusContext";
+import { useMapEditorStore } from "../../store/mapEditorStore";
+import type { ArgosMapV1 } from "../../types/map";
 
 interface HeaderProps {
   onSendCommand: (command: string) => void;
 }
 
 export function Header({ onSendCommand }: HeaderProps) {
-  const { tick, agentCount, roomCount, systemCount, status } = useSimulationStore();
+  const {
+    tick,
+    agentCount,
+    roomCount,
+    systemCount,
+    status,
+    simulationStatus,
+  } = useSimulationStore();
+  const { map } = useMapEditorStore();
+  const { connect, disconnect, inject } = useSimulationBusContext();
   const [command, setCommand] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -27,6 +51,54 @@ export function Header({ onSendCommand }: HeaderProps) {
       setSending(false);
     }
   };
+
+  const buildSimulationMap = (mapData: ArgosMapV1) => {
+    const simulationMarkers = (mapData.markers || []).filter((m) => m.kind !== "prefab");
+    return {
+      id: mapData.id,
+      name: mapData.name,
+      grid: mapData.grid,
+      zones: mapData.zones,
+      markers: simulationMarkers,
+    };
+  };
+
+  const handlePlay = () => {
+    if (status !== "connected") return;
+
+    const hasWorldContent = agentCount > 0 || roomCount > 0;
+    if (simulationStatus === "paused") {
+      inject({ type: "inject:simulation_resume" });
+      return;
+    }
+
+    if (!hasWorldContent && map) {
+      inject({
+        type: "inject:simulation_start",
+        map: buildSimulationMap(map),
+      } as any);
+      return;
+    }
+
+    inject({ type: "inject:simulation_resume" });
+  };
+
+  const handlePause = () => {
+    if (status !== "connected") return;
+    inject({ type: "inject:simulation_pause" });
+  };
+
+  const handleStop = () => {
+    if (status !== "connected") return;
+    inject({ type: "inject:simulation_stop" });
+  };
+
+  const simulationStatusClass =
+    simulationStatus === "running"
+      ? "bg-green-500/20 text-green-400"
+      : simulationStatus === "paused"
+      ? "bg-yellow-500/20 text-yellow-400"
+      : "bg-argos-bg-tertiary text-argos-text-muted";
 
   return (
     <header className="h-16 bg-argos-bg-secondary border-b border-argos-border flex items-center justify-between px-6">
@@ -65,6 +137,67 @@ export function Header({ onSendCommand }: HeaderProps) {
           </span>
           <span className="text-sm text-argos-text-secondary">systems</span>
         </div>
+      </div>
+
+      {/* Global Simulation Controls */}
+      <div className="flex items-center gap-2">
+        {status === "connected" ? (
+          <button
+            onClick={disconnect}
+            className="px-3 py-1.5 text-xs rounded bg-argos-bg-tertiary text-argos-text-secondary hover:text-argos-text-primary border border-argos-border flex items-center gap-1.5"
+            title="Disconnect from simulation bus"
+          >
+            <WifiOff className="w-3.5 h-3.5" />
+            Disconnect
+          </button>
+        ) : (
+          <button
+            onClick={connect}
+            className="px-3 py-1.5 text-xs rounded bg-blue-600 text-white hover:bg-blue-500 flex items-center gap-1.5"
+            title="Connect to simulation bus"
+          >
+            <Wifi className="w-3.5 h-3.5" />
+            Connect
+          </button>
+        )}
+
+        {simulationStatus !== "running" ? (
+          <button
+            onClick={handlePlay}
+            disabled={status !== "connected"}
+            className="px-3 py-1.5 text-xs rounded bg-green-600 text-white hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+            title={simulationStatus === "paused" ? "Resume simulation" : "Play simulation"}
+          >
+            <Play className="w-3.5 h-3.5" />
+            {simulationStatus === "paused" ? "Resume" : "Play"}
+          </button>
+        ) : (
+          <button
+            onClick={handlePause}
+            disabled={status !== "connected"}
+            className="px-3 py-1.5 text-xs rounded bg-yellow-600 text-white hover:bg-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+            title="Pause simulation"
+          >
+            <Pause className="w-3.5 h-3.5" />
+            Pause
+          </button>
+        )}
+
+        {simulationStatus !== "stopped" && (
+          <button
+            onClick={handleStop}
+            disabled={status !== "connected"}
+            className="px-3 py-1.5 text-xs rounded bg-red-600 text-white hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+            title="Stop simulation"
+          >
+            <Square className="w-3.5 h-3.5" />
+            Stop
+          </button>
+        )}
+
+        <span className={`text-xs px-2 py-1 rounded uppercase tracking-wide ${simulationStatusClass}`}>
+          {simulationStatus}
+        </span>
       </div>
 
       {/* Command Input */}

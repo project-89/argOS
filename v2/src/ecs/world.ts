@@ -1,7 +1,5 @@
 import {
   createWorld,
-  createEntityIndex,
-  withVersioning,
   addEntity,
   removeEntity,
   entityExists,
@@ -37,11 +35,14 @@ export interface WorldContext {
   meta: {
     name: string;
     createdAt: number;
+    /** Whether LLM-powered features are enabled for this simulation */
+    aiEnabled?: boolean;
+    /** Whether schedules should be LLM-generated (vs. deterministic defaults) */
+    generateSchedules?: boolean;
   };
 }
 
 export function createArgosWorld(name: string = "ArgOS World"): WorldContext {
-  const entityIndex = createEntityIndex(withVersioning(12));
   const context: WorldContext = {
     time: {
       tick: 0,
@@ -54,9 +55,14 @@ export function createArgosWorld(name: string = "ArgOS World"): WorldContext {
     meta: {
       name,
       createdAt: Date.now(),
+      aiEnabled: false,
+      generateSchedules: false,
     },
   };
-  return createWorld(context, entityIndex);
+  // NOTE: Avoid entity-id versioning here; the project uses sparse JS arrays keyed by EID,
+  // and bitecs 0.4's versioning mode can produce unstable entityExists/addComponent behavior
+  // under heavy churn (many create/remove cycles).
+  return createWorld(context);
 }
 
 export {

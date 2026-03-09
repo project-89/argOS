@@ -1,0 +1,10 @@
+{
+  "name": "MarketPrice",
+  "description": "Current price of goods at this stall",
+  "properties": {
+    "demand": "number",
+    "supply": "number",
+    "currentPrice": "number",
+    "basePrice": "number"
+  }
+}

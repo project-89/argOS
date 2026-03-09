@@ -292,11 +292,71 @@ export interface RoomBroadcastInjection {
   activityType?: string;
 }
 
+export interface SimulationPauseInjection {
+  type: "inject:simulation_pause";
+}
+
+export interface SimulationResumeInjection {
+  type: "inject:simulation_resume";
+}
+
+export interface SimulationStopInjection {
+  type: "inject:simulation_stop";
+}
+
+/** Map data for creating a simulation from UI-designed maps */
+export interface ArgosMapData {
+  id: string;
+  name: string;
+  grid: {
+    width: number;
+    height: number;
+    tileSize: number;
+  };
+  zones: Array<{
+    id: string;
+    name: string;
+    roomType?: string;
+    shape:
+      | { kind: "rect"; x: number; y: number; w: number; h: number }
+      | { kind: "poly"; points: Array<{ x: number; y: number }> }
+      | { kind: "polygon"; points: number[] };
+    properties?: Record<string, any>;
+    meta?: Record<string, any>;
+  }>;
+  markers?: Array<{
+    id: string;
+    x: number;
+    y: number;
+    kind: "spawn" | "portal" | "event" | "label";
+    name?: string;
+    text?: string;
+    spawnType?: "agent" | "object";
+    typeId?: string;
+    traits?: string[];
+    agentDef?: string;
+    targetMapId?: string;
+    targetMarkerId?: string;
+    to?: { x: number; y: number };
+    bidirectional?: boolean;
+    meta?: Record<string, any>;
+  }>;
+}
+
+export interface SimulationStartInjection {
+  type: "inject:simulation_start";
+  map: ArgosMapData;
+}
+
 export type InjectionMessage =
   | GodCommandInjection
   | SpiritMessageInjection
   | AgentStimulusInjection
-  | RoomBroadcastInjection;
+  | RoomBroadcastInjection
+  | SimulationPauseInjection
+  | SimulationResumeInjection
+  | SimulationStopInjection
+  | SimulationStartInjection;
 
 // ============================================================================
 // SimulationBus Class

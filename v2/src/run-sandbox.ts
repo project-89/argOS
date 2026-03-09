@@ -16,9 +16,8 @@ import {
 } from "./systems/builtin-systems";
 import { consumeLogs } from "./ecs/dynamic-systems";
 import { createSimulationServer } from "./server/simulation-server";
-import { query, getRelationTargets } from "bitecs";
+import { query } from "bitecs";
 import { Agent, Name, Room } from "./ecs/components";
-import { OccupiesRoom } from "./ecs/relations";
 import { clearAllAgentMemory } from "./cognition/agent-mind";
 import { autoSave, hasAutoSave, loadAutoSave } from "./persistence/world-persistence";
 import { loadCharacterAnimations } from "./rendering/animation-loader";
@@ -81,7 +80,7 @@ async function main() {
     console.warn("⚠️ Could not load character atlases:", e);
   }
 
-  const server = createSimulationServer(3000);
+  const server = createSimulationServer(3456);
   let sim = createSimulation();
   let lastRoomCount = 0;
   let lastAutoSave = Date.now();
@@ -123,7 +122,7 @@ async function main() {
     console.log("🌌 World reset complete. Ready for new creation.\n");
   });
 
-  console.log("🌌 Empty world created. Use the God Console at http://localhost:3000\n");
+  console.log("🌌 Empty world created. Use the God Console at http://localhost:3456\n");
   console.log("Example prompts:");
   console.log("  • Create a living cell with organelles that interact");
   console.log("  • Build an apartment with a person who needs food and sleep");

@@ -19,6 +19,7 @@ import { OccupiesRoom } from "../ecs/relations";
 import {
   createSystemRegistry,
   registerSystem,
+  runSystems,
   runAsyncSystems,
   listSystems,
   createStimulusEmissionSystem,
@@ -116,9 +117,11 @@ function setupSimulation(): SimulationState {
   registerSystem(systemRegistry, {
     name: "NeedsDecaySystem",
     description: "Gradually increases agent needs over time",
+    pseudocode: "Increase hunger and decrease energy for active agents over time",
     frequency: 2000,
-    enabled: true,
-    execute: async (w) => {
+    active: true,
+    lastRun: 0,
+    compiledFn: (w, _ctx) => {
       const agents = query(w, [Agent, Needs]);
       let processed = 0;
       for (const eid of agents) {
@@ -128,7 +131,6 @@ function setupSimulation(): SimulationState {
         processed++;
       }
       recordSystemExecution("NeedsDecaySystem", 5, processed);
-      return { processed, changes: [] };
     },
   });
   console.log("  ✓ NeedsDecaySystem registered");
@@ -137,9 +139,11 @@ function setupSimulation(): SimulationState {
   registerSystem(systemRegistry, {
     name: "HealthRegenSystem",
     description: "Slowly regenerates health for resting agents",
+    pseudocode: "Regenerate health for low-arousal agents",
     frequency: 3000,
-    enabled: true,
-    execute: async (w) => {
+    active: true,
+    lastRun: 0,
+    compiledFn: (w, _ctx) => {
       const agents = query(w, [Agent, Health, Mind]);
       let processed = 0;
       for (const eid of agents) {
@@ -150,7 +154,6 @@ function setupSimulation(): SimulationState {
         }
       }
       recordSystemExecution("HealthRegenSystem", 3, processed);
-      return { processed, changes: [] };
     },
   });
   console.log("  ✓ HealthRegenSystem registered");
@@ -339,11 +342,12 @@ async function runTick(state: SimulationState): Promise<void> {
   // Run all systems
   console.log("\n[Tick] Running systems...");
   const systemsBefore = listSystems(state.systemRegistry);
-  await runAsyncSystems(state.world, state.systemRegistry);
+  runSystems(state.world, state.systemRegistry, state.tick, SIM_CONFIG.tickInterval);
+  runAsyncSystems(state.world, state.systemRegistry, state.tick, SIM_CONFIG.tickInterval);
 
   // Record execution for tracking
   for (const sys of systemsBefore) {
-    if (sys.enabled) {
+    if (sys.active) {
       recordSystemExecution(sys.name, Math.random() * 10 + 5, Math.floor(Math.random() * 5));
     }
   }
@@ -428,9 +432,9 @@ async function runTick(state: SimulationState): Promise<void> {
 
   // Show current systems
   const currentSystems = listSystems(state.systemRegistry);
-  console.log(`\n[Tick] Active systems (${currentSystems.filter(s => s.enabled).length}/${currentSystems.length}):`);
+  console.log(`\n[Tick] Active systems (${currentSystems.filter(s => s.active).length}/${currentSystems.length}):`);
   for (const sys of currentSystems) {
-    const status = sys.enabled ? "✓" : "○";
+    const status = sys.active ? "✓" : "○";
     console.log(`  ${status} ${sys.name} (${sys.frequency}ms)`);
   }
 }
@@ -448,7 +452,7 @@ function generateFinalReport(state: SimulationState): void {
   const systems = listSystems(state.systemRegistry);
   console.log(`\n📊 SYSTEMS (${systems.length} total):`);
   for (const sys of systems) {
-    console.log(`  ${sys.enabled ? "✓" : "○"} ${sys.name} - ${sys.description?.slice(0, 50)}...`);
+    console.log(`  ${sys.active ? "✓" : "○"} ${sys.name} - ${sys.description?.slice(0, 50)}...`);
   }
 
   // Spirits

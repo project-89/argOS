@@ -1,0 +1,8 @@
+{
+  "name": "Perishable",
+  "description": "Perishability state of food items",
+  "properties": {
+    "spoilRate": "number",
+    "freshness": "number"
+  }
+}

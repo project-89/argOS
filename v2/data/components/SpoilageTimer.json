@@ -1,0 +1,7 @@
+{
+  "name": "SpoilageTimer",
+  "description": "Tracks food spoilage over time",
+  "properties": {
+    "timer": "number"
+  }
+}

@@ -1,5 +1,6 @@
 import type { World } from "../../ecs/world";
 import type { SystemContext } from "../system-loader";
+import { getRoomForEntity } from "../../ecs/location";
 
 export const name = "TensionBuildupSystem";
 export const description = "Increases localized tension in rooms with multiple diverse agents.";
@@ -11,16 +12,14 @@ export function run(world: World, ctx: SystemContext): void {
   if (!Tension) return;
   
   const { Room, Agent, Name } = ctx.components;
-  const { OccupiesRoom } = ctx.relations;
-  
+  const agents = Array.from(ctx.query(world, [Agent]));
   const rooms = Array.from(ctx.query(world, [Room]));
   
   for (const roomEid of rooms) {
       if (Tension.level[roomEid] === undefined) continue;
   
       // Find agents in this room
-      const occupants = ctx.getRelationTargets(world, roomEid, OccupiesRoom);
-      const agentsInRoom = occupants.filter(eid => ctx.components.Agent.active[eid]);
+      const agentsInRoom = agents.filter(eid => Agent.active[eid] && getRoomForEntity(world, eid) === roomEid);
   
       if (agentsInRoom.length > 1) {
           // Count unique roles to simulate "different temperaments"

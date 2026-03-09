@@ -14,10 +14,10 @@
  */
 
 import type { World } from "../ecs/world";
-import { query, getRelationTargets, hasComponent } from "bitecs";
-import { Name, StimulusSource, Agent } from "../ecs/components";
-import { OccupiesRoom, Contains } from "../ecs/relations";
-import { broadcastToRoom, queueStimulus } from "../cognition/cognition-system";
+import { query } from "bitecs";
+import { Name, StimulusSource } from "../ecs/components";
+import { getRoomForEntity } from "../ecs/location";
+import { broadcastToRoom } from "../cognition/cognition-system";
 import type { SensoryModality } from "../cognition/sensory-system";
 
 export const name = "AmbientStimulusSystem";
@@ -129,7 +129,7 @@ export function run(world: World, tick: number): void {
     const modality = getModality(stimType);
 
     // Find what room this source is in
-    const roomEid = findRoomContaining(world, sourceEid);
+    const roomEid = getRoomForEntity(world, sourceEid);
 
     if (roomEid !== undefined) {
       // Broadcast to all agents in the room
@@ -141,33 +141,6 @@ export function run(world: World, tick: number): void {
       });
     }
   }
-}
-
-/**
- * Find what room contains this entity
- */
-function findRoomContaining(world: World, eid: number): number | undefined {
-  // Check if entity occupies a room directly
-  const occupiedRooms = getRelationTargets(world, eid, OccupiesRoom);
-  if (occupiedRooms.length > 0) {
-    return occupiedRooms[0];
-  }
-
-  // Check if entity is contained in a room
-  // We need to find rooms and check their Contains relation
-  // For simplicity, query all entities and check Contains
-  const allEntities = Array.from(query(world, []));
-
-  for (const containerEid of allEntities) {
-    const contents = getRelationTargets(world, containerEid, Contains);
-    if (contents.includes(eid)) {
-      // This container has our entity - is it a room?
-      // For now, assume containers with Contains relation to stimulus sources are rooms
-      return containerEid;
-    }
-  }
-
-  return undefined;
 }
 
 /**

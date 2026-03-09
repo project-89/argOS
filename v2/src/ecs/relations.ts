@@ -4,6 +4,21 @@ export const ChildOf = createRelation(withAutoRemoveSubject);
 
 export const OccupiesRoom = createRelation(makeExclusive);
 
+/**
+ * Canonical containment/location relation.
+ * Exclusive: an entity can be located in only one container at a time.
+ */
+export const LocatedIn = createRelation(withAutoRemoveSubject, makeExclusive);
+
+// World/physical relations (used by WorldSchema + rendering)
+export const OnTopOf = createRelation(withAutoRemoveSubject, makeExclusive);
+export const OccupiedBy = createRelation(makeExclusive);
+export const OwnedBy = createRelation(makeExclusive);
+export const AdjacentTo = createRelation();
+
+// Legacy alias (kept for compatibility with older schema/content).
+export const ContainedIn = LocatedIn;
+
 export const Knows = createRelation(
   withStore(() => ({
     familiarity: [] as number[],
@@ -72,13 +87,25 @@ export const HasGoal = createRelation();
 
 export const HasPlan = createRelation();
 
+export const HasToolResult = createRelation();
+
 export const HasSchedule = createRelation(makeExclusive);
 
 export const HasReflectionState = createRelation(makeExclusive);
 
+// Optional non-location semantic relations (used by affordances/rules)
+export const SittingOn = createRelation(makeExclusive);
+export const SleepingOn = createRelation(makeExclusive);
+
 export const AllRelations = {
   ChildOf,
   OccupiesRoom,
+  LocatedIn,
+  OnTopOf,
+  OccupiedBy,
+  OwnedBy,
+  AdjacentTo,
+  ContainedIn,
   Knows,
   RelatesTo,
   Causes,
@@ -96,8 +123,11 @@ export const AllRelations = {
   HasConversation,
   HasGoal,
   HasPlan,
+  HasToolResult,
   HasSchedule,
   HasReflectionState,
+  SittingOn,
+  SleepingOn,
 };
 
 export type RelationName = keyof typeof AllRelations;

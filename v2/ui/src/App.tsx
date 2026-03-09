@@ -11,12 +11,14 @@ import { Header } from "./components/layout/Header";
 import { Dashboard } from "./components/panels/Dashboard";
 import { EventTimeline } from "./components/panels/EventTimeline";
 import { AgentsPanel } from "./components/panels/AgentsPanel";
+import { EntitiesPanel } from "./components/panels/EntitiesPanel";
 import { RoomsPanel } from "./components/panels/RoomsPanel";
 import { SystemsPanel } from "./components/panels/SystemsPanel";
 import { SpiritsPanel } from "./components/panels/SpiritsPanel";
 import { LogsPanel } from "./components/panels/LogsPanel";
 import { DaemonsPanel } from "./components/panels/DaemonsPanel";
 import { GodChat } from "./components/panels/GodChat";
+import { MapEditor } from "./components/MapEditor";
 
 function App() {
   const { activePanel } = useSimulationStore();
@@ -32,6 +34,8 @@ function App() {
         return <EventTimeline />;
       case "agents":
         return <AgentsPanel />;
+      case "entities":
+        return <EntitiesPanel />;
       case "rooms":
         return <RoomsPanel />;
       case "spirits":
@@ -42,6 +46,8 @@ function App() {
         return <LogsPanel />;
       case "daemons":
         return <DaemonsPanel />;
+      case "mapeditor":
+        return <MapEditor />;
       default:
         return <Dashboard />;
     }

@@ -1,9 +1,10 @@
 import type { World } from "./world";
 import { query, hasComponent, getRelationTargets, addEntity, addComponent, removeEntity, entityExists } from "bitecs";
 import { AllComponents, Name, Agent, Mind, StimulusSource, Stimulus, WorldMap, GridPosition, Goal, Memory, Belief, Thought, Impression } from "./components";
-import { AllRelations, OccupiesRoom, HasGoal, HasMemory, HasBelief, HasThought, HasImpression } from "./relations";
+import { AllRelations, HasGoal, HasMemory, HasBelief, HasThought, HasImpression } from "./relations";
 import { createAIContext, type AIContext } from "../ai/ai-context";
 import { moveEntity, isWalkable, getTile } from "../world/ascii-world";
+import { getDirectContainer, getRoomForEntity, listDirectContents } from "./location";
 
 /**
  * Safe wrapper for getRelationTargets that filters out non-existent entities.
@@ -51,6 +52,44 @@ export interface SystemDefinition {
   running?: boolean;
 }
 
+export interface SystemTelemetry {
+  systemName: string;
+  runs: number;
+  totalDurationMs: number;
+  lastDurationMs: number;
+  totalEmits: number;
+  totalLogs: number;
+  lastEmitCount: number;
+  lastLogCount: number;
+  lastTick: number;
+  lastTimestamp: number;
+}
+
+const systemTelemetry = new Map<string, SystemTelemetry>();
+
+export function getSystemTelemetrySnapshot(): SystemTelemetry[] {
+  return Array.from(systemTelemetry.values()).map((t) => ({ ...t }));
+}
+
+function getOrCreateTelemetry(systemName: string): SystemTelemetry {
+  const existing = systemTelemetry.get(systemName);
+  if (existing) return existing;
+  const fresh: SystemTelemetry = {
+    systemName,
+    runs: 0,
+    totalDurationMs: 0,
+    lastDurationMs: 0,
+    totalEmits: 0,
+    totalLogs: 0,
+    lastEmitCount: 0,
+    lastLogCount: 0,
+    lastTick: 0,
+    lastTimestamp: 0,
+  };
+  systemTelemetry.set(systemName, fresh);
+  return fresh;
+}
+
 export interface GridContext {
   moveEntity: (world: World, mapEid: number, eid: number, dx: number, dy: number) => boolean;
   isWalkable: (world: World, mapEid: number, x: number, y: number) => boolean;
@@ -60,10 +99,16 @@ export interface GridContext {
 
 export interface GoalData {
   description: string;
+  // Optional typed goal contract fields (backward-compatible)
+  kind?: string;
+  paramsJson?: string;
+  successJson?: string;
+  signature?: string;
   priority?: number;
   status?: string;
   progress?: number;
   deadline?: number;
+  createdAt?: number;
 }
 
 export interface MemoryData {
@@ -109,6 +154,12 @@ export interface CognitiveContext {
   removeGoal: (world: World, eid: number) => void;
 }
 
+export interface LocationContext {
+  getDirectContainer: typeof getDirectContainer;
+  getRoomForEntity: typeof getRoomForEntity;
+  listDirectContents: typeof listDirectContents;
+}
+
 export interface SystemContext {
   tick: number;
   delta: number;
@@ -125,6 +176,7 @@ export interface SystemContext {
   relations: typeof AllRelations;
   ai: AIContext;
   grid: GridContext;
+  location: LocationContext;
   cognitive: CognitiveContext;
 }
 
@@ -267,10 +319,15 @@ function createCognitiveContext(): CognitiveContext {
       addComponent(world, goalEid, Goal);
       addComponent(world, agentEid, HasGoal(goalEid));
       Goal.description[goalEid] = data.description;
+      if (data.kind !== undefined) Goal.kind[goalEid] = data.kind;
+      if (data.paramsJson !== undefined) Goal.paramsJson[goalEid] = data.paramsJson;
+      if (data.successJson !== undefined) Goal.successJson[goalEid] = data.successJson;
+      if (data.signature !== undefined) Goal.signature[goalEid] = data.signature;
       Goal.priority[goalEid] = data.priority ?? 5;
       Goal.status[goalEid] = data.status ?? "active";
       Goal.progress[goalEid] = data.progress ?? 0;
       Goal.deadline[goalEid] = data.deadline ?? 0;
+      Goal.createdAt[goalEid] = data.createdAt ?? Date.now();
       return goalEid;
     },
     createMemory: (world: World, agentEid: number, data: MemoryData): number => {
@@ -325,10 +382,15 @@ function createCognitiveContext(): CognitiveContext {
         eid,
         data: {
           description: Goal.description[eid],
+          kind: Goal.kind[eid],
+          paramsJson: Goal.paramsJson[eid],
+          successJson: Goal.successJson[eid],
+          signature: Goal.signature[eid],
           priority: Goal.priority[eid],
           status: Goal.status[eid],
           progress: Goal.progress[eid],
           deadline: Goal.deadline[eid],
+          createdAt: Goal.createdAt[eid],
         }
       }));
     },
@@ -359,10 +421,15 @@ function createCognitiveContext(): CognitiveContext {
     },
     updateGoal: (eid: number, updates: Partial<GoalData>): void => {
       if (updates.description !== undefined) Goal.description[eid] = updates.description;
+      if (updates.kind !== undefined) Goal.kind[eid] = updates.kind;
+      if (updates.paramsJson !== undefined) Goal.paramsJson[eid] = updates.paramsJson;
+      if (updates.successJson !== undefined) Goal.successJson[eid] = updates.successJson;
+      if (updates.signature !== undefined) Goal.signature[eid] = updates.signature;
       if (updates.priority !== undefined) Goal.priority[eid] = updates.priority;
       if (updates.status !== undefined) Goal.status[eid] = updates.status;
       if (updates.progress !== undefined) Goal.progress[eid] = updates.progress;
       if (updates.deadline !== undefined) Goal.deadline[eid] = updates.deadline;
+      if (updates.createdAt !== undefined) Goal.createdAt[eid] = updates.createdAt;
     },
     completeGoal: (world: World, eid: number): void => {
       Goal.status[eid] = "completed";
@@ -375,6 +442,11 @@ function createCognitiveContext(): CognitiveContext {
 }
 
 const sharedCognitiveContext = createCognitiveContext();
+const sharedLocationContext: LocationContext = {
+  getDirectContainer,
+  getRoomForEntity,
+  listDirectContents,
+};
 
 function createSystemContext(world: World, registry: SystemRegistry, tick: number, delta: number): SystemContext {
   return {
@@ -399,6 +471,7 @@ function createSystemContext(world: World, registry: SystemRegistry, tick: numbe
     relations: AllRelations,
     ai: sharedAIContext,
     grid: sharedGridContext,
+    location: sharedLocationContext,
     cognitive: sharedCognitiveContext,
   };
 }
@@ -414,7 +487,33 @@ export function runSystems(world: World, registry: SystemRegistry, tick: number,
 
     try {
       if (system.compiledFn) {
-        system.compiledFn(world, context);
+        const telemetry = getOrCreateTelemetry(system.name);
+        telemetry.lastEmitCount = 0;
+        telemetry.lastLogCount = 0;
+        telemetry.lastTick = tick;
+        telemetry.lastTimestamp = now;
+
+        const ctxForSystem: SystemContext = {
+          ...context,
+          emit: (type, data) => {
+            telemetry.lastEmitCount++;
+            telemetry.totalEmits++;
+            context.emit(type, data);
+          },
+          log: (message) => {
+            telemetry.lastLogCount++;
+            telemetry.totalLogs++;
+            context.log(`[${system.name}] ${message}`);
+          },
+        };
+
+        const started = Date.now();
+        system.compiledFn(world, ctxForSystem);
+        const duration = Date.now() - started;
+        telemetry.runs++;
+        telemetry.lastDurationMs = duration;
+        telemetry.totalDurationMs += duration;
+
         system.lastRun = now;
       }
     } catch (error) {
@@ -438,8 +537,33 @@ export function runAsyncSystems(world: World, registry: SystemRegistry, tick: nu
       system.running = true;
       system.lastRun = now;
 
-      Promise.resolve(system.compiledFn(world, context))
+      const telemetry = getOrCreateTelemetry(system.name);
+      telemetry.lastEmitCount = 0;
+      telemetry.lastLogCount = 0;
+      telemetry.lastTick = tick;
+      telemetry.lastTimestamp = now;
+
+      const ctxForSystem: SystemContext = {
+        ...context,
+        emit: (type, data) => {
+          telemetry.lastEmitCount++;
+          telemetry.totalEmits++;
+          context.emit(type, data);
+        },
+        log: (message) => {
+          telemetry.lastLogCount++;
+          telemetry.totalLogs++;
+          context.log(`[${system.name}] ${message}`);
+        },
+      };
+
+      const started = Date.now();
+      Promise.resolve(system.compiledFn(world, ctxForSystem))
         .then(() => {
+          const duration = Date.now() - started;
+          telemetry.runs++;
+          telemetry.lastDurationMs = duration;
+          telemetry.totalDurationMs += duration;
           system.running = false;
         })
         .catch((error) => {
@@ -511,10 +635,12 @@ export const BUILTIN_SYSTEMS: Record<string, Omit<SystemDefinition, 'lastRun'>> 
     name: "StimulusEmission",
     description: "Emits stimuli from StimulusSource entities to agents in the same room",
     pseudocode: `
-      FOR_EACH entity WITH StimulusSource, OccupiesRoom(room):
-        IF now - lastEmit > interval:
-          FOR_EACH agent WITH Agent, OccupiesRoom(room):
-            EMIT stimulus: { type, content: template, source: entity.name, target: agent }
+      FOR_EACH entity WITH StimulusSource:
+        room = getRoomForEntity(entity)
+        IF room AND now - lastEmit > interval:
+          FOR_EACH agent WITH Agent:
+            IF getRoomForEntity(agent) == room:
+              EMIT stimulus: { type, content: template, source: entity.name, target: agent }
           SET lastEmit = now
     `,
     frequency: 1000,
@@ -569,16 +695,13 @@ export function createStimulusEmissionSystem(): SystemDefinition {
         const template = StimulusSource.template[sourceEid];
         const sourceName = Name.value[sourceEid];
 
-        const roomTargets = ctx.getRelationTargets(world, sourceEid, OccupiesRoom);
-        if (roomTargets.length === 0) continue;
-
-        const roomEid = roomTargets[0];
+        const roomEid = getRoomForEntity(world, sourceEid);
+        if (roomEid === undefined) continue;
         const roomName = Name.value[roomEid];
 
         const agents = Array.from(ctx.query(world, [Agent]));
         for (const agentEid of agents) {
-          const agentRooms = ctx.getRelationTargets(world, agentEid, OccupiesRoom);
-          if (agentRooms.includes(roomEid)) {
+          if (getRoomForEntity(world, agentEid) === roomEid) {
             const agentName = Name.value[agentEid];
             ctx.emit("stimulus", {
               type: stimulusType,
