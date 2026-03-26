@@ -409,6 +409,12 @@ export function goalEvaluationSystem(world: World, ctx: SystemContext): void {
         }
       }
 
+      // Goal-aware BT compilation: compile the action sequence into a reusable skill
+      try {
+        const { onGoalCompleted } = require("../cognition/goal-learning");
+        onGoalCompleted(world, agentEid, goalEid);
+      } catch { /* goal-learning not available */ }
+
       ctx.emit("goal_completed", {
         agent: Name.value[agentEid],
         goal: Goal.description[goalEid] || "",

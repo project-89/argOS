@@ -28,6 +28,7 @@ import { getMovementTarget } from "../systems/builtin-systems";
 import { ensureOfficeDeviceSandboxDir } from "../office-tools/sandbox";
 import { recordPolicyAction } from "./policy-metrics";
 import { captureLLMDecision } from "./bt-compiler";
+import { trackGoalAction, formatAspirationsForContext } from "./goal-learning";
 
 const model = agentModel;
 
@@ -370,6 +371,16 @@ function normalizeSelectedAction(world: World, agentEid: number, action: AgentAc
     recordPolicyAction(agentEid, action.type, wasLlmFallback);
   } catch {}
 
+  // Track action against active goals for intent-aware skill compilation
+  try {
+    trackGoalAction(world, agentEid, {
+      type: action.type,
+      target: action.target,
+      content: action.content,
+      affordance: action.type === "interact" ? action.content?.split(/\s+/)[0] : undefined,
+    });
+  } catch {}
+
   return action;
 }
 
@@ -672,7 +683,9 @@ ${formatPlansForContext(world, eid)}
 
 ${formatScheduleForContext(world, eid)}
 
-${formatInsightsForContext(world, eid)}`;
+${formatInsightsForContext(world, eid)}
+
+${formatAspirationsForContext(eid)}`;
 }
 
 export async function agentThink(world: World, eid: number): Promise<AgentAction> {
