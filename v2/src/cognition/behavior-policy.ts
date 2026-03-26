@@ -844,20 +844,8 @@ export function getBehaviorPolicyTree(world: World, agentEid: number): BehaviorN
   return safeParseTree(BehaviorPolicy.treeJson[agentEid] || "");
 }
 
-// Per-agent evaluator history: tracks recent actions to ensure diversity
+// Per-agent evaluator history (kept for clearPolicyEvalHistory API compat)
 const policyEvalHistory: Map<number, string[]> = new Map();
-const EVAL_HISTORY_SIZE = 6;
-const MAX_FREQUENCY_RATIO = 0.5; // suppress if action type is > 50% of recent history
-
-// Fallback actions for when anti-repetition suppresses the primary choice.
-// Evaluated in order; first one not recently used wins.
-const FALLBACK_ACTIONS: PolicyAction[] = [
-  { type: "observe" },
-  { type: "think", content: "I consider what to do next..." },
-  { type: "reflect" },
-  { type: "observe" },
-  { type: "think", content: "I take stock of my surroundings..." },
-];
 
 export function evaluateBehaviorPolicy(world: World, agentEid: number): PolicyEvalResult {
   const trace: string[] = [];
@@ -865,80 +853,7 @@ export function evaluateBehaviorPolicy(world: World, agentEid: number): PolicyEv
   const tree = getBehaviorPolicyTree(world, agentEid);
   if (!tree) return { kind: "none", trace: ["no_policy"] };
 
-  const result = evalNode(world, agentEid, tree, trace);
-
-  if (result.kind === "action") {
-    const history = policyEvalHistory.get(agentEid) || [];
-    const actionType = result.action.type;
-
-    // Count how often this action type appears in recent history
-    const typeCount = history.filter(h => h.split(":")[0] === actionType).length;
-    const frequency = history.length > 0 ? typeCount / history.length : 0;
-
-    // Also check consecutive repeats (even at low frequency, 3+ in a row is bad)
-    let consecutive = 0;
-    for (let i = history.length - 1; i >= 0; i--) {
-      if (history[i].split(":")[0] === actionType) consecutive++;
-      else break;
-    }
-
-    const shouldSuppress = (history.length >= 3 && frequency >= MAX_FREQUENCY_RATIO) || consecutive >= 2;
-
-    if (shouldSuppress) {
-      const actionSig = `${actionType}:${result.action.target || ""}`;
-      trace.push(`anti-repeat:suppressed:${actionSig}(freq=${(frequency*100).toFixed(0)}%,consec=${consecutive})`);
-
-      // Instead of returning "none", pick a fallback that differs from recent history.
-      // First try static fallbacks, then dynamic ones (interact_any_affordance, wander).
-      const recentTypes = new Set(history.map(h => h.split(":")[0]));
-      let fallback = FALLBACK_ACTIONS.find(a => !recentTypes.has(a.type));
-
-      if (!fallback) {
-        // All static fallbacks exhausted — try dynamic actions
-        if (!recentTypes.has("interact")) {
-          // Try interact_any_affordance
-          const dynamicResult = evalNode(world, agentEid,
-            { type: "interact_any_affordance", scope: "room" }, [...trace]);
-          if (dynamicResult.kind === "action") {
-            const dynSig = `${dynamicResult.action.type}:${dynamicResult.action.target || ""}`;
-            history.push(dynSig);
-            if (history.length > EVAL_HISTORY_SIZE) history.shift();
-            policyEvalHistory.set(agentEid, history);
-            trace.push("anti-repeat:dynamic:interact_any");
-            return dynamicResult;
-          }
-        }
-        if (!recentTypes.has("move")) {
-          // Try wander
-          const wanderResult = evalNode(world, agentEid, { type: "wander" }, [...trace]);
-          if (wanderResult.kind === "action") {
-            const wandSig = `move:${wanderResult.action.target || ""}`;
-            history.push(wandSig);
-            if (history.length > EVAL_HISTORY_SIZE) history.shift();
-            policyEvalHistory.set(agentEid, history);
-            trace.push("anti-repeat:dynamic:wander");
-            return wanderResult;
-          }
-        }
-        // Last resort: random static fallback
-        fallback = FALLBACK_ACTIONS[Math.floor(Math.random() * FALLBACK_ACTIONS.length)];
-      }
-
-      const fallbackSig = `${fallback.type}:${fallback.target || ""}`;
-      history.push(fallbackSig);
-      if (history.length > EVAL_HISTORY_SIZE) history.shift();
-      policyEvalHistory.set(agentEid, history);
-      trace.push(`anti-repeat:fallback:${fallback.type}`);
-      return { kind: "action", action: fallback, trace };
-    }
-
-    const successSig = `${actionType}:${result.action.target || ""}`;
-    history.push(successSig);
-    if (history.length > EVAL_HISTORY_SIZE) history.shift();
-    policyEvalHistory.set(agentEid, history);
-  }
-
-  return result;
+  return evalNode(world, agentEid, tree, trace);
 }
 
 /** Clear evaluator anti-repetition history for an agent (e.g., after policy change). */

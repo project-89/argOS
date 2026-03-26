@@ -1922,6 +1922,10 @@ export function executeActions(
           broadcastSound(world, roomEid, `${name} says: "${action.content}"`, name, eid);
           console.log(`💬 ${name}: "${action.content}"`);
 
+          // Compile LLM speak decision into BT branch
+          resolveDecision(world, eid, true);
+          trackActionForSkill(eid, { type: "speak", content: validatedAction.content }, true);
+
           // Success feedback for cognition/harness scoring.
           queueStimulus({
             targetEid: eid,
@@ -2450,6 +2454,10 @@ export function executeActions(
                 broadcastVisual(world, roomEid, `${name} prepares to head toward ${destName}`, name, eid);
 
                 console.log(`🎯 ${name} intends to go to ${destName} (goal created, GoalPursuitSystem will execute)`);
+
+                // Compile LLM move decision into BT branch
+                resolveDecision(world, eid, true);
+                trackActionForSkill(eid, { type: "move", target: destName }, true);
 
                 // Notify agent of their plan (cognitive feedback)
                 queueStimulus({
