@@ -8,7 +8,7 @@ import { getAvailableAffordances } from "../world/affordance-availability";
 import { getMovementTarget } from "../systems/builtin-systems";
 
 export type PolicyAction = {
-  type: "speak" | "observe" | "move" | "interact" | "think" | "wait";
+  type: "speak" | "observe" | "move" | "interact" | "think" | "wait" | "rest" | "reflect";
   target?: string;
   content?: string;
 };

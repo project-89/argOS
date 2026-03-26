@@ -48,6 +48,7 @@ import {
   type ValidAction,
 } from "../spirits/consistency-spirit";
 import { recordFailedInteraction } from "../spirits/world-crafter-spirit";
+import { recordOutcome } from "./policy-learning";
 import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "./procedural-skills";
 import { compileCompletedPlanToProceduralMacro } from "./plan-compiler";
 import { setGoalContract } from "./goal-contract";
@@ -2254,6 +2255,15 @@ export function executeActions(
 	            // Record successful action for memory/self-awareness
 	            recordSuccessfulAction(eid, `${affordanceName} ${targetName}`);
 
+              // Reinforce behavior tree — successful affordance use increases weight
+              recordOutcome(world, {
+                agentEid: eid,
+                action: { type: "interact", target: targetName, content: affordanceName },
+                affordance: affordanceName,
+                target: targetName,
+                success: true,
+              });
+
             // Broadcast visual to others in room - they can see the interaction!
             if (roomEid !== undefined) {
               broadcastVisual(world, roomEid, `${name} ${affordanceName}s the ${targetName}.`, name, eid);
@@ -2292,6 +2302,16 @@ export function executeActions(
             actionSucceededForPlan = false;
 	            // Action failed - notify actor with HELPFUL feedback
 	            console.log(`❌ ${name} failed to ${affordanceName} ${action.target}: ${result.message}`);
+
+              // Penalize behavior tree — failed affordance use decreases weight
+              recordOutcome(world, {
+                agentEid: eid,
+                action: { type: "interact", target: action.target, content: affordanceName },
+                affordance: affordanceName,
+                target: action.target,
+                success: false,
+                detail: result.message,
+              });
 
 	            // Build helpful error message with ACTIONABLE hints
 	            const targetName = Name.value[targetEid] || action.target;

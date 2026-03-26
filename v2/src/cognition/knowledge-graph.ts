@@ -70,7 +70,46 @@ export function addMemory(
 
   pruneMemoriesIfNeeded(world, agentEid, 50);
 
+  // If the memory is important enough, grow a behavior tree branch for it
+  if (data.importance >= 70) {
+    try {
+      const { growMemoryBranch } = require("./policy-learning");
+      // Extract a keyword from the memory content for the has_memory condition
+      const keyword = extractMemoryKeyword(data.content);
+      if (keyword) {
+        // Choose a response action based on emotional valence
+        const responseAction = data.emotionalValence < -0.3
+          ? { type: "move" as const, target: undefined, content: undefined } // flee/avoid for negative memories
+          : data.emotionalValence > 0.3
+            ? { type: "observe" as const, target: undefined, content: undefined } // pay attention for positive memories
+            : { type: "think" as const, content: `I remember: ${keyword}` }; // reflect for neutral
+        growMemoryBranch(world, agentEid, keyword, responseAction);
+      }
+    } catch { /* policy-learning not available */ }
+  }
+
   return memoryEid;
+}
+
+/** Extract a salient keyword from memory content for has_memory conditions */
+function extractMemoryKeyword(content: string): string | null {
+  const text = String(content || "").trim().toLowerCase();
+  if (text.length < 5) return null;
+  // Look for emotionally significant words
+  const significantPatterns = [
+    /\b(attack|fight|threat|danger|kill|death|murder|stole|theft|rob|betray)\b/,
+    /\b(friend|ally|trust|help|save|gift|kind|love|marry)\b/,
+    /\b(quest|mission|task|order|promise|oath|debt|owe)\b/,
+    /\b(secret|discover|found|reveal|hidden|treasure|map)\b/,
+    /\b(fire|flood|storm|earthquake|plague|curse|monster)\b/,
+  ];
+  for (const pattern of significantPatterns) {
+    const match = text.match(pattern);
+    if (match) return match[1];
+  }
+  // Fallback: use the first 2-3 significant words
+  const words = text.split(/\s+/).filter(w => w.length > 4);
+  return words.slice(0, 2).join(" ") || null;
 }
 
 export function pruneMemoriesIfNeeded(world: World, agentEid: number, maxMemories: number): void {
