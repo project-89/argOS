@@ -7,6 +7,7 @@
 import "dotenv/config";
 import { createArgosWorld } from "./ecs/world";
 import { initializePrefabs } from "./ecs/prefabs";
+import { initializeRegistry } from "./ecs/component-registry";
 import {
   createGodAgent,
   godThink,
@@ -43,7 +44,17 @@ import type {
   GodCommandInjection,
   SpiritMessageInjection,
   SimulationStartInjection,
+  SimulationSaveInjection,
+  SimulationLoadInjection,
 } from "./bus/simulation-bus";
+import {
+  createSimulation as createSimulationInstance,
+  listSimulations,
+  loadSimulation,
+  setCurrentSimulation,
+  getCurrentSimulation,
+  type SimulationInstance,
+} from "./persistence/simulation-manager";
 import { query, getRelationTargets, hasComponent } from "bitecs";
 import { Agent, Room, Name, Description, Mind, StimulusSource, Memory, Thought, GridPosition } from "./ecs/components";
 import { HasMemory, HasThought } from "./ecs/relations";
@@ -80,6 +91,7 @@ async function main() {
 
   // Create empty world
   const world = createArgosWorld("Empty World");
+  initializeRegistry(world);
   initializePrefabs(world);
 
   // Create god agent with minimal config (no preset simulation)
@@ -118,6 +130,8 @@ async function main() {
   let tick = 0;
   let paused = true; // Start paused - simulation only runs when user starts it
   let spiritSystemStarted = false; // Track if spirit system has been started
+  let currentSim: SimulationInstance | null = null; // Persistence manager
+  const AUTOSAVE_TICK_INTERVAL = 50; // Autosave every 50 ticks
   const emittedSpiritObsCount = new Map<number, number>();
   const emittedSpiritOutboxCount = new Map<number, number>();
 
@@ -457,23 +471,8 @@ async function main() {
 
       switch (evt.type) {
         case "agent_moved": {
-          const agentName = String(data.agent || "");
-          const agentId = agentName ? findAgentEidByName(agentName) : undefined;
-          if (!agentName || agentId === undefined) break;
-          const from = data.from ? `${data.from.x},${data.from.y}` : "";
-          const to = data.to ? `${data.to.x},${data.to.y}` : "";
-          const target = data.target ? String(data.target) : undefined;
-          const key = `moved:${agentId}:${from}->${to}:${target || ""}:${Math.floor(ts / 250)}`;
-          if (!shouldEmitEcsEvent(key, 500)) break;
-          busEmit({
-            type: "agent:action",
-            timestamp: ts,
-            agentId,
-            agentName,
-            action: "move",
-            target,
-            result: from && to ? `${from} -> ${to}` : undefined,
-          });
+          // Grid position updates are noisy — don't emit as agent:action.
+          // The cognition system already emits the move intent, and movement_complete signals arrival.
           break;
         }
         case "movement_complete": {
@@ -604,6 +603,16 @@ async function main() {
 
         // Feed action trace into SpiritSystem so Narrative/Coherence spirits can observe grounded behavior
         recordActionEvent(name, action.type, action.content || "", action.target);
+
+        // Persist action events to simulation log
+        if (currentSim) {
+          currentSim.logEvent("agent_action", {
+            agent: name,
+            action: action.type,
+            target: action.target,
+            content: action.content,
+          });
+        }
       }
 
       // Execute the actions
@@ -627,12 +636,42 @@ async function main() {
     emitSystemExecutionTelemetry();
     emitSystemLogs();
     emitSystemErrors();
+
+    // Persistence: log events and autosave periodically
+    if (currentSim) {
+      for (const evt of ecsEvents) {
+        currentSim.logEvent(evt.type, evt.data);
+      }
+      if (tick % AUTOSAVE_TICK_INTERVAL === 0) {
+        const spiritState = getSpiritSystemState();
+        currentSim.tickSave(tick, world, god.systemRegistry, spiritState?.registry).catch(
+          err => console.error("[Persistence] Autosave failed:", err)
+        );
+      }
+    }
   }, ECS_TICK_MS);
 
   // Emit world state periodically (UI rendering + dashboards)
+  // Always emit so the UI can display systems/spirits even when paused.
+  let lastPausedEmit = 0;
+  let lastLogFlush = 0;
   setInterval(() => {
-    if (paused) return;
+    if (paused) {
+      // When paused, emit at a slower rate (every 2s) so the UI stays informed
+      const now = Date.now();
+      if (now - lastPausedEmit < 2000) return;
+      lastPausedEmit = now;
+    }
     emitWorldState();
+
+    // Flush narrative and event logs to disk every 10s
+    const now = Date.now();
+    if (currentSim && now - lastLogFlush > 10_000) {
+      lastLogFlush = now;
+      currentSim.flushLogs().catch(err =>
+        console.error("[Persistence] Log flush failed:", err)
+      );
+    }
   }, 500);
 
   // Run cognition cycle periodically (every 5 seconds when agents exist)
@@ -829,7 +868,7 @@ async function main() {
         emittedSpiritOutboxCount.set(spirit.eid, outbox.length);
       }
 
-      // Emit narrative prose if any
+      // Emit narrative prose if any, and persist to narrative log
       for (const prose of result.narrativeProse) {
         busEmit({
           type: "spirit:message",
@@ -841,56 +880,60 @@ async function main() {
           spiritName: "The Narrator",
           spiritId: narratorEid,
         } as any);
+
+        // Persist narrative prose to disk
+        if (currentSim) {
+          currentSim.appendNarrative(prose);
+        }
       }
 
       // Run World Crafter cycle - creates entities for failed agent interactions
-      // Also runs periodically to check for evolution opportunities
+      // Also runs proactive evolution checks to grow the world autonomously
       const state = getSpiritSystemState();
       if (state) {
         const pendingInteractions = getPendingInteractions();
-        const shouldRunCrafter = pendingInteractions.length > 0 ||
-          (Date.now() - (state as any).lastEvolutionCheck > 120000); // Run at least every 2 min
-
         if (pendingInteractions.length > 0) {
           console.log(`[WorldCrafter] Processing ${pendingInteractions.length} pending failed interactions...`);
         }
 
-        if (shouldRunCrafter) {
-          const crafterResult = await runWorldCrafterCycle(world, state.registry, god);
+        // Always run - the Crafter handles its own cadence for evolution checks
+        const crafterResult = await runWorldCrafterCycle(world, state.registry, god);
 
-          if (crafterResult.entitiesCreated > 0) {
-            console.log(`[WorldCrafter] Created ${crafterResult.entitiesCreated} entities`);
-            busEmit({
-              type: "spirit:message",
-              timestamp: Date.now(),
-              spiritName: "The Crafter",
-              content: `Materialized ${crafterResult.entitiesCreated} entities to meet agent needs`,
-              messageType: "creation",
-              priority: "normal",
-            });
-            // Emit updated world state after creating entities
-            emitWorldState();
-          }
-          if (crafterResult.recommendationsSent > 0) {
-            console.log(`[WorldCrafter] Sent ${crafterResult.recommendationsSent} system recommendations to The Weaver`);
-          }
-          if (crafterResult.evolutionProposalsSent > 0) {
-            console.log(`[WorldCrafter] Sent ${crafterResult.evolutionProposalsSent} evolution proposals to The Weaver`);
-            busEmit({
-              type: "spirit:message",
-              timestamp: Date.now(),
-              spiritName: "The Crafter",
-              content: `Proposed ${crafterResult.evolutionProposalsSent} world evolution(s) to address resource gaps`,
-              messageType: "evolution",
-              priority: "high",
-            });
-          }
+        if (crafterResult.entitiesCreated > 0) {
+          console.log(`[WorldCrafter] Created ${crafterResult.entitiesCreated} entities`);
+          busEmit({
+            type: "spirit:message",
+            timestamp: Date.now(),
+            spiritName: "The Crafter",
+            content: `Materialized ${crafterResult.entitiesCreated} entities to meet agent needs`,
+            messageType: "creation",
+            priority: "normal",
+          });
+          // Emit updated world state after creating entities
+          emitWorldState();
+        }
+        if (crafterResult.recommendationsSent > 0) {
+          console.log(`[WorldCrafter] Sent ${crafterResult.recommendationsSent} system recommendations to The Weaver`);
+        }
+        if (crafterResult.evolutionProposalsSent > 0) {
+          console.log(`[WorldCrafter] Sent ${crafterResult.evolutionProposalsSent} evolution proposals to The Weaver`);
+          busEmit({
+            type: "spirit:message",
+            timestamp: Date.now(),
+            spiritName: "The Crafter",
+            content: `Proposed ${crafterResult.evolutionProposalsSent} world evolution(s) to address resource gaps`,
+            messageType: "evolution",
+            priority: "high",
+          });
         }
 
         // Run The Steward cycle - populates rooms with entities
-        const pendingRoomRequests = getPendingRoomRequests();
-        if (pendingRoomRequests.length > 0) {
-          console.log(`[Steward] Processing ${pendingRoomRequests.length} room population requests...`);
+        // Runs every tick (not just when requests pending) so proactive room scanning works
+        {
+          const pendingRoomRequests = getPendingRoomRequests();
+          if (pendingRoomRequests.length > 0) {
+            console.log(`[Steward] Processing ${pendingRoomRequests.length} room population requests...`);
+          }
           const stewardResult = await runStewardCycle(world, state.registry);
 
           if (stewardResult.roomsPopulated > 0) {
@@ -1169,6 +1212,115 @@ async function main() {
     });
   });
 
+  // Register save/load handlers
+  server.bus.registerInjectionHandler("inject:simulation_save", async (msg) => {
+    const injection = msg as SimulationSaveInjection;
+    if (!currentSim) {
+      // Create a new simulation instance from current world state
+      currentSim = await createSimulationInstance({
+        name: injection.name || world.meta.name || "Manual Save",
+        description: "Manually saved simulation",
+        autosaveInterval: AUTOSAVE_TICK_INTERVAL,
+        snapshotInterval: 200,
+        maxSnapshots: 10,
+      });
+      setCurrentSimulation(currentSim);
+    }
+
+    try {
+      currentSim.updateTick(tick);
+      const spiritState = getSpiritSystemState();
+      await currentSim.saveAll(world, god.systemRegistry, spiritState?.registry);
+
+      busEmit({
+        type: "simulation:saved",
+        timestamp: Date.now(),
+        simulationId: currentSim.id,
+        simulationName: currentSim.name,
+        tick,
+      });
+      console.log(`[Persistence] Saved simulation "${currentSim.name}" at tick ${tick}`);
+    } catch (error) {
+      console.error("[Persistence] Save failed:", error);
+      busEmit({
+        type: "simulation:error",
+        timestamp: Date.now(),
+        error: `Save failed: ${String(error)}`,
+      });
+    }
+  });
+
+  server.bus.registerInjectionHandler("inject:simulation_load", async (msg) => {
+    const injection = msg as SimulationLoadInjection;
+    console.log(`[Persistence] Loading simulation: ${injection.simulationId}`);
+
+    try {
+      // Pause while loading
+      paused = true;
+
+      // Load the simulation instance
+      const loadedSim = await loadSimulation(injection.simulationId);
+      currentSim = loadedSim;
+      setCurrentSimulation(currentSim);
+
+      // Load world state into current world
+      await currentSim.loadWorld(world, god.systemRegistry);
+      tick = currentSim.currentTick;
+
+      // Start spirit system if not started
+      if (!spiritSystemStarted) {
+        startSpiritSystem();
+        spiritSystemStarted = true;
+      }
+
+      paused = false;
+
+      busEmit({
+        type: "simulation:status",
+        timestamp: Date.now(),
+        status: "running",
+        tick,
+      });
+      busEmit({
+        type: "simulation:loaded",
+        timestamp: Date.now(),
+        simulationId: currentSim.id,
+        simulationName: currentSim.name,
+        tick,
+      });
+
+      emitWorldState();
+      console.log(`[Persistence] Loaded simulation "${currentSim.name}" at tick ${tick}`);
+    } catch (error) {
+      console.error("[Persistence] Load failed:", error);
+      busEmit({
+        type: "simulation:error",
+        timestamp: Date.now(),
+        error: `Load failed: ${String(error)}`,
+      });
+    }
+  });
+
+  server.bus.registerInjectionHandler("inject:simulation_list_saves", async () => {
+    try {
+      const saves = await listSimulations();
+      busEmit({
+        type: "simulation:saves_list",
+        timestamp: Date.now(),
+        saves: saves.map(s => ({
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          createdAt: s.createdAt,
+          lastSavedAt: s.lastSavedAt,
+          currentTick: s.currentTick,
+        })),
+      });
+    } catch (error) {
+      console.error("[Persistence] List saves failed:", error);
+    }
+  });
+
   // Register simulation start handler - creates entities from map data
   server.bus.registerInjectionHandler("inject:simulation_start", async (msg) => {
     const injection = msg as SimulationStartInjection;
@@ -1188,6 +1340,17 @@ async function main() {
     console.log(`[Simulation] Starting from map: ${mapData.name}`);
 
     try {
+      // Create a persistence instance for this simulation
+      currentSim = await createSimulationInstance({
+        name: mapData.name || "Untitled Simulation",
+        description: `Simulation from map: ${mapData.name}`,
+        autosaveInterval: AUTOSAVE_TICK_INTERVAL,
+        snapshotInterval: 200,
+        maxSnapshots: 10,
+      });
+      setCurrentSimulation(currentSim);
+      console.log(`[Persistence] Created simulation: ${currentSim.id}`);
+
       const compiled = compileMapIntoWorld(world, mapData as any);
       console.log(
         `[Simulation] Map compiled: rooms=${compiled.roomByZoneId.size + 1}, agents=${compiled.spawnedAgentEids.length}, objects=${compiled.spawnedObjectEids.length}, newTypes=${compiled.definedObjectTypes.length}`
@@ -1274,6 +1437,70 @@ async function main() {
   });
 
   server.start();
+
+  // Emit initial world state so the UI can display systems/spirits immediately on connect
+  emitWorldState();
+
+  // ---- Graceful Shutdown ----
+  let isShuttingDown = false;
+
+  const shutdown = async (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n[Shutdown] Received ${signal}, shutting down gracefully...`);
+
+    try {
+      // 1. Stop simulation loop so no new ticks fire
+      console.log("[Shutdown] Stopping simulation...");
+      paused = true;
+
+      // 2. Wait briefly for any in-flight AI tasks (cognition, spirits, daemons)
+      console.log("[Shutdown] Waiting for in-flight tasks (10s timeout)...");
+      const inFlightDone = () => !runningCognition && !runningSpiritTick && !runningDaemonTick;
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          if (inFlightDone()) return resolve();
+          const check = setInterval(() => {
+            if (inFlightDone()) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 250);
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+      ]);
+
+      // 3. Save simulation state if persistence is active
+      if (currentSim) {
+        console.log("[Shutdown] Saving simulation state...");
+        try {
+          const spiritState = getSpiritSystemState();
+          await currentSim.saveAll(world, god.systemRegistry, spiritState?.registry);
+          await currentSim.flushLogs();
+          console.log(`[Shutdown] Saved simulation "${currentSim.name}" at tick ${tick}`);
+        } catch (e: any) {
+          console.error("[Shutdown] Save failed:", e.message);
+        }
+      }
+
+      // 4. Disconnect WebSocket transport so clients get a clean close
+      console.log("[Shutdown] Disconnecting transport...");
+      try {
+        server.busTransport.disconnect();
+      } catch {
+        // Ignore -- transport may already be disconnected
+      }
+
+      console.log("[Shutdown] Clean shutdown complete.");
+      process.exit(0);
+    } catch (e: any) {
+      console.error("[Shutdown] Error during shutdown:", e.message);
+      process.exit(1);
+    }
+  };
+
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 
   console.log("\n✨ Server ready - use the UI to create a simulation\n");
 }

@@ -25,3 +25,4 @@
 
 export * from "./simulation-bus";
 export * from "./websocket-transport";
+export { RingBuffer } from "./ring-buffer";

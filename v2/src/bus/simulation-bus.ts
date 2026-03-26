@@ -29,6 +29,7 @@
  */
 
 import { EventEmitter } from "events";
+import { RingBuffer } from "./ring-buffer";
 
 // ============================================================================
 // Event Types
@@ -348,6 +349,24 @@ export interface SimulationStartInjection {
   map: ArgosMapData;
 }
 
+export interface SimulationSaveInjection {
+  type: "inject:simulation_save";
+  /** Optional name override for the save */
+  name?: string;
+}
+
+export interface SimulationLoadInjection {
+  type: "inject:simulation_load";
+  /** Simulation ID to load */
+  simulationId: string;
+  /** Optional snapshot tick to restore from */
+  snapshotTick?: number;
+}
+
+export interface SimulationListSavesInjection {
+  type: "inject:simulation_list_saves";
+}
+
 export type InjectionMessage =
   | GodCommandInjection
   | SpiritMessageInjection
@@ -356,7 +375,10 @@ export type InjectionMessage =
   | SimulationPauseInjection
   | SimulationResumeInjection
   | SimulationStopInjection
-  | SimulationStartInjection;
+  | SimulationStartInjection
+  | SimulationSaveInjection
+  | SimulationLoadInjection
+  | SimulationListSavesInjection;
 
 // ============================================================================
 // SimulationBus Class
@@ -365,13 +387,14 @@ export type InjectionMessage =
 export class SimulationBus extends EventEmitter {
   private subscriptions: Map<string, ChannelSubscription[]> = new Map();
   private injectionHandlers: Map<string, (msg: InjectionMessage) => Promise<void>> = new Map();
-  private eventBuffer: SimulationEvent[] = [];
+  private eventBuffer: RingBuffer<SimulationEvent>;
   private bufferEnabled: boolean = false;
-  private maxBufferSize: number = 1000;
+  private static readonly DEFAULT_BUFFER_CAPACITY = 10_000;
 
   constructor() {
     super();
     this.setMaxListeners(100); // Allow many subscribers
+    this.eventBuffer = new RingBuffer<SimulationEvent>(SimulationBus.DEFAULT_BUFFER_CAPACITY);
   }
 
   // -------------------------------------------------------------------------
@@ -395,8 +418,10 @@ export class SimulationBus extends EventEmitter {
     // Buffer if enabled
     if (this.bufferEnabled) {
       this.eventBuffer.push(event);
-      if (this.eventBuffer.length > this.maxBufferSize) {
-        this.eventBuffer.shift();
+      if (this.eventBuffer.checkFirstOverflow()) {
+        console.warn(
+          `[EventBus] Buffer overflow on channel ${channel}: oldest events being dropped (capacity=${this.eventBuffer.capacity})`
+        );
       }
     }
 
@@ -525,11 +550,17 @@ export class SimulationBus extends EventEmitter {
   /**
    * Enable/disable event buffering (useful for replay or late subscribers).
    */
-  setBuffering(enabled: boolean, maxSize: number = 1000): void {
+  setBuffering(enabled: boolean, maxSize: number = 10_000): void {
     this.bufferEnabled = enabled;
-    this.maxBufferSize = maxSize;
     if (!enabled) {
-      this.eventBuffer = [];
+      this.eventBuffer.clear();
+    } else if (maxSize !== this.eventBuffer.capacity) {
+      // Re-allocate with new capacity, preserving existing events
+      const old = this.eventBuffer.toArray();
+      this.eventBuffer = new RingBuffer<SimulationEvent>(maxSize);
+      for (const item of old) {
+        this.eventBuffer.push(item);
+      }
     }
   }
 
@@ -537,14 +568,14 @@ export class SimulationBus extends EventEmitter {
    * Get buffered events (for replay to late subscribers).
    */
   getBuffer(): SimulationEvent[] {
-    return [...this.eventBuffer];
+    return this.eventBuffer.toArray();
   }
 
   /**
    * Clear the event buffer.
    */
   clearBuffer(): void {
-    this.eventBuffer = [];
+    this.eventBuffer.clear();
   }
 
   // -------------------------------------------------------------------------
