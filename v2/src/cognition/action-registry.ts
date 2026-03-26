@@ -50,7 +50,7 @@ export interface AvailableActionsContext {
   locationAffordances: AffordanceInstance[]; // Things you can do in current location
   objectAffordances: AffordanceInstance[];   // Things you can do with nearby objects
   socialAffordances: AffordanceInstance[];   // Things you can do with nearby agents
-  availableLocations: string[];              // Places you can move to
+  availableLocations: Array<{ name: string; description: string }>;  // Places you can move to
 }
 
 // =============================================================================
@@ -365,17 +365,18 @@ function getComponentBasedActions(world: World, agentEid: number): ActionDefinit
 /**
  * Get all available locations the agent can move to
  */
-function getAvailableLocations(world: World, agentEid: number): string[] {
-  const locations: string[] = [];
+function getAvailableLocations(world: World, agentEid: number): Array<{ name: string; description: string }> {
+  const locations: Array<{ name: string; description: string }> = [];
   const currentRoomEid = getRoomForEntity(world, agentEid);
 
-  // Get all rooms in the world
+  // Get ALL rooms in the world — including newly created ones
   const allRooms = Array.from(query(world, [Room]));
 
   for (const roomEid of allRooms) {
     const roomName = Name.value[roomEid];
     if (roomName && (currentRoomEid === undefined || roomEid !== currentRoomEid)) {
-      locations.push(roomName);
+      const desc = Description.value?.[roomEid] || "";
+      locations.push({ name: roomName, description: String(desc).slice(0, 100) });
     }
   }
 
@@ -586,10 +587,12 @@ export function formatActionsForPrompt(
     lines.push("");
   }
 
-  // Available locations
+  // Available locations — include descriptions so the agent knows what's there
   if (context.availableLocations.length > 0) {
     lines.push("PLACES YOU CAN GO:");
-    lines.push(`  ${context.availableLocations.join(", ")}`);
+    for (const loc of context.availableLocations) {
+      lines.push(`  - ${loc.name}${loc.description ? ": " + loc.description : ""}`);
+    }
     lines.push("");
   }
 

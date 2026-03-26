@@ -75,6 +75,7 @@ import { recordAction, clearActionHistory } from "../cognition/agent-action-hist
 import { setLocatedIn, getRoomForEntity } from "../ecs/location";
 import { listSkills, resetSkillRegistry } from "../cognition/skill-registry";
 import { addMemory } from "../cognition/knowledge-graph";
+import { addPerception } from "../cognition/agent-mind";
 
 // =============================================================================
 // HELPERS
@@ -250,6 +251,18 @@ async function main() {
   addObj("Medicinal Herbs", forest, ["forageable", "examinable"]);
   info("Created Forest with Wild Berries and Medicinal Herbs");
 
+  // CRITICAL: Alert agents about the Forest and foraging opportunity
+  // Without this, agents see "Forest" in PLACES but don't know why to go there
+  for (const a of agents) {
+    addPerception(world, a.eid, {
+      type: "event",
+      content: "URGENT: A famine has struck the village! The crops have all failed. But travelers report that the Forest outside the village has wild berries and medicinal herbs that can be foraged for food. You should go to the Forest and forage to survive!",
+      source: "village_news",
+      intensity: 1,
+    });
+  }
+  info("All agents: perception injected — 'famine + Forest has food'");
+
   // Grow affordance discovery branches for foraging
   for (const a of agents) {
     growAffordanceBranch(world, a.eid, "forage", "forageable");
@@ -260,7 +273,7 @@ async function main() {
   for (const a of agents) {
     addMemory(world, a.eid, {
       type: "episodic",
-      content: "The crops have failed. A terrible famine has struck the village. People are starving. We must find food or we will perish.",
+      content: "The crops have failed. A terrible famine has struck the village. I heard the Forest has wild berries and herbs we can forage.",
       importance: 90,
       emotionalValence: -0.8,
       timestamp: Date.now(),
@@ -291,6 +304,17 @@ async function main() {
     Needs.social[a.eid] = 15; // But lonely from isolation during famine
   }
   info("Famine ended: severity=0, hunger=30, social=15 (lonely)");
+
+  // Alert agents about recovery
+  for (const a of agents) {
+    addPerception(world, a.eid, {
+      type: "event",
+      content: "The famine has ended! Food is returning to the village. A festival is being organized to celebrate survival. You should socialize, visit friends, and celebrate!",
+      source: "village_news",
+      intensity: 1,
+    });
+  }
+  info("All agents: perception injected — 'famine over, festival!'");
 
   // Create Festival component
   registryCreateComponent({
