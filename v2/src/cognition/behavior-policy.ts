@@ -6,6 +6,7 @@ import { getRecentActions } from "./agent-action-history";
 import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import { getAvailableAffordances } from "../world/affordance-availability";
 import { getMovementTarget } from "../systems/builtin-systems";
+import { getSkillTree, recordSkillOutcome } from "./skill-registry";
 
 export type PolicyAction = {
   type: "speak" | "observe" | "move" | "interact" | "think" | "wait" | "rest" | "reflect";
@@ -23,6 +24,8 @@ export type BehaviorNode =
   | { type: "weighted_random"; choices: Array<{ weight: number; child: BehaviorNode }> }
   | { type: "social_visit"; minImpression?: number }
   | { type: "use_procedure"; signature: string; minSuccesses?: number }
+  | { type: "skill"; name: string }
+  | { type: "llm_skill"; purpose: string; temperature?: number }
   | { type: "wander" }
   | { type: "llm_fallback" }
   | { type: "noop" };
@@ -289,6 +292,16 @@ export function validateBehaviorNode(
       case "wander":
       case "social_visit":
         return null;
+      case "skill": {
+        const skillName = String((n as any).name || "").trim();
+        if (!skillName) return "skill.name required";
+        return null;
+      }
+      case "llm_skill": {
+        const purpose = String((n as any).purpose || "").trim();
+        if (!purpose) return "llm_skill.purpose required";
+        return null;
+      }
       case "interact_any_affordance": {
         if ("scope" in n && (n as any).scope !== undefined) {
           const scope = String((n as any).scope || "");
@@ -576,6 +589,28 @@ function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: str
     case "llm_fallback":
       trace.push("llm_fallback");
       return { kind: "llm_fallback", trace };
+    case "skill": {
+      // Evaluate a named skill sub-tree — compositional BT
+      const skillName = String((node as any).name || "").trim();
+      trace.push(`skill:${skillName}`);
+      const skillTree = getSkillTree(skillName);
+      if (!skillTree) {
+        trace.push(`skill-not-found:${skillName}`);
+        return { kind: "none", trace };
+      }
+      const skillResult = evalNode(world, agentEid, skillTree, trace);
+      if (skillResult.kind === "action") {
+        recordSkillOutcome(skillName, true);
+      }
+      return skillResult;
+    }
+    case "llm_skill": {
+      // LLM-backed skill — delegates to LLM with a focused purpose
+      // Returns llm_fallback so the cognition chain invokes the LLM
+      const purpose = String((node as any).purpose || "").trim();
+      trace.push(`llm_skill:${purpose}`);
+      return { kind: "llm_fallback", trace };
+    }
     case "action": {
       trace.push(`action:${node.action.type}`);
       let action = node.action;

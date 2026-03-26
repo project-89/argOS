@@ -49,7 +49,7 @@ import {
 } from "../spirits/consistency-spirit";
 import { recordFailedInteraction } from "../spirits/world-crafter-spirit";
 import { recordOutcome } from "./policy-learning";
-import { resolveDecision } from "./bt-compiler";
+import { resolveDecision, trackActionForSkill } from "./bt-compiler";
 import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "./procedural-skills";
 import { compileCompletedPlanToProceduralMacro } from "./plan-compiler";
 import { setGoalContract } from "./goal-contract";
@@ -2266,6 +2266,9 @@ export function executeActions(
               });
               // Compile LLM decision into BT branch if this was an LLM-originated action
               resolveDecision(world, eid, true);
+              // Track for multi-step skill compilation
+              trackActionForSkill(eid, { type: "interact", target: targetName, content: affordanceName },
+                true, affordanceName);
 
             // Broadcast visual to others in room - they can see the interaction!
             if (roomEid !== undefined) {
