@@ -49,6 +49,7 @@ import {
 } from "../spirits/consistency-spirit";
 import { recordFailedInteraction } from "../spirits/world-crafter-spirit";
 import { recordOutcome } from "./policy-learning";
+import { resolveDecision } from "./bt-compiler";
 import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "./procedural-skills";
 import { compileCompletedPlanToProceduralMacro } from "./plan-compiler";
 import { setGoalContract } from "./goal-contract";
@@ -2263,6 +2264,8 @@ export function executeActions(
                 target: targetName,
                 success: true,
               });
+              // Compile LLM decision into BT branch if this was an LLM-originated action
+              resolveDecision(world, eid, true);
 
             // Broadcast visual to others in room - they can see the interaction!
             if (roomEid !== undefined) {
@@ -2312,6 +2315,8 @@ export function executeActions(
                 success: false,
                 detail: result.message,
               });
+              // Mark LLM decision as failed — don't compile this into BT
+              resolveDecision(world, eid, false);
 
 	            // Build helpful error message with ACTIONABLE hints
 	            const targetName = Name.value[targetEid] || action.target;

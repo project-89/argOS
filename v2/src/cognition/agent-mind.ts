@@ -27,6 +27,7 @@ import { selectContractDrivenAction } from "./contract-driven-actions";
 import { getMovementTarget } from "../systems/builtin-systems";
 import { ensureOfficeDeviceSandboxDir } from "../office-tools/sandbox";
 import { recordPolicyAction } from "./policy-metrics";
+import { captureLLMDecision } from "./bt-compiler";
 
 const model = agentModel;
 
@@ -887,6 +888,12 @@ Stay in character. Be concise. React naturally to your perceptions and surroundi
 
     console.log(`[${name}] thinks: "${result.innerThought || ""}"`);
     console.log(`[${name}] action: ${action.type}${action.content ? ` - "${action.content}"` : ""}`);
+
+    // Capture this LLM decision for potential BT compilation
+    // If the action succeeds, it will be compiled into a new BT branch
+    captureLLMDecision(world, eid, result.innerThought || "",
+      { type: action.type as any, target: action.target, content: action.content },
+      action.type === "interact" ? (action.content?.split(/\s+/)[0] || undefined) : undefined);
 
     return normalizeSelectedAction(world, eid, action, true);
   } catch (error) {
