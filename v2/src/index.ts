@@ -30,6 +30,7 @@
 import "dotenv/config";
 import { createArgosWorld, type WorldContext } from "./ecs/world";
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "./ecs/prefabs";
+import { initializeRegistry } from "./ecs/component-registry";
 import { createGodAgent, godCommand, getWorldState, tickWorld, runWorldTickAt, type GodAgentState, type GodAgentConfig } from "./god/god-agent";
 import { createPrebakePreset, getAvailablePresets, type PrebakePreset } from "./god/system-baker";
 import { runCognitionCycle, executeActions, broadcastToRoom, queueStimulus } from "./cognition/cognition-system";
@@ -230,6 +231,13 @@ export interface SimulationConfig {
    * - object: enable + override config
    */
   godAutopilot?: boolean | Partial<GodAutopilotConfig>;
+  /**
+   * Genesis mode: God creates the world from a seed description.
+   * When enabled, no builtin systems, presets, or config-driven rooms/agents are created.
+   * - `true`: use `narrative` as the seed
+   * - `{ seed: string }`: use the provided seed description
+   */
+  genesis?: boolean | { seed: string };
 }
 
 export interface SimulationStats {
@@ -405,6 +413,10 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
   // Expose key runtime flags to ECS systems via the world context.
   (world as any).meta.aiEnabled = aiEnabled;
   (world as any).meta.generateSchedules = Boolean(config.generateSchedules);
+
+  // Initialize unified component registry (must be before prefabs or god agent)
+  initializeRegistry(world);
+
   initializePrefabs(world);
 
   // Create god agent
@@ -417,15 +429,20 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
   };
   const god = createGodAgent(world, godConfig);
 
-  // Register builtin systems
-  registerAllBuiltinSystems(god.systemRegistry);
+  const isGenesis = Boolean(config.genesis);
 
-  // Apply prebake preset
-  const preset = config.preset || "slice-of-life";
-  console.log(`⚙️  Applying preset: ${preset}`);
-  const prebakeResult = createPrebakePreset(preset, world, god.systemRegistry);
-  if (prebakeResult.errors.length > 0) {
-    console.warn(`⚠️  Prebake warnings: ${prebakeResult.errors.join(", ")}`);
+  if (!isGenesis) {
+    // Standard path: register builtin systems + apply prebake preset
+    registerAllBuiltinSystems(god.systemRegistry);
+
+    const preset = config.preset || "slice-of-life";
+    console.log(`⚙️  Applying preset: ${preset}`);
+    const prebakeResult = createPrebakePreset(preset, world, god.systemRegistry);
+    if (prebakeResult.errors.length > 0) {
+      console.warn(`⚠️  Prebake warnings: ${prebakeResult.errors.join(", ")}`);
+    }
+  } else {
+    console.log(`🌱 Genesis mode — God will create the world from seed`);
   }
 
   // Initialize spirit system (default: enabled, but requires AI)
@@ -474,7 +491,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
   // Create rooms first (so agents can be placed in them)
   const roomMap = new Map<string, number>();
   const roomsToPopulate: { name: string; roomType: string }[] = [];
-  if (config.rooms && !config.useGodCommand) {
+  if (config.rooms && !config.useGodCommand && !isGenesis) {
     console.log(`🏠 Creating ${config.rooms.length} rooms...`);
     for (const roomConfig of config.rooms) {
       const roomEid = createRoomEntity(world, {
@@ -503,7 +520,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
   }
 
   // Create agents
-  if (config.agents && !config.useGodCommand) {
+  if (config.agents && !config.useGodCommand && !isGenesis) {
     console.log(`👥 Creating ${config.agents.length} agents...`);
     for (const agentConfig of config.agents) {
       const roomEid = agentConfig.startRoom ? roomMap.get(agentConfig.startRoom) : undefined;
@@ -523,8 +540,15 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
       }
 
       // Auto-assign behavior policy based on role (deterministic-first cognition)
-      const { template, params } = inferPolicyFromRole(agentConfig.role);
-      const policyTree = getPolicyTemplate(template, params);
+      const { template, params: inferredParams } = inferPolicyFromRole(agentConfig.role);
+      // Pass the agent's actual start room so policy room references match reality
+      const policyParams = {
+        ...inferredParams,
+        room: inferredParams?.room || agentConfig.startRoom,
+        workplace: inferredParams?.workplace || agentConfig.startRoom,
+        rooms: inferredParams?.rooms || (config.rooms ? config.rooms.map(r => r.name) : undefined),
+      };
+      const policyTree = getPolicyTemplate(template, policyParams);
       if (policyTree) {
         setAgentBehaviorPolicy(world, agentEid, policyTree);
         console.log(`     policy: ${template}`);
@@ -533,7 +557,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
   }
 
   // Create objects
-  if (config.objects && !config.useGodCommand) {
+  if (config.objects && !config.useGodCommand && !isGenesis) {
     console.log(`📦 Creating ${config.objects.length} objects...`);
     for (const objConfig of config.objects) {
       const roomEid = objConfig.room ? roomMap.get(objConfig.room) : undefined;
@@ -552,6 +576,34 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
   if (config.useGodCommand && config.setupCommand) {
     console.log(`🔮 Running GodAI setup command...`);
     await godCommand(god, config.setupCommand);
+  }
+
+  // Genesis: God creates the entire world from a seed description
+  if (isGenesis) {
+    const seed = typeof config.genesis === "object" && config.genesis.seed
+      ? config.genesis.seed
+      : config.narrative || "A living world where stories unfold.";
+
+    console.log(`🌱 Genesis seed: "${seed.slice(0, 80)}${seed.length > 80 ? "..." : ""}"`);
+
+    const genesisPrompt = `GENESIS MODE — You are creating an entire world from scratch. The world is completely empty.
+
+SEED DESCRIPTION: ${seed}
+
+Your task:
+1. Create 2-4 rooms that fit the setting (use createRoom)
+2. Create 2-4 agents with appropriate roles placed in those rooms (use createAgent)
+3. Create 3-8 objects/furniture to populate the rooms (use createObject)
+4. Optionally create 1-2 custom components if the setting calls for unique mechanics (use createComponent)
+5. Optionally create 1-2 custom systems for unique world behaviors (use bakeNewSystem)
+
+Create a COMPLETE, FUNCTIONAL world. Every agent must be in a room. Objects should make the setting feel alive.
+Do NOT explain — just create everything using your tools.`;
+
+    console.log(`🔮 Running genesis command...`);
+    const results = await godCommand(god, genesisPrompt);
+    const successCount = results.filter(r => r.success).length;
+    console.log(`🌱 Genesis complete: ${successCount}/${results.length} tool calls succeeded`);
   }
 
   // Generate schedules if requested
@@ -743,34 +795,36 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
             },
           });
 
+	          // Cognition loop: always registered so behavior policies fire even without AI.
+	          // When AI is off, planning is skipped and LLM fallback is never reached.
+	          registerAIOperation(runtime, {
+	            name: "AgentCognition",
+	            interval: 1,
+	            priority: "high",
+	            execute: async () => {
+	              const actions = await runCognitionCycle(world, god.systemRegistry, {
+	                enablePlanning: aiEnabled && config.enablePlanning !== false,
+	              });
+
+	              for (const { eid, action } of actions) {
+	                const name = Name.value[eid];
+	                if (server) server.pushAgentAction(name, action);
+	                bus.emit({
+	                  type: "agent:action",
+	                  timestamp: Date.now(),
+	                  agentId: eid,
+	                  agentName: name,
+	                  action: action.type,
+	                  target: action.target,
+	                  content: action.content,
+	                } as SimulationEvent);
+	              }
+
+	              executeActions(world, actions, god.systemRegistry);
+	            },
+	          });
+
 	          if (aiEnabled) {
-	            // Async cognition (LLM) – queued; never blocks fast tick
-	            registerAIOperation(runtime, {
-	              name: "AgentCognition",
-	              interval: 1,
-	              priority: "high",
-	              execute: async () => {
-	                const actions = await runCognitionCycle(world, god.systemRegistry, {
-	                  enablePlanning: config.enablePlanning !== false,
-	                });
-
-	                for (const { eid, action } of actions) {
-	                  const name = Name.value[eid];
-	                  if (server) server.pushAgentAction(name, action);
-	                  bus.emit({
-	                    type: "agent:action",
-	                    timestamp: Date.now(),
-	                    agentId: eid,
-	                    agentName: name,
-	                    action: action.type,
-	                    target: action.target,
-	                    content: action.content,
-	                  } as SimulationEvent);
-	                }
-
-	                executeActions(world, actions, god.systemRegistry);
-	              },
-	            });
 
 	            // Auto-fix file-based systems that error inside the fast tick.
 	            // Note: the fast tick uses `runWorldTickAt` (sync), so runtime fixes must happen here (async).
@@ -1007,7 +1061,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
       const agents = Array.from(query(world, [Agent]));
       const rooms = Array.from(query(world, [Room]));
       return {
-        tick,
+        tick: simulation.tick || tick,
         agentCount: agents.length,
         roomCount: rooms.length,
         objectCount: 0, // TODO: count objects
@@ -1312,6 +1366,19 @@ export async function createVillageSimulation(): Promise<ArgosSimulation> {
 export { createArgosWorld, type WorldContext } from "./ecs/world";
 export { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity, createGodAgentEntity } from "./ecs/prefabs";
 export { query, addEntity, removeEntity, addComponent, removeComponent, hasComponent, getRelationTargets } from "bitecs";
+
+// Unified Component Registry
+export {
+  initializeRegistry,
+  getComponent,
+  registryHasComponent,
+  attachToEntity,
+  detachFromEntity,
+  getMergedComponents,
+  listNames as listComponentNames,
+  listDynamic as listDynamicComponentDefs,
+  listDefinitions as listAllComponentDefs,
+} from "./ecs/component-registry";
 
 // Components & Relations
 export * from "./ecs/components";

@@ -293,6 +293,10 @@ function buildScheduledActivityContract(input: {
 }
 
 export function createScheduledActivityGoalSystem(): SystemDefinition {
+  // Track recently completed schedule goals to prevent re-creation spam
+  const completedCooldowns = new Map<string, number>(); // "agentEid:signature" -> completedAtMs
+  const SCHEDULE_COOLDOWN_MS = 60_000; // Don't re-create for 60s after completion
+
   return {
     name: "ScheduledActivityGoals",
     description: "Creates typed scheduled activity goals (meals/sleep/work/leisure/socialize) and movement subgoals",
@@ -370,6 +374,14 @@ FOR EACH agent WITH Schedule:
         Goal.createdAt[tempGoalEid] = Date.now();
         const sig = setGoalContract(world as any, tempGoalEid, contract);
 
+        // Check cooldown: don't re-create goals that were recently completed
+        const cooldownKey = `${agentEid}:${sig}`;
+        const completedAt = completedCooldowns.get(cooldownKey);
+        if (completedAt !== undefined && Date.now() - completedAt < SCHEDULE_COOLDOWN_MS) {
+          ctx.removeEntity(world as any, tempGoalEid);
+          continue;
+        }
+
         // If agent already has a non-completed scheduled activity goal for this signature, discard temp.
         if (hasActiveGoalWithSignature(world as any, agentEid, sig)) {
           // If it exists but is queued (from preplanning), activate it now.
@@ -382,6 +394,30 @@ FOR EACH agent WITH Schedule:
           }
           // best-effort removal: goal entities are unattached (no HasGoal relation).
           // Removing them avoids registry clutter.
+          ctx.removeEntity(world as any, tempGoalEid);
+          continue;
+        }
+
+        // Track completion for cooldown when goal is evaluated as complete
+        // (Listen for the goal being completed by goal evaluation system)
+        const onComplete = () => {
+          completedCooldowns.set(cooldownKey, Date.now());
+          // Clean old entries periodically
+          if (completedCooldowns.size > 200) {
+            const now = Date.now();
+            for (const [k, v] of completedCooldowns) {
+              if (now - v > SCHEDULE_COOLDOWN_MS * 2) completedCooldowns.delete(k);
+            }
+          }
+        };
+        // We can't directly observe goal completion from here, but we can check
+        // if the goal will be immediately completed (agent already satisfies success conditions)
+        // and set the cooldown proactively.
+        const agentRoom = getRoomForEntity(world as any, agentEid);
+        const agentRoomName = agentRoom !== undefined ? String(Name.value[agentRoom] || "").trim().toLowerCase() : "";
+        if (agentRoomName && agentRoomName === roomName.trim().toLowerCase()) {
+          // Agent is already in the target room — goal will likely complete immediately
+          completedCooldowns.set(cooldownKey, Date.now());
           ctx.removeEntity(world as any, tempGoalEid);
           continue;
         }

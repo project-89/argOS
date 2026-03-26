@@ -410,6 +410,19 @@ export function recordResourceGap(
   };
   crafterState.resourceGaps.push(gap);
   console.log(`[WorldCrafter] Resource gap recorded: "${resourceType}" needed by ${neededBy}`);
+
+  // Report to observation aggregator for synthesis
+  try {
+    const { reportGap: reportObservation } = require("./observation-aggregator");
+    reportObservation(
+      "The Crafter",
+      "resource_gap",
+      `Missing resource: ${resourceType}`,
+      `Resource "${resourceType}" needed by ${neededBy} in ${inRoom} but no source exists. ${crafterState.context.hasEconomy ? "Consider merchant or trade route." : "Consider one-time provision or crafting system."}`,
+      "high"
+    );
+  } catch {}
+
   return gap;
 }
 
@@ -956,6 +969,18 @@ export function recordFailedInteraction(
   }
 
   console.log(`[WorldCrafter] Recorded failed interaction: ${agentName} tried to ${actionType} "${targetName}" in ${roomName}`);
+
+  // Report to observation aggregator for synthesis
+  try {
+    const { reportGap } = require("./observation-aggregator");
+    reportGap(
+      "The Crafter",
+      "interaction_failure",
+      `${agentName} failed to ${actionType} "${targetName}"`,
+      `Agent ${agentName} tried to ${actionType} "${targetName}" in ${roomName} but the target doesn't exist or lacks the required affordance.`,
+      "medium"
+    );
+  } catch {}
 }
 
 /**

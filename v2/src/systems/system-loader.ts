@@ -8,7 +8,8 @@ import { query, addEntity, addComponent, removeEntity, getRelationTargets } from
 import * as AllComponents from "../ecs/components";
 import * as AllRelations from "../ecs/relations";
 import { getDirectContainer, getRoomForEntity, listDirectContents } from "../ecs/location";
-import { getAllDynamicComponents, getDynamicComponent, getComponentDefinition, listDynamicComponents, loadComponentDefinitions, type DynamicComponent } from "../ecs/dynamic-components";
+import { getAllDynamicComponents, getDynamicComponent, getComponentDefinition, listDynamicComponents, loadComponentDefinitions, type DynamicComponent, type ComponentDefinition } from "../ecs/dynamic-components";
+import { getMergedComponents, getComponent, registryCreateComponent, attachToEntity, getRegistryWorld } from "../ecs/component-registry";
 import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
 
@@ -90,7 +91,7 @@ export interface SystemContext {
   addComponent: typeof addComponent;
   removeEntity: typeof removeEntity;
   getRelationTargets: typeof getRelationTargets;
-  components: typeof AllComponents;
+  components: Record<string, any>;
   relations: typeof AllRelations;
   location: {
     getDirectContainer: typeof getDirectContainer;
@@ -102,6 +103,10 @@ export interface SystemContext {
   hasDynamic: (eid: number, componentName: string) => boolean;
   log: (message: string) => void;
   emit: (type: string, data: any) => void;
+  // Unified component registry accessors
+  getComponent: (name: string) => any;
+  createComponent: (def: ComponentDefinition) => any;
+  attachComponent: (eid: number, name: string, values?: Record<string, any>) => boolean;
 }
 
 export interface LoadedSystem {
@@ -230,7 +235,7 @@ export function createSystemContext(
     addComponent,
     removeEntity,
     getRelationTargets,
-    components: AllComponents,
+    components: getMergedComponents(),
     relations: AllRelations,
     location: {
       getDirectContainer,
@@ -245,6 +250,13 @@ export function createSystemContext(
       if (!component || !def) return false;
       // Check if any property has a defined value for this entity
       return Object.keys(def.properties).some(prop => component[prop][eid] !== undefined);
+    },
+    getComponent: (name: string) => getComponent(name),
+    createComponent: (def: ComponentDefinition) => registryCreateComponent(def),
+    attachComponent: (eid: number, name: string, values?: Record<string, any>) => {
+      const world = getRegistryWorld();
+      if (!world) return false;
+      return attachToEntity(world, eid, name, values);
     },
     log: (message: string) => {
       registry.logs.push(`[System] ${message}`);

@@ -221,10 +221,13 @@ export function selectFailureRecoveryAction(world: World, agentEid: number): Rec
   const failure = getLatestCriticalFailure(world, agentEid);
   if (!failure) return null;
 
-  // If we have a newer success/action_result, do not keep "recovering" from an older failure.
+  // If we have a newer success/action_result/observation, do not keep "recovering" from an older failure.
   // Ignore speech-only "success" so agents don't talk their way out of unresolved grounding failures.
   const latestResultTs = getLatestPerceptionTs(world, agentEid, "action_result", ["speech"]);
   if (latestResultTs >= failure.ts && latestResultTs > 0) return null;
+  // Successful observations also count as recovery (observe sends type "observation" not "action_result")
+  const latestObsTs = getLatestPerceptionTs(world, agentEid, "observation");
+  if (latestObsTs >= failure.ts && latestObsTs > 0) return null;
 
   const failureSig = `${failure.source}|${failure.content.slice(0, 300)}`;
   const roomEid = getRoomForEntity(world as any, agentEid);

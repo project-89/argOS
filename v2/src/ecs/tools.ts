@@ -179,6 +179,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
       weight?: number;
       portable?: boolean;
       roomName?: string;
+      traits?: string[];
     }): ToolResult => {
       try {
         const roomId = params.roomName ? lookupEntity(registry, params.roomName) : undefined;

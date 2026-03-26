@@ -86,44 +86,32 @@ const DEFAULT_CAPABILITIES: SensoryCapabilities = {
 // ============================================================================
 
 /**
- * Generate all stimuli an agent would perceive this tick
+ * Generate all stimuli an agent would perceive this tick.
+ *
+ * Environmental stimuli (room, people, objects, sounds, smells, affordances)
+ * are CACHED and only regenerated when the room state fingerprint changes or
+ * the cache TTL expires (10s). This prevents identical stimuli from flooding
+ * the agent every tick.
+ *
+ * Event-based stimuli (speech, actions, arrivals) always pass through fresh.
  */
 export function generateStimuliForAgent(
   world: World,
   agentEid: number,
   pendingEvents: Array<{ modality: SensoryModality; type: string; content: string; source: string; intensity?: number }>
 ): Stimulus[] {
-  const stimuli: Stimulus[] = [];
-
   // Validate agent exists
-  if (!entityExists(world, agentEid)) return stimuli;
+  if (!entityExists(world, agentEid)) return [];
 
   const capabilities = getAgentCapabilities(world, agentEid);
   const roomEid = getRoomForEntity(world, agentEid);
 
-  if (roomEid === undefined || !entityExists(world, roomEid)) return stimuli;
+  if (roomEid === undefined || !entityExists(world, roomEid)) return [];
 
-  // Visual perception - what the agent sees
-  if (capabilities.visual > 0) {
-    stimuli.push(...generateVisualStimuli(world, agentEid, roomEid, capabilities.visual));
-  }
+  // Environmental stimuli — cached per agent+room fingerprint
+  const stimuli = [...getCachedEnvironmentalStimuli(world, agentEid, roomEid, capabilities)];
 
-  // Auditory perception - ambient sounds
-  if (capabilities.auditory > 0) {
-    stimuli.push(...generateAmbientAuditoryStimuli(world, roomEid, capabilities.auditory));
-  }
-
-  // Olfactory perception - smells
-  if (capabilities.olfactory > 0) {
-    stimuli.push(...generateOlfactoryStimuli(world, roomEid, capabilities.olfactory));
-  }
-
-  // Cognitive perception - affordances, intuitions
-  if (capabilities.cognitive > 0) {
-    stimuli.push(...generateCognitiveStimuli(world, agentEid, roomEid, capabilities.cognitive));
-  }
-
-  // Add event-based stimuli (speech, actions, etc.)
+  // Event-based stimuli — always fresh, never cached
   for (const event of pendingEvents) {
     const capabilityLevel = capabilities[event.modality] || 0;
     if (capabilityLevel > 0) {
@@ -136,19 +124,6 @@ export function generateStimuliForAgent(
         timestamp: Date.now(),
       });
     }
-  }
-
-  // Add awareness of notable object states (things that might need fixing)
-  const notableStates = getNotableObjectStates(world, roomEid);
-  if (notableStates.length > 0) {
-    stimuli.push({
-      modality: "cognitive",
-      type: "awareness",
-      content: `Objects needing attention: ${notableStates.join(", ")}`,
-      source: "intuition",
-      intensity: 0.7,
-      timestamp: Date.now(),
-    });
   }
 
   return stimuli;
@@ -554,6 +529,112 @@ export function getInventoryItemNames(arg1: World | number, arg2?: number): stri
   return itemIds
     .map(eid => Name?.value?.[eid])
     .filter((n): n is string => typeof n === "string" && n.length > 0);
+}
+
+// ==========================================================================
+// STIMULUS DEDUPLICATION CACHE
+// ==========================================================================
+
+interface CachedStimuli {
+  roomEid: number;
+  fingerprint: string;
+  stimuli: Stimulus[];
+  timestamp: number;
+}
+
+const stimulusCache = new Map<number, CachedStimuli>();
+const CACHE_TTL_MS = 10_000; // Force refresh every 10s even if unchanged
+
+/**
+ * Compute a lightweight fingerprint of a room's state.
+ * If the fingerprint hasn't changed, we can reuse cached stimuli.
+ */
+function computeRoomFingerprint(world: World, agentEid: number, roomEid: number): string {
+  const contents = listDirectContents(world, roomEid);
+  const parts: string[] = [];
+
+  // Room description/ambience (could change via God AI)
+  parts.push(String(Description.value[roomEid] || ""));
+  parts.push(String(Room.ambience[roomEid] || ""));
+
+  // Count + names of agents in room
+  const allAgents = Array.from(query(world, [Agent])).filter(
+    eid => eid !== agentEid && entityExists(world, eid) && getRoomForEntity(world, eid) === roomEid
+  );
+  parts.push(`agents:${allAgents.map(e => Name.value[e] || e).sort().join(",")}`);
+
+  // Object names + states (sorted for stability)
+  const objParts: string[] = [];
+  for (const eid of contents) {
+    if (!entityExists(world, eid) || hasComponent(world, eid, Agent)) continue;
+    const name = Name.value[eid] || "";
+    const state = ObjectState?.current?.[eid] || "";
+    objParts.push(`${name}:${state}`);
+  }
+  objParts.sort();
+  parts.push(`objs:${objParts.join(",")}`);
+
+  return parts.join("|");
+}
+
+/**
+ * Get environmental stimuli for an agent, using cache when possible.
+ * Event-based stimuli (pendingEvents) are NEVER cached.
+ */
+function getCachedEnvironmentalStimuli(
+  world: World,
+  agentEid: number,
+  roomEid: number,
+  capabilities: SensoryCapabilities,
+): Stimulus[] {
+  const now = Date.now();
+  const fingerprint = computeRoomFingerprint(world, agentEid, roomEid);
+  const cached = stimulusCache.get(agentEid);
+
+  if (
+    cached &&
+    cached.roomEid === roomEid &&
+    cached.fingerprint === fingerprint &&
+    (now - cached.timestamp) < CACHE_TTL_MS
+  ) {
+    return cached.stimuli;
+  }
+
+  // Regenerate
+  const stimuli: Stimulus[] = [];
+  if (capabilities.visual > 0) {
+    stimuli.push(...generateVisualStimuli(world, agentEid, roomEid, capabilities.visual));
+  }
+  if (capabilities.auditory > 0) {
+    stimuli.push(...generateAmbientAuditoryStimuli(world, roomEid, capabilities.auditory));
+  }
+  if (capabilities.olfactory > 0) {
+    stimuli.push(...generateOlfactoryStimuli(world, roomEid, capabilities.olfactory));
+  }
+  if (capabilities.cognitive > 0) {
+    stimuli.push(...generateCognitiveStimuli(world, agentEid, roomEid, capabilities.cognitive));
+  }
+
+  // Add notable object states
+  const notableStates = getNotableObjectStates(world, roomEid);
+  if (notableStates.length > 0) {
+    stimuli.push({
+      modality: "cognitive",
+      type: "awareness",
+      content: `Objects needing attention: ${notableStates.join(", ")}`,
+      source: "intuition",
+      intensity: 0.7,
+      timestamp: now,
+    });
+  }
+
+  stimulusCache.set(agentEid, { roomEid, fingerprint, stimuli, timestamp: now });
+  return stimuli;
+}
+
+/** Evict cache for a removed agent */
+export function evictStimulusCache(agentEid: number): void {
+  stimulusCache.delete(agentEid);
 }
 
 // Track recent successful actions per agent for better memory

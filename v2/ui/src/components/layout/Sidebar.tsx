@@ -40,8 +40,18 @@ const navItems: Array<{
 ];
 
 export function Sidebar() {
-  const { sidebarOpen, setSidebarOpen, activePanel, setActivePanel, status } =
+  const { sidebarOpen, setSidebarOpen, activePanel, setActivePanel, status, agents, entities, rooms, spirits, daemons, systems } =
     useSimulationStore();
+
+  // Badge counts for navigation items
+  const badgeCounts: Record<string, number> = {
+    agents: agents.length,
+    entities: entities.length,
+    rooms: rooms.length,
+    spirits: spirits.length,
+    daemons: daemons.length,
+    systems: systems.length,
+  };
 
   return (
     <aside
@@ -92,7 +102,16 @@ export function Sidebar() {
                   title={!sidebarOpen ? item.label : undefined}
                 >
                   <Icon className={`w-5 h-5 ${isActive ? item.color : ""}`} />
-                  {sidebarOpen && <span className="text-sm font-medium">{item.label}</span>}
+                  {sidebarOpen && (
+                    <span className="text-sm font-medium flex-1">{item.label}</span>
+                  )}
+                  {sidebarOpen && badgeCounts[item.id] > 0 && (
+                    <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                      isActive ? "bg-argos-bg-elevated text-argos-text-primary" : "bg-argos-bg-tertiary text-argos-text-muted"
+                    }`}>
+                      {badgeCounts[item.id]}
+                    </span>
+                  )}
                 </button>
               </li>
             );

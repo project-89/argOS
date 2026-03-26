@@ -63,7 +63,8 @@ export function GodChat({ isOpen, onClose }: GodChatProps) {
         // Add action summaries
         if (responseEvent.actions && responseEvent.actions.length > 0) {
           const actionSummary = responseEvent.actions
-            .map((a) => `• ${a.tool}: ${JSON.stringify(a.result || "done").slice(0, 100)}`)
+            .filter(Boolean)
+            .map((a) => `• ${a.tool || "action"}: ${JSON.stringify(a.result || "done").slice(0, 100)}`)
             .join("\n");
           responseContent += responseContent ? "\n\n" + actionSummary : actionSummary;
         }
@@ -94,7 +95,7 @@ export function GodChat({ isOpen, onClose }: GodChatProps) {
           {
             id: `god-${event.timestamp}`,
             role: "god",
-            content: `Error: ${errorEvent.error}`,
+            content: `Error: ${errorEvent.error || "Unknown error"}`,
             timestamp: event.timestamp,
           },
         ]);

@@ -4,7 +4,17 @@ import { AllComponents, Name, Agent, Mind, StimulusSource, Stimulus, WorldMap, G
 import { AllRelations, HasGoal, HasMemory, HasBelief, HasThought, HasImpression } from "./relations";
 import { createAIContext, type AIContext } from "../ai/ai-context";
 import { moveEntity, isWalkable, getTile } from "../world/ascii-world";
+import {
+  sampleComponentState,
+  diffComponentState,
+  recordEffectivenessRun,
+  recordSystemEvent,
+  recordTickWrite,
+  runPostTickAnalysis,
+} from "../spirits/effectiveness-tracker";
 import { getDirectContainer, getRoomForEntity, listDirectContents } from "./location";
+import { getMergedComponents, getComponent, registryCreateComponent, attachToEntity } from "./component-registry";
+import type { ComponentDefinition } from "./dynamic-components";
 
 /**
  * Safe wrapper for getRelationTargets that filters out non-existent entities.
@@ -50,6 +60,18 @@ export interface SystemDefinition {
   compiledFn?: (world: World, context: SystemContext) => void | Promise<void>;
   async?: boolean;
   running?: boolean;
+  // Rollback fields for effectiveness-based regression detection
+  previousCode?: string;
+  previousCompiledFn?: Function;
+  modificationTimestamp?: number;
+  preModificationScore?: number;
+  // Runtime health tracking (initialised to zero / null by registerSystem)
+  consecutiveErrors?: number;
+  totalErrors?: number;
+  lastError?: string | null;
+  lastErrorTimestamp?: number | null;
+  disabledReason?: string | null;
+  disabledAt?: number | null;
 }
 
 export interface SystemTelemetry {
@@ -172,12 +194,16 @@ export interface SystemContext {
   addEntity: typeof addEntity;
   addComponent: typeof addComponent;
   removeEntity: typeof removeEntity;
-  components: typeof AllComponents;
+  components: Record<string, any>;
   relations: typeof AllRelations;
   ai: AIContext;
   grid: GridContext;
   location: LocationContext;
   cognitive: CognitiveContext;
+  // Unified component registry accessors
+  getComponent: (name: string) => any;
+  createComponent: (def: ComponentDefinition) => any;
+  attachComponent: (eid: number, name: string, values?: Record<string, any>) => boolean;
 }
 
 export interface SystemError {
@@ -207,8 +233,14 @@ export function createSystemRegistry(): SystemRegistry {
   };
 }
 
+/** Number of consecutive errors before a registry system is auto-disabled. */
+const MAX_REGISTRY_CONSECUTIVE_ERRORS = 3;
+
 /**
- * Report a system error for GodAI to handle
+ * Report a system error for GodAI to handle.
+ *
+ * Updates per-system health fields (consecutiveErrors, totalErrors, lastError, etc.)
+ * and auto-disables a system after MAX_REGISTRY_CONSECUTIVE_ERRORS consecutive failures.
  */
 export function reportSystemError(
   registry: SystemRegistry,
@@ -220,11 +252,20 @@ export function reportSystemError(
   registry.errorCounts.set(systemName, currentCount);
 
   const system = registry.systems.get(systemName);
+  const now = Date.now();
+
+  // Update per-system health fields when the SystemDefinition exists
+  if (system) {
+    system.consecutiveErrors = (system.consecutiveErrors ?? 0) + 1;
+    system.totalErrors = (system.totalErrors ?? 0) + 1;
+    system.lastError = error;
+    system.lastErrorTimestamp = now;
+  }
 
   const errorReport: SystemError = {
     systemName,
     error,
-    timestamp: Date.now(),
+    timestamp: now,
     errorCount: currentCount,
     lastCode: system?.code,
     context,
@@ -232,10 +273,27 @@ export function reportSystemError(
 
   registry.errors.push(errorReport);
 
-  // Auto-disable systems that fail repeatedly (>3 times)
-  if (currentCount >= 3 && system) {
-    console.warn(`[SystemRegistry] Auto-disabling ${systemName} after ${currentCount} errors`);
+  // Auto-disable systems that fail repeatedly
+  if (system && (system.consecutiveErrors ?? 0) >= MAX_REGISTRY_CONSECUTIVE_ERRORS) {
+    const reason = `Auto-disabled after ${system.consecutiveErrors} consecutive errors: ${error}`;
     system.active = false;
+    system.disabledReason = reason;
+    system.disabledAt = now;
+    console.warn(`[SystemHealth] Auto-disabled ${systemName}: ${reason}`);
+
+    // Emit a system:auto_disabled event into the registry event stream
+    registry.events.push({
+      type: "system:auto_disabled",
+      data: {
+        name: systemName,
+        reason,
+        consecutiveErrors: system.consecutiveErrors,
+        totalErrors: system.totalErrors,
+        lastError: error,
+        context,
+      },
+      timestamp: now,
+    });
   }
 
   console.error(`[SystemError] ${systemName} (${currentCount}x): ${error}`);
@@ -257,7 +315,92 @@ export function clearSystemErrorCount(registry: SystemRegistry, systemName: stri
   registry.errorCounts.set(systemName, 0);
 }
 
+// ---------------------------------------------------------------------------
+// Health reporting
+// ---------------------------------------------------------------------------
+
+export interface SystemHealthReport {
+  name: string;
+  active: boolean;
+  consecutiveErrors: number;
+  totalErrors: number;
+  lastError: string | null;
+  lastErrorTimestamp: number | null;
+  disabledReason: string | null;
+  disabledAt: number | null;
+  totalExecutions: number;
+  avgDurationMs: number;
+}
+
+function buildHealthReport(system: SystemDefinition): SystemHealthReport {
+  const telemetry = systemTelemetry.get(system.name);
+  return {
+    name: system.name,
+    active: system.active,
+    consecutiveErrors: system.consecutiveErrors ?? 0,
+    totalErrors: system.totalErrors ?? 0,
+    lastError: system.lastError ?? null,
+    lastErrorTimestamp: system.lastErrorTimestamp ?? null,
+    disabledReason: system.disabledReason ?? null,
+    disabledAt: system.disabledAt ?? null,
+    totalExecutions: telemetry?.runs ?? 0,
+    avgDurationMs: telemetry && telemetry.runs > 0 ? telemetry.totalDurationMs / telemetry.runs : 0,
+  };
+}
+
+/**
+ * Get health report for a single system by name.
+ */
+export function getSystemHealth(registry: SystemRegistry, name: string): SystemHealthReport | undefined {
+  const system = registry.systems.get(name);
+  if (!system) return undefined;
+  return buildHealthReport(system);
+}
+
+/**
+ * Get health reports for all registered systems.
+ */
+export function getAllSystemHealth(registry: SystemRegistry): SystemHealthReport[] {
+  return Array.from(registry.systems.values()).map(buildHealthReport);
+}
+
+/**
+ * Get health reports for systems that have exceeded a given consecutive-error threshold.
+ * Defaults to threshold of 1 (any system with at least 1 error).
+ */
+export function getUnhealthySystems(registry: SystemRegistry, errorThreshold: number = 1): SystemHealthReport[] {
+  return Array.from(registry.systems.values())
+    .filter(s => (s.consecutiveErrors ?? 0) >= errorThreshold || (s.totalErrors ?? 0) >= errorThreshold)
+    .map(buildHealthReport);
+}
+
+/**
+ * Re-enable a previously disabled system and reset its error counters.
+ * Returns true if the system was found and re-enabled, false otherwise.
+ */
+export function reEnableSystem(registry: SystemRegistry, name: string): boolean {
+  const system = registry.systems.get(name);
+  if (!system) return false;
+  system.active = true;
+  system.consecutiveErrors = 0;
+  system.totalErrors = 0;
+  system.lastError = null;
+  system.lastErrorTimestamp = null;
+  system.disabledReason = null;
+  system.disabledAt = null;
+  registry.errorCounts.set(name, 0);
+  console.log(`[SystemHealth] Re-enabled system: ${name}`);
+  return true;
+}
+
 export function registerSystem(registry: SystemRegistry, definition: SystemDefinition): void {
+  // Ensure health tracking fields are initialised
+  if (definition.consecutiveErrors === undefined) definition.consecutiveErrors = 0;
+  if (definition.totalErrors === undefined) definition.totalErrors = 0;
+  if (definition.lastError === undefined) definition.lastError = null;
+  if (definition.lastErrorTimestamp === undefined) definition.lastErrorTimestamp = null;
+  if (definition.disabledReason === undefined) definition.disabledReason = null;
+  if (definition.disabledAt === undefined) definition.disabledAt = null;
   registry.systems.set(definition.name, definition);
 }
 
@@ -467,12 +610,15 @@ function createSystemContext(world: World, registry: SystemRegistry, tick: numbe
     addEntity,
     addComponent,
     removeEntity,
-    components: AllComponents,
+    components: getMergedComponents(),
     relations: AllRelations,
     ai: sharedAIContext,
     grid: sharedGridContext,
     location: sharedLocationContext,
     cognitive: sharedCognitiveContext,
+    getComponent: (name: string) => getComponent(name),
+    createComponent: (def: ComponentDefinition) => registryCreateComponent(def),
+    attachComponent: (eid: number, name: string, values?: Record<string, any>) => attachToEntity(world, eid, name, values),
   };
 }
 
@@ -498,7 +644,8 @@ export function runSystems(world: World, registry: SystemRegistry, tick: number,
           emit: (type, data) => {
             telemetry.lastEmitCount++;
             telemetry.totalEmits++;
-            context.emit(type, data);
+            context.emit(type, { ...data, _sourceSystem: system.name });
+            recordSystemEvent(system.name, type, tick);
           },
           log: (message) => {
             telemetry.lastLogCount++;
@@ -507,14 +654,22 @@ export function runSystems(world: World, registry: SystemRegistry, tick: number,
           },
         };
 
+        const snapshot = sampleComponentState(world);
         const started = Date.now();
         system.compiledFn(world, ctxForSystem);
         const duration = Date.now() - started;
+        const afterSnapshot = sampleComponentState(world);
+        const changes = diffComponentState(snapshot, afterSnapshot);
+        recordEffectivenessRun(system.name, changes, telemetry.lastEmitCount);
+        recordTickWrite(system.name, tick, changes);
+
         telemetry.runs++;
         telemetry.lastDurationMs = duration;
         telemetry.totalDurationMs += duration;
 
         system.lastRun = now;
+        // Successful execution — reset consecutive error counter
+        system.consecutiveErrors = 0;
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -548,7 +703,8 @@ export function runAsyncSystems(world: World, registry: SystemRegistry, tick: nu
         emit: (type, data) => {
           telemetry.lastEmitCount++;
           telemetry.totalEmits++;
-          context.emit(type, data);
+          context.emit(type, { ...data, _sourceSystem: system.name });
+          recordSystemEvent(system.name, type, tick);
         },
         log: (message) => {
           telemetry.lastLogCount++;
@@ -557,14 +713,22 @@ export function runAsyncSystems(world: World, registry: SystemRegistry, tick: nu
         },
       };
 
+      const snapshot = sampleComponentState(world);
       const started = Date.now();
       Promise.resolve(system.compiledFn(world, ctxForSystem))
         .then(() => {
           const duration = Date.now() - started;
+          const afterSnapshot = sampleComponentState(world);
+          const changes = diffComponentState(snapshot, afterSnapshot);
+          recordEffectivenessRun(system.name, changes, telemetry.lastEmitCount);
+          recordTickWrite(system.name, tick, changes);
+
           telemetry.runs++;
           telemetry.lastDurationMs = duration;
           telemetry.totalDurationMs += duration;
           system.running = false;
+          // Successful execution — reset consecutive error counter
+          system.consecutiveErrors = 0;
         })
         .catch((error) => {
           const errorMsg = error instanceof Error ? error.message : String(error);

@@ -8,6 +8,7 @@ import {
   Users,
   MapPin,
   Cpu,
+  Box,
   Send,
   Loader2,
   Play,
@@ -15,6 +16,8 @@ import {
   Square,
   Wifi,
   WifiOff,
+  Save,
+  FolderOpen,
 } from "lucide-react";
 import { useSimulationStore } from "../../store/simulation";
 import { useSimulationBusContext } from "../../contexts/SimulationBusContext";
@@ -31,9 +34,13 @@ export function Header({ onSendCommand }: HeaderProps) {
     agentCount,
     roomCount,
     systemCount,
+    entityCount,
     status,
     simulationStatus,
+    lastSavedAt,
+    saves,
   } = useSimulationStore();
+  const [showSaveMenu, setShowSaveMenu] = useState(false);
   const { map } = useMapEditorStore();
   const { connect, disconnect, inject } = useSimulationBusContext();
   const [command, setCommand] = useState("");
@@ -131,6 +138,14 @@ export function Header({ onSendCommand }: HeaderProps) {
         </div>
 
         <div className="flex items-center gap-2">
+          <Box className="w-4 h-4 text-argos-system" />
+          <span className="text-sm font-mono font-semibold text-argos-text-primary">
+            {entityCount}
+          </span>
+          <span className="text-sm text-argos-text-secondary">entities</span>
+        </div>
+
+        <div className="flex items-center gap-2">
           <Cpu className="w-4 h-4 text-argos-system" />
           <span className="text-sm font-mono font-semibold text-argos-text-primary">
             {systemCount}
@@ -194,6 +209,59 @@ export function Header({ onSendCommand }: HeaderProps) {
             Stop
           </button>
         )}
+
+        <div className="h-4 w-px bg-argos-border" />
+
+        {/* Save */}
+        <button
+          onClick={() => inject({ type: "inject:simulation_save" })}
+          disabled={status !== "connected" || simulationStatus === "stopped"}
+          className="px-3 py-1.5 text-xs rounded bg-argos-bg-tertiary text-argos-text-secondary hover:text-argos-text-primary border border-argos-border disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+          title={lastSavedAt ? `Last saved: ${new Date(lastSavedAt).toLocaleTimeString()}` : "Save simulation"}
+        >
+          <Save className="w-3.5 h-3.5" />
+          Save
+        </button>
+
+        {/* Load */}
+        <div className="relative">
+          <button
+            onClick={() => {
+              inject({ type: "inject:simulation_list_saves" });
+              setShowSaveMenu(!showSaveMenu);
+            }}
+            disabled={status !== "connected"}
+            className="px-3 py-1.5 text-xs rounded bg-argos-bg-tertiary text-argos-text-secondary hover:text-argos-text-primary border border-argos-border disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+            title="Load saved simulation"
+          >
+            <FolderOpen className="w-3.5 h-3.5" />
+            Load
+          </button>
+
+          {showSaveMenu && (
+            <div className="absolute right-0 top-full mt-1 w-72 bg-argos-bg-secondary border border-argos-border rounded-lg shadow-xl z-50 max-h-64 overflow-auto">
+              {saves.length === 0 ? (
+                <div className="p-3 text-xs text-argos-text-muted text-center">No saved simulations found</div>
+              ) : (
+                saves.map(save => (
+                  <button
+                    key={save.id}
+                    onClick={() => {
+                      inject({ type: "inject:simulation_load", simulationId: save.id });
+                      setShowSaveMenu(false);
+                    }}
+                    className="w-full px-3 py-2 text-left hover:bg-argos-bg-tertiary border-b border-argos-border last:border-b-0"
+                  >
+                    <div className="text-xs font-medium text-argos-text-primary">{save.name}</div>
+                    <div className="text-xs text-argos-text-muted">
+                      Tick {save.currentTick} &middot; {new Date(save.lastSavedAt).toLocaleString()}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
 
         <span className={`text-xs px-2 py-1 rounded uppercase tracking-wide ${simulationStatusClass}`}>
           {simulationStatus}

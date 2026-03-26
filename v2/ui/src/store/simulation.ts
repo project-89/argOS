@@ -199,6 +199,22 @@ export interface SimulationState {
   selectedSpirit: string | null;
   selectedDaemon: string | null;
 
+  // Narrative log (story prose from The Narrator)
+  narrativeLog: Array<{ content: string; timestamp: number }>;
+
+  // Persistence state
+  simulationId: string | null;
+  simulationName: string | null;
+  saves: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    createdAt: number;
+    lastSavedAt: number;
+    currentTick: number;
+  }>;
+  lastSavedAt: number | null;
+
   // UI state
   sidebarOpen: boolean;
   activePanel: "dashboard" | "agents" | "entities" | "rooms" | "spirits" | "systems" | "timeline" | "logs" | "daemons" | "mapeditor";
@@ -257,6 +273,13 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   roomEvents: [],
   daemonEvents: [],
 
+  narrativeLog: [],
+
+  simulationId: null,
+  simulationName: null,
+  saves: [],
+  lastSavedAt: null,
+
   subscriptions: [{ channel: "*", active: true }],
 
   selectedAgent: null,
@@ -298,6 +321,14 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       updates.godEvents = [event as GodEvent, ...state.godEvents].slice(0, 100);
     } else if (event.type.startsWith("spirit:")) {
       updates.spiritEvents = [event as SpiritEvent, ...state.spiritEvents].slice(0, 100);
+      // Capture narrative prose from The Narrator
+      const spiritMsg = event as any;
+      if (spiritMsg.messageType === "story" && spiritMsg.content) {
+        updates.narrativeLog = [
+          ...state.narrativeLog,
+          { content: spiritMsg.content, timestamp: event.timestamp },
+        ].slice(-200); // Keep last 200 entries
+      }
     } else if (event.type.startsWith("agent:")) {
       updates.agentEvents = [event as AgentEvent, ...state.agentEvents].slice(0, 100);
     } else if (event.type.startsWith("system:")) {
@@ -418,6 +449,21 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     } else if (event.type === "simulation:error") {
       const simError = event as { error?: string };
       updates.error = simError.error || state.error;
+    } else if (event.type === "simulation:saved") {
+      const saved = event as any;
+      updates.simulationId = saved.simulationId;
+      updates.simulationName = saved.simulationName;
+      updates.lastSavedAt = event.timestamp;
+    } else if (event.type === "simulation:loaded") {
+      const loaded = event as any;
+      updates.simulationId = loaded.simulationId;
+      updates.simulationName = loaded.simulationName;
+      updates.lastSavedAt = event.timestamp;
+      // Clear narrative log on load - fresh start
+      updates.narrativeLog = [];
+    } else if (event.type === "simulation:saves_list") {
+      const list = event as any;
+      updates.saves = list.saves || [];
     }
 
     set(updates);

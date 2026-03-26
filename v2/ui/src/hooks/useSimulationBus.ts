@@ -76,6 +76,13 @@ export function useSimulationBus(options: UseSimulationBusOptions = {}): Simulat
       switch (message.type) {
         case "event":
           if (message.event) {
+            // Debug: log world:state events to help diagnose UI data flow
+            if (message.event.type === "world:state") {
+              const ws = message.event as any;
+              console.log(
+                `[SimulationBus] world:state: systems=${(ws.systems||[]).length} spirits=${(ws.spirits||[]).length} agents=${(ws.agents||[]).length} entities=${(ws.entities||[]).length} rooms=${(ws.rooms||[]).length}`
+              );
+            }
             store.getState().addEvent(message.event);
           }
           break;

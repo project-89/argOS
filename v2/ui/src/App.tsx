@@ -21,8 +21,8 @@ import { GodChat } from "./components/panels/GodChat";
 import { MapEditor } from "./components/MapEditor";
 
 function App() {
-  const { activePanel } = useSimulationStore();
-  const { sendGodCommand } = useSimulationBusContext();
+  const { activePanel, status } = useSimulationStore();
+  const { sendGodCommand, connect } = useSimulationBusContext();
   const [chatOpen, setChatOpen] = useState(false);
 
   // Render the active panel
@@ -60,6 +60,25 @@ function App() {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
+        {/* Connection Banner */}
+        {status !== "connected" && (
+          <div className="bg-red-900/60 border-b border-red-700 px-4 py-2 flex items-center justify-between">
+            <span className="text-sm text-red-200">
+              {status === "connecting"
+                ? "Connecting to simulation bus..."
+                : "Disconnected from simulation bus. Panels will be empty until connected."}
+            </span>
+            {status !== "connecting" && (
+              <button
+                onClick={connect}
+                className="px-3 py-1 text-xs rounded bg-red-700 text-red-100 hover:bg-red-600 transition-colors"
+              >
+                Reconnect
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Header */}
         <Header onSendCommand={sendGodCommand} />
 

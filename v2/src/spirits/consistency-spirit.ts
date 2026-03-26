@@ -682,6 +682,28 @@ export function recordIssue(issue: ConsistencyIssue): void {
   if (accumulatedIssues.length > MAX_ACCUMULATED_ISSUES) {
     accumulatedIssues.shift();
   }
+
+  // Report to observation aggregator for synthesis
+  try {
+    const { reportGapObservation } = require("./observation-aggregator");
+    const severityMap: Record<string, "low" | "medium" | "high" | "critical"> = {
+      low: "low", medium: "medium", high: "high", critical: "critical",
+    };
+    const categoryMap: Record<string, string> = {
+      missing_entity: "resource_gap",
+      invalid_action: "interaction_failure",
+      narrative_drift: "narrative_gap",
+      stimulus_mismatch: "environmental_gap",
+    };
+    reportGapObservation({
+      source: "The Arbiter",
+      category: (categoryMap[issue.category] || "rule_missing") as any,
+      severity: severityMap[issue.severity] || "medium",
+      title: `Consistency: ${issue.category}`,
+      detail: issue.description,
+      evidence: issue.evidence?.length ? [issue.evidence.join("; ").slice(0, 200)] : undefined,
+    });
+  } catch {}
 }
 
 /**

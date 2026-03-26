@@ -1,7 +1,7 @@
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext } from "../ecs/dynamic-systems";
 import { query, entityExists, addComponent, removeComponent, hasComponent, getRelationTargets, addEntity } from "bitecs";
-import { Name, Agent, Mind, Room, StimulusSource, GridPosition, Needs, ObjectState, Goal, PhysicalObject, Container } from "../ecs/components";
+import { Name, Agent, Mind, Room, StimulusSource, GridPosition, Needs, ObjectState, Goal, PhysicalObject, Container, BehaviorPolicy } from "../ecs/components";
 import { LocatedIn, SleepingOn, HasGoal } from "../ecs/relations";
 import { getDirectContainer, getRoomForEntity, setLocatedIn } from "../ecs/location";
 import { getDynamicComponentValue } from "../ecs/dynamic-components";
@@ -774,7 +774,7 @@ FOR EACH entity:
  */
 export function createGoalPursuitSystem(): SystemDefinition {
   const movementLocks = new Map<number, { targetEid: number; untilMs: number }>();
-  const RETARGET_LOCK_MS = 4000;
+  const RETARGET_LOCK_MS = 8000;
   return {
     name: "GoalPursuitSystem",
     description: "Executes movement and other goal-driven actions",
@@ -974,7 +974,7 @@ FOR EACH agent WITHOUT active goals AND needs are okay:
   Pick a different room
   Create Goal: "Go to <room> to wander"
 `,
-    frequency: 15000, // every 15s
+    frequency: 25000, // every 25s — backup wander for truly idle agents
     active: true,
     lastRun: 0,
     compiledFn: (world: World, ctx: SystemContext) => {
@@ -984,6 +984,9 @@ FOR EACH agent WITHOUT active goals AND needs are okay:
       const agents = Array.from(ctx.query(world, [Agent, Needs, Mind, Name])).filter((eid) => entityExists(world, eid));
       for (const agentEid of agents) {
         if (!Agent.active[agentEid]) continue;
+
+        // Skip agents with behavior policies — their templates handle movement decisions
+        if (hasComponent(world, agentEid, BehaviorPolicy) && BehaviorPolicy.enabled[agentEid]) continue;
 
         const hunger = Needs.hunger[agentEid] || 0;
         const energy = Needs.energy[agentEid] ?? 100;

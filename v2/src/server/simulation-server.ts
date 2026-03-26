@@ -95,8 +95,14 @@ export function createSimulationServer(port: number = 3456) {
   // Serve static files (legacy UI)
   app.use(express.static(path.join(__dirname, "../../public")));
 
-  // Serve new Vite UI from /ui path (when built)
-  app.use("/app", express.static(path.join(__dirname, "../../ui/dist")));
+  // Serve new Vite UI from /app path (when built)
+  const uiDistPath = path.join(__dirname, "../../ui/dist");
+  app.use("/app", express.static(uiDistPath));
+  // SPA catch-all: serve index.html for any /app sub-route so client-side routing works
+  // Express 5 uses {*path} instead of * for wildcard params
+  app.get("/app/{*path}", (_req: any, res: any) => {
+    res.sendFile(path.join(uiDistPath, "index.html"));
+  });
 
   app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "../../public/index.html"));

@@ -177,3 +177,29 @@ export {
   type ComicOutput,
   type NarrativeHook,
 } from "./story-templates";
+
+// Observation Aggregator
+export {
+  reportGapObservation,
+  reportGap,
+  getTopObservations,
+  getObservationsByCategory,
+  getRecentObservations,
+  getObservationSummary,
+  dismissObservation,
+  pruneStaleObservations,
+  resetAggregator,
+  type GapObservation,
+  type AggregatedObservation,
+  type ObservationCategory,
+  type ObservationSeverity,
+} from "./observation-aggregator";
+
+// Watcher Spirit
+export {
+  createWatcherSpirit,
+  runObservationSynthesis,
+  recordAgentAction,
+  getWatcherStatus,
+  resetWatcherState,
+} from "./watcher-spirit";

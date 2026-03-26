@@ -328,7 +328,22 @@ export function createObjectEntity(
   if (config.portable !== false) {
     defaultTraits.push("takeable");
   }
-  const allTraits = [...defaultTraits, ...(config.traits || [])];
+  // Expand common trait aliases so affordances work correctly
+  const traitAliases: Record<string, string[]> = {
+    food: ["edible"],       // "food" implies "edible" for eat affordance
+    weapon: ["attackable"],  // "weapon" implies "attackable"
+    bed: ["sleepable"],      // "bed" implies "sleepable"
+    chair: ["sittable"],     // "chair" implies "sittable"
+    book: ["readable"],      // "book" implies "readable"
+    door: ["openable"],      // "door" implies "openable"
+  };
+  const rawTraits = [...defaultTraits, ...(config.traits || [])];
+  const expanded = new Set(rawTraits);
+  for (const t of rawTraits) {
+    const aliases = traitAliases[t];
+    if (aliases) aliases.forEach(a => expanded.add(a));
+  }
+  const allTraits = [...expanded];
   Traits.active[eid] = JSON.stringify(allTraits);
 
   // Legacy mirror (compat)

@@ -12,10 +12,12 @@ import { WorldMap as WorldMapComponent } from "../ecs/components";
 // LOCKED MODELS from centralized config - DO NOT CHANGE
 import { systemBakerModel, plannerModel } from "../llm/config";
 import { ActionRegistry } from "../cognition/action-registry";
+import { listNames, listDynamic, getMergedComponents, getComponent, registryCreateComponent, attachToEntity } from "../ecs/component-registry";
+import type { ComponentDefinition } from "../ecs/dynamic-components";
 
-// Pro for design/architecture, Flash for code generation
-const designModel = plannerModel;      // Gemini 3 Pro - better reasoning for system design
-const codeModel = systemBakerModel;    // Gemini 3 Flash - fast code generation
+// Both use 3.1 Pro — quality over speed for R&D
+const designModel = plannerModel;      // System architecture and design
+const buildModel = systemBakerModel;   // Code generation
 
 /**
  * Extract first valid JSON object from text using balanced brace matching.
@@ -133,7 +135,38 @@ function sanitizeFunctionBody(raw: string): string {
     break;
   }
 
-  return lines.join("\n").trim();
+  code = lines.join("\n").trim();
+
+  // Detect duplicated code blocks: LLM sometimes echoes pseudocode then writes real code.
+  // Strategy: find variable declarations that appear twice — the second occurrence is the
+  // start of the real implementation.
+  const constDecls = [...code.matchAll(/^(const \w+)\s*=/gm)];
+  if (constDecls.length >= 4) {
+    const seen = new Map<string, number[]>();
+    for (let i = 0; i < constDecls.length; i++) {
+      const varName = constDecls[i][1];
+      if (!seen.has(varName)) seen.set(varName, []);
+      seen.get(varName)!.push(i);
+    }
+    // Find the first variable that's declared twice
+    for (const [varName, indices] of seen) {
+      if (indices.length >= 2) {
+        const secondDeclIdx = constDecls[indices[1]].index!;
+        // Only trim if the second occurrence is past the first third of the code
+        if (secondDeclIdx > code.length * 0.25) {
+          const secondHalf = code.slice(secondDeclIdx);
+          // Verify the second half is substantial (not a tiny snippet)
+          if (secondHalf.length > code.length * 0.25) {
+            console.log(`[sanitize] Detected duplicated code (${varName} declared twice) — trimming first ${secondDeclIdx} chars`);
+            code = secondHalf;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return code;
 }
 
 function extractRequestedSystemName(description: string): string | null {
@@ -206,10 +239,14 @@ export function validateSystemCode(code: string, design: SystemDesignDoc): {
     "BehaviorPolicy", "ProcedureState"
   ];
 
-  // Check for component writes (Pattern: ComponentName.property[eid] = value)
+  // Check for component writes — multiple patterns:
+  // Direct: Needs.hunger[eid] = value
+  // Qualified: ctx.components.Needs.hunger[eid] = value
+  // Destructured lowercase: needs.hunger[eid] = value
+  // Compound assignment: Needs.hunger[eid] += value
   const componentWritePattern = new RegExp(
-    `(${writableComponents.join("|")})\\.\\w+\\[\\w+\\]\\s*=`,
-    "g"
+    `(?:(?:ctx\\.components|components)\\.)?(?:${writableComponents.join("|")})\\.\\w+\\[\\w+\\]\\s*(?:[+\\-*\\/]?=)`,
+    "gi"
   );
   const componentWrites = code.match(componentWritePattern) || [];
 
@@ -259,17 +296,43 @@ export function validateSystemCode(code: string, design: SystemDesignDoc): {
 
   // Check that modified components from design are actually written
   if (design.modifiedComponents && design.modifiedComponents.length > 0) {
+    let missingComponentWrites = 0;
     for (const component of design.modifiedComponents) {
       const normalized = component.endsWith("s") ? component.slice(0, -1) : component;
       const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const compPattern = new RegExp(`${escaped}\\.\\w+\\[\\w+\\]\\s*=`);
-      const addCompPattern = new RegExp(`ctx\\.addComponent\\(world,\\s*\\w+,\\s*${escaped}(?:\\(|\\b)`);
+      const lowerEscaped = escaped.charAt(0).toLowerCase() + escaped.slice(1);
+
+      const writePatterns: RegExp[] = [
+        // Direct: Needs.hunger[eid] = / += / -= etc
+        new RegExp(`${escaped}\\.\\w+\\[\\w+\\]\\s*(?:[+\\-*\\/]?=)`),
+        // Qualified: ctx.components.Needs.hunger[eid] =
+        new RegExp(`(?:ctx\\.components|components)\\.${escaped}\\.\\w+\\[\\w+\\]\\s*(?:[+\\-*\\/]?=)`),
+        // Lowercase destructured: needs.hunger[eid] =
+        new RegExp(`${lowerEscaped}\\.\\w+\\[\\w+\\]\\s*(?:[+\\-*\\/]?=)`),
+        // Bracket notation: Needs["hunger"][eid] =
+        new RegExp(`${escaped}\\[["']\\w+["']\\]\\[\\w+\\]\\s*(?:[+\\-*\\/]?=)`),
+        // addComponent
+        new RegExp(`(?:ctx\\.)?addComponent\\(\\s*world,\\s*\\w+,\\s*${escaped}(?:\\(|\\b)`),
+        // setDynamicComponentValue
+        new RegExp(`setDynamicComponentValue\\(\\s*["']${escaped}["']`),
+        // Variable alias: const n = Needs; then n.hunger[eid] =
+        // (can't fully detect, but catch common single-letter aliases)
+        new RegExp(`=\\s*(?:ctx\\.components\\.)?${escaped}\\s*;`),
+      ];
+
       const helperPatterns = helperCoverage[normalized] || [];
       const hasHelperWrite = helperPatterns.some((pattern) => pattern.test(code));
+      const hasDirectWrite = writePatterns.some((pattern) => pattern.test(code));
 
-      if (!compPattern.test(code) && !addCompPattern.test(code) && !hasHelperWrite) {
-        issues.push(`Design specifies ${component} should be modified, but no writes to ${component} found`);
-        suggestions.push(`Add write: ${component}.someProperty[eid] = newValue`);
+      if (!hasDirectWrite && !hasHelperWrite) {
+        missingComponentWrites++;
+        // Downgrade to suggestion if the code has other valid state changes
+        if (totalStateChanges > 0) {
+          suggestions.push(`Design specifies ${component} should be modified — write pattern not detected (may use indirect access)`);
+        } else {
+          issues.push(`Design specifies ${component} should be modified, but no writes to ${component} found`);
+          suggestions.push(`Add write: ${component}.someProperty[eid] = newValue`);
+        }
       }
     }
   }
@@ -742,7 +805,18 @@ for (const eid of agents) {
 }`
 };
 
-const FULL_CONTEXT = `
+function getFullContext(): string {
+  // Build dynamic component documentation
+  let dynamicComponentDocs = "";
+  const dynamicDefs = listDynamic();
+  if (dynamicDefs.length > 0) {
+    dynamicComponentDocs = `\n=== DYNAMIC COMPONENTS (created at runtime) ===\n`;
+    for (const def of dynamicDefs) {
+      dynamicComponentDocs += `const ${def.name} = { ${Object.entries(def.properties).map(([k]) => `${k}: []`).join(", ")} };  // ${def.description}\n`;
+    }
+  }
+
+  return `
 === DETERMINISTIC SIMULATION PHILOSOPHY ===
 
 You are building systems for a DETERMINISTIC ECS SIMULATION inspired by Dwarf Fortress.
@@ -1213,11 +1287,26 @@ ctx.addComponent(world, customEid, Name);
 ctx.addComponent(world, customEid, Description);
 Name.value[customEid] = "Dynamic Entity";
 Description.value[customEid] = "Created by a system";
+
+=== UNIFIED COMPONENT REGISTRY ===
+
+ctx.getComponent(name) - get component SoA by name (works for both built-in and dynamic)
+ctx.createComponent({ name, description, properties }) - create new component type at runtime
+ctx.attachComponent(eid, name, values) - attach component to entity with initial values
+
+// Example: Create and use a dynamic component
+const TempComp = ctx.getComponent("Temperature") || ctx.createComponent({ name: "Temperature", description: "Thermal state", properties: { current: "number", target: "number" } });
+ctx.attachComponent(eid, "Temperature", { current: 20, target: 25 });
+// After attaching, the component is queryable:
+const heated = Array.from(ctx.query(world, [ctx.getComponent("Temperature")]));
+${dynamicComponentDocs}
 `;
+}
 
-const SYSTEM_BUILD_PROMPT = `You are a System Builder for a DETERMINISTIC ECS simulation engine.
+function getSystemBuildPrompt(): string {
+  return `You are a System Builder for a DETERMINISTIC ECS simulation engine.
 
-${FULL_CONTEXT}
+${getFullContext()}
 
 === YOUR TASK ===
 
@@ -1236,6 +1325,7 @@ Your code MUST NOT:
 2. Use hardcoded entity names (check roles/components instead)
 3. Make purely random decisions without reading state first
 4. Ignore the input components specified in the design
+5. Duplicate logic — NEVER write the same query/loop/block twice. One implementation only.
 
 === CODE STYLE RULES ===
 
@@ -1273,6 +1363,7 @@ for (const eid of entities) {
 \`\`\`
 
 Generate ONLY the function body. No markdown, no code fences, no explanation.`;
+}
 
 export async function designSystem(description: string): Promise<SystemDesignDoc | null> {
   try {
@@ -1280,7 +1371,7 @@ export async function designSystem(description: string): Promise<SystemDesignDoc
       model: designModel,  // Use Pro for architecture/design
       system: `You are a System Architect designing DETERMINISTIC ECS systems.
 
-${FULL_CONTEXT}
+${getFullContext()}
 
 === DESIGN REQUIREMENTS ===
 
@@ -1363,8 +1454,8 @@ Bad modifiedComponents examples:
 export async function buildSystem(design: SystemDesignDoc): Promise<string | null> {
   try {
     const { text } = await generateText({
-      model: codeModel,  // Use Flash for code generation
-      system: SYSTEM_BUILD_PROMPT,
+      model: buildModel,  // Gemini 3.1 Pro for code generation
+      system: getSystemBuildPrompt(),
       prompt: `Build system: ${design.name}
 Purpose: ${design.purpose}
 Complexity: ${design.complexity || "moderate"}
@@ -1372,12 +1463,13 @@ Complexity: ${design.complexity || "moderate"}
 INPUT COMPONENTS (must READ these): ${design.inputs.join(", ")}
 MODIFIED COMPONENTS (must WRITE to these): ${(design.modifiedComponents || []).join(", ") || "At least one component"}
 
-Pseudocode: ${design.pseudocode}
+Design intent: ${design.pseudocode}
 
-REMINDER: Your code MUST write to at least one of the modified components.
-Text-only systems that don't change state are REJECTED.
-
-Generate the plain JavaScript function body only. No markdown.`,
+CRITICAL RULES:
+1. Your code MUST write to at least one of the modified components. Text-only systems are REJECTED.
+2. Do NOT echo the design intent as comments or pseudocode — write ONLY the final implementation.
+3. Do NOT duplicate logic — every query, loop, and write should appear exactly ONCE.
+4. Output the plain JavaScript function body only. No markdown fences, no explanation.`,
     });
 
     return sanitizeFunctionBody(text);
@@ -1399,8 +1491,9 @@ export function compileSystemCode(code: string, isAsync: boolean = false): Compi
     const hasAwait = /\bawait\b/.test(code);
     const needsAsync = isAsync || hasAwait;
 
-    // Expose ALL components and relations to generated systems
-    const componentDestructure = `const { Name, Description, Position, Room, Agent, Mind, WorkingMemory, Attention, Personality, Thought, Perception, Memory, Belief, Impression, Goal, ConversationTurn, Stimulus, KnowledgeNode, Action, CognitiveEvent, PhysicalObject, StimulusSource, GodAgent, GridPosition, Sprite, WorldMap, Needs, Health, Plan, Schedule, ReflectionState, Visual, Connection, Tile, Removed, CombatStats, InCombat, StatusEffect, Inventory, Item, EquipSlot, ScheduledActivity, Interactable, CurrentAction, CharacterRigConfig, ObjectType, ObjectState, Traits, Durability, Fuel, Container, Surface, Portal, LightSource, StateTransition, DynamicDescription, ObjectProperties } = ctx.components;`;
+    // Expose ALL components (static + dynamic) and relations to generated systems
+    const allNames = listNames();
+    const componentDestructure = `const { ${allNames.join(", ")} } = ctx.components;`;
     const relationDestructure = `const { ChildOf, LocatedIn, Knows, RelatesTo, Causes, Supports, Contradicts, Perceives, Targets, BelongsTo, HasMemory, HasBelief, HasImpression, HasThought, HasPerception, HasConversation, HasGoal, HasPlan, HasSchedule, HasReflectionState } = ctx.relations;`;
 
     let wrappedCode: string;
@@ -1564,7 +1657,7 @@ export function testSystem(
     addEntity,
     addComponent,
     removeEntity,
-    components: AllComponents,
+    components: getMergedComponents(),
     relations: AllRelations,
     ai: createAIContext(),
     grid: {
@@ -1587,6 +1680,9 @@ export function testSystem(
       listDirectContents,
     },
     cognitive: cognitiveContext,
+    getComponent: (name: string) => getComponent(name),
+    createComponent: (def: ComponentDefinition) => registryCreateComponent(def),
+    attachComponent: (eid: number, name: string, values?: Record<string, any>) => attachToEntity(world, eid, name, values),
   };
 
   try {
@@ -1617,10 +1713,10 @@ async function reviewAndFixCode(code: string, error: string, design: SystemDesig
 
   try {
     const { text } = await generateText({
-      model: codeModel,  // Use Flash for code fixes
+      model: buildModel,  // Gemini 3.1 Pro for code fixes
       system: `You are a Code Review Agent. Your job is to fix JavaScript syntax errors.
 
-${FULL_CONTEXT}
+${getFullContext()}
 
 RULES:
 1. Fix ONLY the syntax error - don't rewrite everything
@@ -1702,34 +1798,41 @@ export async function bakeSystem(
 
   const requestedName = extractRequestedSystemName(description);
 
-  // Check if a template matches first
-  const templateMatch = matchSystemTemplate(description);
-  if (templateMatch) {
-    const finalName = requestedName || templateMatch.name;
-    console.log(`[SystemBaker] Template match found: ${templateMatch.name}${requestedName ? ` (forced name: ${finalName})` : ""}`);
+  // Template matching — only for preset/bootstrap baking, not for architect-proposed systems.
+  // Architect proposals should always go through full LLM design+code generation to get
+  // novel systems tailored to the actual need, not clones of generic templates.
+  const isArchitectProposal = description.includes("System Name:") || description.includes("Logic Description:");
+  if (!isArchitectProposal) {
+    const templateMatch = matchSystemTemplate(description);
+    if (templateMatch) {
+      const finalName = requestedName || templateMatch.name;
+      console.log(`[SystemBaker] Template match found: ${templateMatch.name}${requestedName ? ` (forced name: ${finalName})` : ""}`);
 
-    const compileResult = compileSystemCode(templateMatch.template, false);
-    if (compileResult.success && compileResult.fn) {
-      const testResults = testSystem(compileResult.fn, world, registry);
-      const allPassed = testResults.every(r => r.passed);
+      const compileResult = compileSystemCode(templateMatch.template, false);
+      if (compileResult.success && compileResult.fn) {
+        const testResults = testSystem(compileResult.fn, world, registry);
+        const allPassed = testResults.every(r => r.passed);
 
-      if (allPassed) {
-        const system: SystemDefinition = {
-          name: finalName,
-          description: description,
-          pseudocode: "Template-based system: " + templateMatch.name,
-          frequency: 10000,
-          active: false,
-          lastRun: 0,
-          code: templateMatch.template,
-          compiledFn: compileResult.fn,
-          async: false,
-        };
-        console.log("[SystemBaker] SUCCESS (template):", system.name);
-        return { success: true, system, testResults };
+        if (allPassed) {
+          const system: SystemDefinition = {
+            name: finalName,
+            description: description,
+            pseudocode: "Template-based system: " + templateMatch.name,
+            frequency: 10000,
+            active: false,
+            lastRun: 0,
+            code: templateMatch.template,
+            compiledFn: compileResult.fn,
+            async: false,
+          };
+          console.log("[SystemBaker] SUCCESS (template):", system.name);
+          return { success: true, system, testResults };
+        }
       }
+      console.log("[SystemBaker] Template failed, falling back to LLM generation");
     }
-    console.log("[SystemBaker] Template failed, falling back to LLM generation");
+  } else {
+    console.log("[SystemBaker] Architect proposal detected — skipping template matching, using full LLM generation");
   }
 
   const design = await designSystem(description);
@@ -1855,8 +1958,8 @@ export async function bakeSystem(
 async function buildSystemWithContext(design: SystemDesignDoc, extraContext: string): Promise<string | null> {
   try {
     const { text } = await generateText({
-      model: codeModel,  // Use Flash for code generation
-      system: SYSTEM_BUILD_PROMPT + extraContext,
+      model: buildModel,  // Gemini 3.1 Pro for code generation
+      system: getSystemBuildPrompt() + extraContext,
       prompt: `Build system: ${design.name}
 Purpose: ${design.purpose}
 Complexity: ${design.complexity || "moderate"}
@@ -1864,23 +1967,16 @@ Complexity: ${design.complexity || "moderate"}
 INPUT COMPONENTS (must READ these): ${design.inputs.join(", ")}
 MODIFIED COMPONENTS (must WRITE to these): ${(design.modifiedComponents || []).join(", ") || "At least one component"}
 
-Pseudocode: ${design.pseudocode}
+Design intent: ${design.pseudocode}
 
-REMINDER: Your code MUST write to at least one of the modified components.
-Text-only systems that don't change state are REJECTED.
-
-Generate the plain JavaScript function body only. No markdown.`,
+CRITICAL RULES:
+1. Your code MUST write to at least one of the modified components. Text-only systems are REJECTED.
+2. Do NOT echo the design intent as comments or pseudocode — write ONLY the final implementation.
+3. Do NOT duplicate logic — every query, loop, and write should appear exactly ONCE.
+4. Output the plain JavaScript function body only. No markdown fences, no explanation.`,
     });
 
-    let code = text.trim();
-    if (code.startsWith('```')) {
-      code = code.replace(/```\w*\n?/g, '').trim();
-    }
-    if (code.endsWith('```')) {
-      code = code.slice(0, -3).trim();
-    }
-
-    return code;
+    return sanitizeFunctionBody(text);
   } catch (error) {
     console.error("Build error:", error);
     return null;
@@ -1903,8 +1999,8 @@ export async function modifySystem(
 
   try {
     const { text } = await generateText({
-      model: codeModel,  // Use Flash for code modification
-      system: SYSTEM_BUILD_PROMPT + `
+      model: buildModel,  // Gemini 3.1 Pro for code modification
+      system: getSystemBuildPrompt() + `
 
 EXISTING SYSTEM CODE:
 \`\`\`

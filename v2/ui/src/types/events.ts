@@ -482,6 +482,21 @@ export interface SimulationStartInjection {
   };
 }
 
+export interface SimulationSaveInjection {
+  type: "inject:simulation_save";
+  name?: string;
+}
+
+export interface SimulationLoadInjection {
+  type: "inject:simulation_load";
+  simulationId: string;
+  snapshotTick?: number;
+}
+
+export interface SimulationListSavesInjection {
+  type: "inject:simulation_list_saves";
+}
+
 export type InjectionMessage =
   | GodCommandInjection
   | SpiritMessageInjection
@@ -490,7 +505,10 @@ export type InjectionMessage =
   | SimulationPauseInjection
   | SimulationResumeInjection
   | SimulationStopInjection
-  | SimulationStartInjection;
+  | SimulationStartInjection
+  | SimulationSaveInjection
+  | SimulationLoadInjection
+  | SimulationListSavesInjection;
 
 // Helper to get event category
 export function getEventCategory(event: SimulationEvent): "god" | "spirit" | "agent" | "system" | "world" | "room" | "daemon" {

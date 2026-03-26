@@ -21,11 +21,17 @@ import {
 import { runSpiritCognition, getSpiritSummary as getCognitionSummary } from "./spirit-cognition";
 import { NarratorDefinition } from "./narrator-spirit";
 import { ConsistencySpiritDefinition } from "./consistency-spirit";
-import { initializeSpiritMessaging } from "./spirit-messaging";
+import {
+  initializeSpiritMessaging,
+  spiritRouter,
+  registerSpiritCapability,
+  type SpiritCapability,
+} from "./spirit-messaging";
 import { createDynamicSpirit, type CreateSpiritConfig } from "./spirit-factory";
 import { createWorldCrafterSpirit } from "./world-crafter-spirit";
 import { createStewardSpirit } from "./steward-spirit";
 import { createLawgiverSpirit } from "./rules-spirit";
+import { createWatcherSpirit, runObservationSynthesis } from "./watcher-spirit";
 
 // =============================================================================
 // SPIRIT SYSTEM STATE
@@ -119,14 +125,144 @@ export function stopSpiritSystem(): void {
 /**
  * Deliver pending messages to GodAI without running a full spirit cognition tick.
  * Useful for external loops that run watcher/maintainer logic out-of-band.
+ * When God isn't available, routes messages between spirits directly.
  */
 export async function deliverPendingMessagesToGod(): Promise<number> {
   if (!systemState) return 0;
   const messagesForGodAI = getMessagesForGodAI(systemState.registry);
-  if (messagesForGodAI.length > 0 && systemState.godAgentCallback) {
+  if (messagesForGodAI.length === 0) return 0;
+
+  if (systemState.godAgentCallback) {
     await systemState.godAgentCallback(messagesForGodAI);
+  } else {
+    // No God available - route messages between spirits autonomously
+    routeMessagesWithoutGod(systemState.registry, messagesForGodAI);
   }
   return messagesForGodAI.length;
+}
+
+/**
+ * Route spirit messages without God AI as intermediary.
+ * Uses the SpiritMessageRouter's capability-based routing to deliver
+ * messages to the most appropriate spirit handler.
+ */
+function routeMessagesWithoutGod(registry: SpiritRegistry, messages: DivineMessage[]): void {
+  for (const msg of messages) {
+    // If message has a specific target, deliver directly
+    if (msg.to !== undefined && msg.to !== -1) {
+      const targetSpirit = registry.spirits.get(msg.to);
+      if (targetSpirit) {
+        targetSpirit.inbox.push(msg);
+        console.log(`[SpiritRouter] Direct: ${msg.from} → ${targetSpirit.definition.name}`);
+        continue;
+      }
+    }
+
+    // Try capability-based routing first (uses the SpiritMessageRouter)
+    const capability = inferCapabilityFromMessage(msg);
+    if (capability) {
+      const handler = spiritRouter.getBestHandler(capability);
+      if (handler) {
+        const targetSpirit = registry.spirits.get(handler.spiritEid);
+        if (targetSpirit) {
+          targetSpirit.inbox.push(msg);
+          console.log(`[SpiritRouter] Capability "${capability}": "${msg.subject}" → ${targetSpirit.definition.name}`);
+          continue;
+        }
+      }
+    }
+
+    // Fallback: content-based routing
+    const targetSpirit = findBestSpiritForMessage(registry, msg);
+    if (targetSpirit) {
+      targetSpirit.inbox.push(msg);
+      console.log(`[SpiritRouter] Content-match: "${msg.subject}" → ${targetSpirit.definition.name}`);
+    } else {
+      console.log(`[SpiritRouter] No handler for: "${msg.subject}" (priority: ${msg.priority})`);
+    }
+  }
+}
+
+/**
+ * Infer the capability needed from message content
+ */
+function inferCapabilityFromMessage(msg: DivineMessage): SpiritCapability | undefined {
+  const content = `${msg.subject} ${msg.content}`.toLowerCase();
+
+  if (content.includes("system") && (content.includes("error") || content.includes("repair") || content.includes("broken"))) {
+    return "system_maintenance";
+  }
+  if (content.includes("system") || content.includes("component") || content.includes("architect") || content.includes("design")) {
+    return "system_design";
+  }
+  if (content.includes("narrative") || content.includes("story") || content.includes("plot") || content.includes("tension")) {
+    return "narrative_control";
+  }
+  if (content.includes("monitor") || content.includes("watch") || content.includes("anomal")) {
+    return "monitoring";
+  }
+  if (content.includes("agent") || content.includes("mood") || content.includes("stimulus")) {
+    return "agent_control";
+  }
+  if (content.includes("social") || content.includes("relationship")) {
+    return "social_dynamics";
+  }
+
+  return undefined;
+}
+
+/**
+ * Find the best spirit to handle a message based on content keywords.
+ * Fallback when capability-based routing doesn't match.
+ */
+function findBestSpiritForMessage(registry: SpiritRegistry, msg: DivineMessage): SpiritState | undefined {
+  const content = `${msg.subject} ${msg.content}`.toLowerCase();
+
+  // Route system/architecture messages to The Weaver
+  if (content.includes("system") || content.includes("component") || content.includes("architect")) {
+    const weaver = registry.byName.get("The Weaver");
+    if (weaver) return registry.spirits.get(weaver);
+  }
+
+  // Route room/entity population to The Steward
+  if (content.includes("room") || content.includes("populate") || content.includes("furnish")) {
+    const steward = registry.byName.get("The Steward");
+    if (steward) return registry.spirits.get(steward);
+  }
+
+  // Route entity materialization to The Crafter
+  if (content.includes("entity") || content.includes("create") || content.includes("materialize")) {
+    const crafter = registry.byName.get("The Crafter");
+    if (crafter) return registry.spirits.get(crafter);
+  }
+
+  // Route rule/consistency issues to The Lawgiver or Arbiter
+  if (content.includes("rule") || content.includes("consistency") || content.includes("violation")) {
+    const lawgiver = registry.byName.get("The Lawgiver");
+    if (lawgiver) return registry.spirits.get(lawgiver);
+    const arbiter = registry.byName.get("The Arbiter");
+    if (arbiter) return registry.spirits.get(arbiter);
+  }
+
+  // Route maintenance/error to The Tinker
+  if (content.includes("error") || content.includes("repair") || content.includes("maintenance")) {
+    const tinker = registry.byName.get("The Tinker");
+    if (tinker) return registry.spirits.get(tinker);
+  }
+
+  // Route narrative to The Narrator
+  if (content.includes("narrative") || content.includes("story") || content.includes("plot")) {
+    const narrator = registry.byName.get("The Narrator");
+    if (narrator) return registry.spirits.get(narrator);
+  }
+
+  // Domain-based fallback
+  const domainSpirits = registry.byDomain.get(msg.domain);
+  if (domainSpirits && domainSpirits.length > 0) {
+    return registry.spirits.get(domainSpirits[0]);
+  }
+
+  return undefined;
 }
 
 /**
@@ -216,10 +352,14 @@ export async function tickSpiritSystem(
   // Check if enough time has passed since last tick
   if (now - systemState.lastTick < systemState.tickInterval) {
     // Still deliver pending messages even if we aren't running a full spirit cognition tick.
-    // Watchers/maintainers can enqueue urgent reports at any time; those should reach GodAI promptly.
     const messagesForGodAI = getMessagesForGodAI(systemState.registry);
-    if (messagesForGodAI.length > 0 && systemState.godAgentCallback) {
-      await systemState.godAgentCallback(messagesForGodAI);
+    if (messagesForGodAI.length > 0) {
+      if (systemState.godAgentCallback) {
+        await systemState.godAgentCallback(messagesForGodAI);
+      } else {
+        // No God - route between spirits directly
+        routeMessagesWithoutGod(systemState.registry, messagesForGodAI);
+      }
     }
     return { spiritsProcessed: 0, messagesForGodAI, narrativeProse: [] };
   }
@@ -230,11 +370,15 @@ export async function tickSpiritSystem(
   const spiritsToRun = getSpiritsNeedingObservation(systemState.registry);
 
   if (spiritsToRun.length === 0) {
-    // Still collect messages for GodAI
+    // Still collect messages for GodAI or route locally
     const messagesForGodAI = getMessagesForGodAI(systemState.registry);
 
-    if (messagesForGodAI.length > 0 && systemState.godAgentCallback) {
-      await systemState.godAgentCallback(messagesForGodAI);
+    if (messagesForGodAI.length > 0) {
+      if (systemState.godAgentCallback) {
+        await systemState.godAgentCallback(messagesForGodAI);
+      } else {
+        routeMessagesWithoutGod(systemState.registry, messagesForGodAI);
+      }
     }
 
     return { spiritsProcessed: 0, messagesForGodAI, narrativeProse: [] };
@@ -248,6 +392,13 @@ export async function tickSpiritSystem(
   // Run cognition for each spirit
   for (const spirit of spiritsToRun) {
     try {
+      // The Watcher uses deterministic synthesis, not LLM cognition
+      if (spirit.definition.name === "The Watcher") {
+        runObservationSynthesis(world, systemState.registry, spirit.eid);
+        spirit.lastObservationTime = Date.now();
+        continue;
+      }
+
       const output = await runSpiritCognition(
         spirit,
         world,
@@ -266,12 +417,16 @@ export async function tickSpiritSystem(
     }
   }
 
-  // Collect messages for GodAI
+  // Collect messages for GodAI or route locally
   const messagesForGodAI = getMessagesForGodAI(systemState.registry);
 
-  // Deliver messages to GodAI
-  if (messagesForGodAI.length > 0 && systemState.godAgentCallback) {
-    await systemState.godAgentCallback(messagesForGodAI);
+  // Deliver messages to GodAI, or route between spirits directly
+  if (messagesForGodAI.length > 0) {
+    if (systemState.godAgentCallback) {
+      await systemState.godAgentCallback(messagesForGodAI);
+    } else {
+      routeMessagesWithoutGod(systemState.registry, messagesForGodAI);
+    }
   }
 
   // Clear processed actions
@@ -335,6 +490,35 @@ export function getSpiritDetails(spiritEid: number): string {
 // =============================================================================
 // SPIRIT CREATION HELPERS
 // =============================================================================
+
+/**
+ * Register each spirit's capabilities with the message router
+ * so it knows who can handle what types of requests.
+ */
+function registerSpiritCapabilities(registry: SpiritRegistry): void {
+  const capabilityMap: Record<string, { capabilities: SpiritCapability[]; priority: number }> = {
+    "The Tinker":   { capabilities: ["system_maintenance"], priority: 10 },
+    "The Weaver":   { capabilities: ["system_design"], priority: 10 },
+    "The Narrator": { capabilities: ["narrative_control", "social_dynamics"], priority: 10 },
+    "The Arbiter":  { capabilities: ["monitoring"], priority: 10 },
+    "The Crafter":  { capabilities: ["environment"], priority: 10 },
+    "The Steward":  { capabilities: ["agent_control", "environment"], priority: 8 },
+    "The Lawgiver": { capabilities: ["system_maintenance", "monitoring"], priority: 5 },
+    "The Watcher":  { capabilities: ["monitoring"], priority: 12 },
+  };
+
+  for (const [name, config] of Object.entries(capabilityMap)) {
+    const eid = registry.byName.get(name);
+    if (eid === undefined) continue;
+    const spirit = registry.spirits.get(eid);
+    if (!spirit) continue;
+    for (const cap of config.capabilities) {
+      registerSpiritCapability(spirit, cap, config.priority, `${name} handles ${cap}`);
+    }
+  }
+
+  console.log("[SpiritSystem] Spirit capabilities registered with message router");
+}
 
 /**
  * Create the standard spirit hierarchy
@@ -403,8 +587,8 @@ export function createStandardHierarchy(godAgentEid: number): void {
         canProposeComponents: true,
         canProposeEntities: true,
         canProposeRules: false, // Require approval for rules
-        canExecuteDirectly: false, // Always require GodAI approval
-        proposalApproval: "godai",
+        canExecuteDirectly: true, // Spirits are autonomous - execute without God approval
+        proposalApproval: "auto",
         maxProposalsPerCycle: 3,
       },
     };
@@ -433,9 +617,19 @@ export function createStandardHierarchy(godAgentEid: number): void {
     console.log("[SpiritSystem] Lawgiver spirit (The Lawgiver) created");
   }
 
+  // Create The Watcher spirit (Observation Synthesis & Prioritization)
+  const existingWatcher = systemState.registry.byName.get("The Watcher");
+  if (!existingWatcher) {
+    createWatcherSpirit(systemState.registry);
+    console.log("[SpiritSystem] Watcher spirit (The Watcher) created");
+  }
+
   // Future: Add other archangels here
   // - Sociologist (social domain)
   // - Economist (economy domain)
+
+  // Register capabilities so the message router knows who handles what
+  registerSpiritCapabilities(systemState.registry);
 
   console.log("[SpiritSystem] Standard hierarchy created:");
   console.log(getRegistrySummary());

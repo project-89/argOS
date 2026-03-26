@@ -10,7 +10,7 @@ import {
 } from "../../store/simulation";
 
 export function SystemsPanel() {
-  const { systems, systemLogs, selectedSystem, setSelectedSystem } = useSimulationStore();
+  const { systems, systemLogs, selectedSystem, setSelectedSystem, status } = useSimulationStore();
 
   if (systems.length === 0) {
     return (
@@ -19,8 +19,15 @@ export function SystemsPanel() {
           <Cpu className="w-12 h-12 text-argos-text-muted mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-argos-text-primary mb-2">No Systems</h2>
           <p className="text-argos-text-muted">
-            Systems will appear here when the simulation is running.
+            {status !== "connected"
+              ? "Connect to the simulation bus to see systems."
+              : "Systems will appear here when the simulation is running."}
           </p>
+          {status !== "connected" && (
+            <p className="text-xs text-argos-status-error mt-2">
+              WebSocket status: {status}
+            </p>
+          )}
         </div>
       </div>
     );

@@ -13,6 +13,7 @@ import {
   MapPin,
   Cpu,
   BookOpenText,
+  ScrollText,
 } from "lucide-react";
 import { useSimulationStore } from "../../store/simulation";
 import { useSimulationBusContext } from "../../contexts/SimulationBusContext";
@@ -28,35 +29,49 @@ const SIMULATION_PRESETS = [
     color: "spirit",
     command: `Create "The Crossroads Inn" - a mystical tavern where paths converge.
 
-Create three agents:
-1. "Vera" - an elderly fortune teller with genuine mystical sight, speaks in riddles but kind
-2. "Kael" - a young runaway noble seeking adventure, naive but brave
-3. "Iron Jack" - a weathered bounty hunter, few words, strong moral code
+Rooms:
+- "Main Hall" - a warm tavern hall with a crackling hearth and wooden tables
+- "Kitchen" - a busy kitchen with pots bubbling and herbs hanging
+- "Courtyard" - a quiet courtyard under open sky with a stone well
 
-Create a stimulus source "Mystic Hearth" - a magical fireplace that occasionally whispers prophecies.
+Agents:
+1. "Vera" - role: fortune teller. An elderly mystic with genuine prophetic sight, speaks in riddles but kind. Place in Main Hall.
+2. "Kael" - role: runaway noble. A young noble who fled his family, naive but brave. Place in Main Hall.
+3. "Iron Jack" - role: bounty hunter. A weathered tracker with a scarred face and few words. Place in Courtyard.
 
-Place everyone in the inn.`,
+Objects:
+- "Bread Loaf" in Kitchen with traits: food, examinable, takeable
+- "Ale Mug" in Main Hall with traits: drinkable, examinable
+- "Worn Map" in Main Hall with traits: examinable, takeable
+- "Iron Dagger" in Courtyard with traits: examinable, takeable
+
+Create a stimulus source "Mystic Hearth" in Main Hall - a magical fireplace that occasionally whispers prophecies.`,
   },
   {
     id: "village-life",
     name: "Village Life",
     description: "A peaceful medieval village with daily routines and gossip",
     color: "agent",
-    command: `Create a peaceful medieval village with:
+    command: `Create a peaceful medieval village.
 
 Rooms:
-- "Town Square" - the central gathering place
+- "Town Square" - the central gathering place with a fountain
 - "Bakery" - warm, smells of fresh bread
-- "Tavern" - cozy with a warm hearth
-- "Blacksmith" - hot and filled with the ring of metal
+- "Tavern" - cozy with a warm hearth and tables
+- "Blacksmith" - hot forge filled with the ring of metal
 
 Agents:
-1. "Ada" - a cheerful baker who loves her craft, early riser
-2. "Bram" - a quiet but skilled blacksmith, protective of the village
-3. "Clara" - the tavern keeper who knows everyone's secrets
-4. "Old Tom" - the village elder, wise and respected
+1. "Ada" - role: baker. A cheerful baker who loves her craft, early riser. Place in Bakery.
+2. "Bram" - role: blacksmith. A quiet but skilled blacksmith, protective of the village. Place in Blacksmith.
+3. "Clara" - role: innkeeper. The tavern keeper who knows everyone's secrets. Place in Tavern.
+4. "Old Tom" - role: scholar. The village elder, wise and respected. Place in Town Square.
 
-Place each agent in their appropriate location.`,
+Objects:
+- "Fresh Bread" in Bakery with traits: food, examinable, takeable
+- "Ale Barrel" in Tavern with traits: drinkable, examinable
+- "Iron Sword" in Blacksmith with traits: examinable, takeable
+- "Ancient Tome" in Town Square with traits: examinable, takeable
+- "Warm Stew" in Tavern with traits: food, examinable`,
   },
   {
     id: "space-station",
@@ -66,18 +81,24 @@ Place each agent in their appropriate location.`,
     command: `Create "Nexus Station" - a frontier space station at the edge of known space.
 
 Rooms:
-- "Command Deck" - the nerve center of the station
-- "Crew Quarters" - living spaces for the crew
-- "Cargo Bay" - storage and docking area
-- "Medical Bay" - advanced medical facilities
+- "Command Deck" - the nerve center of the station with holographic displays
+- "Crew Quarters" - living spaces for the crew with bunks and lockers
+- "Cargo Bay" - storage and docking area, dimly lit
+- "Medical Bay" - advanced medical facilities, sterile and bright
 
 Agents:
-1. "Commander Chen" - stern but fair station commander, ex-military
-2. "Dr. Vex" - alien medical officer, curious about humans
-3. "Sparks" - eccentric engineer who talks to machines
-4. "Nova" - mysterious drifter who recently arrived
+1. "Commander Chen" - role: guard. Stern but fair station commander, ex-military. Place in Command Deck.
+2. "Dr. Vex" - role: scholar. Alien medical officer, curious about humans. Place in Medical Bay.
+3. "Sparks" - role: worker. Eccentric engineer who talks to machines. Place in Cargo Bay.
+4. "Nova" - role: merchant. Mysterious drifter who recently arrived, trades in rare goods. Place in Crew Quarters.
 
-Create a stimulus source "Station AI" that announces events and anomalies.`,
+Objects:
+- "Ration Pack" in Crew Quarters with traits: food, examinable, takeable
+- "Medical Scanner" in Medical Bay with traits: examinable
+- "Data Tablet" in Command Deck with traits: examinable, takeable
+- "Cargo Manifest" in Cargo Bay with traits: examinable, takeable
+
+Create a stimulus source "Station AI" in Command Deck that announces events and anomalies.`,
   },
   {
     id: "murder-mystery",
@@ -87,16 +108,23 @@ Create a stimulus source "Station AI" that announces events and anomalies.`,
     command: `Create "Thornwood Manor" - a gothic mansion during a stormy night.
 
 Rooms:
-- "Grand Foyer" - impressive entrance with a grand staircase
-- "Dining Room" - where the dinner party was held
-- "Library" - filled with ancient books and secrets
-- "Study" - the victim's private room
+- "Grand Foyer" - impressive entrance with a grand staircase, cold drafts
+- "Dining Room" - where the dinner party was held, table still set
+- "Library" - filled with ancient books, the crime scene
+- "Study" - the victim's private room, locked from inside
 
 Agents:
-1. "Lord Ashworth" - the host, hiding dark secrets
-2. "Lady Ashworth" - his wife, not as innocent as she seems
-3. "Detective Mills" - investigating the murder, sharp and observant
-4. "Butler Jenkins" - knows everything that happens in the house
+1. "Lord Ashworth" - role: merchant. The host, hiding dark secrets. Place in Dining Room.
+2. "Lady Ashworth" - role: scholar. His wife, not as innocent as she seems. Place in Grand Foyer.
+3. "Detective Mills" - role: guard. Investigating the murder, sharp and observant. Place in Library.
+4. "Butler Jenkins" - role: innkeeper. Knows everything that happens in the house. Place in Grand Foyer.
+
+Objects:
+- "Bloody Letter Opener" in Library with traits: examinable, takeable
+- "Torn Letter" in Study with traits: examinable, takeable
+- "Wine Glass" in Dining Room with traits: drinkable, examinable
+- "Ancient Ledger" in Library with traits: examinable, takeable
+- "Silver Candelabra" in Grand Foyer with traits: examinable
 
 The victim was found in the library. Everyone is a suspect.`,
   },
@@ -126,6 +154,7 @@ export function Dashboard() {
     roomEvents,
     daemonEvents,
     daemons,
+    narrativeLog,
     setActivePanel,
     setSelectedAgent,
     setSelectedRoom,
@@ -523,6 +552,28 @@ export function Dashboard() {
       {!isEmptySimulation && (
         <div className="absolute top-4 right-4 bottom-4 w-[24rem] z-10 pointer-events-none hidden xl:block">
           <div className="h-full overflow-y-auto pr-1 space-y-3 pointer-events-auto">
+            {/* Narrative Log - Story prose from The Narrator */}
+            {narrativeLog.length > 0 && (
+              <div className="panel bg-argos-bg-secondary/95 backdrop-blur-sm border-argos-border/80">
+                <div className="panel-header flex items-center justify-between px-3 py-2 border-b border-argos-border/60">
+                  <div className="flex items-center gap-2">
+                    <ScrollText className="w-4 h-4 text-argos-god" />
+                    <span className="text-xs font-semibold uppercase tracking-wide text-argos-text-secondary">
+                      Story
+                    </span>
+                    <span className="text-xs text-argos-text-muted">({narrativeLog.length})</span>
+                  </div>
+                </div>
+                <div className="panel-content p-3 max-h-48 overflow-y-auto space-y-2">
+                  {narrativeLog.slice(-5).reverse().map((entry, i) => (
+                    <p key={`narrative-${entry.timestamp}-${i}`} className="text-xs text-argos-text-primary leading-relaxed italic">
+                      {entry.content}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <LiveFeedCard
               title="Spirit Cognition"
               icon={<Sparkles className="w-4 h-4 text-argos-spirit" />}

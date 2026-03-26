@@ -84,8 +84,8 @@ function DaemonListItem({
   onClick: () => void;
 }) {
   const isHighConcern = daemon.concernLevel > 0.6;
-  const isStagnating = daemon.growthMetrics.stagnationScore > 0.5;
-  const recentThought = daemon.memory.recentThoughts[0];
+  const isStagnating = daemon.growthMetrics?.stagnationScore > 0.5;
+  const recentThought = daemon.memory?.recentThoughts?.[0];
   const povPreview = daemon.latestPovStory;
 
   return (
@@ -200,7 +200,7 @@ function DaemonDetail({ daemon, events }: { daemon: DaemonSummary; events: any[]
         <StatCard
           icon={<Brain className="w-5 h-5" />}
           label="Memories"
-          value={String(daemon.memory.memoryCount)}
+          value={String(daemon.memory?.memoryCount ?? 0)}
           color="god"
         />
       </div>
@@ -254,19 +254,19 @@ function DaemonDetail({ daemon, events }: { daemon: DaemonSummary; events: any[]
         <div className="panel-content">
           <div className="grid grid-cols-4 gap-4">
             <div className="text-center">
-              <p className="text-2xl font-bold text-argos-text-primary">{daemon.memory.thoughtCount}</p>
+              <p className="text-2xl font-bold text-argos-text-primary">{daemon.memory?.thoughtCount ?? 0}</p>
               <p className="text-xs text-argos-text-muted">Thoughts</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-argos-text-primary">{daemon.memory.memoryCount}</p>
+              <p className="text-2xl font-bold text-argos-text-primary">{daemon.memory?.memoryCount ?? 0}</p>
               <p className="text-xs text-argos-text-muted">Memories</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-argos-text-primary">{daemon.memory.planCount}</p>
+              <p className="text-2xl font-bold text-argos-text-primary">{daemon.memory?.planCount ?? 0}</p>
               <p className="text-xs text-argos-text-muted">Plans</p>
             </div>
             <div className="text-center">
-              <p className="text-2xl font-bold text-argos-text-primary">{daemon.memory.characterMoments}</p>
+              <p className="text-2xl font-bold text-argos-text-primary">{daemon.memory?.characterMoments ?? 0}</p>
               <p className="text-xs text-argos-text-muted">Moments</p>
             </div>
           </div>
@@ -286,17 +286,17 @@ function DaemonDetail({ daemon, events }: { daemon: DaemonSummary; events: any[]
                 <div className="w-32 h-2 bg-argos-bg-elevated rounded-full overflow-hidden">
                   <div
                     className={`h-full ${
-                      daemon.growthMetrics.stagnationScore > 0.6
+                      (daemon.growthMetrics?.stagnationScore ?? 0) > 0.6
                         ? "bg-orange-500"
-                        : daemon.growthMetrics.stagnationScore > 0.3
+                        : (daemon.growthMetrics?.stagnationScore ?? 0) > 0.3
                         ? "bg-yellow-500"
                         : "bg-green-500"
                     }`}
-                    style={{ width: `${daemon.growthMetrics.stagnationScore * 100}%` }}
+                    style={{ width: `${(daemon.growthMetrics?.stagnationScore ?? 0) * 100}%` }}
                   />
                 </div>
                 <span className="text-xs font-mono text-argos-text-muted">
-                  {(daemon.growthMetrics.stagnationScore * 100).toFixed(0)}%
+                  {((daemon.growthMetrics?.stagnationScore ?? 0) * 100).toFixed(0)}%
                 </span>
               </div>
             </div>
@@ -304,24 +304,24 @@ function DaemonDetail({ daemon, events }: { daemon: DaemonSummary; events: any[]
               <div>
                 <p className="text-argos-text-muted">Last Goal Change</p>
                 <p className="text-argos-text-secondary">
-                  {daemon.growthMetrics.lastGoalChange > 0
-                    ? formatTimeAgo(daemon.growthMetrics.lastGoalChange)
+                  {(daemon.growthMetrics?.lastGoalChange ?? 0) > 0
+                    ? formatTimeAgo(daemon.growthMetrics?.lastGoalChange)
                     : "Never"}
                 </p>
               </div>
               <div>
                 <p className="text-argos-text-muted">Last Belief Change</p>
                 <p className="text-argos-text-secondary">
-                  {daemon.growthMetrics.lastBeliefChange > 0
-                    ? formatTimeAgo(daemon.growthMetrics.lastBeliefChange)
+                  {(daemon.growthMetrics?.lastBeliefChange ?? 0) > 0
+                    ? formatTimeAgo(daemon.growthMetrics?.lastBeliefChange)
                     : "Never"}
                 </p>
               </div>
               <div>
                 <p className="text-argos-text-muted">Last Relationship Change</p>
                 <p className="text-argos-text-secondary">
-                  {daemon.growthMetrics.lastRelationshipChange > 0
-                    ? formatTimeAgo(daemon.growthMetrics.lastRelationshipChange)
+                  {(daemon.growthMetrics?.lastRelationshipChange ?? 0) > 0
+                    ? formatTimeAgo(daemon.growthMetrics?.lastRelationshipChange)
                     : "Never"}
                 </p>
               </div>
@@ -331,7 +331,7 @@ function DaemonDetail({ daemon, events }: { daemon: DaemonSummary; events: any[]
       </div>
 
       {/* Recent Thoughts */}
-      {daemon.memory.recentThoughts.length > 0 && (
+      {daemon.memory?.recentThoughts?.length > 0 && (
         <div className="panel">
           <div className="panel-header">
             <span className="panel-title flex items-center gap-2">
@@ -341,7 +341,7 @@ function DaemonDetail({ daemon, events }: { daemon: DaemonSummary; events: any[]
           </div>
           <div className="panel-content">
             <div className="space-y-3">
-              {daemon.memory.recentThoughts.map((thought, idx) => (
+              {(daemon.memory?.recentThoughts ?? []).map((thought, idx) => (
                 <div key={idx} className="border-l-2 border-argos-agent/30 pl-3 py-1">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium text-argos-agent">

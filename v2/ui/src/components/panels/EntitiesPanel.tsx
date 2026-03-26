@@ -15,7 +15,7 @@ type GenericEvent = {
 };
 
 export function EntitiesPanel() {
-  const { entities, selectedEntity, setSelectedEntity, events } = useSimulationStore();
+  const { entities, selectedEntity, setSelectedEntity, events, status } = useSimulationStore();
 
   if (entities.length === 0) {
     return (
@@ -24,8 +24,15 @@ export function EntitiesPanel() {
           <Box className="w-12 h-12 text-argos-text-muted mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-argos-text-primary mb-2">No Dynamic Entities</h2>
           <p className="text-argos-text-muted">
-            Non-agent entities created by systems or spirits will appear here.
+            {status !== "connected"
+              ? "Connect to the simulation bus to see entities."
+              : "Non-agent entities created by systems or spirits will appear here."}
           </p>
+          {status !== "connected" && (
+            <p className="text-xs text-argos-status-error mt-2">
+              WebSocket status: {status}
+            </p>
+          )}
         </div>
       </div>
     );
