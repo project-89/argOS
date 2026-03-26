@@ -22,7 +22,7 @@ import { addEntity, addComponent } from "bitecs";
 import type { World } from "../ecs/world";
 import { Name, Description, Agent, Mind, Needs, Health, Room, StimulusSource } from "../ecs/components";
 import { OccupiesRoom } from "../ecs/relations";
-import { spiritModel, plannerModel } from "../llm/config";
+import { spiritModel, plannerModel, codeModel as designModel31 } from "../llm/config";
 import type { SystemRegistry, SystemDefinition } from "../ecs/dynamic-systems";
 import { registerSystem } from "../ecs/dynamic-systems";
 import { createDynamicComponent, getDynamicComponent, setDynamicComponentValue } from "../ecs/dynamic-components";
@@ -39,6 +39,21 @@ import {
 } from "./spirit-factory";
 import { recordEvent, getRecentEvents, getDetectedPatterns } from "./consistency-spirit";
 import { getIntrospectionContext } from "../introspection/introspection";
+import {
+  registerAffordance,
+  type AffordanceDefinition,
+} from "../world/schema";
+import {
+  registerTrait,
+  isTraitRegistered,
+  type TraitDefinition,
+  type TraitCategory,
+} from "../world/trait-registry";
+import {
+  registerRelationshipType,
+  hasRelationshipType,
+  type RelationshipTypeDefinition,
+} from "../ecs/relationship-registry";
 
 // =============================================================================
 // PROPOSAL SPECIFICATIONS
@@ -77,6 +92,40 @@ export interface RuleProposalSpec {
   effect: string;    // What happens
 }
 
+/**
+ * Robustly extract JSON from LLM output that may contain markdown fences,
+ * trailing commas, comments, or other noise.
+ */
+function extractJSON(text: string): any {
+  let s = text.trim();
+
+  // Strip markdown fences
+  s = s.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "");
+
+  // Try direct parse first
+  try { return JSON.parse(s); } catch {}
+
+  // Find first [ or { and last ] or }
+  const firstBracket = s.search(/[\[{]/);
+  const lastBracket = Math.max(s.lastIndexOf("]"), s.lastIndexOf("}"));
+  if (firstBracket >= 0 && lastBracket > firstBracket) {
+    let candidate = s.slice(firstBracket, lastBracket + 1);
+
+    // Strip single-line comments
+    candidate = candidate.replace(/\/\/[^\n]*/g, "");
+    // Strip trailing commas before } or ]
+    candidate = candidate.replace(/,\s*([}\]])/g, "$1");
+
+    try { return JSON.parse(candidate); } catch {}
+
+    // Last resort: try to fix unterminated strings by closing them
+    const fixed = candidate.replace(/:\s*"([^"]*?)(\n|$)/g, ': "$1"$2');
+    try { return JSON.parse(fixed); } catch {}
+  }
+
+  throw new SyntaxError(`Could not extract valid JSON from LLM output (${s.length} chars)`);
+}
+
 function readPositiveIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -85,8 +134,8 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   return Math.floor(parsed);
 }
 
-const DEFAULT_BAKE_TIMEOUT_MS = readPositiveIntEnv("SPIRIT_BAKE_TIMEOUT_MS", 30000);
-const DEFAULT_BAKE_MAX_RETRIES = readPositiveIntEnv("SPIRIT_BAKE_MAX_RETRIES", 1);
+const DEFAULT_BAKE_TIMEOUT_MS = readPositiveIntEnv("SPIRIT_BAKE_TIMEOUT_MS", 120000);
+const DEFAULT_BAKE_MAX_RETRIES = readPositiveIntEnv("SPIRIT_BAKE_MAX_RETRIES", 3);
 const DEFAULT_MAX_APPROVED_PER_PASS = readPositiveIntEnv("SPIRIT_MAX_APPROVED_PER_PASS", 3);
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -121,6 +170,82 @@ function toPascalCase(input: string): string {
 // =============================================================================
 
 /**
+ * Consume structured gap observations from The Watcher's messages in the inbox.
+ * Converts Watcher proposals into IdentifiedNeeds without an LLM call.
+ */
+function consumeWatcherMessages(architect: DynamicSpiritState): IdentifiedNeed[] {
+  // Find the SpiritState that owns this architect (check the spirit registry indirectly via inbox)
+  // The architect's inbox lives on the SpiritState, which is accessed through the spirit-factory layer.
+  // For dynamic spirits, the inbox is on architect.state (the DynamicSpiritState wraps a SpiritState).
+  const state = (architect as any).state as { inbox?: any[] } | undefined;
+  const inbox = state?.inbox || (architect as any).inbox || [];
+
+  const needs: IdentifiedNeed[] = [];
+  const watcherMessages: number[] = [];
+
+  for (let i = 0; i < inbox.length; i++) {
+    const msg = inbox[i];
+    if (!msg || typeof msg !== "object") continue;
+    const subject = String(msg.subject || "");
+    const content = String(msg.content || "");
+
+    // Only process Watcher messages
+    if (!subject.includes("[Watcher]")) continue;
+    watcherMessages.push(i);
+
+    // Parse individual proposals from the message content
+    // Format: "1. [SYSTEM] Title (priority: 75, reporters: ...)\n   Description"
+    const proposalRegex = /\d+\.\s*\[(\w+)\]\s*(.+?)\s*\(priority:\s*(\d+)/g;
+    let match;
+    while ((match = proposalRegex.exec(content)) !== null) {
+      const typeRaw = match[1].toLowerCase();
+      const title = match[2].trim();
+      const priority = parseInt(match[3], 10);
+
+      const type: IdentifiedNeed["type"] =
+        typeRaw === "system" ? "system" :
+        typeRaw === "component" ? "component" :
+        typeRaw === "entity" ? "entity" :
+        typeRaw === "rule" ? "rule" :
+        typeRaw === "affordance" ? "affordance" :
+        typeRaw === "trait" ? "trait" :
+        typeRaw === "relationship_type" || typeRaw === "relationship" ? "relationship_type" :
+        "system";
+
+      const needPriority: IdentifiedNeed["priority"] =
+        priority >= 60 ? "high" : priority >= 30 ? "medium" : "low";
+
+      // Extract description (everything after the header line until next numbered item)
+      const titleIdx = content.indexOf(title);
+      const descStart = content.indexOf("\n", titleIdx);
+      let description = title;
+      if (descStart !== -1) {
+        const nextItem = content.indexOf("\n\n", descStart + 1);
+        description = content.slice(descStart + 1, nextItem !== -1 ? nextItem : undefined).trim() || title;
+      }
+
+      needs.push({
+        type,
+        description,
+        priority: needPriority,
+        rationale: `Synthesized from spirit observations (priority: ${priority}). ${title}`,
+      });
+    }
+  }
+
+  // Remove processed Watcher messages from inbox (reverse order to preserve indices)
+  for (let i = watcherMessages.length - 1; i >= 0; i--) {
+    inbox.splice(watcherMessages[i], 1);
+  }
+
+  if (needs.length > 0) {
+    console.log(`[Architect] Consumed ${needs.length} needs from Watcher observations`);
+  }
+
+  return needs;
+}
+
+/**
  * Run architect cognition cycle - observe, design, propose
  */
 export async function runArchitectCognition(
@@ -137,8 +262,22 @@ export async function runArchitectCognition(
   // 1. OBSERVE: Gather context about the simulation state
   const context = await gatherArchitectContext(world, systemRegistry);
 
-  // 2. ANALYZE: Identify needs and opportunities
-  const needs = await identifyNeeds(architect, context);
+  // 1.5. CONSUME WATCHER OBSERVATIONS: Extract structured needs from Watcher messages
+  const watcherNeeds = consumeWatcherMessages(architect);
+
+  // 2. ANALYZE: Identify needs and opportunities (LLM-based + Watcher-provided)
+  const llmNeeds = await identifyNeeds(architect, context);
+  const allNeeds = [...watcherNeeds, ...llmNeeds];
+
+  // Prioritize system proposals first (they're the highest-value evolution),
+  // then by priority level, keeping relative order stable within tiers
+  const priorityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+  const typeOrder: Record<string, number> = { system: 0, component: 1, rule: 2, entity: 3 };
+  const needs = allNeeds.sort((a, b) => {
+    const typeDiff = (typeOrder[a.type] ?? 9) - (typeOrder[b.type] ?? 9);
+    if (typeDiff !== 0) return typeDiff;
+    return (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9);
+  });
 
   // 3. DESIGN: Create proposals for addressing needs
   const proposals: SpiritProposal[] = [];
@@ -215,14 +354,15 @@ async function gatherArchitectContext(
 }
 
 interface IdentifiedNeed {
-  type: "system" | "component" | "entity" | "rule";
+  type: "system" | "component" | "entity" | "rule" | "affordance" | "trait" | "relationship_type";
   description: string;
   priority: "low" | "medium" | "high";
   rationale: string;
 }
 
 function isNeedType(value: unknown): value is IdentifiedNeed["type"] {
-  return value === "system" || value === "component" || value === "entity" || value === "rule";
+  return value === "system" || value === "component" || value === "entity" || value === "rule"
+    || value === "affordance" || value === "trait" || value === "relationship_type";
 }
 
 function isPriority(value: unknown): value is IdentifiedNeed["priority"] {
@@ -362,8 +502,12 @@ function fallbackSpecificationForNeed(
       };
     }
 
+    // Generate a proper name instead of converting the description to PascalCase
+    const npcNames = ["Thorne", "Mira", "Cedric", "Lyra", "Gareth", "Fern", "Aldric", "Petra", "Rowan", "Sage", "Vesta", "Orin", "Dalia", "Bram", "Wren"];
+    const npcName = npcNames[Math.floor(Math.random() * npcNames.length)];
+
     return {
-      name: `${baseName.replace(/Npc$/, "")}Npc`,
+      name: npcName,
       description: need.description,
       type: "agent",
       components: [
@@ -417,11 +561,9 @@ Respond with a JSON array of needs:
     "rationale": "Why this would improve the simulation"
   }
 ]`,
-      maxOutputTokens: 500,
     });
 
-    const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");
-    const parsed = JSON.parse(cleaned);
+    const parsed = extractJSON(result.text);
     const normalized = (Array.isArray(parsed) ? parsed : []).map(normalizeNeed).filter(Boolean) as IdentifiedNeed[];
 
     if (normalized.length > 0) return normalized;
@@ -441,24 +583,25 @@ async function designProposal(
   spiritRegistry?: SpiritRegistry
 ): Promise<SpiritProposal | null> {
   let specification: any = null;
+  let rawOutput = "";
 
   try {
     const specPrompt = getSpecificationPrompt(need.type, need.description, context);
 
     const result = await generateText({
-      model: plannerModel,  // Use the smarter model for design
+      model: designModel31,  // Gemini 3.1 Pro - better structured output
       prompt: `You are ${architect.definition.name}, designing a solution for: ${need.description}
 
 ${specPrompt}
 
-Respond with valid JSON only, no markdown.`,
-      maxOutputTokens: 800,
+Respond with valid JSON only, no markdown fences, no comments.`,
     });
 
-    const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");
-    specification = JSON.parse(cleaned);
+    rawOutput = result.text;
+    specification = extractJSON(result.text);
   } catch (error) {
-    console.error(`[Architect] Failed to design proposal for "${need.description}":`, error);
+    console.error(`[Architect] Failed to design ${need.type} proposal for "${need.description}":`, error);
+    if (rawOutput) console.error(`[Architect] Raw LLM output (first 300 chars): ${rawOutput.slice(0, 300)}`);
     specification = fallbackSpecificationForNeed(need, context);
   }
 
@@ -566,6 +709,43 @@ Required JSON format:
   "effect": "What happens when rule fires"
 }`;
 
+    case "affordance":
+      return `Design an AFFORDANCE (action that can be performed on objects) for: ${description}
+
+Required JSON format:
+{
+  "name": "affordanceName",
+  "description": "What this action does",
+  "requires": ["trait1", "trait2"],
+  "effects": [
+    { "type": "emit_stimulus", "target": "nearby", "stimulusType": "action", "stimulusContent": "{actor.name} does something to {target.name}" }
+  ]
+}`;
+
+    case "trait":
+      return `Design a TRAIT (tag for entities enabling affordances) for: ${description}
+
+Required JSON format:
+{
+  "name": "traitName",
+  "description": "What this trait means for an entity",
+  "category": "physical|interactive|social|sensory|state|custom",
+  "enablesAffordances": ["affordance1"],
+  "incompatibleWith": []
+}`;
+
+    case "relationship_type":
+      return `Design a RELATIONSHIP TYPE (dynamic link between entities) for: ${description}
+
+Required JSON format:
+{
+  "name": "RelationName",
+  "description": "What this relationship represents",
+  "dataFields": { "strength": "number", "since": "string" },
+  "isExclusive": false,
+  "autoRemoveSubject": false
+}`;
+
     default:
       return `Design a solution for: ${description}`;
   }
@@ -632,6 +812,15 @@ async function executeProposal(
     case "rule":
       console.log(`[Architect] Rule execution not yet implemented: ${proposal.name}`);
       break;
+    case "affordance":
+      executeAffordanceProposal(proposal.specification);
+      break;
+    case "trait":
+      executeTraitProposal(proposal.specification);
+      break;
+    case "relationship_type":
+      executeRelationshipTypeProposal(proposal.specification);
+      break;
   }
 }
 
@@ -680,6 +869,105 @@ function registerPlaceholderSystem(
     description: spec.description,
     createdBy: "architect",
     reason,
+  }, "Architect");
+}
+
+// =============================================================================
+// VOCABULARY PROPOSAL EXECUTION
+// =============================================================================
+
+interface AffordanceProposalSpec {
+  name: string;
+  description: string;
+  requires: string[];
+  effects?: any[];
+}
+
+interface TraitProposalSpec {
+  name: string;
+  description: string;
+  category: string;
+  enablesAffordances?: string[];
+  incompatibleWith?: string[];
+}
+
+interface RelationshipTypeProposalSpec {
+  name: string;
+  description: string;
+  dataFields?: Record<string, "number" | "string">;
+  isExclusive?: boolean;
+  autoRemoveSubject?: boolean;
+}
+
+function executeAffordanceProposal(spec: AffordanceProposalSpec): void {
+  // Auto-register required traits that don't exist
+  for (const traitName of spec.requires || []) {
+    if (!isTraitRegistered(traitName)) {
+      registerTrait({
+        name: traitName,
+        description: `Enables ${spec.name} interaction`,
+        category: "custom" as TraitCategory,
+        enablesAffordances: [spec.name],
+        incompatibleWith: [],
+      });
+      console.log(`[Architect] Auto-registered trait: ${traitName}`);
+    }
+  }
+
+  const def: AffordanceDefinition = {
+    name: spec.name,
+    requires: spec.requires || [],
+    effects: spec.effects as any,
+    descriptionTemplate: `{actor.name} performs ${spec.name} on {target.name}.`,
+  };
+  registerAffordance(def);
+  console.log(`[Architect] Created affordance: ${spec.name}`);
+
+  recordEvent("affordance_created", {
+    name: spec.name,
+    requires: spec.requires,
+    createdBy: "architect",
+  }, "Architect");
+}
+
+function executeTraitProposal(spec: TraitProposalSpec): void {
+  const def: TraitDefinition = {
+    name: spec.name,
+    description: spec.description,
+    category: (spec.category || "custom") as TraitCategory,
+    enablesAffordances: spec.enablesAffordances || [],
+    incompatibleWith: spec.incompatibleWith || [],
+  };
+  registerTrait(def);
+  console.log(`[Architect] Created trait: ${spec.name} (${spec.category})`);
+
+  recordEvent("trait_created", {
+    name: spec.name,
+    category: spec.category,
+    createdBy: "architect",
+  }, "Architect");
+}
+
+function executeRelationshipTypeProposal(spec: RelationshipTypeProposalSpec): void {
+  if (hasRelationshipType(spec.name)) {
+    console.log(`[Architect] Relationship type already exists: ${spec.name}`);
+    return;
+  }
+
+  const def: RelationshipTypeDefinition = {
+    name: spec.name,
+    description: spec.description,
+    dataFields: spec.dataFields || {},
+    isExclusive: spec.isExclusive || false,
+    autoRemoveSubject: spec.autoRemoveSubject || false,
+    category: "custom",
+  };
+  registerRelationshipType(def);
+  console.log(`[Architect] Created relationship type: ${spec.name}`);
+
+  recordEvent("relationship_type_created", {
+    name: spec.name,
+    createdBy: "architect",
   }, "Architect");
 }
 

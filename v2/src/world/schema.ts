@@ -273,6 +273,15 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
     ],
   },
 
+  read: {
+    name: "read",
+    requires: ["readable"],
+    descriptionTemplate: "{actor.name} reads {target.name}.",
+    effects: [
+      { type: "emit_stimulus", target: "actor", stimulusType: "knowledge", stimulusContent: "{actor.name} gains insight from reading {target.name}." },
+    ],
+  },
+
   // ==========================================================================
   // DEVICE AFFORDANCES - For technology objects
   // ==========================================================================
@@ -1542,7 +1551,8 @@ export const BASE_RULES: RuleDefinition[] = [
 // ============================================================================
 
 export class WorldSchema {
-  private affordances: Map<string, AffordanceDefinition> = new Map();
+  private baseAffordances: Map<string, AffordanceDefinition> = new Map();
+  private runtimeAffordances: Map<string, AffordanceDefinition> = new Map();
   private objectTypes: Map<string, ObjectTypeDefinition> = new Map();
   private rules: Map<string, RuleDefinition> = new Map();
   private traits: Set<string> = new Set();
@@ -1550,7 +1560,7 @@ export class WorldSchema {
   constructor() {
     // Load base definitions
     for (const [name, aff] of Object.entries(BASE_AFFORDANCES)) {
-      this.affordances.set(name, aff);
+      this.baseAffordances.set(name, aff);
     }
     for (const [name, obj] of Object.entries(BASE_OBJECT_TYPES)) {
       const normalized = normalizeEdibleType(obj);
@@ -1564,16 +1574,47 @@ export class WorldSchema {
 
   // --- Affordances ---
 
+  /** Look up an affordance by name. Runtime overrides take precedence over base. */
   getAffordance(name: string): AffordanceDefinition | undefined {
-    return this.affordances.get(name);
+    return this.runtimeAffordances.get(name) ?? this.baseAffordances.get(name);
   }
 
+  /**
+   * Register a runtime affordance. This adds to the runtime layer so that
+   * it can be removed later without affecting base affordances. Existing
+   * callers (god agent, spirits, tests) continue to work unchanged.
+   */
   defineAffordance(def: AffordanceDefinition): void {
-    this.affordances.set(def.name, def);
+    this.runtimeAffordances.set(def.name, def);
   }
 
+  /** Merged list: base + runtime (runtime wins on name collisions). */
   getAllAffordances(): AffordanceDefinition[] {
-    return Array.from(this.affordances.values());
+    const merged = new Map(this.baseAffordances);
+    for (const [name, def] of this.runtimeAffordances) {
+      merged.set(name, def);
+    }
+    return Array.from(merged.values());
+  }
+
+  /** Only runtime-registered affordances (not base). */
+  getRuntimeAffordances(): AffordanceDefinition[] {
+    return Array.from(this.runtimeAffordances.values());
+  }
+
+  /** Remove a runtime affordance. Base affordances cannot be removed. Returns true if removed. */
+  removeAffordance(name: string): boolean {
+    return this.runtimeAffordances.delete(name);
+  }
+
+  /** Whether the given affordance name exists in the base set. */
+  isBaseAffordance(name: string): boolean {
+    return this.baseAffordances.has(name);
+  }
+
+  /** Clear all runtime affordances (useful for testing and simulation reset). */
+  resetRuntimeAffordances(): void {
+    this.runtimeAffordances.clear();
   }
 
   // --- Object Types ---
@@ -1637,8 +1678,15 @@ export class WorldSchema {
   // --- Serialization ---
 
   toJSON(): object {
+    // Merge affordances for backward-compatible serialization.
+    // Also emit the runtime set separately so loaders can distinguish.
+    const mergedAffordances = new Map(this.baseAffordances);
+    for (const [name, def] of this.runtimeAffordances) {
+      mergedAffordances.set(name, def);
+    }
     return {
-      affordances: Object.fromEntries(this.affordances),
+      affordances: Object.fromEntries(mergedAffordances),
+      runtimeAffordances: Object.fromEntries(this.runtimeAffordances),
       objectTypes: Object.fromEntries(this.objectTypes),
       rules: Object.fromEntries(this.rules),
       traits: Array.from(this.traits),
@@ -1648,14 +1696,29 @@ export class WorldSchema {
   static fromJSON(data: any): WorldSchema {
     const schema = new WorldSchema();
     // Clear defaults and load from data
-    schema.affordances.clear();
+    schema.baseAffordances.clear();
     schema.objectTypes.clear();
     schema.rules.clear();
     schema.traits.clear();
 
-    for (const [name, aff] of Object.entries(data.affordances || {})) {
-      schema.affordances.set(name, aff as AffordanceDefinition);
+    // If the serialized data includes a runtimeAffordances key, use it to
+    // separate base from runtime. Otherwise, treat everything in "affordances"
+    // as belonging to base (legacy format).
+    if (data.runtimeAffordances && Object.keys(data.runtimeAffordances).length > 0) {
+      const runtimeNames = new Set(Object.keys(data.runtimeAffordances));
+      for (const [name, aff] of Object.entries(data.affordances || {})) {
+        if (runtimeNames.has(name)) {
+          schema.runtimeAffordances.set(name, aff as AffordanceDefinition);
+        } else {
+          schema.baseAffordances.set(name, aff as AffordanceDefinition);
+        }
+      }
+    } else {
+      for (const [name, aff] of Object.entries(data.affordances || {})) {
+        schema.baseAffordances.set(name, aff as AffordanceDefinition);
+      }
     }
+
     for (const [name, obj] of Object.entries(data.objectTypes || {})) {
       schema.objectTypes.set(name, obj as ObjectTypeDefinition);
     }
@@ -1672,3 +1735,53 @@ export class WorldSchema {
 
 // Singleton instance
 export const worldSchema = new WorldSchema();
+
+// ============================================================================
+// MODULE-LEVEL AFFORDANCE API - convenience wrappers around the singleton
+// ============================================================================
+
+/**
+ * Register a runtime affordance. Immediately visible to all affordance queries.
+ * Runtime affordances can be removed; base affordances cannot.
+ */
+export function registerAffordance(def: AffordanceDefinition): void {
+  worldSchema.defineAffordance(def);
+}
+
+/**
+ * Remove a runtime affordance by name. Returns true if removed.
+ * Base affordances (those in BASE_AFFORDANCES) cannot be removed.
+ */
+export function removeAffordance(name: string): boolean {
+  return worldSchema.removeAffordance(name);
+}
+
+/**
+ * Look up an affordance by name. Runtime overrides take precedence over base.
+ */
+export function getAffordance(name: string): AffordanceDefinition | undefined {
+  return worldSchema.getAffordance(name);
+}
+
+/**
+ * Get the merged list of all affordances (base + runtime).
+ * Runtime definitions override base definitions with the same name.
+ */
+export function listAllAffordances(): AffordanceDefinition[] {
+  return worldSchema.getAllAffordances();
+}
+
+/**
+ * Get only runtime-registered affordances (excludes base).
+ */
+export function listRuntimeAffordances(): AffordanceDefinition[] {
+  return worldSchema.getRuntimeAffordances();
+}
+
+/**
+ * Clear all runtime affordances, restoring only base definitions.
+ * Useful for testing and simulation reset.
+ */
+export function resetRuntimeAffordances(): void {
+  worldSchema.resetRuntimeAffordances();
+}

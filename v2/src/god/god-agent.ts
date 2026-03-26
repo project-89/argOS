@@ -11,11 +11,14 @@ import {
   type ToolResult,
 } from "../ecs/tools";
 import { createGodAgentEntity } from "../ecs/prefabs";
-import { GodAgent, Name, Description, Agent, Mind, ObjectType, ObjectState, Traits } from "../ecs/components";
+import { GodAgent, Name, Description, Agent, Mind, ObjectType, ObjectState, Traits, Room } from "../ecs/components";
 import { AllComponents } from "../ecs/components";
 import { AllRelations } from "../ecs/relations";
-import { setAgentBehaviorPolicy } from "../cognition/behavior-policy";
+import { setAgentBehaviorPolicy, validateBehaviorNode } from "../cognition/behavior-policy";
 import { getPolicyTemplate, inferPolicyFromRole, getAvailableTemplates, type PolicyTemplateName } from "../cognition/behavior-templates";
+import { generateBatchPolicies, type PolicyGenerationContext } from "../cognition/policy-generator";
+import { ActionRegistry, type ActionDefinition } from "../cognition/action-registry";
+import { getRoomForEntity } from "../ecs/location";
 import { transitionObjectState as transitionObjectStateCanonical } from "../world/effect-executor";
 import {
   createSystemRegistry,
@@ -31,6 +34,7 @@ import {
   createMindDecaySystem,
 } from "../ecs/dynamic-systems";
 import { bakeSystem, modifySystem, activateBakedSystem } from "./system-baker";
+import { runPostTickAnalysis } from "../spirits/effectiveness-tracker";
 import {
   getPendingTaskNames,
   getQueueStats,
@@ -62,6 +66,11 @@ import {
   getAllDynamicComponentValuesForEntity,
   type ComponentDefinition,
 } from "../ecs/dynamic-components";
+import {
+  listNames as registryListNames,
+  listDefinitions as registryListDefinitions,
+  attachToEntity,
+} from "../ecs/component-registry";
 import {
   createRenderingTools,
   type RenderingTools,
@@ -104,6 +113,23 @@ import {
   type RuleDefinition,
 } from "../world/schema";
 import type { GodAutopilotState } from "./god-autopilot";
+import {
+  registerAffordance,
+  listAllAffordances,
+} from "../world/schema";
+import {
+  registerTrait,
+  listAllTraits,
+  isTraitRegistered,
+  type TraitDefinition,
+  type TraitCategory,
+} from "../world/trait-registry";
+import {
+  registerRelationshipType,
+  listRelationshipTypes,
+  addRelationship,
+  type RelationshipTypeDefinition,
+} from "../ecs/relationship-registry";
 import {
   createSimulation,
   loadSimulation,
@@ -1243,6 +1269,20 @@ WORLDSCHEMA TOOLS:
 - getObjectTraits/getAvailableActions - Query entity state
 - transitionObjectState(entityName, newState) - Change object state
 
+VOCABULARY TOOLS (World-specific affordances, traits, and relationships):
+- createAffordance(name, description, requires, effects?, category?) - Register a new affordance (auto-registers missing traits)
+- createTrait(name, description, category, enablesAffordances?, incompatibleWith?) - Register a new trait
+- createRelationshipType(name, description, dataFields?, isExclusive?, autoRemoveSubject?) - Register a social/dynamic relationship type
+- addEntityRelationship(subjectEid, relationName, targetEid, data?) - Add a relationship between two entities
+- listVocabulary() - List all registered affordances, traits, and relationship types
+
+VOCABULARY GENERATION (during world creation):
+After creating rooms, agents, and objects, generate vocabulary appropriate to this world's setting:
+- Create AFFORDANCES that make sense for the genre/setting (e.g., medieval: forge, brew, pray, haggle; sci-fi: scan, hack, teleport; noir: interrogate, bribe, tail)
+- Create TRAITS that objects and agents in this world would have (e.g., medieval: forgeable, blessed, cursed; sci-fi: powered, encrypted, radioactive)
+- Create RELATIONSHIP TYPES for social dynamics (e.g., GuildMember, OwesDebtTo, RivalOf, MentorOf, ContractedBy)
+This vocabulary enables richer agent interactions and emergent behavior specific to the world's theme.
+
 CURRENT WORLD STATE:
 ${buildCurrentWorldContext(state)}
 
@@ -1269,6 +1309,7 @@ NOTE ON LONG TASKS:
 DEFINITION OF DONE (do not stop early):
 - Verify your changes with tool calls (listSystems/listRules/listObjectTypes/queryEntities).
 - If the command requires baked systems, wait for the bake tasks to complete and confirm they are present/active.
+- When building a new world, also create vocabulary (createAffordance, createTrait, createRelationshipType) appropriate to the setting.
 
 ${narrative ? `NARRATIVE CONTEXT:\n${narrative}\n` : ""}WORLD SNAPSHOT:
 ${buildCurrentWorldContext(state)}
@@ -1302,7 +1343,32 @@ function buildTools(state: GodAgentState) {
       }),
       execute: async (params) => {
         const result = state.tools.createAgent(params);
-        console.log(`[Tool] createAgent: ${params.name}`);
+        if (result.success && result.result?.entityId) {
+          // Auto-assign behavior policy based on role, using actual room names
+          const eid = result.result.entityId;
+          const role = params.role || "";
+          const { template, params: inferredParams } = inferPolicyFromRole(role);
+          // Use the agent's actual room as the workplace/home so templates don't reference non-existent rooms
+          const policyParams = {
+            ...inferredParams,
+            room: params.roomName || inferredParams?.room,
+            workplace: params.roomName || inferredParams?.workplace,
+            // For guard patrol, use all known rooms from the world
+            rooms: inferredParams?.rooms || (() => {
+              const roomEids = Array.from(query(state.world, [Room as any, Name as any]));
+              return roomEids.map((r: number) => String(Name.value[r] || "")).filter(Boolean);
+            })(),
+          };
+          const tree = getPolicyTemplate(template, policyParams);
+          if (tree) {
+            setAgentBehaviorPolicy(state.world, eid, tree);
+            console.log(`[Tool] createAgent: ${params.name} (policy: ${template}, room: ${policyParams.room || "none"})`);
+          } else {
+            console.log(`[Tool] createAgent: ${params.name} (no policy)`);
+          }
+        } else {
+          console.log(`[Tool] createAgent: ${params.name}`);
+        }
         return result;
       },
     }),
@@ -1413,7 +1479,7 @@ function buildTools(state: GodAgentState) {
     }),
 
     createObject: tool({
-      description: "Create a physical object entity",
+      description: "Create a physical object entity with optional traits for the affordance system (e.g. food, drinkable, examinable, takeable, sleepable, workable, talkable)",
       inputSchema: z.object({
         name: z.string().describe("Unique name for the object"),
         description: z
@@ -1427,6 +1493,10 @@ function buildTools(state: GodAgentState) {
           .string()
           .optional()
           .describe("Name of room to place object in"),
+        traits: z
+          .array(z.string())
+          .optional()
+          .describe("Trait tags for the affordance system: food, drinkable, examinable, takeable, sleepable, workable, talkable"),
       }),
       execute: async (params) => {
         const result = state.tools.createObject(params);
@@ -2089,6 +2159,9 @@ Use getSystemCode first to see the current system implementation before modifyin
             error: `Dynamic component not found: ${params.componentName}`,
           };
         }
+        // Bridge: attach via registry so entity is queryable by this component
+        attachToEntity(state.world, eid, params.componentName, params.values);
+        // Also write via legacy path for backward compat
         for (const [key, value] of Object.entries(params.values)) {
           setDynamicComponentValue(params.componentName, eid, key, value);
         }
@@ -2163,21 +2236,29 @@ Use getSystemCode first to see the current system implementation before modifyin
 
     listComponents: tool({
       description:
-        "List all available components (both built-in and custom/dynamic)",
+        "List all available components (both built-in and custom/dynamic) from the unified registry",
       inputSchema: z.object({}),
       execute: async () => {
-        const builtIn = Object.keys(AllComponents);
-        const dynamic = listDynamicComponents();
+        const allNames = registryListNames();
+        const allDefs = registryListDefinitions();
+        const builtIn: string[] = [];
+        const dynamic: Array<{ name: string; description: string; properties: Record<string, string> }> = [];
+
+        for (const def of allDefs) {
+          if (Object.keys(AllComponents).includes(def.name)) {
+            builtIn.push(def.name);
+          } else {
+            dynamic.push({
+              name: def.name,
+              description: def.description,
+              properties: def.properties,
+            });
+          }
+        }
+
         return {
           success: true,
-          result: {
-            builtIn,
-            dynamic: dynamic.map((d) => ({
-              name: d.name,
-              description: d.description,
-              properties: d.properties,
-            })),
-          },
+          result: { builtIn, dynamic, totalCount: allNames.length },
         };
       },
     }),
@@ -4543,6 +4624,203 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
       },
     }),
 
+    setCustomBehaviorTree: tool({
+      description: `Assign a fully custom behavior tree (JSON) to an agent. This allows arbitrary decision logic beyond preset templates. Node types: selector (try children in order), sequence (all must pass), condition (boolean check), action (execute), interact_with_trait (find + interact by trait), wander, llm_fallback, noop. Condition ops: always, chance(p), need_above/below(need,value), in_room/not_in_room(roomName), has_goal(includes), no_active_movement_goal, room_has_named(name), has_perception(perceptionType). Action types: move, speak, observe, interact, think, wait, rest, reflect, plus any custom-registered actions.`,
+      inputSchema: z.object({
+        agentName: z.string().describe("Name of the agent"),
+        tree: z.any().describe("BehaviorNode JSON tree. Root must be a selector or sequence node."),
+        enable: z.boolean().optional().describe("Enable/disable the policy (default: true)"),
+      }),
+      execute: async (params: any) => {
+        const agents = Array.from(query(state.world, [Agent as any]));
+        const eid = agents.find((e: number) => Name.value[e] === params.agentName);
+        if (eid === undefined) {
+          return { success: false, result: null, error: `Agent "${params.agentName}" not found` };
+        }
+
+        const tree = params.tree;
+        if (!tree || typeof tree !== "object") {
+          return { success: false, result: null, error: "tree must be a valid BehaviorNode JSON object" };
+        }
+
+        // Get custom action types for validation
+        const allActions = ActionRegistry.getAllActions();
+        const customTypes = new Set(allActions.map(a => a.name));
+
+        const validation = validateBehaviorNode(tree, { allowedActionTypes: customTypes });
+        if (!validation.ok) {
+          return { success: false, result: null, error: `Invalid behavior tree: ${validation.error}` };
+        }
+
+        setAgentBehaviorPolicy(state.world, eid, tree, params.enable !== false);
+        console.log(`[Tool] setCustomBehaviorTree: ${params.agentName} (${JSON.stringify(tree).length} bytes)`);
+        return {
+          success: true,
+          result: {
+            agent: params.agentName,
+            treeSize: JSON.stringify(tree).length,
+            enabled: params.enable !== false,
+          },
+        };
+      },
+    }),
+
+    generateCustomPolicies: tool({
+      description: "Generate unique LLM-crafted behavior policies for all agents (or specific agents). Uses the world's affordances, traits, and relationships to create context-aware behavior trees tailored to each agent's role and personality. Falls back to template-based policies if LLM generation fails. Requires GOOGLE_GENERATIVE_AI_API_KEY.",
+      inputSchema: z.object({
+        agentNames: z.array(z.string()).optional().describe("Specific agent names to generate for. If omitted, generates for ALL agents."),
+        worldTheme: z.string().optional().describe("Theme description (e.g., 'medieval port city'). Defaults to world name."),
+      }),
+      execute: async (params: any) => {
+        const allAgentEids = Array.from(query(state.world, [Agent as any, Name as any]));
+        let targetEids = allAgentEids;
+
+        if (params.agentNames && params.agentNames.length > 0) {
+          const nameSet = new Set(params.agentNames as string[]);
+          targetEids = allAgentEids.filter((eid: number) => nameSet.has(String(Name.value[eid] || "")));
+          if (targetEids.length === 0) {
+            return { success: false, result: null, error: `No matching agents found for names: ${params.agentNames.join(", ")}` };
+          }
+        }
+
+        // Build context for each agent
+        const allAffordances = state.worldSchema.getAllAffordances().map(a => ({
+          name: a.name,
+          description: a.descriptionTemplate || a.name,
+          requires: a.requires || [],
+        }));
+        const allTraits = state.worldSchema.getAllTraits().map(t => ({
+          name: t,
+          description: t,
+          category: "world",
+        }));
+        const relationships = Object.keys(AllRelations).map(r => ({
+          name: r,
+          description: r,
+        }));
+        const templates = getAvailableTemplates();
+        const worldTheme = params.worldTheme || state.worldSchema.constructor.name || "simulation";
+
+        const contexts: PolicyGenerationContext[] = targetEids.map((eid: number) => {
+          const roomEid = getRoomForEntity(state.world, eid);
+          const roomName = roomEid !== undefined ? String(Name.value[roomEid] || "Unknown") : "Unknown";
+
+          return {
+            name: String(Name.value[eid] || ""),
+            role: String(Agent.role[eid] || ""),
+            personality: String(Agent.systemPrompt[eid] || "").slice(0, 300),
+            currentRoom: roomName,
+            availableAffordances: allAffordances,
+            availableTraits: allTraits,
+            availableRelationships: relationships,
+            worldTheme,
+            existingTemplates: templates,
+          };
+        });
+
+        try {
+          console.log(`[Tool] generateCustomPolicies: Generating for ${contexts.length} agents...`);
+          const policies = await generateBatchPolicies(contexts);
+
+          let assigned = 0;
+          for (const eid of targetEids) {
+            const name = String(Name.value[eid] || "");
+            const policy = policies.get(name);
+            if (policy) {
+              setAgentBehaviorPolicy(state.world, eid, policy);
+              assigned++;
+            }
+          }
+
+          console.log(`[Tool] generateCustomPolicies: ${assigned}/${contexts.length} agents received custom policies`);
+          return {
+            success: true,
+            result: {
+              totalAgents: contexts.length,
+              policiesGenerated: assigned,
+              agentNames: contexts.map(c => c.name),
+            },
+          };
+        } catch (err: any) {
+          console.error(`[Tool] generateCustomPolicies failed:`, err?.message || err);
+          return { success: false, result: null, error: `Policy generation failed: ${err?.message || String(err)}` };
+        }
+      },
+    }),
+
+    registerAction: tool({
+      description: "Register a new action type that agents can perform. Once registered, the action appears in agent prompts and can be used in behavior trees. Actions are validated against this registry.",
+      inputSchema: z.object({
+        name: z.string().describe("Action name (lowercase, e.g., 'brew_potion', 'cast_spell', 'trade')"),
+        description: z.string().describe("What this action does (shown to agent AI)"),
+        requiresTarget: z.boolean().describe("Does this action need a target entity?"),
+        requiresContent: z.boolean().describe("Does this action need content/details?"),
+        targetTypes: z.array(z.string()).optional().describe("What can be targeted: 'room', 'agent', 'object', 'any'"),
+        examples: z.array(z.string()).optional().describe("Example usages for AI prompt"),
+        category: z.enum(["movement", "social", "combat", "interaction", "self", "inventory"]).describe("Action category"),
+        enabledByComponent: z.string().optional().describe("Component name that enables this action (e.g., 'Inventory'). If set, only agents with this component can use the action."),
+        systemName: z.string().optional().describe("System name this action belongs to (for grouping)"),
+      }),
+      execute: async (params: any) => {
+        const actionDef: ActionDefinition = {
+          name: params.name,
+          description: params.description,
+          requiresTarget: params.requiresTarget,
+          requiresContent: params.requiresContent,
+          targetTypes: params.targetTypes,
+          examples: params.examples,
+          enabledBy: params.enabledByComponent ? [params.enabledByComponent] : undefined,
+          category: params.category,
+        };
+
+        if (params.enabledByComponent) {
+          ActionRegistry.registerComponentAction(params.enabledByComponent, actionDef);
+          console.log(`[Tool] registerAction: ${params.name} (enabled by ${params.enabledByComponent})`);
+        } else if (params.systemName) {
+          const existing = ActionRegistry.getSystemActions(params.systemName);
+          ActionRegistry.registerSystemActions(params.systemName, [...existing, actionDef]);
+          console.log(`[Tool] registerAction: ${params.name} (system: ${params.systemName})`);
+        } else {
+          // Register as a system action under "god" namespace
+          const existing = ActionRegistry.getSystemActions("god");
+          ActionRegistry.registerSystemActions("god", [...existing, actionDef]);
+          console.log(`[Tool] registerAction: ${params.name} (god namespace)`);
+        }
+
+        return {
+          success: true,
+          result: {
+            name: params.name,
+            description: params.description,
+            category: params.category,
+            totalActions: ActionRegistry.getAllActions().length,
+          },
+        };
+      },
+    }),
+
+    listAvailableActions: tool({
+      description: "List all registered action types (core + component + system/custom)",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const all = ActionRegistry.getAllActions();
+        return {
+          success: true,
+          result: {
+            total: all.length,
+            actions: all.map(a => ({
+              name: a.name,
+              description: a.description,
+              category: a.category,
+              requiresTarget: a.requiresTarget,
+              requiresContent: a.requiresContent,
+              enabledBy: a.enabledBy,
+            })),
+          },
+        };
+      },
+    }),
+
     getInterventionStats: tool({
       description:
         "Get statistics about GodAI interventions in this simulation.",
@@ -6266,6 +6544,258 @@ Returns the simulation ID for use with other persistence tools.`,
         }
       },
     } as any),
+
+    // =========================================================================
+    // VOCABULARY TOOLS - Affordances, Traits, and Relationship Types
+    // =========================================================================
+
+    createAffordance: tool({
+      description:
+        "Create a new affordance (action that can be performed on objects with matching traits). Auto-registers any required traits that don't exist yet.",
+      inputSchema: z.object({
+        name: z.string().describe("Unique name for this affordance (e.g., 'forge', 'brew', 'hack')"),
+        description: z
+          .string()
+          .describe("What this affordance does"),
+        requires: z
+          .array(z.string())
+          .describe("Trait names the target must have to allow this action"),
+        effects: z
+          .array(
+            z.object({
+              type: z
+                .enum([
+                  "modify_component",
+                  "set_state",
+                  "add_trait",
+                  "remove_trait",
+                  "destroy",
+                  "spawn",
+                  "emit_stimulus",
+                  "transfer",
+                  "add_relation",
+                  "remove_relation",
+                ])
+                .describe("Effect type"),
+              target: z.string().optional().describe("'actor', 'target', 'nearby', or entity name"),
+              state: z.string().optional().describe("For set_state"),
+              trait: z.string().optional().describe("For add_trait/remove_trait"),
+              stimulusType: z.string().optional().describe("For emit_stimulus"),
+              stimulusContent: z.string().optional().describe("For emit_stimulus"),
+              chance: z.number().optional().describe("Probability 0-1 (default 1)"),
+            })
+          )
+          .optional()
+          .describe("Effects when this affordance is used"),
+        category: z
+          .string()
+          .optional()
+          .describe("Category for grouping (e.g., 'crafting', 'combat', 'social')"),
+      }),
+      execute: async (params) => {
+        // Auto-register any required traits that don't exist yet
+        const autoRegistered: string[] = [];
+        for (const traitName of params.requires) {
+          if (!isTraitRegistered(traitName)) {
+            registerTrait({
+              name: traitName,
+              description: `Enables ${params.name} interaction`,
+              category: "custom" as TraitCategory,
+              enablesAffordances: [params.name],
+              incompatibleWith: [],
+            });
+            autoRegistered.push(traitName);
+          }
+        }
+
+        const def: AffordanceDefinition = {
+          name: params.name,
+          requires: params.requires,
+          effects: params.effects as any,
+          descriptionTemplate: `{actor.name} performs ${params.name} on {target.name}.`,
+        };
+        registerAffordance(def);
+        console.log(
+          `[Tool] createAffordance: ${params.name} (requires: ${params.requires.join(", ")}${
+            autoRegistered.length > 0 ? `, auto-registered traits: ${autoRegistered.join(", ")}` : ""
+          })`
+        );
+        return {
+          success: true,
+          result: {
+            affordance: params.name,
+            requires: params.requires,
+            autoRegisteredTraits: autoRegistered,
+            effectCount: params.effects?.length || 0,
+          },
+        };
+      },
+    }),
+
+    createTrait: tool({
+      description:
+        "Create a new trait definition. Traits are tags that entities can have, enabling affordances and categorizing capabilities.",
+      inputSchema: z.object({
+        name: z.string().describe("Unique trait name (e.g., 'forgeable', 'magical', 'hackable')"),
+        description: z.string().describe("What this trait means"),
+        category: z
+          .enum(["physical", "interactive", "social", "sensory", "state", "custom"])
+          .describe("Semantic category"),
+        enablesAffordances: z
+          .array(z.string())
+          .optional()
+          .describe("Affordance names this trait enables"),
+        incompatibleWith: z
+          .array(z.string())
+          .optional()
+          .describe("Trait names that cannot coexist with this one"),
+      }),
+      execute: async (params) => {
+        const def: TraitDefinition = {
+          name: params.name,
+          description: params.description,
+          category: params.category as TraitCategory,
+          enablesAffordances: params.enablesAffordances || [],
+          incompatibleWith: params.incompatibleWith || [],
+        };
+        registerTrait(def);
+        console.log(`[Tool] createTrait: ${params.name} (${params.category})`);
+        return {
+          success: true,
+          result: {
+            trait: params.name,
+            category: params.category,
+            description: params.description,
+          },
+        };
+      },
+    }),
+
+    createRelationshipType: tool({
+      description:
+        "Create a new relationship type for social dynamics between entities (e.g., GuildMember, OwesDebtTo, RivalOf).",
+      inputSchema: z.object({
+        name: z.string().describe("Unique name for this relationship type"),
+        description: z.string().describe("What this relationship represents"),
+        dataFields: z
+          .record(z.enum(["number", "string"]))
+          .optional()
+          .describe("Data fields stored on the relationship (e.g., { strength: 'number', since: 'string' })"),
+        isExclusive: z
+          .boolean()
+          .optional()
+          .describe("If true, each subject can only have one target (default false)"),
+        autoRemoveSubject: z
+          .boolean()
+          .optional()
+          .describe("If true, removing the target also removes the subject (default false)"),
+      }),
+      execute: async (params) => {
+        try {
+          const def: RelationshipTypeDefinition = {
+            name: params.name,
+            description: params.description,
+            dataFields: params.dataFields || {},
+            isExclusive: params.isExclusive || false,
+            autoRemoveSubject: params.autoRemoveSubject || false,
+            category: "custom",
+          };
+          registerRelationshipType(def);
+          console.log(`[Tool] createRelationshipType: ${params.name}`);
+          return {
+            success: true,
+            result: {
+              relationshipType: params.name,
+              description: params.description,
+              dataFields: params.dataFields || {},
+              isExclusive: params.isExclusive || false,
+            },
+          };
+        } catch (error) {
+          return {
+            success: false,
+            result: null,
+            error: String(error),
+          };
+        }
+      },
+    }),
+
+    addEntityRelationship: tool({
+      description:
+        "Add a runtime relationship between two entities using a registered relationship type.",
+      inputSchema: z.object({
+        subjectEid: z.number().describe("Entity ID of the subject"),
+        relationName: z.string().describe("Name of the registered relationship type"),
+        targetEid: z.number().describe("Entity ID of the target"),
+        data: z
+          .record(z.any())
+          .optional()
+          .describe("Data field values for the relationship"),
+      }),
+      execute: async (params) => {
+        const ok = addRelationship(
+          state.world,
+          params.subjectEid,
+          params.relationName,
+          params.targetEid,
+          params.data
+        );
+        if (!ok) {
+          return {
+            success: false,
+            result: null,
+            error: `Relationship type "${params.relationName}" is not registered. Use createRelationshipType first.`,
+          };
+        }
+        console.log(
+          `[Tool] addEntityRelationship: eid ${params.subjectEid} --[${params.relationName}]--> eid ${params.targetEid}`
+        );
+        return {
+          success: true,
+          result: {
+            subject: params.subjectEid,
+            relation: params.relationName,
+            target: params.targetEid,
+            data: params.data || {},
+          },
+        };
+      },
+    }),
+
+    listVocabulary: tool({
+      description:
+        "List all registered vocabulary: affordances, traits, and relationship types.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const affordances = listAllAffordances().map((a) => ({
+          name: a.name,
+          requires: a.requires,
+          effectCount: a.effects?.length || 0,
+        }));
+        const traits = listAllTraits().map((t) => ({
+          name: t.name,
+          category: t.category,
+          description: t.description,
+          enablesAffordances: t.enablesAffordances,
+        }));
+        const relationshipTypes = listRelationshipTypes().map((r) => ({
+          name: r.name,
+          description: r.description,
+          dataFields: r.dataFields,
+          isExclusive: r.isExclusive,
+        }));
+        return {
+          success: true,
+          result: {
+            affordances,
+            traits,
+            relationshipTypes,
+            summary: `${affordances.length} affordances, ${traits.length} traits, ${relationshipTypes.length} relationship types`,
+          },
+        };
+      },
+    }),
   };
 }
 
@@ -6658,6 +7188,8 @@ function buildExecutionTools(state: GodAgentState) {
             error: `Component not found: ${params.componentName}`,
           };
         }
+        // Bridge: attach via registry so entity is queryable
+        attachToEntity(state.world, eid, params.componentName, params.values);
         for (const [prop, val] of Object.entries(params.values)) {
           if (comp[prop]) {
             comp[prop][eid] = val;
@@ -6804,6 +7336,9 @@ export async function executeDesign(
         for (const compDef of design.components || []) {
           const comp = getDynamicComponent(compDef.name);
           if (!comp) continue;
+
+          // Bridge: ensure entity is registered with BitECS for this component
+          attachToEntity(state.world, eid, compDef.name);
 
           for (const [prop, propType] of Object.entries(
             compDef.properties || {}
@@ -6974,6 +7509,8 @@ export async function executeDesign(
           for (const [compName, values] of Object.entries(ent.initialValues)) {
             const comp = getDynamicComponent(compName);
             if (comp && values) {
+              // Bridge: attach via registry
+              attachToEntity(state.world, eid, compName, values as Record<string, any>);
               for (const [prop, val] of Object.entries(
                 values as Record<string, any>
               )) {
@@ -7103,7 +7640,6 @@ Return ONLY the code (no markdown, no explanation):`;
     const response = await generateText({
       model: executorModel,
       messages: [{ role: "user", content: prompt }],
-      maxOutputTokens: 2000,
       providerOptions: {
         google: {
           thinkingConfig: {
@@ -7574,6 +8110,11 @@ export async function godThink(
     "spawn",
     "listRules",
     "defineRule",
+    "createAffordance",
+    "createTrait",
+    "createRelationshipType",
+    "addEntityRelationship",
+    "listVocabulary",
   ] as const;
 
   const coreTools: Record<string, any> = {};
@@ -7773,6 +8314,8 @@ export function runWorldTickAt(
   }
   // Run interventions - event-driven precondition→effect rules
   runInterventions(state.world, state.interventionRegistry, tick);
+  // Post-tick effectiveness analysis (conflict detection + cleanup)
+  runPostTickAnalysis(tick);
   return consumeEvents(state.systemRegistry);
 }
 

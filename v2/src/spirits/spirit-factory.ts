@@ -108,7 +108,7 @@ export interface SpiritProposal {
   timestamp: number;
   fromSpiritEid: number;
   fromSpiritName: string;
-  type: "system" | "component" | "entity" | "rule";
+  type: "system" | "component" | "entity" | "rule" | "affordance" | "trait" | "relationship_type";
   name: string;
   description: string;
   specification: any;  // Type-specific details
@@ -435,8 +435,9 @@ export function submitProposal(
     status: "pending",
   };
 
-  // Check if auto-approve
-  if (dynamicState.architectConfig?.proposalApproval === "auto") {
+  // Auto-approve when: approval mode is "auto" OR architect can execute directly
+  if (dynamicState.architectConfig?.proposalApproval === "auto" ||
+      dynamicState.architectConfig?.canExecuteDirectly) {
     proposal.status = "approved";
     proposal.approvedBy = spiritEid;
   }

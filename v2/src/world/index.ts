@@ -19,6 +19,12 @@ export {
   BASE_AFFORDANCES,
   BASE_OBJECT_TYPES,
   BASE_RULES,
+  registerAffordance,
+  removeAffordance,
+  getAffordance,
+  listAllAffordances,
+  listRuntimeAffordances,
+  resetRuntimeAffordances,
   type AffordanceDefinition,
   type StateDefinition,
   type ObjectTypeDefinition,
@@ -53,3 +59,26 @@ export {
   initializeWorldToolsState,
   type WorldToolsState,
 } from "./world-tools";
+
+export {
+  saveRuntimeAffordances,
+  loadRuntimeAffordances,
+} from "./affordance-persistence";
+
+export {
+  registerTrait,
+  removeTrait,
+  getTrait,
+  isTraitRegistered,
+  listAllTraits,
+  listRuntimeTraits,
+  listTraitNames,
+  resetRuntimeTraits,
+  initializeBaseTraits,
+  getTraitInfo,
+  getTraitsSummaryForContext,
+  saveRuntimeTraits,
+  loadRuntimeTraits,
+  type TraitDefinition,
+  type TraitCategory,
+} from "./trait-registry";
