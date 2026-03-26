@@ -555,11 +555,14 @@ function buildAgentContext(world: World, eid: number): string {
 
   const roomEid = getRoomForEntity(world, eid);
   let roomContext = "nowhere in particular";
+  let roomDescription = "";
   let roomAmbience = "";
   let othersInRoom: string[] = [];
+  let objectsInRoom: string[] = [];
 
   if (roomEid !== undefined) {
     roomContext = Name.value[roomEid] || "an unknown room";
+    roomDescription = Description.value[roomEid] || "";
     roomAmbience = Room.ambience[roomEid] || "";
 
     const agents = Array.from(query(world, [Agent]));
@@ -569,6 +572,14 @@ function buildAgentContext(world: World, eid: number): string {
         const otherName = Name.value[otherEid];
         if (otherName) othersInRoom.push(otherName);
       }
+    }
+
+    // List objects in the room so the agent knows what's available to interact with
+    for (const child of listDirectContents(world, roomEid)) {
+      if (child === eid) continue;
+      if (hasComponent(world, child, Agent)) continue; // Skip other agents (listed separately)
+      const objName = Name.value[child];
+      if (objName) objectsInRoom.push(objName);
     }
   }
 
@@ -627,12 +638,13 @@ BEHAVIORAL GUIDELINES:
 ${systemPrompt}
 
 CURRENT STATE:
-- Location: ${roomContext}
-- Ambience: ${roomAmbience}
+- Location: ${roomContext}${roomDescription ? ` — ${roomDescription}` : ""}
+- Objects here: ${objectsInRoom.length > 0 ? objectsInRoom.join(", ") : "nothing notable"}
+- Others Present: ${othersInRoom.length > 0 ? othersInRoom.join(", ") : "no one else"}
+- Ambience: ${roomAmbience || "quiet"}
 - Mental Mode: ${mode}
 - Arousal Level: ${(arousal * 100).toFixed(0)}%
 - Current Focus: ${focus || "nothing specific"}
-- Others Present: ${othersInRoom.length > 0 ? othersInRoom.join(", ") : "no one else"}
 ${personalityTraits ? `- Temperament: ${formatPersonality(personalityTraits)}` : ""}
 
 ACTIVE GOALS:
