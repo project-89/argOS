@@ -7,6 +7,7 @@ import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import { getAvailableAffordances } from "../world/affordance-availability";
 import { getMovementTarget } from "../systems/builtin-systems";
 import { getSkillTree, recordSkillOutcome } from "./skill-registry";
+import { getComponent, entityHasComponent } from "../ecs/component-registry";
 
 export type PolicyAction = {
   type: "speak" | "observe" | "move" | "interact" | "think" | "wait" | "rest" | "reflect";
@@ -51,7 +52,10 @@ export type ConditionOp =
   | { type: "impression_above"; targetName: string; threshold: number }
   | { type: "impression_below"; targetName: string; threshold: number }
   | { type: "last_n_actions_include"; n: number; actionType: string }
-  | { type: "last_n_actions_exclude"; n: number; actionType: string };
+  | { type: "last_n_actions_exclude"; n: number; actionType: string }
+  | { type: "component_above"; component: string; field: string; value: number }
+  | { type: "component_below"; component: string; field: string; value: number }
+  | { type: "has_component"; component: string };
 
 export type PolicyEvalResult =
   | { kind: "action"; action: PolicyAction; trace: string[] }
@@ -256,6 +260,21 @@ export function validateBehaviorNode(
         if (!Number.isFinite(nVal) || nVal < 1 || nVal > 100) return `${type}.n must be a number 1..100`;
         const aType = String((op as any).actionType || "").trim();
         if (!aType) return `${type}.actionType required`;
+        return null;
+      }
+      case "component_above":
+      case "component_below": {
+        const comp = String((op as any).component || "").trim();
+        if (!comp) return `${type}.component required`;
+        const field = String((op as any).field || "").trim();
+        if (!field) return `${type}.field required`;
+        const val = Number((op as any).value);
+        if (!Number.isFinite(val)) return `${type}.value must be a finite number`;
+        return null;
+      }
+      case "has_component": {
+        const comp2 = String((op as any).component || "").trim();
+        if (!comp2) return "has_component.component required";
         return null;
       }
       default:
@@ -559,6 +578,21 @@ function evalCondition(world: World, agentEid: number, op: ConditionOp): boolean
       const actions2 = getRecentActions(agentEid);
       const lastN2 = actions2.slice(-op.n);
       return !lastN2.some(a => a === op.actionType);
+    }
+    case "component_above": {
+      const comp = getComponent(op.component);
+      if (!comp) return false;
+      const v = comp[op.field]?.[agentEid];
+      return typeof v === "number" && v >= op.value;
+    }
+    case "component_below": {
+      const comp2 = getComponent(op.component);
+      if (!comp2) return false;
+      const v2 = comp2[op.field]?.[agentEid];
+      return typeof v2 === "number" && v2 <= op.value;
+    }
+    case "has_component": {
+      return entityHasComponent(world, agentEid, op.component);
     }
   }
 }

@@ -444,6 +444,7 @@ const CONDITION_OP_TYPES = new Set([
   "last_action_was", "last_action_not", "has_perception",
   "has_memory", "has_belief", "impression_above", "impression_below",
   "last_n_actions_include", "last_n_actions_exclude",
+  "component_above", "component_below", "has_component",
 ]);
 
 function normalizeNode(node: any): any {
