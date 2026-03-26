@@ -1,10 +1,11 @@
 import { generateText } from "ai";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { google } from "@ai-sdk/google";
+import { agentModel } from "../llm/config";
+import { extractJSON } from "../llm/json-extract";
 import type { World } from "../ecs/world";
 import { addEntity, addComponent, removeEntity, query, getRelationTargets, hasComponent } from "bitecs";
-import { Name, Description, Agent, Mind, Room, Thought, Perception, ConversationTurn, Goal, Personality, KanbanCard, KanbanColumn, PendingToolJob } from "../ecs/components";
+import { Name, Description, Agent, Mind, Room, Thought, Perception, ConversationTurn, Goal, Personality, KanbanCard, KanbanColumn, PendingToolJob, BehaviorPolicy } from "../ecs/components";
 import { HasThought, HasPerception, HasConversation, HasGoal } from "../ecs/relations";
 import { getDirectContainer, getRoomForEntity, listDirectContents } from "../ecs/location";
 import {
@@ -23,9 +24,16 @@ import { formatProceduralSkillsForContext, selectProceduralAction, tryStartProce
 import { evaluateBehaviorPolicy, formatBehaviorPolicyForContext } from "./behavior-policy";
 import { selectFailureRecoveryAction } from "./failure-recovery";
 import { selectContractDrivenAction } from "./contract-driven-actions";
+import { getMovementTarget } from "../systems/builtin-systems";
 import { ensureOfficeDeviceSandboxDir } from "../office-tools/sandbox";
+import { recordPolicyAction } from "./policy-metrics";
 
-const model = google("gemini-2.5-flash");
+const model = agentModel;
+
+/** Temperature for agent cognition LLM calls. Lower values produce more
+ *  reliable structured JSON output while still allowing some variety in
+ *  dialogue and inner thoughts. */
+const AGENT_COGNITION_TEMPERATURE = 0.3;
 
 function getConfiguredGeminiApiKey(): string {
   const key = String(
@@ -255,27 +263,75 @@ export interface AgentAction {
   content?: string;
 }
 
-function normalizeSelectedAction(world: World, agentEid: number, action: AgentAction): AgentAction {
+function normalizeSelectedAction(world: World, agentEid: number, action: AgentAction, wasLlmFallback: boolean = false): AgentAction {
   // Avoid common no-op loops: e.g. a policy repeatedly selecting "move -> <current room>".
   // Returning "wait" keeps the event stream honest (no state change) and avoids thrash scoring.
   if (action.type === "move" && action.target) {
-    // If this is the current plan step, keep it as-is so the plan advancement logic can
-    // treat the step as satisfied ("already there") and move on.
-    const planned = getNextPlannedAction(world as any, agentEid);
-    if (planned && planned.actionType === "move" && String(planned.target || "").trim().toLowerCase() === String(action.target || "").trim().toLowerCase()) {
-      return action;
+    const wanted = String(action.target || "").trim().toLowerCase();
+
+    // Validate target is actually a room — reject moves to objects/agents/etc.
+    const allRooms = Array.from(query(world as any, [Room as any, Name as any]));
+    const isRoom = allRooms.some(rid => {
+      const rn = String(Name.value[rid] || "").trim().toLowerCase();
+      return rn && rn === wanted;
+    });
+    if (!isRoom) {
+      // Target is not a room — convert to observe (they probably want to interact with it)
+      return { type: "observe", target: action.target };
     }
 
     const roomEid = getRoomForEntity(world as any, agentEid);
     if (roomEid !== undefined) {
       const currentRoomName = String(Name.value[roomEid] || "").trim().toLowerCase();
-      const wanted = String(action.target || "").trim().toLowerCase();
       if (currentRoomName && wanted && currentRoomName === wanted) {
+        // Already in this room — convert to wait
+        return { type: "wait" };
+      }
+    }
+
+    // Suppress ALL moves when agent is already in transit (grid movement or goal-based).
+    // This prevents templates from fighting each other (e.g. wander vs return-to-home).
+    const movTarget = getMovementTarget(agentEid);
+    if (movTarget !== undefined) {
+      return { type: "wait" };
+    }
+
+    // Suppress moves when any active movement goal exists (goal may not have set movementTarget yet).
+    const goalEids = getRelationTargets(world as any, agentEid, HasGoal as any);
+    for (const gid of goalEids) {
+      if (!hasComponent(world as any, gid, Goal as any)) continue;
+      if (String(Goal.status[gid] || "") !== "active") continue;
+      const desc = String(Goal.description[gid] || "").toLowerCase();
+      if (desc.includes("go to") || desc.includes("follow schedule")) {
         return { type: "wait" };
       }
     }
   }
 
+
+  // Clean up target names: strip trailing punctuation from observe/interact targets
+  // (recovery system and LLM sometimes append periods from parsed messages)
+  if ((action.type === "observe" || action.type === "interact") && action.target) {
+    const cleaned = action.target.replace(/[.!?,;:]+$/, "").trim();
+    if (cleaned !== action.target) {
+      action = { ...action, target: cleaned };
+    }
+  }
+
+  // Suppress self-targeting: agents should not observe/interact with themselves.
+  if ((action.type === "observe" || action.type === "interact") && action.target) {
+    const agentName = String(Name.value[agentEid] || "").trim().toLowerCase();
+    const targetName = String(action.target || "").trim().toLowerCase();
+    if (agentName && targetName && agentName === targetName) {
+      // Redirect self-observe to room observation
+      if (action.type === "observe") {
+        const roomEid = getRoomForEntity(world as any, agentEid);
+        const roomName = roomEid !== undefined ? String(Name.value[roomEid] || "").trim() : "";
+        return { type: "observe", target: roomName || "surroundings" };
+      }
+      return { type: "wait" };
+    }
+  }
 
   // Suppress duplicate async tool actions when a PendingToolJob is already in-flight.
   // Without this, LLM agents may repeatedly choose the same tool action every tick while the job is running.
@@ -301,6 +357,17 @@ function normalizeSelectedAction(world: World, agentEid: number, action: AgentAc
       return { type: "wait" };
     }
   }
+
+  // Record action for The Watcher's behavioral analysis
+  try {
+    const { recordAgentAction } = require("../spirits/watcher-spirit");
+    recordAgentAction(agentEid, action.type);
+  } catch {}
+
+  // Record action for policy effectiveness metrics
+  try {
+    recordPolicyAction(agentEid, action.type, wasLlmFallback);
+  } catch {}
 
   return action;
 }
@@ -625,7 +692,10 @@ export async function agentThink(world: World, eid: number): Promise<AgentAction
 
   // Deterministic failure recovery: if the last action failed, change strategy immediately.
   // This prevents thrashy loops like "pickup X" -> fail -> retry "take X" -> fail...
-  const recovery = selectFailureRecoveryAction(world as any, eid);
+  // Skip for agents with behavior policies — the policy tree handles decision-making and
+  // recovery's observe-loop can starve the policy from ever running.
+  const hasBehaviorPolicy = hasComponent(world as any, eid, BehaviorPolicy as any) && BehaviorPolicy.enabled[eid];
+  const recovery = hasBehaviorPolicy ? null : selectFailureRecoveryAction(world as any, eid);
   // If recovery can only suggest "wait" and we *do* have an LLM available, treat that as
   // "no deterministic recovery found" so the agent can escalate to the LLM.
   if (recovery && (recovery.type !== "wait" || !getConfiguredGeminiApiKey())) {
@@ -665,13 +735,17 @@ export async function agentThink(world: World, eid: number): Promise<AgentAction
 
   // Deterministic plan execution: if an agent has an active plan for its highest-priority goal,
   // follow the next step directly (LLM-free). This is the core "plans drive grounded action" bridge.
-  const nextPlanned = getNextPlannedAction(world, eid);
-  if (nextPlanned) {
-    return normalizeSelectedAction(world, eid, {
-      type: nextPlanned.actionType as any,
-      target: nextPlanned.target,
-      content: nextPlanned.content,
-    });
+  // Skip for behavior-policy agents: their template already covers observe/interact/wander patterns,
+  // and schedule-generated micro-plans (observe → interact) starve the policy from ever running.
+  if (!hasBehaviorPolicy) {
+    const nextPlanned = getNextPlannedAction(world, eid);
+    if (nextPlanned) {
+      return normalizeSelectedAction(world, eid, {
+        type: nextPlanned.actionType as any,
+        target: nextPlanned.target,
+        content: nextPlanned.content,
+      });
+    }
   }
 
   // Deterministic policy layer: optional behavior tree / policy graph. Runs before any LLM call.
@@ -759,6 +833,16 @@ Respond with JSON only:
   }
 }
 
+RESPONSE EXAMPLES:
+Example 1 - Moving to a location:
+{"innerThought": "The market sounds busy. I should go check it out.", "action": {"type": "move", "target": "Market"}}
+
+Example 2 - Interacting with an object:
+{"innerThought": "That old book looks interesting. Let me take a closer look.", "action": {"type": "interact", "target": "Ancient Tome", "content": "examine"}}
+
+Example 3 - Speaking to someone:
+{"innerThought": "Alice looks like she could use some company.", "action": {"type": "speak", "target": "Alice", "content": "Good morning! How are you today?"}}
+
 Stay in character. Be concise. React naturally to your perceptions and surroundings.`;
 
 
@@ -778,14 +862,15 @@ Stay in character. Be concise. React naturally to your perceptions and surroundi
           content: userContent,
         },
       ],
+      temperature: AGENT_COGNITION_TEMPERATURE,
     });
 
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    const jsonStr = extractJSON(text);
+    if (!jsonStr) {
       return { type: "wait" };
     }
 
-    const result = JSON.parse(jsonMatch[0]);
+    const result = JSON.parse(jsonStr);
     
     if (result.innerThought) {
       addThought(world, eid, { content: result.innerThought, type: "reasoning" });
@@ -803,7 +888,7 @@ Stay in character. Be concise. React naturally to your perceptions and surroundi
     console.log(`[${name}] thinks: "${result.innerThought || ""}"`);
     console.log(`[${name}] action: ${action.type}${action.content ? ` - "${action.content}"` : ""}`);
 
-    return normalizeSelectedAction(world, eid, action);
+    return normalizeSelectedAction(world, eid, action, true);
   } catch (error) {
     console.error(`[${name}] cognition error:`, error);
     return { type: "wait" };

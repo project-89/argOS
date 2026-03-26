@@ -12,13 +12,14 @@
  * don't exist in the ECS.
  */
 
-import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
+import { spiritModel } from "../llm/config";
 import { hasComponent, query } from "bitecs";
 import type { SpiritRegistry } from "./spirit-registry";
 import { createSpirit } from "./spirit-registry";
 import type { SpiritDefinition, SpiritState, DivineMessage } from "./types";
-import { Name, Room, Traits } from "../ecs/components";
+import { Name, Room, Traits, Agent } from "../ecs/components";
+import { getRoomForEntity } from "../ecs/location";
 import { worldSchema, type ObjectTypeDefinition, type StimulusDefinition, type StateDefinition } from "../world/schema";
 import { ObjectManager } from "../world/object-manager";
 
@@ -282,7 +283,7 @@ export function getPendingRoomRequests(): RoomCreationRequest[] {
 export async function generateRoomPopulation(
   request: RoomCreationRequest
 ): Promise<PopulatedRoom | null> {
-  const model = google("gemini-2.0-flash");
+  const model = spiritModel;
 
   // Get template hints if available
   const template = ROOM_TEMPLATES[request.roomType.toLowerCase().replace(/\s+/g, "_")];
@@ -525,7 +526,7 @@ export async function generateReplenishment(
   missingItems: string[],
   context: string
 ): Promise<RoomEntitySpec[]> {
-  const model = google("gemini-2.0-flash");
+  const model = spiritModel;
 
   const prompt = `You are The Steward. A room needs replenishment.
 
@@ -650,7 +651,7 @@ export async function populateRoomViaSchema(
   request: RoomCreationRequest,
   roomEid: number // EID of the room entity to populate
 ): Promise<SchemaPopulatedRoom | null> {
-  const model = google("gemini-2.0-flash");
+  const model = spiritModel;
   const objectManager = new ObjectManager(world);
 
   // Get template hints if available
@@ -994,6 +995,98 @@ export function materializeRoomFromSchemaPlan(
 }
 
 // =============================================================================
+// PROACTIVE ROOM SCANNING
+// =============================================================================
+
+let lastProactiveScan = 0;
+const PROACTIVE_SCAN_INTERVAL_MS = 30_000; // Scan every 30 seconds
+
+/**
+ * Scan for rooms that exist in the ECS but have no entities inside them.
+ * Automatically queue population requests for any unpopulated rooms.
+ * This makes The Steward autonomous - it detects new rooms without being told.
+ */
+export function scanForUnpopulatedRooms(world: any): number {
+  const now = Date.now();
+  if (now - lastProactiveScan < PROACTIVE_SCAN_INTERVAL_MS) return 0;
+  lastProactiveScan = now;
+
+  const rooms = Array.from(query(world, [Room]));
+  let queued = 0;
+
+  for (const roomEid of rooms) {
+    const roomName = Name.value[roomEid];
+    if (!roomName) continue;
+
+    // Skip if already tracked or has a pending request
+    if (stewardState.roomInventory.has(roomName)) continue;
+    if (stewardState.pendingRequests.some(r => r.roomName === roomName)) continue;
+    if (stewardState.completedSchemaRooms.some(r => r.roomName === roomName)) continue;
+    if (stewardState.completedRooms.some(r => r.roomName === roomName)) continue;
+
+    // Check if room has any entities inside it (objects, not agents)
+    // A room with 0 non-agent entities is likely unpopulated
+    const allNamedEntities = Array.from(query(world, [Name]));
+    const hasEntities = allNamedEntities.some(eid => {
+      if (eid === roomEid) return false;
+      // Skip agents - we want objects/furniture
+      if (hasComponent(world, eid, Agent)) return false;
+      const entityRoom = getRoomForEntity(world, eid);
+      return entityRoom === roomEid;
+    });
+
+    if (!hasEntities) {
+      // Report to observation aggregator
+      try {
+        const { reportGap } = require("./observation-aggregator");
+        reportGap(
+          "The Steward",
+          "environmental_gap",
+          `${roomName} is unpopulated`,
+          `Room "${roomName}" has no objects or furniture. Agents visiting this room will have nothing to interact with.`,
+          "medium"
+        );
+      } catch {}
+
+      // Infer room type from name
+      const roomType = inferRoomType(roomName);
+      requestRoomPopulation(
+        roomType,
+        roomName,
+        { worldTheme: "slice_of_life", primaryFunction: `A ${roomType}` },
+        { maxItems: 12 },
+        0 // Self-requested
+      );
+      queued++;
+      console.log(`[Steward] Auto-detected unpopulated room: "${roomName}" (type: ${roomType})`);
+    }
+  }
+
+  return queued;
+}
+
+/**
+ * Infer room type from room name for population templates
+ */
+function inferRoomType(roomName: string): string {
+  const lower = roomName.toLowerCase();
+  if (lower.includes("bakery") || lower.includes("bake")) return "bakery";
+  if (lower.includes("tavern") || lower.includes("inn") || lower.includes("pub")) return "tavern";
+  if (lower.includes("forge") || lower.includes("smith") || lower.includes("blacksmith")) return "blacksmith";
+  if (lower.includes("library") || lower.includes("study") || lower.includes("archive")) return "library";
+  if (lower.includes("shop") || lower.includes("store") || lower.includes("market")) return "general_store";
+  if (lower.includes("herb") || lower.includes("apothecary") || lower.includes("healer")) return "herbalist";
+  if (lower.includes("bed") || lower.includes("chamber") || lower.includes("quarters")) return "bedroom";
+  if (lower.includes("kitchen") || lower.includes("cook")) return "tavern";
+  if (lower.includes("garden") || lower.includes("yard") || lower.includes("courtyard")) return "garden";
+  if (lower.includes("hall") || lower.includes("common") || lower.includes("gathering")) return "tavern";
+  if (lower.includes("temple") || lower.includes("shrine") || lower.includes("chapel")) return "library";
+  if (lower.includes("stable") || lower.includes("barn")) return "general_store";
+  if (lower.includes("office") || lower.includes("work")) return "general_store";
+  return "general";
+}
+
+// =============================================================================
 // MAIN CYCLE
 // =============================================================================
 
@@ -1012,6 +1105,8 @@ function findRoomEidByName(world: any, roomName: string): number | undefined {
 
 /**
  * Run The Steward's main cycle
+ * Now includes proactive room scanning - The Steward autonomously detects
+ * unpopulated rooms and furnishes them without needing God AI.
  */
 export async function runStewardCycle(
   world: any,
@@ -1023,6 +1118,12 @@ export async function runStewardCycle(
 }> {
   let roomsPopulated = 0;
   let entitiesGenerated = 0;
+
+  // Proactive: scan for unpopulated rooms and auto-queue them
+  const autoQueued = scanForUnpopulatedRooms(world);
+  if (autoQueued > 0) {
+    console.log(`[Steward] Auto-queued ${autoQueued} unpopulated rooms for furnishing`);
+  }
 
   // Process pending room requests
   for (const request of [...stewardState.pendingRequests]) {

@@ -16,14 +16,14 @@
  */
 
 import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { flashModel } from "../llm/config";
 import type { World } from "../ecs/world";
 import { addEntity, addComponent, query, getRelationTargets, hasComponent, removeEntity } from "bitecs";
 import { Name, Description, Agent, Mind, Schedule, Goal, Room } from "../ecs/components";
 import { HasSchedule, HasGoal } from "../ecs/relations";
 import { getKnowledgeSummary } from "./knowledge-graph";
 
-const model = google("gemini-2.0-flash");
+const model = flashModel;
 
 export interface ScheduledActivity {
   name: string;

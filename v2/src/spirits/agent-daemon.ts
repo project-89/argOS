@@ -1950,7 +1950,6 @@ You've observed a concern: ${topConcern.description}
 Generate a short, subtle whisper (1 sentence, under 20 words) to gently guide them.
 The whisper should feel like an inner voice or intuition, not a direct command.
 Do not use quotes. Just output the whisper text.`,
-          maxOutputTokens: 50,
         });
         whisperContent = result.text.trim().replace(/^["']|["']$/g, '');
         whisperType = "guidance";
@@ -2078,7 +2077,6 @@ Generate a short, provocative whisper (1 sentence, under 20 words) that:
 
 The whisper should feel like a nagging inner voice that won't let them rest easy.
 Be subtle but unsettling. Do not use quotes. Just output the whisper text.`,
-      maxOutputTokens: 50,
     });
     challengeContent = result.text.trim().replace(/^["']|["']$/g, '');
   } catch (error) {

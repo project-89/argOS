@@ -12,7 +12,7 @@
  */
 
 import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { flashModel } from "../llm/config";
 import type { World } from "../ecs/world";
 import { addEntity, addComponent, query, getRelationTargets, hasComponent } from "bitecs";
 import { Name, Description, Agent, Mind, Memory, ReflectionState, Thought } from "../ecs/components";
@@ -20,7 +20,7 @@ import { HasMemory, HasReflectionState, HasThought } from "../ecs/relations";
 import { getAgentMemories, addMemory, getKnowledgeSummary } from "./knowledge-graph";
 import { addThought } from "./agent-mind";
 
-const model = google("gemini-2.0-flash");
+const model = flashModel;
 
 // Default reflection threshold (accumulated importance before reflecting)
 const DEFAULT_REFLECTION_THRESHOLD = 100;

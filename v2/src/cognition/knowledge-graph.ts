@@ -1,11 +1,11 @@
 import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { flashModel } from "../llm/config";
 import type { World } from "../ecs/world";
 import { addEntity, addComponent, removeEntity, query, getRelationTargets, hasComponent } from "bitecs";
 import { Name, Memory, Belief, Impression } from "../ecs/components";
 import { HasMemory, HasBelief, HasImpression } from "../ecs/relations";
 
-const model = google("gemini-2.5-flash");
+const model = flashModel;
 
 function hasGoogleApiKey(): boolean {
   const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;

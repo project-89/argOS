@@ -11,7 +11,7 @@
  */
 
 import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { flashModel } from "../llm/config";
 import type { World } from "../ecs/world";
 import { addEntity, addComponent, query, getRelationTargets, hasComponent, removeEntity } from "bitecs";
 import { Name, Description, Agent, Goal, Plan, Mind, Room, LastToolResult, PendingToolJob } from "../ecs/components";
@@ -20,7 +20,7 @@ import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import { getKnowledgeSummary } from "./knowledge-graph";
 import { getAvailableAffordances } from "../world/affordance-availability";
 
-const model = google("gemini-2.0-flash");
+const model = flashModel;
 
 export interface PlanStep {
   description: string;

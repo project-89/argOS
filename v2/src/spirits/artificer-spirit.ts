@@ -32,6 +32,18 @@ import {
 } from "./spirit-factory";
 import { recordEvent, getRecentEvents } from "./consistency-spirit";
 import { modifySystem } from "../god/system-baker";
+import {
+  detectCascades,
+  computeSystemHealth,
+  getAverageEffectiveness,
+  getEffectivenessReport,
+  checkForRegression,
+  rollbackSystem,
+  type SystemConflict,
+  type SystemHealthScore,
+  type CascadeResult,
+} from "./effectiveness-tracker";
+import { reportGap } from "./observation-aggregator";
 
 // =============================================================================
 // ARTIFICER TYPES
@@ -90,6 +102,10 @@ export interface ArtificerReport {
   criticalSystems: number;
   repairsAttempted: RepairAction[];
   recommendations: string[];
+  rollbacks: string[];
+  conflicts: SystemConflict[];
+  cascadeChains: string[][];
+  healthScores: SystemHealthScore[];
 }
 
 // =============================================================================
@@ -305,6 +321,22 @@ export function inspectAllSystems(
     const diagnosis = inspectSystem(systemRegistry, system.name);
     if (diagnosis) {
       diagnoses.push(diagnosis);
+
+      // Report significant issues to observation aggregator
+      if (diagnosis.status !== "healthy" && diagnosis.issues.length > 0) {
+        try {
+          const { reportGap } = require("./observation-aggregator");
+          const severity = diagnosis.status === "critical" || diagnosis.status === "dead"
+            ? "critical" : diagnosis.issues.some(i => i.severity === "high") ? "high" : "medium";
+          reportGap(
+            "The Tinker",
+            "performance_issue",
+            `System ${diagnosis.systemName}: ${diagnosis.status}`,
+            diagnosis.issues.map(i => `[${i.severity}] ${i.description}`).join("; "),
+            severity as any
+          );
+        } catch {}
+      }
     }
   }
 
@@ -432,6 +464,10 @@ export async function runArtificerCognition(
     criticalSystems: 0,
     repairsAttempted: [],
     recommendations: [],
+    rollbacks: [],
+    conflicts: [],
+    cascadeChains: [],
+    healthScores: [],
   };
 
   // 1. Inspect all systems
@@ -468,49 +504,97 @@ export async function runArtificerCognition(
     }
   }
 
-  // 5. NEW: Check for overly simple systems that need improvement
-  const simpleSystems = findSimpleSystems(systemRegistry, "moderate");
-  if (simpleSystems.length > 0 && config.autoFixEnabled) {
-    console.log(`[Artificer] Found ${simpleSystems.length} systems below complexity threshold`);
+  // 5a. Regression check — roll back systems that degraded after modification
+  for (const system of listSystems(systemRegistry)) {
+    if ((system as any).modificationTimestamp && checkForRegression(system.name, systemRegistry)) {
+      const rolled = rollbackSystem(system.name, systemRegistry);
+      if (rolled) {
+        report.rollbacks.push(system.name);
+        console.log(`[Artificer] ROLLBACK: ${system.name} regressed after modification`);
+      }
+    }
+  }
 
-    // Improve up to 2 simple systems per cycle to avoid overwhelming
-    for (const analysis of simpleSystems.slice(0, 2)) {
-      console.log(`[Artificer] Improving ${analysis.systemName} (complexity: ${analysis.complexity}, score: ${analysis.score})`);
-      console.log(`[Artificer] Issues: ${analysis.issues.join("; ")}`);
+  // 5b. Cascade detection
+  const cascades = detectCascades();
+  report.cascadeChains = cascades.chains;
+  if (cascades.chains.length > 0) {
+    console.log(`[Artificer] Cascade chains: ${cascades.chains.map(c => c.join(" → ")).join("; ")}`);
+  }
 
-      const improvementPrompt = generateImprovementPrompt(analysis);
+  // 5c. Log conflicts detected this cycle (conflicts are detected per-tick in runPostTickAnalysis)
+  // We just surface them in the report for visibility
+
+  // 5d. Health-based prioritization (replaces findSimpleSystems)
+  const allBaked = listSystems(systemRegistry).filter(s => s.code);
+  const healthScores = allBaked
+    .map(s => computeSystemHealth(s.name, systemRegistry))
+    .sort((a, b) => b.improvementPriority - a.improvementPriority);
+  report.healthScores = healthScores.slice(0, 10);
+
+  if (healthScores.length > 0) {
+    console.log(`[Artificer] Health scores: ${healthScores.slice(0, 5).map(
+      h => `${h.systemName} (eff: ${h.effectiveness}, cascade: ${h.cascadeValue}, priority: ${h.improvementPriority})`
+    ).join(", ")}`);
+  }
+
+  const toImprove = healthScores
+    .filter(h => h.improvementPriority > 40 && h.cascadeValue < 60)
+    .slice(0, 2);
+
+  if (toImprove.length > 0 && config.autoFixEnabled) {
+    console.log(`[Artificer] Improving ${toImprove.length} systems by health priority`);
+
+    for (const health of toImprove) {
+      const complexityAnalysis = analyzeSystemComplexity(systemRegistry, health.systemName);
+      if (!complexityAnalysis) continue;
+
+      console.log(`[Artificer] Improving ${health.systemName} (eff: ${health.effectiveness}, static: ${health.staticComplexity})`);
+
+      // 5e. Pre-modification snapshot
+      const system = systemRegistry.systems.get(health.systemName);
+      if (system) {
+        system.previousCode = system.code;
+        system.previousCompiledFn = system.compiledFn as Function | undefined;
+        (system as any).preModificationScore = getAverageEffectiveness(health.systemName);
+        (system as any).modificationTimestamp = Date.now();
+      }
+
+      // 5f. Enhanced improvement prompt with runtime data
+      const improvementPrompt = generateImprovementPrompt(complexityAnalysis) +
+        `\n\nRUNTIME DATA:\n${getEffectivenessReport(health.systemName)}`;
 
       try {
         const result = await modifySystem(
-          analysis.systemName,
+          health.systemName,
           improvementPrompt,
           world,
           systemRegistry
         );
 
         report.repairsAttempted.push({
-          systemName: analysis.systemName,
+          systemName: health.systemName,
           actionType: "fix_code",
-          description: `Improved complexity from ${analysis.complexity} (${analysis.score}/100)`,
+          description: `Improved (eff: ${health.effectiveness}, static: ${health.staticComplexity}, priority: ${health.improvementPriority})`,
           success: result.success,
           error: result.error,
           timestamp: Date.now(),
         });
 
         if (result.success) {
-          console.log(`[Artificer] SUCCESS: Improved ${analysis.systemName}`);
+          console.log(`[Artificer] SUCCESS: Improved ${health.systemName}`);
         } else {
-          console.log(`[Artificer] FAILED to improve ${analysis.systemName}: ${result.error}`);
+          console.log(`[Artificer] FAILED to improve ${health.systemName}: ${result.error}`);
         }
       } catch (error) {
-        console.error(`[Artificer] Error improving ${analysis.systemName}:`, error);
+        console.error(`[Artificer] Error improving ${health.systemName}:`, error);
       }
     }
 
-    // Add recommendations for remaining simple systems
-    for (const analysis of simpleSystems.slice(2)) {
+    // Add recommendations for remaining systems
+    for (const health of healthScores.filter(h => h.improvementPriority > 40 && h.cascadeValue < 60).slice(2)) {
       report.recommendations.push(
-        `System "${analysis.systemName}" is too simple (${analysis.complexity}). Needs: ${analysis.improvements[0] || "state transformation"}`
+        `System "${health.systemName}" needs improvement (eff: ${health.effectiveness}, priority: ${health.improvementPriority})`
       );
     }
   }
@@ -537,7 +621,6 @@ ${d.issues.map(i => `- [${i.severity}] ${i.type}: ${i.description}`).join("\n")}
 
 Respond with a JSON array of recommendation strings (max 3):
 ["recommendation 1", "recommendation 2"]`,
-        maxOutputTokens: 200,
       });
 
       const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");
@@ -563,7 +646,9 @@ Respond with a JSON array of recommendation strings (max 3):
       `${spiritName} inspection complete:
 - Systems: ${report.healthySystems} healthy, ${report.warningSystems} warning, ${report.criticalSystems} critical
 - Repairs attempted: ${report.repairsAttempted.length}
-${improvementsMade.length > 0 ? `- Complexity improvements: ${improvementsMade.length}` : ""}
+${improvementsMade.length > 0 ? `- Improvements: ${improvementsMade.length}` : ""}
+${report.rollbacks.length > 0 ? `- Rollbacks: ${report.rollbacks.join(", ")}` : ""}
+${report.cascadeChains.length > 0 ? `- Cascades: ${report.cascadeChains.map(c => c.join("→")).join("; ")}` : ""}
 ${report.recommendations.length > 0 ? `\nRecommendations:\n${report.recommendations.map(r => `- ${r}`).join("\n")}` : ""}`,
       report.criticalSystems > 0 ? "high" : "normal"
     );
@@ -576,7 +661,8 @@ ${report.recommendations.length > 0 ? `\nRecommendations:\n${report.recommendati
     warning: report.warningSystems,
     critical: report.criticalSystems,
     repairsAttempted: report.repairsAttempted.length,
-    simpleSystemsFound: simpleSystems.length,
+    rollbacks: report.rollbacks.length,
+    cascadeChains: report.cascadeChains.length,
   }, artificer.definition?.name || "Artificer");
 
   logSpiritExecution(
@@ -584,7 +670,7 @@ ${report.recommendations.length > 0 ? `\nRecommendations:\n${report.recommendati
     "inspection",
     `${report.systemsInspected} systems`,
     "success",
-    `${report.repairsAttempted.length} repairs, ${simpleSystems.length} simple systems`
+    `${report.repairsAttempted.length} repairs, ${report.rollbacks.length} rollbacks, ${report.cascadeChains.length} cascades`
   );
 
   return report;
@@ -853,7 +939,6 @@ Respond with JSON:
   "analysis": "Brief overall assessment",
   "suggestions": ["suggestion 1", "suggestion 2", ...]
 }`,
-      maxOutputTokens: 500,
     });
 
     const cleaned = result.text.trim().replace(/```json\n?|\n?```/g, "");
@@ -952,6 +1037,10 @@ export async function runArtificerWithTools(
     criticalSystems: diagnoses.filter(d => d.status === "critical" || d.status === "dead").length,
     repairsAttempted: [],
     recommendations: [],
+    rollbacks: [],
+    conflicts: [],
+    cascadeChains: [],
+    healthScores: [],
   };
 
   // Get current system state for context

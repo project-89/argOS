@@ -12,7 +12,7 @@
  */
 
 import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { flashModel } from "../llm/config";
 import type { World } from "../ecs/world";
 import { query, getRelationTargets, hasComponent } from "bitecs";
 import { Name, Description, Agent, Mind, Room, Perception } from "../ecs/components";
@@ -30,7 +30,7 @@ import {
   generateMemoryContext,
 } from "./enhanced-memory";
 
-const model = google("gemini-2.5-flash");
+const model = flashModel;
 
 // =============================================================================
 // WORKING MEMORY - Track actual events in the current session

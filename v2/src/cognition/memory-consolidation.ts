@@ -18,13 +18,13 @@
  */
 
 import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { flashModel } from "../llm/config";
 import type { World } from "../ecs/world";
 import { addEntity, addComponent, removeEntity, query, getRelationTargets, entityExists } from "bitecs";
 import { Name, Agent, Mind, Memory } from "../ecs/components";
 import { HasMemory } from "../ecs/relations";
 
-const model = google("gemini-2.0-flash");
+const model = flashModel;
 
 // ============================================================================
 // Configuration

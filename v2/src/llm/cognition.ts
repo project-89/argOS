@@ -116,7 +116,6 @@ export async function runCognition(
       model: defaultModel,
       prompt,
       temperature: 0.8,
-      maxOutputTokens: 2000,
     });
 
     console.log("\n=== LLM RESPONSE ===");

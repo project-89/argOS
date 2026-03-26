@@ -12,8 +12,8 @@
  * - Temperature propagates between adjacent areas
  */
 
-import { google } from "@ai-sdk/google";
 import { generateText } from "ai";
+import { flashModel } from "../llm/config";
 import type { SpiritRegistry } from "./spirit-registry";
 import { createSpirit } from "./spirit-registry";
 import type { SpiritDefinition, SpiritState, DivineMessage } from "./types";
@@ -125,7 +125,7 @@ export function getPendingRuleRequests(): RuleRequest[] {
 export async function generateRuleProposal(
   request: RuleRequest
 ): Promise<RuleProposal | null> {
-  const model = google("gemini-2.0-flash");
+  const model = flashModel;
 
   // Get existing rules for context
   const existingRules = worldSchema.getActiveRules();
