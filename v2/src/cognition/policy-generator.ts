@@ -352,14 +352,25 @@ export async function generateBatchPolicies(
   agents: PolicyGenerationContext[]
 ): Promise<Map<string, BehaviorNode>> {
   const results = new Map<string, BehaviorNode>();
-  // Process sequentially — concurrent requests with same system prompt
-  // trigger Gemini's response deduplication/caching
-  for (const agent of agents) {
-    try {
-      const policy = await generateBehaviorPolicy(agent);
-      results.set(agent.name, policy);
-    } catch {
-      results.set(agent.name, fallbackToTemplate(agent));
+  // Small batches of 3 — each agent has a unique user prompt (name/role/personality)
+  // so deduplication risk is low, but we avoid hammering the API with 10+ concurrent.
+  const BATCH_SIZE = 3;
+
+  for (let i = 0; i < agents.length; i += BATCH_SIZE) {
+    const batch = agents.slice(i, i + BATCH_SIZE);
+    const settled = await Promise.allSettled(
+      batch.map(async (agent) => {
+        const policy = await generateBehaviorPolicy(agent);
+        return { name: agent.name, policy };
+      })
+    );
+    for (let j = 0; j < settled.length; j++) {
+      const s = settled[j];
+      if (s.status === "fulfilled") {
+        results.set(s.value.name, s.value.policy);
+      } else {
+        results.set(batch[j].name, fallbackToTemplate(batch[j]));
+      }
     }
   }
 
