@@ -268,15 +268,15 @@ function compileToBranch(world: World, decision: DecisionContext): void {
 function buildConditions(decision: DecisionContext): BehaviorNode[] {
   const conditions: BehaviorNode[] = [];
 
-  // Room condition — if the action was room-specific
-  if (decision.roomName && (decision.action.type === "interact" || decision.action.type === "move")) {
-    if (decision.action.type !== "move") {
-      // "I did this interaction in this room" → in_room condition
-      conditions.push({
-        type: "condition",
-        op: { type: "in_room", roomName: decision.roomName },
-      } as BehaviorNode);
-    }
+  // Room condition — only for actions that are genuinely room-specific.
+  // interact_with_trait actions are NOT room-specific (the agent should forge
+  // anywhere there's a forgeable object, not just in the room where they first learned).
+  // Only add in_room for: speak (social context matters), move (always room-specific by definition).
+  if (decision.roomName && decision.action.type === "speak") {
+    conditions.push({
+      type: "condition",
+      op: { type: "in_room", roomName: decision.roomName },
+    } as BehaviorNode);
   }
 
   // Need conditions — only if a need was notably high/low
@@ -470,7 +470,10 @@ function branchSignature(decision: DecisionContext): string {
   const parts: string[] = [decision.action.type];
   if (decision.affordance) parts.push(decision.affordance);
   if (decision.action.target) parts.push(decision.action.target);
-  if (decision.roomName) parts.push(`@${decision.roomName}`);
+  // Only include room for room-specific actions (move, speak) — not interact
+  if (decision.roomName && (decision.action.type === "move" || decision.action.type === "speak")) {
+    parts.push(`@${decision.roomName}`);
+  }
   if (decision.needs.hunger > 60) parts.push("hungry");
   if (decision.needs.energy < 30) parts.push("tired");
   return parts.join(":");
@@ -560,11 +563,14 @@ export function trackActionForSkill(
   }
 
   const streak = seq.slice(streakStart);
-  if (streak.length < 3) return; // Need at least 3 steps
+  if (streak.length < 2) return; // Need at least 2 steps
 
   // Check if this sequence has variety (not just repeating the same action)
+  // move+interact counts as varied (it's a "go there and do it" plan)
   const types = new Set(streak.map(s => s.action.type));
-  if (types.size < 2) return; // All same type, not a plan
+  const affordances = new Set(streak.filter(s => s.affordance).map(s => s.affordance));
+  const hasVariety = types.size >= 2 || affordances.size >= 2;
+  if (!hasVariety) return;
 
   // Generate a skill name from the sequence
   const sig = streak.map(s => s.affordance || s.action.type).join("→");

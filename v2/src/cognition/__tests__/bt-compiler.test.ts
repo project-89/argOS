@@ -114,7 +114,7 @@ describe("BT Compiler: Capture + Resolve", () => {
     expect(getCompilationStats(agent).compiledBranches).toBe(1); // Not 2
   });
 
-  test("compiled branch includes room condition for interactions", () => {
+  test("compiled interact branch is location-independent (no in_room)", () => {
     const world = makeWorld();
     const room = createRoomEntity(world, { name: "Forge", description: "A forge" });
     registerEntity(room, "Forge");
@@ -127,8 +127,30 @@ describe("BT Compiler: Capture + Resolve", () => {
     resolveDecision(world, agent, true);
 
     const raw = BehaviorPolicy.treeJson[agent];
+    // Interact branches should NOT have in_room — they work anywhere with matching traits
+    expect(raw).not.toContain("in_room");
+    // But should contain the affordance
+    expect(raw).toContain("forge");
+  });
+
+  test("compiled speak branch includes room condition", () => {
+    const world = makeWorld();
+    const room = createRoomEntity(world, { name: "Tavern", description: "A tavern" });
+    registerEntity(room, "Tavern");
+    const other = createAgentEntity(world, { name: "Other", role: "npc", systemPrompt: "NPC.", roomId: room });
+    registerEntity(other, "Other");
+    const agent = createAgentEntity(world, { name: "Greta", role: "innkeeper", systemPrompt: "Innkeeper.", roomId: room });
+    registerEntity(agent, "Greta");
+    setAgentBehaviorPolicy(world, agent, BASE_TREE, true);
+
+    captureLLMDecision(world, agent, "I should greet the newcomer",
+      { type: "speak", content: "Welcome!" });
+    resolveDecision(world, agent, true);
+
+    const raw = BehaviorPolicy.treeJson[agent];
+    // Speak branches ARE room-specific
     expect(raw).toContain("in_room");
-    expect(raw).toContain("Forge");
+    expect(raw).toContain("Tavern");
   });
 
   test("compiled branch includes need conditions when relevant", () => {

@@ -821,8 +821,8 @@ const FALLBACK_ACTIONS: PolicyAction[] = [
   { type: "observe" },
   { type: "think", content: "I consider what to do next..." },
   { type: "reflect" },
-  { type: "observe" },    // observe again if all else used
-  { type: "think", content: "I take stock of my situation..." },
+  { type: "observe" },
+  { type: "think", content: "I take stock of my surroundings..." },
 ];
 
 export function evaluateBehaviorPolicy(world: World, agentEid: number): PolicyEvalResult {
@@ -854,10 +854,41 @@ export function evaluateBehaviorPolicy(world: World, agentEid: number): PolicyEv
       const actionSig = `${actionType}:${result.action.target || ""}`;
       trace.push(`anti-repeat:suppressed:${actionSig}(freq=${(frequency*100).toFixed(0)}%,consec=${consecutive})`);
 
-      // Instead of returning "none", pick a fallback action that differs from recent history
+      // Instead of returning "none", pick a fallback that differs from recent history.
+      // First try static fallbacks, then dynamic ones (interact_any_affordance, wander).
       const recentTypes = new Set(history.map(h => h.split(":")[0]));
-      const fallback = FALLBACK_ACTIONS.find(a => !recentTypes.has(a.type))
-        || FALLBACK_ACTIONS[Math.floor(Math.random() * FALLBACK_ACTIONS.length)];
+      let fallback = FALLBACK_ACTIONS.find(a => !recentTypes.has(a.type));
+
+      if (!fallback) {
+        // All static fallbacks exhausted — try dynamic actions
+        if (!recentTypes.has("interact")) {
+          // Try interact_any_affordance
+          const dynamicResult = evalNode(world, agentEid,
+            { type: "interact_any_affordance", scope: "room" }, [...trace]);
+          if (dynamicResult.kind === "action") {
+            const dynSig = `${dynamicResult.action.type}:${dynamicResult.action.target || ""}`;
+            history.push(dynSig);
+            if (history.length > EVAL_HISTORY_SIZE) history.shift();
+            policyEvalHistory.set(agentEid, history);
+            trace.push("anti-repeat:dynamic:interact_any");
+            return dynamicResult;
+          }
+        }
+        if (!recentTypes.has("move")) {
+          // Try wander
+          const wanderResult = evalNode(world, agentEid, { type: "wander" }, [...trace]);
+          if (wanderResult.kind === "action") {
+            const wandSig = `move:${wanderResult.action.target || ""}`;
+            history.push(wandSig);
+            if (history.length > EVAL_HISTORY_SIZE) history.shift();
+            policyEvalHistory.set(agentEid, history);
+            trace.push("anti-repeat:dynamic:wander");
+            return wanderResult;
+          }
+        }
+        // Last resort: random static fallback
+        fallback = FALLBACK_ACTIONS[Math.floor(Math.random() * FALLBACK_ACTIONS.length)];
+      }
 
       const fallbackSig = `${fallback.type}:${fallback.target || ""}`;
       history.push(fallbackSig);

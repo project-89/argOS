@@ -71,7 +71,7 @@ export function addMemory(
   pruneMemoriesIfNeeded(world, agentEid, 50);
 
   // If the memory is important enough, grow a behavior tree branch for it
-  if (data.importance >= 70) {
+  if (data.importance >= 50) {
     try {
       const { growMemoryBranch } = require("./policy-learning");
       // Extract a keyword from the memory content for the has_memory condition
