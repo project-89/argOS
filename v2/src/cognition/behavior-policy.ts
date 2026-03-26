@@ -1,7 +1,8 @@
 import type { World } from "../ecs/world";
-import { addComponent, getRelationTargets, hasComponent } from "bitecs";
-import { Agent, BehaviorPolicy, Goal, Name, Needs, Perception, Traits } from "../ecs/components";
-import { HasGoal, HasPerception } from "../ecs/relations";
+import { addComponent, getRelationTargets, hasComponent, query } from "bitecs";
+import { Agent, BehaviorPolicy, Belief, Goal, LastAction, Memory, Name, Needs, Perception, Room, Traits, Impression } from "../ecs/components";
+import { HasGoal, HasPerception, HasImpression, HasMemory, HasBelief } from "../ecs/relations";
+import { getRecentActions } from "./agent-action-history";
 import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import { getAvailableAffordances } from "../world/affordance-availability";
 import { getMovementTarget } from "../systems/builtin-systems";
@@ -18,7 +19,11 @@ export type BehaviorNode =
   | { type: "condition"; op: ConditionOp }
   | { type: "action"; action: PolicyAction }
   | { type: "interact_with_trait"; trait: string; affordance: string; args?: string; scope?: "room" | "accessible" }
+  | { type: "interact_any_affordance"; scope?: "room" | "accessible"; exclude?: string[] }
+  | { type: "weighted_random"; choices: Array<{ weight: number; child: BehaviorNode }> }
+  | { type: "social_visit"; minImpression?: number }
   | { type: "use_procedure"; signature: string; minSuccesses?: number }
+  | { type: "wander" }
   | { type: "llm_fallback" }
   | { type: "noop" };
 
@@ -28,10 +33,22 @@ export type ConditionOp =
   | { type: "need_above"; need: "hunger" | "energy" | "social" | "comfort"; value: number }
   | { type: "need_below"; need: "hunger" | "energy" | "social" | "comfort"; value: number }
   | { type: "in_room"; roomName: string }
+  | { type: "not_in_room"; roomName: string }
   | { type: "has_perception"; perceptionType: string; includes?: string }
   | { type: "has_goal"; includes: string }
   | { type: "has_active_movement_goal"; destinationIncludes?: string }
-  | { type: "room_has_named"; name: string };
+  | { type: "no_active_movement_goal" }
+  | { type: "room_has_named"; name: string }
+  | { type: "last_action_was"; actionType: string }
+  | { type: "last_action_not"; actionType: string }
+  | { type: "room_has_other_agents" }
+  | { type: "room_is_empty" }
+  | { type: "has_memory"; includes: string }
+  | { type: "has_belief"; includes: string }
+  | { type: "impression_above"; targetName: string; threshold: number }
+  | { type: "impression_below"; targetName: string; threshold: number }
+  | { type: "last_n_actions_include"; n: number; actionType: string }
+  | { type: "last_n_actions_exclude"; n: number; actionType: string };
 
 export type PolicyEvalResult =
   | { kind: "action"; action: PolicyAction; trace: string[] }
@@ -103,7 +120,9 @@ function findInteractTargetByTrait(
   }
 
   const seen = new Set<number>();
+  let fallback: number | undefined;
   for (const eid of candidates) {
+    if (eid === agentEid) continue; // Don't interact with self
     if (seen.has(eid)) continue;
     seen.add(eid);
     if (!hasTrait(world, eid, trait)) continue;
@@ -117,15 +136,22 @@ function findInteractTargetByTrait(
 
     const affordances = getAvailableAffordances(world, agentEid, eid);
     if (!affordances.some((a) => a.name === affordance)) continue;
+
+    // Prefer entities with meaningful names (skip generic type names like "npc", "object")
+    const name = String(Name.value[eid] || "").trim();
+    if (!name || name === "npc" || name === "object" || name === "room") {
+      if (fallback === undefined) fallback = eid;
+      continue;
+    }
     return eid;
   }
 
-  return undefined;
+  return fallback;
 }
 
 export function validateBehaviorNode(
   node: unknown,
-  opts?: { maxDepth?: number; maxNodes?: number; maxJsonBytes?: number }
+  opts?: { maxDepth?: number; maxNodes?: number; maxJsonBytes?: number; allowedActionTypes?: Set<string> }
 ): { ok: true } | { ok: false; error: string } {
   const maxDepth = opts?.maxDepth ?? 18;
   const maxNodes = opts?.maxNodes ?? 300;
@@ -136,8 +162,12 @@ export function validateBehaviorNode(
   const validateAction = (action: unknown): string | null => {
     if (!isPlainObject(action)) return "action must be an object";
     const type = String(action.type || "");
-    const allowed = new Set(["speak", "observe", "move", "interact", "think", "wait"]);
-    if (!allowed.has(type)) return `unsupported action.type: ${type}`;
+    const builtinAllowed = new Set(["speak", "observe", "move", "interact", "think", "wait", "rest", "reflect"]);
+    // Allow both builtin action types and any custom-registered action types
+    const customAllowed = opts?.allowedActionTypes;
+    if (!builtinAllowed.has(type) && (!customAllowed || !customAllowed.has(type))) {
+      return `unsupported action.type: ${type}`;
+    }
     if ("target" in action && action.target !== undefined && typeof action.target !== "string") return "action.target must be a string";
     if ("content" in action && action.content !== undefined && typeof action.content !== "string") return "action.content must be a string";
     return null;
@@ -163,9 +193,20 @@ export function validateBehaviorNode(
         if (!Number.isFinite(value)) return "need_* value must be a finite number";
         return null;
       }
-      case "in_room": {
+      case "in_room":
+      case "not_in_room": {
         const roomName = String((op as any).roomName || "").trim();
-        if (!roomName) return "in_room.roomName required";
+        if (!roomName) return `${type}.roomName required`;
+        return null;
+      }
+      case "no_active_movement_goal":
+      case "room_has_other_agents":
+      case "room_is_empty":
+        return null;
+      case "last_action_was":
+      case "last_action_not": {
+        const actionType = String((op as any).actionType || "").trim();
+        if (!actionType) return `${type}.actionType required`;
         return null;
       }
       case "has_goal": {
@@ -190,6 +231,28 @@ export function validateBehaviorNode(
         if ("includes" in op && (op as any).includes !== undefined && typeof (op as any).includes !== "string") {
           return "has_perception.includes must be a string";
         }
+        return null;
+      }
+      case "has_memory":
+      case "has_belief": {
+        const includes = String((op as any).includes || "").trim();
+        if (!includes) return `${type}.includes required`;
+        return null;
+      }
+      case "impression_above":
+      case "impression_below": {
+        const tName = String((op as any).targetName || "").trim();
+        if (!tName) return `${type}.targetName required`;
+        const thresh = Number((op as any).threshold);
+        if (!Number.isFinite(thresh)) return `${type}.threshold must be a finite number`;
+        return null;
+      }
+      case "last_n_actions_include":
+      case "last_n_actions_exclude": {
+        const nVal = Number((op as any).n);
+        if (!Number.isFinite(nVal) || nVal < 1 || nVal > 100) return `${type}.n must be a number 1..100`;
+        const aType = String((op as any).actionType || "").trim();
+        if (!aType) return `${type}.actionType required`;
         return null;
       }
       default:
@@ -223,7 +286,31 @@ export function validateBehaviorNode(
         return validateAction((n as any).action);
       case "llm_fallback":
       case "noop":
+      case "wander":
+      case "social_visit":
         return null;
+      case "interact_any_affordance": {
+        if ("scope" in n && (n as any).scope !== undefined) {
+          const scope = String((n as any).scope || "");
+          if (scope !== "room" && scope !== "accessible") return "interact_any_affordance.scope must be 'room' or 'accessible'";
+        }
+        if ("exclude" in n && (n as any).exclude !== undefined) {
+          if (!Array.isArray((n as any).exclude)) return "interact_any_affordance.exclude must be an array";
+        }
+        return null;
+      }
+      case "weighted_random": {
+        const choices = (n as any).choices;
+        if (!Array.isArray(choices)) return "weighted_random.choices must be an array";
+        if (choices.length > 30) return "weighted_random.choices too large";
+        for (const c of choices) {
+          if (!isPlainObject(c)) return "weighted_random choice must be an object";
+          if (typeof (c as any).weight !== "number") return "weighted_random choice.weight must be a number";
+          const err = walk((c as any).child, depth + 1);
+          if (err) return err;
+        }
+        return null;
+      }
       case "use_procedure": {
         const signature = String((n as any).signature || "").trim();
         if (!signature) return "use_procedure.signature required";
@@ -347,6 +434,43 @@ function roomHasNamed(world: World, agentEid: number, wantedName: string): boole
   return false;
 }
 
+function hasMemoryContaining(world: World, agentEid: number, needle: string): boolean {
+  const memEids = getRelationTargets(world as any, agentEid, HasMemory as any);
+  const n = needle.toLowerCase();
+  return memEids.some((eid: number) => {
+    if (!hasComponent(world as any, eid, Memory as any)) return false;
+    const content = String(Memory.content[eid] || "").toLowerCase();
+    return content.includes(n);
+  });
+}
+
+function hasBeliefContaining(world: World, agentEid: number, needle: string): boolean {
+  const beliefEids = getRelationTargets(world as any, agentEid, HasBelief as any);
+  const n = needle.toLowerCase();
+  return beliefEids.some((eid: number) => {
+    if (!hasComponent(world as any, eid, Belief as any)) return false;
+    const combined = [
+      String(Belief.subject[eid] || ""),
+      String(Belief.predicate[eid] || ""),
+      String(Belief.object[eid] || ""),
+    ].join(" ").toLowerCase();
+    return combined.includes(n);
+  });
+}
+
+function getImpressionValence(world: World, agentEid: number, targetName: string): number | undefined {
+  const impEids = getRelationTargets(world as any, agentEid, HasImpression as any);
+  const wanted = targetName.trim().toLowerCase();
+  for (const eid of impEids) {
+    if (!hasComponent(world as any, eid, Impression as any)) continue;
+    const name = String(Impression.targetName[eid] || "").trim().toLowerCase();
+    if (name === wanted) {
+      return Impression.valence[eid] ?? 0;
+    }
+  }
+  return undefined;
+}
+
 function evalCondition(world: World, agentEid: number, op: ConditionOp): boolean {
   switch (op.type) {
     case "always":
@@ -359,10 +483,14 @@ function evalCondition(world: World, agentEid: number, op: ConditionOp): boolean
       return getNeedValue(world, agentEid, op.need) <= op.value;
     case "in_room":
       return inRoom(world, agentEid, op.roomName);
+    case "not_in_room":
+      return !inRoom(world, agentEid, op.roomName);
     case "has_goal":
       return hasGoalContaining(world, agentEid, op.includes);
     case "has_active_movement_goal":
       return hasActiveMovementGoal(world, agentEid, op.destinationIncludes);
+    case "no_active_movement_goal":
+      return !hasActiveMovementGoal(world, agentEid);
     case "room_has_named":
       return roomHasNamed(world, agentEid, op.name);
     case "has_perception": {
@@ -370,6 +498,54 @@ function evalCondition(world: World, agentEid: number, op: ConditionOp): boolean
       if (!c) return false;
       if (op.includes && op.includes.trim()) return c.toLowerCase().includes(op.includes.toLowerCase());
       return true;
+    }
+    case "last_action_was": {
+      if (!hasComponent(world as any, agentEid, LastAction as any)) return false;
+      return String(LastAction.type[agentEid] || "") === op.actionType;
+    }
+    case "last_action_not": {
+      if (!hasComponent(world as any, agentEid, LastAction as any)) return true;
+      return String(LastAction.type[agentEid] || "") !== op.actionType;
+    }
+    case "room_has_other_agents": {
+      const roomEid = getRoomForEntity(world, agentEid);
+      if (roomEid === undefined) return false;
+      for (const eid of listDirectContents(world, roomEid)) {
+        if (eid !== agentEid && hasComponent(world as any, eid, Agent as any)) return true;
+      }
+      return false;
+    }
+    case "room_is_empty": {
+      const roomEid2 = getRoomForEntity(world, agentEid);
+      if (roomEid2 === undefined) return true;
+      for (const eid of listDirectContents(world, roomEid2)) {
+        if (eid !== agentEid && hasComponent(world as any, eid, Agent as any)) return false;
+      }
+      return true;
+    }
+    case "has_memory":
+      return hasMemoryContaining(world, agentEid, op.includes);
+    case "has_belief":
+      return hasBeliefContaining(world, agentEid, op.includes);
+    case "impression_above": {
+      const val = getImpressionValence(world, agentEid, op.targetName);
+      if (val === undefined) return false;
+      return val >= op.threshold;
+    }
+    case "impression_below": {
+      const val2 = getImpressionValence(world, agentEid, op.targetName);
+      if (val2 === undefined) return false;
+      return val2 <= op.threshold;
+    }
+    case "last_n_actions_include": {
+      const actions = getRecentActions(agentEid);
+      const lastN = actions.slice(-op.n);
+      return lastN.some(a => a === op.actionType);
+    }
+    case "last_n_actions_exclude": {
+      const actions2 = getRecentActions(agentEid);
+      const lastN2 = actions2.slice(-op.n);
+      return !lastN2.some(a => a === op.actionType);
     }
   }
 }
@@ -381,12 +557,64 @@ function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: str
     case "noop":
       trace.push("noop");
       return { kind: "none", trace };
+    case "wander": {
+      trace.push("wander");
+      // Skip if already moving somewhere (grid movement or goal-based)
+      if (getMovementTarget(agentEid) !== undefined) return { kind: "none", trace };
+      if (hasActiveMovementGoal(world, agentEid)) return { kind: "none", trace };
+      // Pick a random room that isn't the current room
+      const currentRoomEid = getRoomForEntity(world, agentEid);
+      const allRooms = Array.from(query(world as any, [Room as any, Name as any]));
+      const candidates = allRooms.filter(rid => rid !== currentRoomEid);
+      if (candidates.length === 0) return { kind: "none", trace };
+      const targetRid = candidates[Math.floor(Math.random() * candidates.length)];
+      const targetName = String(Name.value[targetRid] || "").trim();
+      if (!targetName) return { kind: "none", trace };
+      trace.push(`wander:${targetName}`);
+      return { kind: "action", action: { type: "move", target: targetName }, trace };
+    }
     case "llm_fallback":
       trace.push("llm_fallback");
       return { kind: "llm_fallback", trace };
-    case "action":
+    case "action": {
       trace.push(`action:${node.action.type}`);
-      return { kind: "action", action: node.action, trace };
+      let action = node.action;
+      // Resolve special target "room" to the actual room name
+      if (action.target === "room") {
+        const roomEid = getRoomForEntity(world, agentEid);
+        if (roomEid !== undefined) {
+          const roomName = String(Name.value[roomEid] || "").trim();
+          if (roomName) {
+            action = { ...action, target: roomName };
+          }
+        }
+      }
+      // Validate move targets
+      if (action.type === "move" && action.target) {
+        const allRooms = Array.from(query(world as any, [Room as any, Name as any]));
+        const targetLower = action.target.trim().toLowerCase();
+        const isRoom = allRooms.some(rid => String(Name.value[rid] || "").trim().toLowerCase() === targetLower);
+        if (!isRoom) {
+          trace.push(`move-target-invalid:${action.target}`);
+          return { kind: "none", trace };
+        }
+        // Skip move if already in the target room
+        const currentRoomEid = getRoomForEntity(world, agentEid);
+        if (currentRoomEid !== undefined) {
+          const currentRoomName = String(Name.value[currentRoomEid] || "").trim().toLowerCase();
+          if (currentRoomName === targetLower) {
+            trace.push(`move-already-there:${action.target}`);
+            return { kind: "none", trace };
+          }
+        }
+        // Skip move if already moving somewhere
+        if (getMovementTarget(agentEid) !== undefined) {
+          trace.push(`move-already-moving`);
+          return { kind: "none", trace };
+        }
+      }
+      return { kind: "action", action, trace };
+    }
     case "use_procedure": {
       const signature = String(node.signature || "").trim();
       const minSuccesses = Number.isFinite(Number(node.minSuccesses)) ? Math.max(0, Math.min(100, Number(node.minSuccesses))) : 2;
@@ -405,6 +633,110 @@ function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: str
       if (!targetName) return { kind: "none", trace };
       const content = args.trim() ? `${affordance} ${args}` : affordance;
       return { kind: "action", action: { type: "interact", target: targetName, content }, trace };
+    }
+    case "interact_any_affordance": {
+      const scope = node.scope === "accessible" ? "accessible" : "room";
+      const exclude = new Set((node.exclude || []).map(s => s.toLowerCase()));
+      trace.push(`interact_any_affordance:${scope}`);
+      const roomEid = getRoomForEntity(world, agentEid);
+      const candidates: number[] = [];
+      if (roomEid !== undefined) candidates.push(...listDirectContents(world, roomEid));
+      if (scope === "accessible") candidates.push(...listDirectContents(world, agentEid));
+
+      // Collect all (target, affordance) pairs
+      const pairs: Array<{ eid: number; name: string; affordance: string }> = [];
+      const seen = new Set<number>();
+      for (const eid of candidates) {
+        if (eid === agentEid || seen.has(eid)) continue;
+        seen.add(eid);
+        const eName = String(Name.value[eid] || "").trim();
+        if (!eName || eName === "npc" || eName === "object") continue;
+        const affordances = getAvailableAffordances(world, agentEid, eid);
+        for (const aff of affordances) {
+          if (!exclude.has(aff.name.toLowerCase())) {
+            pairs.push({ eid, name: eName, affordance: aff.name });
+          }
+        }
+      }
+      if (pairs.length === 0) return { kind: "none", trace };
+      const pick = pairs[Math.floor(Math.random() * pairs.length)];
+      trace.push(`picked:${pick.name}/${pick.affordance}`);
+      return { kind: "action", action: { type: "interact", target: pick.name, content: pick.affordance }, trace };
+    }
+    case "weighted_random": {
+      trace.push("weighted_random");
+      const choices = node.choices || [];
+      if (choices.length === 0) return { kind: "none", trace };
+      const totalWeight = choices.reduce((s, c) => s + Math.max(0, c.weight), 0);
+      if (totalWeight <= 0) return { kind: "none", trace };
+
+      // Weighted shuffle: try in random weighted order, return first that yields an action
+      const indices = choices.map((_, i) => i);
+      // Sort by random weighted priority (higher weight = more likely to be tried first)
+      indices.sort(() => Math.random() - 0.5);
+      // But respect weights: pick via cumulative probability first
+      let roll = Math.random() * totalWeight;
+      let firstPick = 0;
+      for (let i = 0; i < choices.length; i++) {
+        roll -= Math.max(0, choices[i].weight);
+        if (roll <= 0) { firstPick = i; break; }
+      }
+      // Try the weighted pick first, then others as fallback
+      const order = [firstPick, ...indices.filter(i => i !== firstPick)];
+      for (const idx of order) {
+        const r = evalChild(choices[idx].child);
+        if (r.kind === "action" || r.kind === "llm_fallback") return r;
+      }
+      return { kind: "none", trace };
+    }
+    case "social_visit": {
+      trace.push("social_visit");
+      // Skip if already moving
+      if (getMovementTarget(agentEid) !== undefined) return { kind: "none", trace };
+      if (hasActiveMovementGoal(world, agentEid)) return { kind: "none", trace };
+
+      const currentRoomEid = getRoomForEntity(world, agentEid);
+      const minImpression = node.minImpression ?? 0;
+
+      // Find agents we have positive impressions of
+      const impressionEids = getRelationTargets(world as any, agentEid, HasImpression as any);
+      const visitCandidates: Array<{ agentEid: number; roomEid: number; roomName: string }> = [];
+
+      for (const impEid of impressionEids) {
+        if (!hasComponent(world as any, impEid, Impression as any)) continue;
+        const valence = Impression.valence[impEid] ?? 0;
+        if (valence < minImpression) continue;
+        const targetName = String(Impression.targetName[impEid] || "").trim();
+        if (!targetName) continue;
+
+        // Find the named agent
+        const allAgents = Array.from(query(world as any, [Agent as any, Name as any]));
+        for (const aeid of allAgents) {
+          if (aeid === agentEid) continue;
+          if (String(Name.value[aeid] || "").trim().toLowerCase() !== targetName.toLowerCase()) continue;
+          const theirRoom = getRoomForEntity(world, aeid);
+          if (theirRoom === undefined || theirRoom === currentRoomEid) continue;
+          const roomName = String(Name.value[theirRoom] || "").trim();
+          if (roomName) visitCandidates.push({ agentEid: aeid, roomEid: theirRoom, roomName });
+        }
+      }
+
+      // Also consider visiting agents in other rooms even without impressions (curiosity)
+      if (visitCandidates.length === 0) {
+        const allAgents = Array.from(query(world as any, [Agent as any, Name as any]));
+        for (const aeid of allAgents) {
+          if (aeid === agentEid) continue;
+          const theirRoom = getRoomForEntity(world, aeid);
+          if (theirRoom === undefined || theirRoom === currentRoomEid) continue;
+          const roomName = String(Name.value[theirRoom] || "").trim();
+          if (roomName) visitCandidates.push({ agentEid: aeid, roomEid: theirRoom, roomName });
+        }
+      }
+
+      if (visitCandidates.length === 0) return { kind: "none", trace };
+      const pick = visitCandidates[Math.floor(Math.random() * visitCandidates.length)];
+      trace.push(`visit:${pick.roomName}`);
+      return { kind: "action", action: { type: "move", target: pick.roomName }, trace };
     }
     case "condition": {
       const ok = evalCondition(world, agentEid, node.op);
@@ -443,12 +775,75 @@ export function getBehaviorPolicyTree(world: World, agentEid: number): BehaviorN
   return safeParseTree(BehaviorPolicy.treeJson[agentEid] || "");
 }
 
+// Per-agent evaluator history: tracks recent actions to ensure diversity
+const policyEvalHistory: Map<number, string[]> = new Map();
+const EVAL_HISTORY_SIZE = 6;
+const MAX_FREQUENCY_RATIO = 0.5; // suppress if action type is > 50% of recent history
+
+// Fallback actions for when anti-repetition suppresses the primary choice.
+// Evaluated in order; first one not recently used wins.
+const FALLBACK_ACTIONS: PolicyAction[] = [
+  { type: "observe" },
+  { type: "think", content: "I consider what to do next..." },
+  { type: "reflect" },
+  { type: "observe" },    // observe again if all else used
+  { type: "think", content: "I take stock of my situation..." },
+];
+
 export function evaluateBehaviorPolicy(world: World, agentEid: number): PolicyEvalResult {
   const trace: string[] = [];
   if (!hasComponent(world as any, agentEid, Agent as any)) return { kind: "none", trace: ["not_agent"] };
   const tree = getBehaviorPolicyTree(world, agentEid);
   if (!tree) return { kind: "none", trace: ["no_policy"] };
-  return evalNode(world, agentEid, tree, trace);
+
+  const result = evalNode(world, agentEid, tree, trace);
+
+  if (result.kind === "action") {
+    const history = policyEvalHistory.get(agentEid) || [];
+    const actionType = result.action.type;
+
+    // Count how often this action type appears in recent history
+    const typeCount = history.filter(h => h.split(":")[0] === actionType).length;
+    const frequency = history.length > 0 ? typeCount / history.length : 0;
+
+    // Also check consecutive repeats (even at low frequency, 3+ in a row is bad)
+    let consecutive = 0;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].split(":")[0] === actionType) consecutive++;
+      else break;
+    }
+
+    const shouldSuppress = (history.length >= 3 && frequency >= MAX_FREQUENCY_RATIO) || consecutive >= 2;
+
+    if (shouldSuppress) {
+      const actionSig = `${actionType}:${result.action.target || ""}`;
+      trace.push(`anti-repeat:suppressed:${actionSig}(freq=${(frequency*100).toFixed(0)}%,consec=${consecutive})`);
+
+      // Instead of returning "none", pick a fallback action that differs from recent history
+      const recentTypes = new Set(history.map(h => h.split(":")[0]));
+      const fallback = FALLBACK_ACTIONS.find(a => !recentTypes.has(a.type))
+        || FALLBACK_ACTIONS[Math.floor(Math.random() * FALLBACK_ACTIONS.length)];
+
+      const fallbackSig = `${fallback.type}:${fallback.target || ""}`;
+      history.push(fallbackSig);
+      if (history.length > EVAL_HISTORY_SIZE) history.shift();
+      policyEvalHistory.set(agentEid, history);
+      trace.push(`anti-repeat:fallback:${fallback.type}`);
+      return { kind: "action", action: fallback, trace };
+    }
+
+    const successSig = `${actionType}:${result.action.target || ""}`;
+    history.push(successSig);
+    if (history.length > EVAL_HISTORY_SIZE) history.shift();
+    policyEvalHistory.set(agentEid, history);
+  }
+
+  return result;
+}
+
+/** Clear evaluator anti-repetition history for an agent (e.g., after policy change). */
+export function clearPolicyEvalHistory(agentEid: number): void {
+  policyEvalHistory.delete(agentEid);
 }
 
 export function formatBehaviorPolicyForContext(world: World, agentEid: number): string {
