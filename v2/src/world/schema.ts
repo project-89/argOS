@@ -117,6 +117,8 @@ export interface EffectDefinition {
 
 export interface AffordanceDefinition {
   name: string;
+  /** Human-readable description of what this affordance does */
+  description?: string;
   /** Traits the TARGET must have to allow this action */
   requires: string[];
   /** Traits that block this action */

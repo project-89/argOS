@@ -712,13 +712,23 @@ Required JSON format:
     case "affordance":
       return `Design an AFFORDANCE (action that can be performed on objects) for: ${description}
 
+Effects MUST actually change the world. Available effect types:
+- modify_component: Change values (e.g., reduce hunger, increase health)
+- spawn: Create new entities (e.g., forge creates a sword)
+- destroy: Remove entities (e.g., eating destroys food)
+- set_state: Change object state (e.g., door: closed → open)
+- add_trait/remove_trait: Change available actions
+- emit_stimulus: Notify nearby agents (ALWAYS include this)
+- transfer: Move items between containers
+
 Required JSON format:
 {
   "name": "affordanceName",
   "description": "What this action does",
-  "requires": ["trait1", "trait2"],
+  "requires": ["trait1"],
   "effects": [
-    { "type": "emit_stimulus", "target": "nearby", "stimulusType": "action", "stimulusContent": "{actor.name} does something to {target.name}" }
+    { "type": "modify_component", "target": "actor", "modifications": [{ "component": "Needs", "property": "hunger", "operation": "subtract", "value": 20 }] },
+    { "type": "emit_stimulus", "target": "nearby", "stimulusType": "observation", "stimulusContent": "{actor} does something to {target}!" }
   ]
 }`;
 

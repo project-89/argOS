@@ -1276,12 +1276,63 @@ VOCABULARY TOOLS (World-specific affordances, traits, and relationships):
 - addEntityRelationship(subjectEid, relationName, targetEid, data?) - Add a relationship between two entities
 - listVocabulary() - List all registered affordances, traits, and relationship types
 
+CRITICAL: Affordances MUST have effects[] to actually change the world. Without effects, the action is logged but nothing happens.
+Effect types:
+- modify_component: Change a value (e.g., reduce actor's energy, increase target's damage)
+  Example: { type: "modify_component", target: "actor", modifications: [{ component: "Needs", property: "hunger", operation: "subtract", value: 30 }] }
+- spawn: Create a new entity in the world (e.g., forge creates a Sword, build creates a House)
+  Example: { type: "spawn", spawnType: "Sword", spawnName: "Iron Sword", containerName: "room" }
+- destroy: Remove the target entity (e.g., eating food destroys it)
+  Example: { type: "destroy", target: "target" }
+- set_state: Change object state (e.g., door: closed → open, ore: raw → smelted)
+  Example: { type: "set_state", target: "target", state: "open" }
+- add_trait/remove_trait: Change what actions are available on an entity
+  Example: { type: "add_trait", target: "target", trait: "sharpened" }
+- emit_stimulus: Notify nearby agents about what happened
+  Example: { type: "emit_stimulus", target: "nearby", stimulusContent: "{actor} forges a sword at {target}!", stimulusType: "observation" }
+- transfer: Move item to a container/inventory
+  Example: { type: "transfer", target: "actor", containerName: "room" }
+
+EVERY affordance should have at least an emit_stimulus so other agents can see what happened.
+
 VOCABULARY GENERATION (during world creation):
-After creating rooms, agents, and objects, generate vocabulary appropriate to this world's setting:
-- Create AFFORDANCES that make sense for the genre/setting (e.g., medieval: forge, brew, pray, haggle; sci-fi: scan, hack, teleport; noir: interrogate, bribe, tail)
-- Create TRAITS that objects and agents in this world would have (e.g., medieval: forgeable, blessed, cursed; sci-fi: powered, encrypted, radioactive)
-- Create RELATIONSHIP TYPES for social dynamics (e.g., GuildMember, OwesDebtTo, RivalOf, MentorOf, ContractedBy)
-This vocabulary enables richer agent interactions and emergent behavior specific to the world's theme.
+After creating rooms, agents, and objects, generate vocabulary appropriate to this world's setting.
+
+Affordances MUST have effects that actually change the world state:
+
+Example — a medieval world needs these affordances:
+  createAffordance({
+    name: "forge_weapon", requires: ["forgeable"], category: "craft",
+    description: "Forge a weapon at the anvil",
+    effects: [
+      { type: "spawn", spawnType: "Weapon", spawnName: "Iron Sword", containerName: "room" },
+      { type: "modify_component", target: "actor", modifications: [{ component: "Needs", property: "energy", operation: "subtract", value: 15 }] },
+      { type: "emit_stimulus", target: "nearby", stimulusContent: "{actor} forges a weapon at {target}!", stimulusType: "observation" }
+    ]
+  })
+  createAffordance({
+    name: "eat", requires: ["edible"], category: "survival",
+    description: "Eat food to reduce hunger",
+    effects: [
+      { type: "modify_component", target: "actor", modifications: [{ component: "Needs", property: "hunger", operation: "subtract", value: 30 }] },
+      { type: "destroy", target: "target" },
+      { type: "emit_stimulus", target: "nearby", stimulusContent: "{actor} eats {target}.", stimulusType: "observation" }
+    ]
+  })
+  createAffordance({
+    name: "build_house", requires: ["buildable"], category: "construction",
+    description: "Build a wooden house on this land",
+    effects: [
+      { type: "spawn", spawnType: "House", spawnName: "Wooden House", containerName: "room", spawnProperties: { traits: ["shelter", "door"] } },
+      { type: "modify_component", target: "actor", modifications: [{ component: "Needs", property: "energy", operation: "subtract", value: 30 }] },
+      { type: "remove_trait", target: "target", trait: "buildable" },
+      { type: "emit_stimulus", target: "nearby", stimulusContent: "{actor} builds a house!", stimulusType: "observation" }
+    ]
+  })
+
+Also create:
+- TRAITS that objects would have (forgeable, edible, buildable, locked, sacred...)
+- RELATIONSHIP TYPES for social dynamics (GuildMember, OwesDebtTo, RivalOf, MentorOf...)
 
 CURRENT WORLD STATE:
 ${buildCurrentWorldContext(state)}
@@ -6577,16 +6628,35 @@ Returns the simulation ID for use with other persistence tools.`,
                   "remove_relation",
                 ])
                 .describe("Effect type"),
-              target: z.string().optional().describe("'actor', 'target', 'nearby', or entity name"),
-              state: z.string().optional().describe("For set_state"),
-              trait: z.string().optional().describe("For add_trait/remove_trait"),
-              stimulusType: z.string().optional().describe("For emit_stimulus"),
-              stimulusContent: z.string().optional().describe("For emit_stimulus"),
-              chance: z.number().optional().describe("Probability 0-1 (default 1)"),
+              target: z.string().optional().describe("Who this affects: 'actor', 'target', 'nearby', or entity name"),
+              // modify_component: change numeric/string values on components
+              modifications: z.array(z.object({
+                component: z.string().describe("Component name (e.g., 'Needs', 'Health', or any dynamic component)"),
+                property: z.string().describe("Property name (e.g., 'hunger', 'current')"),
+                operation: z.enum(["set", "add", "subtract", "multiply"]).describe("How to change the value"),
+                value: z.union([z.number(), z.string()]).describe("Value to apply"),
+              })).optional().describe("For modify_component: what to change"),
+              // set_state: change object state (recalculates traits)
+              state: z.string().optional().describe("For set_state: new state name"),
+              // add_trait/remove_trait
+              trait: z.string().optional().describe("For add_trait/remove_trait: trait name"),
+              // spawn: create new entities
+              spawnType: z.string().optional().describe("For spawn: object type to create"),
+              spawnName: z.string().optional().describe("For spawn: name of the new entity"),
+              spawnProperties: z.record(z.any()).optional().describe("For spawn: initial properties"),
+              containerName: z.string().optional().describe("For spawn/transfer: where to place it ('room' = actor's room)"),
+              // emit_stimulus: notify agents
+              stimulusType: z.string().optional().describe("For emit_stimulus: 'observation', 'sound', 'event'"),
+              stimulusContent: z.string().optional().describe("For emit_stimulus: message text. Use {actor} and {target} as placeholders"),
+              // relations
+              relation: z.string().optional().describe("For add_relation/remove_relation: relation name"),
+              relatedEntity: z.string().optional().describe("For add_relation/remove_relation: other entity name"),
+              // probability
+              chance: z.number().optional().describe("Probability 0-1 this effect fires (default 1)"),
             })
           )
           .optional()
-          .describe("Effects when this affordance is used"),
+          .describe("Effects that execute when this affordance is used — this is how affordances CHANGE THE WORLD"),
         category: z
           .string()
           .optional()
@@ -6610,9 +6680,10 @@ Returns the simulation ID for use with other persistence tools.`,
 
         const def: AffordanceDefinition = {
           name: params.name,
+          description: params.description,
           requires: params.requires,
           effects: params.effects as any,
-          descriptionTemplate: `{actor.name} performs ${params.name} on {target.name}.`,
+          descriptionTemplate: `{actor.name} ${params.name}s {target.name}.`,
         };
         registerAffordance(def);
         console.log(
