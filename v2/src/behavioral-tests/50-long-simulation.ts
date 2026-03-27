@@ -106,7 +106,7 @@ async function main() {
 
   // Traits
   const traits = ["forgeable", "edible", "drinkable", "serveable", "sacred", "sellable", "farmable", "examinable", "readable"];
-  for (const t of traits) registerTrait({ name: t, description: `Object is ${t}`, category: "general" });
+  for (const t of traits) registerTrait({ name: t, description: `Object is ${t}`, category: "general", enablesAffordances: [], incompatibleWith: [] });
 
   // Affordances WITH EFFECTS
   registerAffordance({
@@ -352,7 +352,7 @@ function injectFamine(world: any, agents: AgentInfo[]) {
       { type: "emit_stimulus", target: "nearby", stimulusContent: "{actor} forages for wild food at {target}.", stimulusType: "observation" },
     ],
   } as any);
-  registerTrait({ name: "forageable", description: "Can be foraged for food", category: "natural" });
+  registerTrait({ name: "forageable", description: "Can be foraged for food", category: "natural", enablesAffordances: [], incompatibleWith: [] });
   chronicle.record("affordance_evolved", { name: "forage", description: "Forage for wild food" });
 
   const berries = addEntity(world);
@@ -381,7 +381,7 @@ function injectEvolution(world: any, agents: AgentInfo[]) {
       { type: "emit_stimulus", target: "nearby", stimulusContent: "{actor} brews a remedy from herbs!", stimulusType: "observation" },
     ],
   } as any);
-  registerTrait({ name: "brewable", description: "Can be brewed into remedies", category: "craft" });
+  registerTrait({ name: "brewable", description: "Can be brewed into remedies", category: "craft", enablesAffordances: [], incompatibleWith: [] });
   chronicle.record("affordance_evolved", { name: "brew_remedy", description: "Brew healing remedy (spirit-created)" });
 
   // Add brewing station to temple
@@ -401,7 +401,7 @@ function injectEvolution(world: any, agents: AgentInfo[]) {
       { type: "emit_stimulus", target: "nearby", stimulusContent: "{actor} builds a shelter!", stimulusType: "observation" },
     ],
   } as any);
-  registerTrait({ name: "buildable", description: "Land where a shelter can be built", category: "construction" });
+  registerTrait({ name: "buildable", description: "Land where a shelter can be built", category: "construction", enablesAffordances: [], incompatibleWith: [] });
   chronicle.record("affordance_evolved", { name: "build_shelter", description: "Build shelter (spirit-created)" });
 
   // Add buildable land
