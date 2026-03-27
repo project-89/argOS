@@ -273,10 +273,22 @@ async function runPhase(world: any, agents: AgentInfo[], from: number, to: numbe
   for (let tick = from; tick <= to; tick++) {
     chronicle.setTick(tick);
 
-    for (const a of agents) {
-      try {
+    // All agents think in PARALLEL — BT-handled agents are instant,
+    // LLM-requiring agents run concurrently. This is the dual-loop:
+    // fast ECS tick + parallel async LLM.
+    const results = await Promise.allSettled(
+      agents.map(async (a) => {
         const action = await agentThink(world, a.eid);
+        return { a, action };
+      })
+    );
 
+    // Execute all actions (sequential — ECS mutations aren't thread-safe)
+    for (const result of results) {
+      if (result.status !== "fulfilled") continue;
+      const { a, action } = result.value;
+
+      try {
         // Handle movement
         if (action.type === "move" && action.target) {
           const allRooms = Array.from(query(world, [Room as any, Name as any]));
@@ -289,15 +301,12 @@ async function runPhase(world: any, agents: AgentInfo[], from: number, to: numbe
         try {
           await executeActions(world, [{ eid: a.eid, action: action as any }] as any);
         } catch {}
+      } catch {}
 
-        // Simulate need decay
-        Needs.hunger[a.eid] = Math.min(100, (Needs.hunger[a.eid] || 0) + 2);
-        Needs.energy[a.eid] = Math.max(0, (Needs.energy[a.eid] || 100) - 1);
-        Needs.social[a.eid] = Math.max(0, (Needs.social[a.eid] || 50) - 1);
-
-      } catch (err: any) {
-        // Don't let one agent crash the whole simulation
-      }
+      // Simulate need decay
+      Needs.hunger[a.eid] = Math.min(100, (Needs.hunger[a.eid] || 0) + 2);
+      Needs.energy[a.eid] = Math.max(0, (Needs.energy[a.eid] || 100) - 1);
+      Needs.social[a.eid] = Math.max(0, (Needs.social[a.eid] || 50) - 1);
     }
 
     // Snapshot
