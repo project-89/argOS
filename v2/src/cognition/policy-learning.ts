@@ -15,8 +15,9 @@
  */
 
 import { hasComponent } from "bitecs";
-import { BehaviorPolicy } from "../ecs/components";
+import { BehaviorPolicy, Name } from "../ecs/components";
 import type { World } from "../ecs/world";
+import { chronicle } from "./simulation-chronicle";
 import {
   type BehaviorNode,
   type PolicyAction,
@@ -253,6 +254,11 @@ export function growMemoryBranch(
     clearPolicyEvalHistory(agentEid);
 
     known.add(memoryKeyword.toLowerCase());
+    chronicle.record("memory_branch", {
+      agent: Name.value[agentEid] || agentEid,
+      keyword: memoryKeyword,
+      responseAction: responseAction.type,
+    });
     return true;
   } catch {
     return false;
@@ -315,6 +321,11 @@ export function growAffordanceBranch(
     clearPolicyEvalHistory(agentEid);
 
     known.add(affordanceName.toLowerCase());
+    chronicle.record("affordance_discovered", {
+      agent: Name.value[agentEid] || agentEid,
+      affordance: affordanceName,
+      trait: requiredTrait,
+    });
     return true;
   } catch {
     return false;

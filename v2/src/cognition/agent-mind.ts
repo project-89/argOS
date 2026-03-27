@@ -29,6 +29,7 @@ import { ensureOfficeDeviceSandboxDir } from "../office-tools/sandbox";
 import { recordPolicyAction } from "./policy-metrics";
 import { captureLLMDecision } from "./bt-compiler";
 import { trackGoalAction, formatAspirationsForContext } from "./goal-learning";
+import { chronicle } from "./simulation-chronicle";
 
 const model = agentModel;
 
@@ -779,6 +780,10 @@ export async function agentThink(world: World, eid: number): Promise<AgentAction
   if (policy.kind === "action") {
     const name = Name.value[eid];
     console.log(`[${name}] uses policy: ${policy.action.type}${policy.action.target ? ` -> ${policy.action.target}` : ""}`);
+    chronicle.record("policy_decision", {
+      agent: name,
+      action: `${policy.action.type}${policy.action.target ? "→" + policy.action.target : ""}`,
+    });
     return normalizeSelectedAction(world, eid, policy.action as any);
   }
   if (policy.kind === "start_procedure") {
@@ -915,10 +920,16 @@ Stay in character. Be concise. React naturally to your perceptions and surroundi
     console.log(`[${name}] action: ${action.type}${action.content ? ` - "${action.content}"` : ""}`);
 
     // Capture this LLM decision for potential BT compilation
-    // If the action succeeds, it will be compiled into a new BT branch
     captureLLMDecision(world, eid, result.innerThought || "",
       { type: action.type as any, target: action.target, content: action.content },
       action.type === "interact" ? (action.content?.split(/\s+/)[0] || undefined) : undefined);
+
+    // Chronicle: record the LLM decision
+    chronicle.record("llm_decision", {
+      agent: name,
+      action: `${action.type}${action.target ? "→" + action.target : ""}`,
+      reasoning: (result.innerThought || "").slice(0, 150),
+    });
 
     return normalizeSelectedAction(world, eid, action, true);
   } catch (error) {

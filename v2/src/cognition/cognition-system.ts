@@ -50,6 +50,7 @@ import {
 import { recordFailedInteraction } from "../spirits/world-crafter-spirit";
 import { recordOutcome } from "./policy-learning";
 import { resolveDecision, trackActionForSkill } from "./bt-compiler";
+import { chronicle } from "./simulation-chronicle";
 import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "./procedural-skills";
 import { compileCompletedPlanToProceduralMacro } from "./plan-compiler";
 import { setGoalContract } from "./goal-contract";
@@ -1922,6 +1923,12 @@ export function executeActions(
           broadcastSound(world, roomEid, `${name} says: "${action.content}"`, name, eid);
           console.log(`💬 ${name}: "${action.content}"`);
 
+          // Chronicle: conversation
+          chronicle.record("conversation", {
+            speaker: name, target: validatedAction.target || "room",
+            content: (action.content || "").slice(0, 100),
+          });
+
           // Compile LLM speak decision into BT branch
           resolveDecision(world, eid, true);
           trackActionForSkill(eid, { type: "speak", content: validatedAction.content }, true);
@@ -2259,6 +2266,20 @@ export function executeActions(
 
 	            // Record successful action for memory/self-awareness
 	            recordSuccessfulAction(eid, `${affordanceName} ${targetName}`);
+
+              // Chronicle
+              chronicle.record("action_success", {
+                agent: name, affordance: affordanceName, target: targetName,
+                changes: result.changes.slice(0, 3),
+              });
+              // Track world mutations (spawn/destroy)
+              for (const change of result.changes) {
+                if (change.startsWith("spawned:") || change.startsWith("destroyed:")) {
+                  chronicle.record("world_mutation", {
+                    agent: name, action: affordanceName, result: change,
+                  });
+                }
+              }
 
               // Reinforce behavior tree — successful affordance use increases weight
               recordOutcome(world, {

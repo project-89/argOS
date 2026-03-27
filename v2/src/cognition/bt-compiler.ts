@@ -33,6 +33,7 @@ import {
 } from "./behavior-policy";
 import { growMemoryBranch } from "./policy-learning";
 import { compileSequenceToSkill, hasSkill } from "./skill-registry";
+import { chronicle } from "./simulation-chronicle";
 
 // =============================================================================
 // TYPES
@@ -255,6 +256,16 @@ function compileToBranch(world: World, decision: DecisionContext): void {
 
     const agentName = Name.value[decision.agentEid] || decision.agentEid;
     console.log(`[BT-Compiler] ${agentName} learned: ${sig} (${branchSize} nodes, tree now ${nodeCount + branchSize})`);
+
+    chronicle.record("bt_compiled", {
+      agent: agentName,
+      branch: sig,
+      treeSize: nodeCount + branchSize,
+      reasoning: decision.reasoning.slice(0, 120),
+      action: decision.action.type,
+      affordance: decision.affordance,
+      roomName: decision.roomName,
+    });
 
     // Also check if the reasoning mentions memory-worthy keywords
     extractAndGrowMemoryBranches(world, decision);
@@ -592,6 +603,12 @@ export function trackActionForSkill(
 
   if (compiled) {
     console.log(`[BT-Compiler] Agent ${agentEid} learned skill: "${skillName}" (${streak.length} steps)`);
+    chronicle.record("skill_learned", {
+      agent: agentEid,
+      skillName,
+      steps: streak.length,
+      sequence: sig,
+    });
   }
 }
 
