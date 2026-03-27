@@ -14,10 +14,11 @@
  * evolves gradually rather than being replaced.
  */
 
-import { hasComponent } from "bitecs";
-import { BehaviorPolicy, Name } from "../ecs/components";
+import { hasComponent, query } from "bitecs";
+import { Agent, BehaviorPolicy, Name } from "../ecs/components";
 import type { World } from "../ecs/world";
 import { chronicle } from "./simulation-chronicle";
+import { onAffordanceRegistered } from "../world/schema";
 import {
   type BehaviorNode,
   type PolicyAction,
@@ -456,17 +457,13 @@ export function initializeAffordanceDiscovery(world: World): void {
   if (discoveryInitialized) return;
   discoveryInitialized = true;
 
-  const { onAffordanceRegistered } = require("../world/schema");
-  const { Agent, BehaviorPolicy } = require("../ecs/components");
-  const { query } = require("bitecs");
-
   onAffordanceRegistered((def: any) => {
     // Skip base affordances (registered at startup before agents exist)
     if (!def.requires || def.requires.length === 0) return;
     const trait = def.requires[0];
 
     // Grow exploration branches in all active agents
-    const agents = Array.from(query(world, [Agent, BehaviorPolicy])) as number[];
+    const agents = Array.from(query(world, [Agent as any, BehaviorPolicy as any])) as number[];
     let grewCount = 0;
     for (const agentEid of agents) {
       if (!BehaviorPolicy.enabled[agentEid as number]) continue;
