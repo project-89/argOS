@@ -428,9 +428,51 @@ export function getGrowthSummary(agentEid: number): {
   };
 }
 
+// =============================================================================
+// AUTO-DISCOVERY: hook into affordance registration
+// =============================================================================
+
+let discoveryInitialized = false;
+
+/**
+ * Initialize auto-discovery: when a new affordance is registered by the
+ * God AI or spirits, automatically grow exploration branches in all
+ * agents with behavior policies.
+ *
+ * Call once during simulation startup.
+ */
+export function initializeAffordanceDiscovery(world: World): void {
+  if (discoveryInitialized) return;
+  discoveryInitialized = true;
+
+  const { onAffordanceRegistered } = require("../world/schema");
+  const { Agent, BehaviorPolicy } = require("../ecs/components");
+  const { query } = require("bitecs");
+
+  onAffordanceRegistered((def: any) => {
+    // Skip base affordances (registered at startup before agents exist)
+    if (!def.requires || def.requires.length === 0) return;
+    const trait = def.requires[0];
+
+    // Grow exploration branches in all active agents
+    const agents = Array.from(query(world, [Agent, BehaviorPolicy])) as number[];
+    let grewCount = 0;
+    for (const agentEid of agents) {
+      if (!BehaviorPolicy.enabled[agentEid as number]) continue;
+      if (growAffordanceBranch(world, agentEid as number, def.name, trait)) {
+        grewCount++;
+      }
+    }
+    if (grewCount > 0) {
+      console.log(`[Discovery] ${grewCount} agents learned about new affordance: ${def.name}`);
+    }
+  });
+}
+
 /** Reset all learning state (for tests) */
 export function resetLearningState(): void {
   reinforcementState.clear();
   knownAffordances.clear();
   knownMemoryBranches.clear();
+  discoveryInitialized = false;
 }

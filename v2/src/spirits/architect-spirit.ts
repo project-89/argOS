@@ -926,9 +926,10 @@ function executeAffordanceProposal(spec: AffordanceProposalSpec): void {
 
   const def: AffordanceDefinition = {
     name: spec.name,
+    description: spec.description,
     requires: spec.requires || [],
     effects: spec.effects as any,
-    descriptionTemplate: `{actor.name} performs ${spec.name} on {target.name}.`,
+    descriptionTemplate: `{actor.name} ${spec.name}s {target.name}.`,
   };
   registerAffordance(def);
   console.log(`[Architect] Created affordance: ${spec.name}`);

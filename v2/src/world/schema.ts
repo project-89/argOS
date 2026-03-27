@@ -1746,8 +1746,20 @@ export const worldSchema = new WorldSchema();
  * Register a runtime affordance. Immediately visible to all affordance queries.
  * Runtime affordances can be removed; base affordances cannot.
  */
+/** Callbacks notified when a new affordance is registered */
+const affordanceListeners: Array<(def: AffordanceDefinition) => void> = [];
+
+/** Register a callback for when new affordances are created (for agent BT discovery) */
+export function onAffordanceRegistered(cb: (def: AffordanceDefinition) => void): void {
+  affordanceListeners.push(cb);
+}
+
 export function registerAffordance(def: AffordanceDefinition): void {
   worldSchema.defineAffordance(def);
+  // Notify listeners (e.g., grow exploration branches in agent BTs)
+  for (const cb of affordanceListeners) {
+    try { cb(def); } catch { /* listener error */ }
+  }
 }
 
 /**
