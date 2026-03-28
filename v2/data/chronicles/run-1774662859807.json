@@ -1,0 +1,1665 @@
+{
+  "meta": {
+    "totalTicks": 200,
+    "runtimeMs": 7706938,
+    "totalEvents": 1678,
+    "snapshotCount": 20
+  },
+  "eventCounts": {
+    "world_seed": 1,
+    "room_created": 6,
+    "affordance_created": 7,
+    "object_created": 10,
+    "agent_created": 5,
+    "phase_change": 4,
+    "llm_decision": 331,
+    "action_success": 124,
+    "bt_compiled": 30,
+    "memory_branch": 13,
+    "skill_learned": 142,
+    "conversation": 317,
+    "policy_decision": 665,
+    "component_created": 2,
+    "affordance_discovered": 15,
+    "affordance_evolved": 3,
+    "crisis_event": 3
+  },
+  "keyMoments": [
+    {
+      "tick": 1,
+      "type": "bt_compiled",
+      "summary": "Aldric learned: interact:forge_weapon:Iron Anvil (tree now 9 nodes)"
+    },
+    {
+      "tick": 1,
+      "type": "memory_branch",
+      "summary": "Aldric grew memory branch for \"exhaustion\""
+    },
+    {
+      "tick": 1,
+      "type": "bt_compiled",
+      "summary": "Brother Caius learned: interact:pray:Stone Altar (tree now 9 nodes)"
+    },
+    {
+      "tick": 1,
+      "type": "bt_compiled",
+      "summary": "Mira learned: interact:harvest:Wheat Field (tree now 9 nodes)"
+    },
+    {
+      "tick": 1,
+      "type": "memory_branch",
+      "summary": "Mira grew memory branch for \"hunger\""
+    },
+    {
+      "tick": 2,
+      "type": "bt_compiled",
+      "summary": "Brother Caius learned: interact:read:Herb Shelf (tree now 13 nodes)"
+    },
+    {
+      "tick": 2,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read\" (2 steps)"
+    },
+    {
+      "tick": 2,
+      "type": "bt_compiled",
+      "summary": "Dex learned: speak:Greta:@Market (tree now 11 nodes)"
+    },
+    {
+      "tick": 2,
+      "type": "memory_branch",
+      "summary": "Dex grew memory branch for \"suspicion\""
+    },
+    {
+      "tick": 3,
+      "type": "bt_compiled",
+      "summary": "Greta learned: speak:Dex:@Market (tree now 11 nodes)"
+    },
+    {
+      "tick": 3,
+      "type": "memory_branch",
+      "summary": "Greta grew memory branch for \"friend\""
+    },
+    {
+      "tick": 5,
+      "type": "bt_compiled",
+      "summary": "Greta learned: observe:Dex (tree now 19 nodes)"
+    },
+    {
+      "tick": 5,
+      "type": "bt_compiled",
+      "summary": "Dex learned: interact:haggle:Bread Loaf (tree now 20 nodes)"
+    },
+    {
+      "tick": 5,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle\" (3 steps)"
+    },
+    {
+      "tick": 6,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray\" (3 steps)"
+    },
+    {
+      "tick": 6,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle→speak\" (4 steps)"
+    },
+    {
+      "tick": 7,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle→speak→speak\" (5 steps)"
+    },
+    {
+      "tick": 8,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle→speak→speak→haggle\" (6 steps)"
+    },
+    {
+      "tick": 9,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle→speak→speak→haggle→speak\" (7 steps)"
+    },
+    {
+      "tick": 10,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→read\" (4 steps)"
+    },
+    {
+      "tick": 11,
+      "type": "bt_compiled",
+      "summary": "Mira learned: interact:drink:Well:tired (tree now 18 nodes)"
+    },
+    {
+      "tick": 11,
+      "type": "memory_branch",
+      "summary": "Mira grew memory branch for \"opportunity\""
+    },
+    {
+      "tick": 11,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→harvest→harvest→harvest→harvest→harvest→harv\" (9 steps)"
+    },
+    {
+      "tick": 11,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle→speak→speak→haggle→speak→haggle\" (8 steps)"
+    },
+    {
+      "tick": 12,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→read→pray\" (5 steps)"
+    },
+    {
+      "tick": 12,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle→speak→speak→haggle→speak→haggle→s\" (9 steps)"
+    },
+    {
+      "tick": 14,
+      "type": "bt_compiled",
+      "summary": "Greta learned: interact:haggle:Bread Loaf (tree now 24 nodes)"
+    },
+    {
+      "tick": 14,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→speak→speak→speak→haggle\" (8 steps)"
+    },
+    {
+      "tick": 15,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→haggle→speak→speak→haggle→speak→haggle→speak→s\" (10 steps)"
+    },
+    {
+      "tick": 16,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→read→pray→read\" (6 steps)"
+    },
+    {
+      "tick": 17,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→speak→speak→speak→haggle→spe\" (9 steps)"
+    },
+    {
+      "tick": 17,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:haggle→speak→speak→haggle→speak→haggle→speak→speak→h\" (10 steps)"
+    },
+    {
+      "tick": 18,
+      "type": "bt_compiled",
+      "summary": "Dex learned: interact:eat:Bread Loaf (tree now 25 nodes)"
+    },
+    {
+      "tick": 18,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle→speak→haggle→speak→speak→haggle→s\" (10 steps)"
+    },
+    {
+      "tick": 19,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→speak→speak→haggle→speak→spe\" (10 steps)"
+    },
+    {
+      "tick": 19,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→haggle→speak→haggle→speak→speak→haggle→speak→e\" (10 steps)"
+    },
+    {
+      "tick": 20,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→speak→haggle→speak→speak→spe\" (10 steps)"
+    },
+    {
+      "tick": 20,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:haggle→speak→haggle→speak→speak→haggle→speak→eat→spe\" (10 steps)"
+    },
+    {
+      "tick": 21,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→haggle→speak→speak→haggle→speak→eat→speak→spea\" (10 steps)"
+    },
+    {
+      "tick": 22,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→haggle→speak→speak→speak→spe\" (10 steps)"
+    },
+    {
+      "tick": 22,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→read→pray→read→pray\" (7 steps)"
+    },
+    {
+      "tick": 24,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→haggle→speak→speak→speak→speak→spe\" (10 steps)"
+    },
+    {
+      "tick": 24,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→read→pray→read→pray→read\" (8 steps)"
+    },
+    {
+      "tick": 24,
+      "type": "bt_compiled",
+      "summary": "Dex learned: move:Tavern:@Market (tree now 29 nodes)"
+    },
+    {
+      "tick": 24,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:haggle→speak→speak→haggle→speak→eat→speak→speak→spea\" (10 steps)"
+    },
+    {
+      "tick": 25,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→haggle→speak→speak→speak→speak→speak→spe\" (10 steps)"
+    },
+    {
+      "tick": 25,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle→speak→eat→speak→speak→speak→speak\" (10 steps)"
+    },
+    {
+      "tick": 27,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→read→pray→read→pray→read→pray\" (9 steps)"
+    },
+    {
+      "tick": 27,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→haggle→speak→eat→speak→speak→speak→speak→speak\" (10 steps)"
+    },
+    {
+      "tick": 28,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→haggle→speak→speak→speak→speak→speak→speak→hag\" (10 steps)"
+    },
+    {
+      "tick": 28,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:haggle→speak→eat→speak→speak→speak→speak→speak→speak\" (10 steps)"
+    },
+    {
+      "tick": 29,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:haggle→speak→speak→speak→speak→speak→speak→haggle→sp\" (10 steps)"
+    },
+    {
+      "tick": 30,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→eat→speak→speak→speak→speak→speak→speak→speak→\" (10 steps)"
+    },
+    {
+      "tick": 31,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:eat→speak→speak→speak→speak→speak→speak→speak→haggle\" (10 steps)"
+    },
+    {
+      "tick": 33,
+      "type": "bt_compiled",
+      "summary": "Greta learned: observe:Dex:hungry (tree now 29 nodes)"
+    },
+    {
+      "tick": 34,
+      "type": "bt_compiled",
+      "summary": "Greta learned: speak:Dex:@Market:hungry (tree now 37 nodes)"
+    },
+    {
+      "tick": 34,
+      "type": "bt_compiled",
+      "summary": "Brother Caius learned: interact:pray:Stone Altar:hungry (tree now 18 nodes)"
+    },
+    {
+      "tick": 34,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→read→pray→read→pray→read→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 35,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→speak→speak→speak→haggle→speak→speak→hag\" (10 steps)"
+    },
+    {
+      "tick": 37,
+      "type": "bt_compiled",
+      "summary": "Greta learned: interact:eat:Bread Loaf:hungry (tree now 43 nodes)"
+    },
+    {
+      "tick": 37,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→speak→speak→haggle→speak→speak→haggle→sp\" (10 steps)"
+    },
+    {
+      "tick": 38,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:read→pray→read→pray→read→pray→read→pray→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 38,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→speak→haggle→speak→speak→haggle→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 39,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→haggle→speak→speak→speak→speak→speak→eat\" (10 steps)"
+    },
+    {
+      "tick": 39,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→speak→haggle→speak→speak→haggle→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 40,
+      "type": "bt_compiled",
+      "summary": "Brother Caius learned: interact:read:Herb Shelf:hungry (tree now 23 nodes)"
+    },
+    {
+      "tick": 40,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→read→pray→read→pray→pray→pray→read\" (10 steps)"
+    },
+    {
+      "tick": 42,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→haggle→speak→speak→haggle→speak→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 43,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→haggle→speak→speak→speak→speak→speak→eat→speak\" (10 steps)"
+    },
+    {
+      "tick": 43,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:read→pray→read→pray→read→pray→pray→pray→read→pray\" (10 steps)"
+    },
+    {
+      "tick": 43,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:haggle→speak→speak→haggle→speak→speak→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 44,
+      "type": "bt_compiled",
+      "summary": "Mira learned: interact:harvest:Wheat Field:hungry (tree now 27 nodes)"
+    },
+    {
+      "tick": 45,
+      "type": "bt_compiled",
+      "summary": "Dex learned: speak:Greta:@Market:hungry (tree now 37 nodes)"
+    },
+    {
+      "tick": 45,
+      "type": "memory_branch",
+      "summary": "Dex grew memory branch for \"friend\""
+    },
+    {
+      "tick": 45,
+      "type": "memory_branch",
+      "summary": "Dex grew memory branch for \"hunger\""
+    },
+    {
+      "tick": 46,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:speak→haggle→speak→speak→speak→speak→speak→speak→spe\" (10 steps)"
+    },
+    {
+      "tick": 47,
+      "type": "skill_learned",
+      "summary": "25 compiled skill: \"learned:haggle→speak→speak→speak→speak→speak→speak→speak→spe\" (10 steps)"
+    },
+    {
+      "tick": 50,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→read→pray→pray→pray→read→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 50,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→harvest→harvest→harvest→harvest→harvest→drin\" (10 steps)"
+    },
+    {
+      "tick": 50,
+      "type": "affordance_evolved",
+      "summary": "Spirit created affordance: forage"
+    },
+    {
+      "tick": 50,
+      "type": "crisis_event",
+      "summary": "CRISIS: Famine strikes the village. Forest added with forageable food."
+    },
+    {
+      "tick": 52,
+      "type": "bt_compiled",
+      "summary": "Aldric learned: speak:@Forge:hungry (tree now 24 nodes)"
+    },
+    {
+      "tick": 52,
+      "type": "memory_branch",
+      "summary": "Aldric grew memory branch for \"friend\""
+    },
+    {
+      "tick": 52,
+      "type": "memory_branch",
+      "summary": "Aldric grew memory branch for \"hunger\""
+    },
+    {
+      "tick": 52,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:forge_weapon→forge_weapon→forge_weapon→forge_weapon→\" (8 steps)"
+    },
+    {
+      "tick": 52,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→harvest→harvest→harvest→harvest→drink→harves\" (10 steps)"
+    },
+    {
+      "tick": 53,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:haggle→speak→speak→speak→speak→speak→eat→speak→speak\" (10 steps)"
+    },
+    {
+      "tick": 53,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:read→pray→read→pray→pray→pray→read→pray→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 54,
+      "type": "bt_compiled",
+      "summary": "Aldric learned: move:Market:@Forge:hungry (tree now 37 nodes)"
+    },
+    {
+      "tick": 54,
+      "type": "memory_branch",
+      "summary": "Aldric grew memory branch for \"opportunity\""
+    },
+    {
+      "tick": 54,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→speak→eat→speak→speak→eat→sp\" (10 steps)"
+    },
+    {
+      "tick": 55,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→harvest→harvest→harvest→drink→harvest→harves\" (10 steps)"
+    },
+    {
+      "tick": 56,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→eat→speak→speak→eat→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 56,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→pray→pray→read→pray→pray→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 57,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→eat→speak→speak→eat→speak→speak→ea\" (10 steps)"
+    },
+    {
+      "tick": 58,
+      "type": "bt_compiled",
+      "summary": "Mira learned: speak:@Farm:hungry (tree now 38 nodes)"
+    },
+    {
+      "tick": 58,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→harvest→harvest→drink→harvest→harvest→drink→\" (10 steps)"
+    },
+    {
+      "tick": 59,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:read→pray→pray→pray→read→pray→pray→pray→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 59,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→harvest→drink→harvest→harvest→drink→harvest→\" (10 steps)"
+    },
+    {
+      "tick": 60,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→eat→speak→speak→eat→speak→speak→eat→spea\" (10 steps)"
+    },
+    {
+      "tick": 60,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→drink→harvest→harvest→drink→harvest→harvest→\" (10 steps)"
+    },
+    {
+      "tick": 61,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:drink→harvest→harvest→drink→harvest→harvest→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 62,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→pray→pray→read→pray→pray→pray→pray→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 63,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→pray→read→pray→pray→pray→pray→pray→pray→read\" (10 steps)"
+    },
+    {
+      "tick": 64,
+      "type": "bt_compiled",
+      "summary": "Aldric learned: interact:forge_weapon:Iron Anvil:hungry (tree now 46 nodes)"
+    },
+    {
+      "tick": 64,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→harvest→drink→harvest→harvest→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 65,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→eat→speak→speak→eat→speak→speak→eat→speak→spea\" (10 steps)"
+    },
+    {
+      "tick": 66,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→pray→pray→pray→pray→pray→pray→read→read\" (10 steps)"
+    },
+    {
+      "tick": 67,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:eat→speak→speak→eat→speak→speak→eat→speak→speak→eat\" (10 steps)"
+    },
+    {
+      "tick": 67,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:read→pray→pray→pray→pray→pray→pray→read→read→pray\" (10 steps)"
+    },
+    {
+      "tick": 67,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→drink→harvest→harvest→speak→speak→speak→spea\" (10 steps)"
+    },
+    {
+      "tick": 70,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:forge_weapon→forge_weapon→forge_weapon→speak→speak→s\" (10 steps)"
+    },
+    {
+      "tick": 72,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:drink→harvest→harvest→speak→speak→speak→speak→harves\" (10 steps)"
+    },
+    {
+      "tick": 73,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:forge_weapon→forge_weapon→speak→speak→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 74,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:forge_weapon→speak→speak→speak→speak→speak→forge_wea\" (10 steps)"
+    },
+    {
+      "tick": 74,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→pray→pray→pray→pray→pray→read→read→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 75,
+      "type": "bt_compiled",
+      "summary": "Greta learned: interact:eat:Bread Loaf:hungry:tired (tree now 54 nodes)"
+    },
+    {
+      "tick": 75,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→eat→speak→speak→eat→speak→speak→eat→speak→eat\" (10 steps)"
+    },
+    {
+      "tick": 76,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:speak→speak→speak→speak→speak→forge_weapon→speak→for\" (10 steps)"
+    },
+    {
+      "tick": 77,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:speak→speak→speak→speak→forge_weapon→speak→forge_wea\" (10 steps)"
+    },
+    {
+      "tick": 77,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:eat→speak→speak→eat→speak→speak→eat→speak→eat→speak\" (10 steps)"
+    },
+    {
+      "tick": 78,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:speak→speak→speak→forge_weapon→speak→forge_weapon→sp\" (10 steps)"
+    },
+    {
+      "tick": 79,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:speak→speak→forge_weapon→speak→forge_weapon→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 80,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:speak→forge_weapon→speak→forge_weapon→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 81,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:forge_weapon→speak→forge_weapon→speak→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 81,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→eat→speak→speak→eat→speak→eat→speak→spea\" (10 steps)"
+    },
+    {
+      "tick": 82,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:speak→forge_weapon→speak→speak→speak→speak→speak→spe\" (10 steps)"
+    },
+    {
+      "tick": 83,
+      "type": "skill_learned",
+      "summary": "21 compiled skill: \"learned:forge_weapon→speak→speak→speak→speak→speak→speak→spe\" (10 steps)"
+    },
+    {
+      "tick": 84,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→eat→speak→speak→eat→speak→eat→speak→speak→spea\" (10 steps)"
+    },
+    {
+      "tick": 84,
+      "type": "bt_compiled",
+      "summary": "Brother Caius learned: interact:pray:Stone Altar:hungry:tired (tree now 33 nodes)"
+    },
+    {
+      "tick": 84,
+      "type": "memory_branch",
+      "summary": "Brother Caius grew memory branch for \"opportunity\""
+    },
+    {
+      "tick": 84,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→pray→pray→pray→pray→read→read→pray→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 90,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→harvest→speak→speak→speak→speak→harvest→harv\" (10 steps)"
+    },
+    {
+      "tick": 92,
+      "type": "bt_compiled",
+      "summary": "Mira learned: move:Forest:@Farm:hungry (tree now 43 nodes)"
+    },
+    {
+      "tick": 92,
+      "type": "memory_branch",
+      "summary": "Mira grew memory branch for \"exhaustion\""
+    },
+    {
+      "tick": 92,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→speak→speak→speak→speak→harvest→harvest→drin\" (10 steps)"
+    },
+    {
+      "tick": 93,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→speak→speak→speak→harvest→harvest→drink→speak→\" (10 steps)"
+    },
+    {
+      "tick": 96,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→speak→speak→harvest→harvest→drink→speak→speak→\" (10 steps)"
+    },
+    {
+      "tick": 97,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→speak→harvest→harvest→drink→speak→speak→speak→\" (10 steps)"
+    },
+    {
+      "tick": 98,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→harvest→harvest→drink→speak→speak→speak→speak→\" (10 steps)"
+    },
+    {
+      "tick": 100,
+      "type": "bt_compiled",
+      "summary": "Mira learned: move:Market:@Farm:hungry (tree now 52 nodes)"
+    },
+    {
+      "tick": 100,
+      "type": "memory_branch",
+      "summary": "Mira grew memory branch for \"friend\""
+    },
+    {
+      "tick": 100,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→harvest→drink→speak→speak→speak→speak→harves\" (10 steps)"
+    },
+    {
+      "tick": 100,
+      "type": "affordance_evolved",
+      "summary": "Spirit created affordance: brew_remedy"
+    },
+    {
+      "tick": 100,
+      "type": "affordance_evolved",
+      "summary": "Spirit created affordance: build_shelter"
+    },
+    {
+      "tick": 100,
+      "type": "crisis_event",
+      "summary": "CRISIS: Evolution: brew_remedy and build_shelter affordances added"
+    },
+    {
+      "tick": 102,
+      "type": "bt_compiled",
+      "summary": "Mira learned: move:Temple:@Farm:hungry (tree now 69 nodes)"
+    },
+    {
+      "tick": 102,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→drink→speak→speak→speak→speak→harvest→speak→\" (10 steps)"
+    },
+    {
+      "tick": 103,
+      "type": "bt_compiled",
+      "summary": "Mira learned: interact:drink:Well:hungry (tree now 74 nodes)"
+    },
+    {
+      "tick": 103,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:drink→speak→speak→speak→speak→harvest→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 104,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→speak→speak→speak→harvest→speak→speak→speak→dr\" (10 steps)"
+    },
+    {
+      "tick": 105,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→speak→speak→harvest→speak→speak→speak→drink→ha\" (10 steps)"
+    },
+    {
+      "tick": 106,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→speak→harvest→speak→speak→speak→drink→harvest→\" (10 steps)"
+    },
+    {
+      "tick": 107,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→harvest→speak→speak→speak→drink→harvest→harves\" (10 steps)"
+    },
+    {
+      "tick": 108,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:harvest→speak→speak→speak→drink→harvest→harvest→harv\" (10 steps)"
+    },
+    {
+      "tick": 109,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→speak→speak→drink→harvest→harvest→harvest→harv\" (10 steps)"
+    },
+    {
+      "tick": 110,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:eat→speak→speak→eat→speak→eat→speak→speak→speak→eat\" (10 steps)"
+    },
+    {
+      "tick": 110,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→speak→drink→harvest→harvest→harvest→harvest→ha\" (10 steps)"
+    },
+    {
+      "tick": 111,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→eat→speak→eat→speak→speak→speak→eat→spea\" (10 steps)"
+    },
+    {
+      "tick": 114,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→eat→speak→eat→speak→speak→speak→eat→speak→spea\" (10 steps)"
+    },
+    {
+      "tick": 117,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:eat→speak→eat→speak→speak→speak→eat→speak→speak→eat\" (10 steps)"
+    },
+    {
+      "tick": 117,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→pray→pray→pray→read→read→pray→pray→pray→read\" (10 steps)"
+    },
+    {
+      "tick": 118,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→eat→speak→speak→speak→eat→speak→speak→eat→spea\" (10 steps)"
+    },
+    {
+      "tick": 119,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:eat→speak→speak→speak→eat→speak→speak→eat→speak→spea\" (10 steps)"
+    },
+    {
+      "tick": 120,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→eat→speak→speak→eat→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 126,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→eat→speak→speak→eat→speak→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 126,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:speak→drink→harvest→harvest→harvest→harvest→harvest→\" (10 steps)"
+    },
+    {
+      "tick": 127,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→eat→speak→speak→eat→speak→speak→speak→speak→ea\" (10 steps)"
+    },
+    {
+      "tick": 127,
+      "type": "skill_learned",
+      "summary": "24 compiled skill: \"learned:drink→harvest→harvest→harvest→harvest→harvest→harves\" (10 steps)"
+    },
+    {
+      "tick": 130,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→pray→pray→read→read→pray→pray→pray→read→pray\" (10 steps)"
+    },
+    {
+      "tick": 131,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:eat→speak→speak→eat→speak→speak→speak→speak→eat→spea\" (10 steps)"
+    },
+    {
+      "tick": 132,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→pray→read→read→pray→pray→pray→read→pray→read\" (10 steps)"
+    },
+    {
+      "tick": 133,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→eat→speak→speak→speak→speak→eat→speak→ea\" (10 steps)"
+    },
+    {
+      "tick": 134,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→eat→speak→speak→speak→speak→eat→speak→eat→spea\" (10 steps)"
+    },
+    {
+      "tick": 140,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:eat→speak→speak→speak→speak→eat→speak→eat→speak→spea\" (10 steps)"
+    },
+    {
+      "tick": 143,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→eat→speak→eat→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 144,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→eat→speak→eat→speak→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 147,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→eat→speak→eat→speak→speak→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 150,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→eat→speak→eat→speak→speak→speak→speak→speak→ea\" (10 steps)"
+    },
+    {
+      "tick": 150,
+      "type": "crisis_event",
+      "summary": "CRISIS: Recovery: Famine ended, Festival declared, social needs high"
+    },
+    {
+      "tick": 153,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:eat→speak→eat→speak→speak→speak→speak→speak→eat→spea\" (10 steps)"
+    },
+    {
+      "tick": 154,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:pray→read→read→pray→pray→pray→read→pray→read→pray\" (10 steps)"
+    },
+    {
+      "tick": 155,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→eat→speak→speak→speak→speak→speak→eat→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 157,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:eat→speak→speak→speak→speak→speak→eat→speak→speak→sp\" (10 steps)"
+    },
+    {
+      "tick": 160,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→speak→eat→speak→speak→speak→\" (10 steps)"
+    },
+    {
+      "tick": 169,
+      "type": "bt_compiled",
+      "summary": "Greta learned: move:Tavern:@Market (tree now 66 nodes)"
+    },
+    {
+      "tick": 169,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→speak→eat→speak→speak→speak→speak→\" (10 steps)"
+    },
+    {
+      "tick": 169,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:read→read→pray→pray→pray→read→pray→read→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 175,
+      "type": "skill_learned",
+      "summary": "23 compiled skill: \"learned:read→pray→pray→pray→read→pray→read→pray→pray→pray\" (10 steps)"
+    },
+    {
+      "tick": 176,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→speak→eat→speak→speak→speak→speak→speak→\" (10 steps)"
+    },
+    {
+      "tick": 184,
+      "type": "skill_learned",
+      "summary": "22 compiled skill: \"learned:speak→speak→eat→speak→speak→speak→speak→speak→eat→sp\" (10 steps)"
+    }
+  ],
+  "agentGrowth": {
+    "Aldric": [
+      {
+        "tick": 10,
+        "treeSize": 13,
+        "compiled": 1
+      },
+      {
+        "tick": 20,
+        "treeSize": 13,
+        "compiled": 1
+      },
+      {
+        "tick": 30,
+        "treeSize": 13,
+        "compiled": 1
+      },
+      {
+        "tick": 40,
+        "treeSize": 13,
+        "compiled": 1
+      },
+      {
+        "tick": 50,
+        "treeSize": 13,
+        "compiled": 1
+      },
+      {
+        "tick": 60,
+        "treeSize": 41,
+        "compiled": 3
+      },
+      {
+        "tick": 70,
+        "treeSize": 46,
+        "compiled": 4
+      },
+      {
+        "tick": 80,
+        "treeSize": 46,
+        "compiled": 4
+      },
+      {
+        "tick": 90,
+        "treeSize": 46,
+        "compiled": 4
+      },
+      {
+        "tick": 100,
+        "treeSize": 46,
+        "compiled": 4
+      },
+      {
+        "tick": 110,
+        "treeSize": 54,
+        "compiled": 4
+      },
+      {
+        "tick": 120,
+        "treeSize": 54,
+        "compiled": 4
+      },
+      {
+        "tick": 130,
+        "treeSize": 54,
+        "compiled": 4
+      },
+      {
+        "tick": 140,
+        "treeSize": 54,
+        "compiled": 4
+      },
+      {
+        "tick": 150,
+        "treeSize": 54,
+        "compiled": 4
+      },
+      {
+        "tick": 160,
+        "treeSize": 54,
+        "compiled": 4
+      },
+      {
+        "tick": 170,
+        "treeSize": 54,
+        "compiled": 4
+      },
+      {
+        "tick": 180,
+        "treeSize": 54,
+        "compiled": 4
+      },
+      {
+        "tick": 190,
+        "treeSize": 54,
+        "compiled": 4
+      },
+      {
+        "tick": 200,
+        "treeSize": 54,
+        "compiled": 4
+      }
+    ],
+    "Greta": [
+      {
+        "tick": 10,
+        "treeSize": 19,
+        "compiled": 2
+      },
+      {
+        "tick": 20,
+        "treeSize": 24,
+        "compiled": 3
+      },
+      {
+        "tick": 30,
+        "treeSize": 24,
+        "compiled": 3
+      },
+      {
+        "tick": 40,
+        "treeSize": 43,
+        "compiled": 6
+      },
+      {
+        "tick": 50,
+        "treeSize": 43,
+        "compiled": 6
+      },
+      {
+        "tick": 60,
+        "treeSize": 47,
+        "compiled": 6
+      },
+      {
+        "tick": 70,
+        "treeSize": 47,
+        "compiled": 6
+      },
+      {
+        "tick": 80,
+        "treeSize": 54,
+        "compiled": 7
+      },
+      {
+        "tick": 90,
+        "treeSize": 54,
+        "compiled": 7
+      },
+      {
+        "tick": 100,
+        "treeSize": 54,
+        "compiled": 7
+      },
+      {
+        "tick": 110,
+        "treeSize": 62,
+        "compiled": 7
+      },
+      {
+        "tick": 120,
+        "treeSize": 62,
+        "compiled": 7
+      },
+      {
+        "tick": 130,
+        "treeSize": 62,
+        "compiled": 7
+      },
+      {
+        "tick": 140,
+        "treeSize": 62,
+        "compiled": 7
+      },
+      {
+        "tick": 150,
+        "treeSize": 62,
+        "compiled": 7
+      },
+      {
+        "tick": 160,
+        "treeSize": 62,
+        "compiled": 7
+      },
+      {
+        "tick": 170,
+        "treeSize": 66,
+        "compiled": 8
+      },
+      {
+        "tick": 180,
+        "treeSize": 66,
+        "compiled": 8
+      },
+      {
+        "tick": 190,
+        "treeSize": 66,
+        "compiled": 8
+      },
+      {
+        "tick": 200,
+        "treeSize": 66,
+        "compiled": 8
+      }
+    ],
+    "Brother Caius": [
+      {
+        "tick": 10,
+        "treeSize": 13,
+        "compiled": 2
+      },
+      {
+        "tick": 20,
+        "treeSize": 13,
+        "compiled": 2
+      },
+      {
+        "tick": 30,
+        "treeSize": 13,
+        "compiled": 2
+      },
+      {
+        "tick": 40,
+        "treeSize": 23,
+        "compiled": 4
+      },
+      {
+        "tick": 50,
+        "treeSize": 23,
+        "compiled": 4
+      },
+      {
+        "tick": 60,
+        "treeSize": 27,
+        "compiled": 4
+      },
+      {
+        "tick": 70,
+        "treeSize": 27,
+        "compiled": 4
+      },
+      {
+        "tick": 80,
+        "treeSize": 27,
+        "compiled": 4
+      },
+      {
+        "tick": 90,
+        "treeSize": 37,
+        "compiled": 5
+      },
+      {
+        "tick": 100,
+        "treeSize": 37,
+        "compiled": 5
+      },
+      {
+        "tick": 110,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 120,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 130,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 140,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 150,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 160,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 170,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 180,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 190,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 200,
+        "treeSize": 45,
+        "compiled": 5
+      }
+    ],
+    "Mira": [
+      {
+        "tick": 10,
+        "treeSize": 13,
+        "compiled": 1
+      },
+      {
+        "tick": 20,
+        "treeSize": 22,
+        "compiled": 2
+      },
+      {
+        "tick": 30,
+        "treeSize": 22,
+        "compiled": 2
+      },
+      {
+        "tick": 40,
+        "treeSize": 22,
+        "compiled": 2
+      },
+      {
+        "tick": 50,
+        "treeSize": 27,
+        "compiled": 3
+      },
+      {
+        "tick": 60,
+        "treeSize": 38,
+        "compiled": 4
+      },
+      {
+        "tick": 70,
+        "treeSize": 38,
+        "compiled": 4
+      },
+      {
+        "tick": 80,
+        "treeSize": 38,
+        "compiled": 4
+      },
+      {
+        "tick": 90,
+        "treeSize": 38,
+        "compiled": 4
+      },
+      {
+        "tick": 100,
+        "treeSize": 56,
+        "compiled": 6
+      },
+      {
+        "tick": 110,
+        "treeSize": 74,
+        "compiled": 8
+      },
+      {
+        "tick": 120,
+        "treeSize": 74,
+        "compiled": 8
+      },
+      {
+        "tick": 130,
+        "treeSize": 74,
+        "compiled": 8
+      },
+      {
+        "tick": 140,
+        "treeSize": 74,
+        "compiled": 8
+      },
+      {
+        "tick": 150,
+        "treeSize": 74,
+        "compiled": 8
+      },
+      {
+        "tick": 160,
+        "treeSize": 74,
+        "compiled": 8
+      },
+      {
+        "tick": 170,
+        "treeSize": 74,
+        "compiled": 8
+      },
+      {
+        "tick": 180,
+        "treeSize": 74,
+        "compiled": 8
+      },
+      {
+        "tick": 190,
+        "treeSize": 74,
+        "compiled": 8
+      },
+      {
+        "tick": 200,
+        "treeSize": 74,
+        "compiled": 8
+      }
+    ],
+    "Dex": [
+      {
+        "tick": 10,
+        "treeSize": 20,
+        "compiled": 2
+      },
+      {
+        "tick": 20,
+        "treeSize": 25,
+        "compiled": 3
+      },
+      {
+        "tick": 30,
+        "treeSize": 29,
+        "compiled": 4
+      },
+      {
+        "tick": 40,
+        "treeSize": 29,
+        "compiled": 4
+      },
+      {
+        "tick": 50,
+        "treeSize": 45,
+        "compiled": 5
+      },
+      {
+        "tick": 60,
+        "treeSize": 49,
+        "compiled": 5
+      },
+      {
+        "tick": 70,
+        "treeSize": 49,
+        "compiled": 5
+      },
+      {
+        "tick": 80,
+        "treeSize": 49,
+        "compiled": 5
+      },
+      {
+        "tick": 90,
+        "treeSize": 49,
+        "compiled": 5
+      },
+      {
+        "tick": 100,
+        "treeSize": 49,
+        "compiled": 5
+      },
+      {
+        "tick": 110,
+        "treeSize": 57,
+        "compiled": 5
+      },
+      {
+        "tick": 120,
+        "treeSize": 57,
+        "compiled": 5
+      },
+      {
+        "tick": 130,
+        "treeSize": 57,
+        "compiled": 5
+      },
+      {
+        "tick": 140,
+        "treeSize": 57,
+        "compiled": 5
+      },
+      {
+        "tick": 150,
+        "treeSize": 57,
+        "compiled": 5
+      },
+      {
+        "tick": 160,
+        "treeSize": 57,
+        "compiled": 5
+      },
+      {
+        "tick": 170,
+        "treeSize": 57,
+        "compiled": 5
+      },
+      {
+        "tick": 180,
+        "treeSize": 57,
+        "compiled": 5
+      },
+      {
+        "tick": 190,
+        "treeSize": 57,
+        "compiled": 5
+      },
+      {
+        "tick": 200,
+        "treeSize": 57,
+        "compiled": 5
+      }
+    ]
+  },
+  "llmReduction": [
+    {
+      "tick": 10,
+      "llmRate": 0.84
+    },
+    {
+      "tick": 20,
+      "llmRate": 0.78
+    },
+    {
+      "tick": 30,
+      "llmRate": 0.6533333333333333
+    },
+    {
+      "tick": 40,
+      "llmRate": 0.645
+    },
+    {
+      "tick": 50,
+      "llmRate": 0.6506024096385542
+    },
+    {
+      "tick": 60,
+      "llmRate": 0.6387959866220736
+    },
+    {
+      "tick": 70,
+      "llmRate": 0.6379310344827587
+    },
+    {
+      "tick": 80,
+      "llmRate": 0.6035353535353535
+    },
+    {
+      "tick": 90,
+      "llmRate": 0.547085201793722
+    },
+    {
+      "tick": 100,
+      "llmRate": 0.5020161290322581
+    },
+    {
+      "tick": 110,
+      "llmRate": 0.47619047619047616
+    },
+    {
+      "tick": 120,
+      "llmRate": 0.44966442953020136
+    },
+    {
+      "tick": 130,
+      "llmRate": 0.42879256965944273
+    },
+    {
+      "tick": 140,
+      "llmRate": 0.41235632183908044
+    },
+    {
+      "tick": 150,
+      "llmRate": 0.39812332439678283
+    },
+    {
+      "tick": 160,
+      "llmRate": 0.3869346733668342
+    },
+    {
+      "tick": 170,
+      "llmRate": 0.375886524822695
+    },
+    {
+      "tick": 180,
+      "llmRate": 0.36495535714285715
+    },
+    {
+      "tick": 190,
+      "llmRate": 0.3498942917547569
+    },
+    {
+      "tick": 200,
+      "llmRate": 0.33232931726907633
+    }
+  ],
+  "evolvedAffordances": [
+    {
+      "tick": 50,
+      "name": "forage",
+      "description": "Forage for wild food"
+    },
+    {
+      "tick": 100,
+      "name": "brew_remedy",
+      "description": "Brew healing remedy (spirit-created)"
+    },
+    {
+      "tick": 100,
+      "name": "build_shelter",
+      "description": "Build shelter (spirit-created)"
+    }
+  ],
+  "mutations": [],
+  "finalSnapshot": {
+    "tick": 200,
+    "timestamp": 1774662859806,
+    "agents": [
+      {
+        "name": "Aldric",
+        "role": "blacksmith",
+        "room": "Forge",
+        "treeSize": 54,
+        "compiledBranches": 4,
+        "llmCallsTotal": 55,
+        "policyCallsTotal": 143,
+        "skillCount": 3,
+        "memoryBranchCount": 4
+      },
+      {
+        "name": "Greta",
+        "role": "innkeeper",
+        "room": "Market",
+        "treeSize": 66,
+        "compiledBranches": 8,
+        "llmCallsTotal": 37,
+        "policyCallsTotal": 163,
+        "skillCount": 3,
+        "memoryBranchCount": 1
+      },
+      {
+        "name": "Brother Caius",
+        "role": "monk healer",
+        "room": "Temple",
+        "treeSize": 45,
+        "compiledBranches": 5,
+        "llmCallsTotal": 149,
+        "policyCallsTotal": 50,
+        "skillCount": 3,
+        "memoryBranchCount": 1
+      },
+      {
+        "name": "Mira",
+        "role": "farmer",
+        "room": "Farm",
+        "treeSize": 74,
+        "compiledBranches": 8,
+        "llmCallsTotal": 62,
+        "policyCallsTotal": 137,
+        "skillCount": 3,
+        "memoryBranchCount": 4
+      },
+      {
+        "name": "Dex",
+        "role": "merchant thief",
+        "room": "Market",
+        "treeSize": 57,
+        "compiledBranches": 5,
+        "llmCallsTotal": 28,
+        "policyCallsTotal": 172,
+        "skillCount": 3,
+        "memoryBranchCount": 3
+      }
+    ],
+    "worldStats": {
+      "rooms": 6,
+      "entities": 25,
+      "affordances": 10,
+      "components": 4,
+      "systems": 0,
+      "skills": 142
+    }
+  }
+}
