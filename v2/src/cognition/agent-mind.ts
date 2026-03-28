@@ -29,6 +29,7 @@ import { ensureOfficeDeviceSandboxDir } from "../office-tools/sandbox";
 import { recordPolicyAction } from "./policy-metrics";
 import { captureLLMDecision } from "./bt-compiler";
 import { trackGoalAction, formatAspirationsForContext } from "./goal-learning";
+import { formatSkillsForContext } from "./skill-registry";
 import { chronicle } from "./simulation-chronicle";
 
 const model = agentModel;
@@ -686,7 +687,9 @@ ${formatScheduleForContext(world, eid)}
 
 ${formatInsightsForContext(world, eid)}
 
-${formatAspirationsForContext(eid)}`;
+${formatAspirationsForContext(eid)}
+
+${formatSkillsForContext(eid)}`;
 }
 
 export async function agentThink(world: World, eid: number): Promise<AgentAction> {

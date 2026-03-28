@@ -25,7 +25,8 @@ import {
   validateBehaviorNode,
   clearPolicyEvalHistory,
 } from "./behavior-policy";
-import { compileSequenceToSkill, hasSkill, registerSkill } from "./skill-registry";
+import { compileSequenceToSkill, hasSkill, registerSkill, composeSkills, listSkills } from "./skill-registry";
+import { chronicle } from "./simulation-chronicle";
 import { getRoomForEntity } from "../ecs/location";
 
 // =============================================================================
@@ -161,8 +162,20 @@ export function onGoalCompleted(world: World, agentEid: number, goalEid: number)
   // when similar conditions arise
   insertGoalSkillBranch(world, agentEid, goalDesc, goalKind, skillName);
 
-  const agentName = Name.value[agentEid] || agentEid;
+  const agentName = String(Name.value[agentEid] || agentEid);
   console.log(`[GoalLearning] ${agentName} learned skill "${skillName}" from completing: "${goalDesc}" (${meaningful.length} steps)`);
+
+  chronicle.record("goal_skill_compiled", {
+    agent: agentName,
+    goal: goalDesc,
+    skillName,
+    steps: meaningful.length,
+    actions: meaningful.map(a => a.affordance || a.type).join("→"),
+  });
+
+  // Check if this goal was achieved using existing skills as substeps.
+  // If so, create a composed higher-order skill.
+  tryComposeHigherOrderSkill(agentName, skillName, goalDesc, meaningful);
 
   // Clean up the action log for this goal
   agentLog?.delete(goalEid);
@@ -189,6 +202,69 @@ export function onGoalFailed(world: World, agentEid: number, goalEid: number): v
 
   // Clean up the action log
   goalActionLog.get(agentEid)?.delete(goalEid);
+}
+
+// =============================================================================
+// SKILL COMPOSITION — Voyager pattern: compose simple skills into complex ones
+// =============================================================================
+
+/**
+ * After compiling a new skill from a goal, check if the action sequence
+ * contains steps that match existing skills. If so, create a composed
+ * higher-order skill that references the component skills by name.
+ *
+ * Example: Goal "prepare for battle" → actions [move→Forge, forge_weapon, move→Market, haggle]
+ * If "go_to_forge" and "forge_weapon" skills exist, compose:
+ *   "prepare_for_battle" = skill:go_to_forge → skill:forge_weapon → move→Market → haggle
+ */
+function tryComposeHigherOrderSkill(
+  agentName: string,
+  newSkillName: string,
+  goalDesc: string,
+  actions: Array<{ type: string; target?: string; affordance?: string }>,
+): void {
+  const existingSkills = listSkills().filter(s =>
+    s.origin === "compiled" && s.name !== newSkillName);
+
+  if (existingSkills.length < 2) return;
+
+  // Check if any pair of existing skills covers a subsequence of actions
+  // This is a simplified composition check — looks for two skills that
+  // together describe the action sequence
+  const actionSig = actions.map(a => a.affordance || a.type).join("→");
+
+  for (const skillA of existingSkills) {
+    for (const skillB of existingSkills) {
+      if (skillA.name === skillB.name) continue;
+
+      const composedName = `composed:${skillA.name}+${skillB.name}`;
+      if (hasSkill(composedName)) continue;
+
+      // Check if skillA's description + skillB's description relates to the goal
+      const combined = `${skillA.description} then ${skillB.description}`;
+      if (goalDesc.length > 10 && combined.length > 20) {
+        // Only compose if both component skills have been used successfully
+        if (skillA.successCount > 0 && skillB.successCount > 0) {
+          const composed = composeSkills(
+            composedName,
+            `${goalDesc} (${skillA.name} → ${skillB.name})`,
+            [skillA.name, skillB.name],
+          );
+          if (composed) {
+            console.log(`[GoalLearning] ${agentName} composed: "${composedName}" = ${skillA.name} → ${skillB.name}`);
+            chronicle.record("skill_learned", {
+              agent: agentName,
+              skillName: composedName,
+              steps: 2,
+              sequence: `${skillA.name}→${skillB.name}`,
+              composed: true,
+            });
+            return; // One composition per goal completion
+          }
+        }
+      }
+    }
+  }
 }
 
 // =============================================================================

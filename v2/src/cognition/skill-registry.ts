@@ -209,6 +209,72 @@ function registerBuiltinSkills(): void {
 registerBuiltinSkills();
 
 // =============================================================================
+// SKILL CONTEXT FOR LLM — tells agents what skills they've learned
+// =============================================================================
+
+/**
+ * Format learned skills for injection into the agent's LLM prompt.
+ * This is how agents know they have capabilities beyond basic actions.
+ * The LLM can then compose these into higher-order plans.
+ */
+export function formatSkillsForContext(agentEid?: number): string {
+  const learned = [...skills.values()].filter(s => s.origin === "compiled" || s.origin === "learned");
+  if (learned.length === 0) return "";
+
+  const lines: string[] = ["SKILLS YOU'VE LEARNED (you can use these as building blocks for complex plans):"];
+  for (const s of learned.slice(0, 10)) { // Cap at 10 to not bloat prompt
+    const rate = s.attemptCount > 0 ? ` (${Math.round(s.successCount / s.attemptCount * 100)}% success)` : "";
+    lines.push(`  - ${s.name}: ${s.description}${rate}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+// =============================================================================
+// SKILL COMPOSITION — build higher-order skills from simpler ones
+// =============================================================================
+
+/**
+ * Compose two or more skills into a higher-order skill.
+ *
+ * Example: compose("get_food", ["go_to_forest", "forage"])
+ * Creates a skill that first executes go_to_forest, then forage.
+ *
+ * This is the Voyager pattern: simple verified skills compose into
+ * complex behaviors. "make_sword" = "go_to_forge" + "forge_weapon" + "quench"
+ */
+export function composeSkills(
+  name: string,
+  description: string,
+  skillNames: string[],
+): boolean {
+  if (skills.has(name)) return false;
+  if (skillNames.length < 2) return false;
+
+  // Verify all component skills exist
+  for (const sn of skillNames) {
+    if (!skills.has(sn)) return false;
+  }
+
+  // Build a sequence of skill references
+  const children: BehaviorNode[] = skillNames.map(sn => ({
+    type: "skill" as const,
+    name: sn,
+  }));
+
+  const tree: BehaviorNode = {
+    type: "sequence",
+    children,
+  };
+
+  return registerSkill({
+    name,
+    description,
+    origin: "compiled",
+    tree,
+  });
+}
+
+// =============================================================================
 // SKILL COMPILATION FROM PLANS
 // =============================================================================
 

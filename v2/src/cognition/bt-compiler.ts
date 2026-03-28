@@ -32,7 +32,7 @@ import {
   clearPolicyEvalHistory,
 } from "./behavior-policy";
 import { growMemoryBranch } from "./policy-learning";
-import { compileSequenceToSkill, hasSkill } from "./skill-registry";
+// skill compilation happens in goal-learning.ts, not here
 import { chronicle } from "./simulation-chronicle";
 
 // =============================================================================
@@ -80,14 +80,6 @@ const branchLastFired: Map<number, Map<string, number>> = new Map();
 /** Counter for unique decision IDs */
 let decisionCounter = 0;
 
-/** Multi-step action sequences for skill compilation */
-const actionSequences: Map<number, Array<{
-  action: PolicyAction;
-  affordance?: string;
-  trait?: string;
-  success: boolean;
-  timestamp: number;
-}>> = new Map();
 
 // Tuning
 const MAX_COMPILED_BRANCHES = 15;       // Max compiled branches per agent
@@ -541,82 +533,14 @@ export function getCompilationStats(agentEid: number): {
   };
 }
 
-/**
- * Track an action in the agent's sequence for potential skill compilation.
- * When 3+ consecutive successful actions form a coherent sequence,
- * compile them into a named skill.
- */
-export function trackActionForSkill(
-  agentEid: number,
-  action: PolicyAction,
-  success: boolean,
-  affordance?: string,
-  trait?: string,
-): void {
-  let seq = actionSequences.get(agentEid);
-  if (!seq) {
-    seq = [];
-    actionSequences.set(agentEid, seq);
-  }
-
-  seq.push({ action, affordance, trait, success, timestamp: Date.now() });
-
-  // Keep only last 10 actions
-  if (seq.length > 10) seq.shift();
-
-  // If the last action failed, reset the successful streak
-  if (!success) return;
-
-  // Find the longest recent streak of consecutive successes
-  let streakStart = seq.length - 1;
-  while (streakStart > 0 && seq[streakStart - 1].success) {
-    streakStart--;
-  }
-
-  const streak = seq.slice(streakStart);
-  if (streak.length < 2) return; // Need at least 2 steps
-
-  // Check if this sequence has variety (not just repeating the same action)
-  // move+interact counts as varied (it's a "go there and do it" plan)
-  const types = new Set(streak.map(s => s.action.type));
-  const affordances = new Set(streak.filter(s => s.affordance).map(s => s.affordance));
-  const hasVariety = types.size >= 2 || affordances.size >= 2;
-  if (!hasVariety) return;
-
-  // Generate a skill name from the sequence
-  const sig = streak.map(s => s.affordance || s.action.type).join("→");
-  const skillName = `learned:${sig}`.slice(0, 60);
-
-  if (hasSkill(skillName)) return;
-
-  const compiled = compileSequenceToSkill(
-    skillName,
-    `Learned sequence: ${sig}`,
-    streak.map(s => ({
-      type: s.action.type,
-      target: s.action.target,
-      content: s.action.content,
-      affordance: s.affordance,
-      trait: s.trait,
-    })),
-  );
-
-  if (compiled) {
-    console.log(`[BT-Compiler] Agent ${agentEid} learned skill: "${skillName}" (${streak.length} steps)`);
-    chronicle.record("skill_learned", {
-      agent: agentEid,
-      skillName,
-      steps: streak.length,
-      sequence: sig,
-    });
-  }
-}
+// trackActionForSkill removed — arbitrary sequence compilation produced noise.
+// Skill compilation now happens ONLY through goal-learning.ts (onGoalCompleted)
+// where skills are tied to intentional plans that achieved verified goals.
 
 /** Reset all compiler state (for tests) */
 export function resetCompilerState(): void {
   pendingDecisions.clear();
   compiledSignatures.clear();
   branchLastFired.clear();
-  actionSequences.clear();
   decisionCounter = 0;
 }

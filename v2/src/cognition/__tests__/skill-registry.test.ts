@@ -19,7 +19,7 @@ import {
   getSkillSuccessRate,
   resetSkillRegistry,
 } from "../skill-registry";
-import { trackActionForSkill, resetCompilerState } from "../bt-compiler";
+import { resetCompilerState } from "../bt-compiler";
 import { resetLearningState } from "../policy-learning";
 
 function makeWorld() {
@@ -246,17 +246,6 @@ describe("Sequence-to-Skill Compilation", () => {
     expect(validateBehaviorNode(skill!.tree).ok).toBe(true);
   });
 
-  test("trackActionForSkill compiles after 3+ varied successes", () => {
-    const agentEid = 42;
-
-    // Simulate a 3-step sequence: move, interact, interact (different types)
-    trackActionForSkill(agentEid, { type: "move", target: "Forge" }, true);
-    trackActionForSkill(agentEid, { type: "interact", target: "Anvil", content: "forge" }, true, "forge_weapon");
-    trackActionForSkill(agentEid, { type: "interact", target: "Bucket", content: "quench" }, true, "quench");
-
-    // Should have compiled a skill from this sequence
-    const allSkills = listSkills();
-    const learned = allSkills.filter(s => s.origin === "compiled");
-    expect(learned.length).toBeGreaterThanOrEqual(1);
-  });
+  // trackActionForSkill removed — skills now only compile from goal completion
+  // See goal-learning.ts onGoalCompleted()
 });

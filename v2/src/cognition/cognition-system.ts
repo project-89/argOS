@@ -49,7 +49,7 @@ import {
 } from "../spirits/consistency-spirit";
 import { recordFailedInteraction } from "../spirits/world-crafter-spirit";
 import { recordOutcome } from "./policy-learning";
-import { resolveDecision, trackActionForSkill } from "./bt-compiler";
+import { resolveDecision } from "./bt-compiler";
 import { chronicle } from "./simulation-chronicle";
 import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "./procedural-skills";
 import { compileCompletedPlanToProceduralMacro } from "./plan-compiler";
@@ -1931,7 +1931,6 @@ export function executeActions(
 
           // Compile LLM speak decision into BT branch
           resolveDecision(world, eid, true);
-          trackActionForSkill(eid, { type: "speak", content: validatedAction.content }, true);
 
           // Success feedback for cognition/harness scoring.
           queueStimulus({
@@ -2291,9 +2290,6 @@ export function executeActions(
               });
               // Compile LLM decision into BT branch if this was an LLM-originated action
               resolveDecision(world, eid, true);
-              // Track for multi-step skill compilation
-              trackActionForSkill(eid, { type: "interact", target: targetName, content: affordanceName },
-                true, affordanceName);
 
             // Broadcast visual to others in room - they can see the interaction!
             if (roomEid !== undefined) {
@@ -2478,7 +2474,6 @@ export function executeActions(
 
                 // Compile LLM move decision into BT branch
                 resolveDecision(world, eid, true);
-                trackActionForSkill(eid, { type: "move", target: destName }, true);
 
                 // Notify agent of their plan (cognitive feedback)
                 queueStimulus({
