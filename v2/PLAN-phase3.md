@@ -110,6 +110,101 @@ createSimulation("medieval port city with a corrupt governor and a pirate threat
 
 **Success criteria:** A single seed phrase produces a world with 5+ agents, 5+ rooms, 10+ affordances, relationships, aspirations, and initial tensions. Agents begin acting autonomously within 5 ticks.
 
+## Critical Integration Points (for implementation)
+
+### Agent Cognition Chain (`src/cognition/agent-mind.ts` → `agentThink()`)
+The decision priority is:
+1. Procedural skill reflex (line ~716)
+2. Failure recovery (line ~728)
+3. Speech reply (line ~746)
+4. Contract-driven actions (line ~753)
+5. Plan execution (line ~770)
+6. **Behavior tree evaluation** (line ~782) — `evaluateBehaviorPolicy()`
+7. Contract fallback (line ~803)
+8. **← INSERT autonomous goal generation HERE (line ~812)**
+9. LLM one-shot action selection (line ~834)
+
+The insertion point for 3.1 is between "BT returns llm_fallback" and "call LLM for one-shot action." When BT can't handle it AND no active goal exists → ask LLM to SET a goal, not just pick an action.
+
+### Goal System
+- `createIntentGoal(world, agentEid, description, priority)` — creates a Goal entity (line 325 cognition-system.ts)
+- `createMovementGoal(world, agentEid, destination, reason, priority)` — typed movement goal
+- Goals have: description, kind, paramsJson, successJson, signature, priority, status, progress, deadline
+- `GoalEvaluationSystem` checks success contracts and triggers `onGoalCompleted` → skill compilation
+- `HasGoal` relation links agent to goal entities
+
+### BT Compilation Pipeline
+- `captureLLMDecision()` in bt-compiler.ts — snapshots agent state when LLM acts
+- `resolveDecision()` — on success, compiles into BT branch (called from cognition-system.ts)
+- `onGoalCompleted()` in goal-learning.ts — compiles action sequences into named skills
+- `growMemoryBranch()` / `growAffordanceBranch()` in policy-learning.ts — reactive branch growth
+- `initializeAffordanceDiscovery()` — hooks affordance registration to auto-grow agent BTs
+- All compiled branches go through `validateBehaviorNode()` before persisting
+
+### Key Components (src/ecs/components.ts)
+- `Agent` { role, systemPrompt, active }
+- `BehaviorPolicy` { enabled, treeJson, version, lastUpdatedAt }
+- `Goal` { description, kind, paramsJson, successJson, signature, priority, status, progress, deadline, createdAt }
+- `Needs` { hunger(0=full,100=starving), energy(100=rested,0=exhausted), social, comfort }
+- `Memory` { type, content, emotionalValence, importance, timestamp }
+- `Impression` { targetName, valence }
+
+### BehaviorNode Types (src/cognition/behavior-policy.ts)
+`selector | sequence | condition | action | interact_with_trait | interact_any_affordance | weighted_random | social_visit | use_procedure | skill | llm_skill | wander | llm_fallback | noop`
+
+ConditionOps: `always | chance | need_above | need_below | in_room | not_in_room | has_goal | has_active_movement_goal | no_active_movement_goal | room_has_named | room_has_other_agents | room_is_empty | last_action_was | last_action_not | has_perception | has_memory | has_belief | impression_above | impression_below | last_n_actions_include | last_n_actions_exclude | component_above | component_below | has_component`
+
+### Affordance Effect System (src/world/effect-executor.ts)
+Effects that mutate the ECS when affordances execute:
+`modify_component | set_state | add_trait | remove_trait | destroy | spawn | emit_stimulus | run_tool | transfer | add_relation | remove_relation`
+
+### LLM Configuration (src/llm/config.ts)
+- `spiritModel` = gemini-3.1-pro-preview (policy generation, spirits)
+- `agentModel` = gemini-3-flash-preview (agent cognition)
+- Temperature 1.0 for policy generation (Gemini 3 docs say lower values cause loops)
+- Temperature 0.3 for agent cognition (reliable JSON)
+- No maxOutputTokens anywhere (causes truncation → silent fallback to templates)
+
+### Normalizer (src/cognition/policy-generator.ts)
+LLM JSON output must be normalized — Gemini produces 10+ format variants. The normalizer handles: `action_type→actionType`, `action→actionType`, `amount→value`, `threshold→value`, `location_is→in_room`, `memory→includes`, flattened conditions, weighted_random.children→choices, direct action types as node types, etc.
+
+### Chronicle (src/cognition/simulation-chronicle.ts)
+`chronicle.record(type, data)` — captures meaningful events. `chronicle.saveReport(path)` — markdown + JSON output. Event types: bt_compiled, skill_learned, goal_skill_compiled, llm_decision, policy_decision, action_success, action_failure, world_mutation, conversation, memory_branch, affordance_discovered, affordance_evolved, crisis_event, phase_change, snapshot.
+
+### File Locations
+- Agent cognition chain: `src/cognition/agent-mind.ts` → `agentThink()`
+- BT evaluator: `src/cognition/behavior-policy.ts` → `evaluateBehaviorPolicy()`
+- BT compiler: `src/cognition/bt-compiler.ts` → `captureLLMDecision()`, `resolveDecision()`
+- Policy generator: `src/cognition/policy-generator.ts` → `generateBehaviorPolicy()`
+- Policy learning: `src/cognition/policy-learning.ts` → `growMemoryBranch()`, `growAffordanceBranch()`
+- Goal learning: `src/cognition/goal-learning.ts` → `onGoalCompleted()`, `trackGoalAction()`
+- Skill registry: `src/cognition/skill-registry.ts` → `registerSkill()`, `composeSkills()`
+- Aspirations: `src/cognition/goal-learning.ts` → `setAspirations()`, `formatAspirationsForContext()`
+- Action execution: `src/cognition/cognition-system.ts` → `executeActions()`, `runCognitionCycle()`
+- Affordance effects: `src/world/effect-executor.ts` → `executeAffordance()`, `executeEffect()`
+- Affordance registry: `src/world/schema.ts` → `registerAffordance()`, `onAffordanceRegistered()`
+- God agent: `src/god/god-agent.ts` → `createGodTools()` (8000+ lines, 130+ tools)
+- Dual-loop runtime: `src/runtime/simulation-loop.ts` (20Hz ECS + async AI queue)
+- Dev server: `src/run-dev-server.ts`
+- Chronicle: `src/cognition/simulation-chronicle.ts`
+- Components: `src/ecs/components.ts`
+- Relations: `src/ecs/relations.ts`
+
+### Test Patterns
+- Unit tests: Jest, `npm test -- --testPathPattern="<name>"`
+- Behavioral tests: `npx tsx src/behavioral-tests/<N>-<name>.ts` (real LLM calls)
+- Long simulation: `src/behavioral-tests/50-long-simulation.ts` (200 ticks, 5 agents, chronicle)
+- Always run from `v2/` directory
+- Working directory: `/Users/parzival/workspace/oneirocom/project89/argos/v2`
+
+### 200-Tick Simulation Results (baseline)
+- LLM reduction: 84% → 33% over 200 ticks
+- Tree growth: Mira 5→74 (14.8x), Greta 5→66, Dex 5→57, Aldric 5→54, Caius 5→45
+- 665 policy decisions vs 331 LLM decisions
+- 317 conversations, 30 BT compilations, 13 memory branches
+- 3 evolved affordances (forage, brew_remedy, build_shelter)
+- Agents: blacksmith, innkeeper, monk, farmer, merchant
+
 ## Execution Order
 
 ```
