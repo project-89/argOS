@@ -1,0 +1,26 @@
+{
+  "name": "psyche-bt",
+  "version": "0.1.0",
+  "description": "Continuous learning agent architecture using behavior trees and ECS",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "chat": "npx tsx src/cli/chat.ts",
+    "eval": "npx tsx src/cli/eval.ts",
+    "benchmark": "npx tsx src/cli/benchmark.ts",
+    "paper-eval": "npx tsx src/cli/paper-eval.ts",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --no-coverage"
+  },
+  "dependencies": {
+    "@google/genai": "^1.49.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.0.0",
+    "@types/node": "^22.0.0",
+    "jest": "^29.0.0",
+    "ts-jest": "^29.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
