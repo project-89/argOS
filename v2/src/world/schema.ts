@@ -1762,8 +1762,8 @@ export function registerAffordance(def: AffordanceDefinition): void {
   // but their required traits aren't, causing silent execution failures.
   if (def.requires && Array.isArray(def.requires)) {
     for (const traitName of def.requires) {
-      if (!worldSchema.traits.has(traitName)) {
-        worldSchema.traits.add(traitName);
+      if (!worldSchema.hasTrait(traitName)) {
+        worldSchema.defineTrait(traitName);
         console.log(`[Schema] Auto-registered trait "${traitName}" (required by affordance "${def.name}")`);
       }
     }

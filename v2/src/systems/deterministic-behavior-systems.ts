@@ -257,14 +257,21 @@ export function goalPursuitSystem(world: World, ctx: SystemContext): void {
       // Legacy: parse description (format: "Go to <location>..." or "Go to <location> to...")
       const moveMatch = goalDesc.match(/Go to ([^.]+)/i);
       if (moveMatch) {
-        targetLocation = moveMatch[1].trim();
-        const forIndex = targetLocation.indexOf(" for ");
-        const toIndex = targetLocation.indexOf(" to ");
+        // goalDesc is loosely typed (GoalComp.description is untyped storage), so
+        // moveMatch resolves to `any` and the capture group needs an explicit guard
+        // before we can safely treat it as a string.
+        const rawMatch: string | undefined = moveMatch[1];
+        if (rawMatch) {
+          let parsedLocation = rawMatch.trim();
+          const forIndex = parsedLocation.indexOf(" for ");
+          const toIndex = parsedLocation.indexOf(" to ");
 
-        if (forIndex !== -1) {
-          targetLocation = targetLocation.substring(0, forIndex);
-        } else if (toIndex !== -1) {
-          targetLocation = targetLocation.substring(0, toIndex);
+          if (forIndex !== -1) {
+            parsedLocation = parsedLocation.substring(0, forIndex);
+          } else if (toIndex !== -1) {
+            parsedLocation = parsedLocation.substring(0, toIndex);
+          }
+          targetLocation = parsedLocation;
         }
       }
     }
