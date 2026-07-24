@@ -1,0 +1,26 @@
+{
+  "name": "psyche-chassis",
+  "version": "0.1.0",
+  "description": "Self-improving cognitive agent architecture — BT compilation meets rich cognition",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/cli/chat.ts",
+    "agent": "tsx src/cli/agent-cli.ts",
+    "benchmark": "tsx src/cli/agent-cli.ts --benchmark",
+    "nightly": "tsx src/cli/nightly.ts",
+    "test": "jest --runInBand",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^1.49.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.4",
+    "tsx": "^4.15.0",
+    "typescript": "^5.5.0"
+  }
+}
