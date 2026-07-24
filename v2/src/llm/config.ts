@@ -25,10 +25,17 @@ export const codeModel = google("gemini-3.1-pro-preview");
 
 /**
  * Gemini 3 Flash Preview — fast reactive model.
- * Used only for high-frequency tasks where latency matters more than depth:
- * agent cognition ticks, daemon whispers.
+ * Used for: agent cognition ticks, daemon whispers, autonomous goals.
  */
 export const flashModel = google("gemini-3-flash-preview");
+
+/**
+ * Gemini 3.1 Flash-Lite — ultra-fast, ultra-cheap rendering model.
+ * $0.25/1M input, $1.50/1M output. 2.5x faster than Flash.
+ * Used for: LIL world rendering, intent parsing, ambient narration,
+ * speech impact analysis — any high-frequency text-in/text-out task.
+ */
+export const flashLiteModel = google("gemini-3.1-flash-lite-preview");
 
 // Keep proModel as alias to codeModel — 3.1 Pro supersedes 3.0 Pro
 export const proModel = codeModel;
@@ -51,6 +58,15 @@ export const spiritModel = codeModel;
 
 /** For daemon whispers and monitoring - uses Flash */
 export const daemonModel = flashModel;
+
+/** For LIL rendering layer — world snapshots to prose, high frequency */
+export const renderModel = flashLiteModel;
+
+/** For LIL intent parsing — player input to actions, high frequency */
+export const intentModel = flashLiteModel;
+
+/** For speech impact analysis — tone/gossip detection, high frequency */
+export const speechAnalysisModel = flashLiteModel;
 
 /** For narrative generation - uses 3.1 Pro */
 export const narrativeModel = codeModel;
@@ -88,6 +104,10 @@ export const THINKING_LEVELS = {
   DAEMON: 'low' as const,
   /** For spirit analysis */
   SPIRIT: 'high' as const,
+  /** For LIL rendering (speed is king) */
+  RENDER: 'low' as const,
+  /** For intent parsing (speed + accuracy) */
+  INTENT: 'low' as const,
 } as const;
 
 // =============================================================================
@@ -97,11 +117,15 @@ export const THINKING_LEVELS = {
 export const MODEL_INFO = {
   code: {
     name: "gemini-3.1-pro-preview",
-    purpose: "Primary model — planning, design, code generation, spirits, review",
+    purpose: "Primary — planning, design, code generation, spirits, review, story scaffold",
   },
   flash: {
     name: "gemini-3-flash-preview",
-    purpose: "Fast reactive — agent cognition, daemon monitoring",
+    purpose: "Reactive — agent cognition, daemon monitoring, autonomous goals",
+  },
+  flashLite: {
+    name: "gemini-3.1-flash-lite-preview",
+    purpose: "Rendering — LIL world renderer, intent parser, speech analysis, ambient narration",
   },
 } as const;
 

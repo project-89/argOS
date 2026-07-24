@@ -15,6 +15,8 @@ import { GodAgent, Name, Description, Agent, Mind, ObjectType, ObjectState, Trai
 import { AllComponents } from "../ecs/components";
 import { AllRelations } from "../ecs/relations";
 import { setAgentBehaviorPolicy, validateBehaviorNode } from "../cognition/behavior-policy";
+import { generateAspirations } from "../cognition/autonomous-goals";
+import { setAspirations } from "../cognition/goal-learning";
 import { getPolicyTemplate, inferPolicyFromRole, getAvailableTemplates, type PolicyTemplateName } from "../cognition/behavior-templates";
 import { generateBatchPolicies, type PolicyGenerationContext } from "../cognition/policy-generator";
 import { ActionRegistry, type ActionDefinition } from "../cognition/action-registry";
@@ -1417,6 +1419,14 @@ function buildTools(state: GodAgentState) {
           } else {
             console.log(`[Tool] createAgent: ${params.name} (no policy)`);
           }
+
+          // Generate LLM-based aspirations from role/description (fire and forget)
+          generateAspirations(state.world, eid).then(aspirations => {
+            if (aspirations.length > 0) {
+              setAspirations(eid, aspirations);
+              console.log(`[Tool] createAgent: ${params.name} aspirations: ${aspirations.join("; ")}`);
+            }
+          }).catch(() => {});
         } else {
           console.log(`[Tool] createAgent: ${params.name}`);
         }

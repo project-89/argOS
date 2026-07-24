@@ -596,6 +596,10 @@ Your task:
 3. Create 3-8 objects/furniture to populate the rooms (use createObject)
 4. Optionally create 1-2 custom components if the setting calls for unique mechanics (use createComponent)
 5. Optionally create 1-2 custom systems for unique world behaviors (use bakeNewSystem)
+6. If creating affordances, you MUST also create the required traits AND tag the relevant objects with those traits.
+   For example: if you create affordance "read_forbidden_text" requiring trait "forbidden_text",
+   you must ALSO create trait "forbidden_text" AND ensure the target objects have that trait in their traits list.
+   Without matching traits on objects, affordances will silently fail.
 
 Create a COMPLETE, FUNCTIONAL world. Every agent must be in a room. Objects should make the setting feel alive.
 Do NOT explain — just create everything using your tools.`;

@@ -493,6 +493,39 @@ export const ScheduledActivity = {
   interruptible: [] as boolean[],    // Can this be interrupted?
 };
 
+// ============================================================================
+// WORLD CLOCK & EVENTS (Phase 3.2)
+// ============================================================================
+
+/**
+ * World clock — attached to a single "clock" entity.
+ * Systems advance the tick; period cycles: morning → midday → evening → night.
+ * Agents and BTs read period to shape behavior (work in morning, socialize in evening).
+ */
+export const WorldClock = {
+  period: [] as string[],            // "morning" | "midday" | "evening" | "night"
+  tick: [] as number[],              // Current tick within the period
+  ticksPerPeriod: [] as number[],    // How many ticks each period lasts
+  day: [] as number[],               // Current simulation day (increments after night)
+  totalTicks: [] as number[],        // Total ticks elapsed
+};
+
+/**
+ * World event — attached to event entities that the God AI or designers create.
+ * Active events override or bias agent behavior (festival → social, storm → shelter).
+ * Events have a duration; systems or the God AI remove them when expired.
+ */
+export const WorldEvent = {
+  name: [] as string[],              // "Harvest Festival", "Thunderstorm", "Plague"
+  eventType: [] as string[],         // "festival" | "weather" | "crisis" | "ceremony" | "market" | "custom"
+  description: [] as string[],       // What's happening (injected into agent context)
+  priority: [] as number[],          // 0-100, higher overrides lower
+  startTick: [] as number[],         // When the event started
+  duration: [] as number[],          // How many ticks it lasts (0 = permanent until removed)
+  affectsGoals: [] as string[],      // JSON: goal biases, e.g. {"social": 2, "survive": -1}
+  location: [] as string[],          // Where it's happening (room name, or "" for global)
+};
+
 /** Reflection state - tracks when agent should reflect */
 export const ReflectionState = {
   lastReflection: [] as number[],    // Timestamp of last reflection
@@ -500,6 +533,29 @@ export const ReflectionState = {
   reflectionThreshold: [] as number[], // Threshold to trigger reflection (default 100)
   reflectionCount: [] as number[],   // Total reflections performed
   insights: [] as string[],          // JSON array of recent insights
+};
+
+// ============================================================================
+// NARRATIVE LOGIC ENGINE (Phase 3.5 — LSE NLE)
+// ============================================================================
+
+/**
+ * Story Scaffold — attached to a single world entity.
+ * The NLE's narrative plan: tensions, dramatic beats, NPC roles.
+ * Generated at genesis, updated by the NarrativeDirector.
+ * All fields are JSON strings for ECS SoA compatibility.
+ */
+export const StoryScaffold = {
+  /** JSON: Array of narrative tensions, each with id, description, status, beats */
+  tensions: [] as string[],
+  /** JSON: NPC eid → narrative role mapping (protagonist, antagonist, catalyst, witness, ally) */
+  npcRoles: [] as string[],
+  /** Current narrative act: "setup" | "escalation" | "crisis" | "resolution" */
+  currentAct: [] as string[],
+  /** JSON: Log of narrative adaptations made by the director */
+  adaptations: [] as string[],
+  /** Seed phrase that generated this scaffold */
+  seed: [] as string[],
 };
 
 /** Active procedural execution state for an agent (multi-step habits/macros). */

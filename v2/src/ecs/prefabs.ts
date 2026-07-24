@@ -15,6 +15,8 @@ import {
   setDynamicComponentValue,
   createDynamicComponent,
 } from "./dynamic-components";
+import { setAspirations } from "../cognition/goal-learning";
+import { generateDeterministicAspirations } from "../cognition/autonomous-goals";
 
 let AgentPrefab: number;
 let RoomPrefab: number;
@@ -223,6 +225,10 @@ export function createAgentEntity(
   if (config.roomId !== undefined) {
     setLocatedIn(world, eid, config.roomId);
   }
+
+  // Seed aspirations from role (deterministic, no LLM needed)
+  const aspirations = generateDeterministicAspirations(config.role);
+  setAspirations(eid, aspirations);
 
   return eid;
 }
