@@ -1,9 +1,35 @@
 .env
 node_modules
-dist 
+dist
 .DS_Store
 logs
 devLogs
 ./devLogs/**/* */
 feedback
 simulations
+
+# Local Claude Code config (already ignored by v2/.gitignore)
+.claude/
+
+# One-off scratch/debug scripts (not part of the test suite)
+/v2/argos-test.cjs
+/v2/behavior-test.ts
+
+# psyche-chassis swarm task scratch artifacts (throwaway agent work-products
+# left at the top level of psyche-bt/psyche-chassis/ — scoped narrowly so
+# src/**, soul/**, context/**, content/**, and project config files still
+# get tracked)
+/psyche-bt/psyche-chassis/binary_search.js
+/psyche-bt/psyche-chassis/palindrome_test.js
+/psyche-bt/psyche-chassis/_swarm_tmp.js
+/psyche-bt/psyche-chassis/lru_cache.js
+/psyche-bt/psyche-chassis/lru.js
+/psyche-bt/psyche-chassis/fibonacci.js
+/psyche-bt/psyche-chassis/mergeSort.js
+/psyche-bt/psyche-chassis/data.json
+/psyche-bt/psyche-chassis/dinner_party_plan.txt
+/psyche-bt/psyche-chassis/trip_plan.txt
+/psyche-bt/psyche-chassis/emergency_plan.txt
+/psyche-bt/psyche-chassis/report.txt
+/psyche-bt/psyche-chassis/design_wireframes.md
+/psyche-bt/psyche-chassis/tech_stack_decision.md
