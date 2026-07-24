@@ -1,0 +1,16 @@
+{
+  "raw": {
+    "type": "action",
+    "action": {
+      "type": "fly_to_moon"
+    }
+  },
+  "normalized": {
+    "type": "action",
+    "action": {
+      "type": "fly_to_moon"
+    }
+  },
+  "error": "unsupported action.type: fly_to_moon",
+  "rawError": "unsupported action.type: fly_to_moon"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Intoxication",
+  "description": "How drunk an agent is",
+  "properties": {
+    "level": "number"
+  }
+}

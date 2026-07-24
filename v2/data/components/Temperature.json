@@ -1,0 +1,8 @@
+{
+  "name": "Temperature",
+  "description": "Represents the physical temperature of an object or agent.",
+  "properties": {
+    "maxHeat": "number",
+    "heat": "number"
+  }
+}

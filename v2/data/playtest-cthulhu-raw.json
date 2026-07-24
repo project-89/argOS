@@ -1,0 +1,206 @@
+{
+  "seed": "A fog-shrouded 1920s New England coastal town called Innsmouth Cove. Professor Aldric Marsh has vanished from Miskatonic University after researching forbidden texts in the restricted archives. His study is locked from the inside. Strange lights pulse over the harbor at night. The local fishermen have become secretive — they won't speak about what their nets have been pulling from the deep. An ancient stone church on the cliff has been holding midnight services again after decades of silence. Something very old and very wrong stirs beneath the waves. The town reeks of salt and decay. Create a Sanity component (0=mad, 100=stable) for all agents and the player. Create an OccultKnowledge component (dangerous to accumulate — the more you know, the faster Sanity decays). Create investigation affordances: investigate_clue, read_forbidden_text (costs Sanity), interrogate_witness. Create a system that decays Sanity when OccultKnowledge exceeds 30.",
+  "playerName": "Detective Crane",
+  "playerRole": "private investigator from Boston, hired by the university to find the missing professor",
+  "scaffold": {
+    "tensions": [
+      {
+        "id": "the_marsh_disappearance",
+        "description": "The investigation into Professor Marsh's locked study and his sudden disappearance from Miskatonic University, which links the academic world to the horrors of Innsmouth Harbor.",
+        "status": "active",
+        "beats": [
+          {
+            "id": "the_ciphered_ledger",
+            "description": "Dr. Armitage discovers a missing ledger in the Restricted Archives that contains Professor Marsh’s last known coordinates—the Ancient Stone Church.",
+            "act": "setup",
+            "status": "pending",
+            "triggerCondition": "Player uses 'investigate_clue' in the Miskatonic Restricted Archives.",
+            "npcActions": [
+              "Dr. Armitage nervously approaches the player to share his fears about 'pre-classical syntax' found in Marsh's notes."
+            ]
+          },
+          {
+            "id": "the_harbor_sighting",
+            "description": "Silas is caught disposing of academic papers near the harbor; they are soaked in seawater and covered in the same 'clicking' notations Armitage is studying.",
+            "act": "escalation",
+            "status": "pending",
+            "triggerCondition": "Player interrogates Silas after witnessing 'strange lights' over the harbor.",
+            "npcActions": [
+              "Silas attempts to use 'breath-binding' techniques to ignore questions, staring with unblinking eyes."
+            ]
+          },
+          {
+            "id": "the_study_breach",
+            "description": "The player gains entry to Marsh's locked study, only to find the room is filled with several inches of seawater and the Professor's 'monograph' has been rewritten in a language that causes Sanity loss.",
+            "act": "crisis",
+            "status": "pending",
+            "triggerCondition": "Player uses 'read_forbidden_text' on the papers found in Professor Marsh's Study.",
+            "npcActions": [
+              "Father Dagon appears outside the study window, despite it being high above the ground, watching the player's reaction."
+            ]
+          },
+          {
+            "id": "the_final_lecture",
+            "description": "The truth is revealed: Marsh didn't vanish; he was the first 'Sacrament of the Tides' recipient, and his remains are being used by Father Dagon to call the Void-Fin.",
+            "act": "resolution",
+            "status": "pending",
+            "triggerCondition": "OccultKnowledge exceeds 50 and the player reaches the Ancient Stone Church at midnight.",
+            "npcActions": [
+              "Father Dagon attempts to recruit the player into his circle of thirteen."
+            ]
+          }
+        ],
+        "involvedNpcs": [
+          "Dr. Armitage",
+          "Silas",
+          "Father Dagon"
+        ]
+      },
+      {
+        "id": "the_tithe_of_the_deep",
+        "description": "The conflict between the town's survival through fishing and the spiritual price demanded by the Ancient Stone Church.",
+        "status": "active",
+        "beats": [
+          {
+            "id": "the_silver_haul",
+            "description": "Silas brings in a massive haul of strange, iridescent fish, but the 'silver' he is paid with is actually ancient, non-human coinage.",
+            "act": "setup",
+            "status": "pending",
+            "triggerCondition": "Player visits Innsmouth Harbor during the day.",
+            "npcActions": [
+              "Silas obsessively cleans a coin that bears the mark of a lightless depth."
+            ]
+          },
+          {
+            "id": "the_missing_junior_faculty",
+            "description": "The junior faculty member Armitage was mentoring goes missing after being seen near the Church; the town smells of salt and decay more than ever.",
+            "act": "escalation",
+            "status": "pending",
+            "triggerCondition": "Player speaks to Dr. Armitage about his 'struggling junior faculty member'.",
+            "npcActions": [
+              "Dr. Armitage suffers a Sanity drop and pleads with the player to find his student."
+            ]
+          },
+          {
+            "id": "the_great_invocation",
+            "description": "Father Dagon begins the midnight service to summon the Void-Fin, requiring a sacrifice of 'secrets' from the town's residents.",
+            "act": "crisis",
+            "status": "pending",
+            "triggerCondition": "A lunar eclipse occurs in-sim (Day 7).",
+            "npcActions": [
+              "Father Dagon performs the 'Sacrament of the Tides' on a captive witness."
+            ]
+          }
+        ],
+        "involvedNpcs": [
+          "Father Dagon",
+          "Silas"
+        ]
+      }
+    ],
+    "npcRoles": [
+      {
+        "name": "Silas",
+        "eid": 11,
+        "role": "wild_card",
+        "secrets": [
+          "He found Professor Marsh’s signet ring inside the belly of a shark he caught last week.",
+          "He has already begun growing vestigial gills behind his ears."
+        ],
+        "hiddenMotivation": "He doesn't care about the cult's religion; he only wants the Void-Fin's heart, believing eating it will grant him immortality beneath the waves."
+      },
+      {
+        "name": "Dr. Armitage",
+        "eid": 12,
+        "role": "ally",
+        "secrets": [
+          "He accidentally read a page of the 'lost language of the Abyss' years ago, which is the real source of his chronic anxiety.",
+          "He knows the locked study isn't locked by a key, but by a 'linguistic seal' that only opens when the correct clicking sound is made."
+        ],
+        "hiddenMotivation": "He wants to destroy the Miskatonic Archives entirely to stop the spread of the 'pre-classical syntax' that is infecting his mind."
+      },
+      {
+        "name": "Father Dagon",
+        "eid": 13,
+        "role": "antagonist",
+        "secrets": [
+          "He was the one who 'helped' Professor Marsh vanish by pushing him into the harbor's pulsing lights.",
+          "The 'waterlogged scrolls' he seeks are actually written on the preserved skin of previous town priests."
+        ],
+        "hiddenMotivation": "He fears the 'lords of the lightless depths' are hungry and believes if he doesn't provide enough converts, he will be the next sacrifice."
+      }
+    ],
+    "currentAct": "setup",
+    "adaptations": [],
+    "seed": "A fog-shrouded 1920s New England coastal town called Innsmouth Cove. Professor Aldric Marsh has vanished from Miskatonic University after researching forbidden texts in the restricted archives. His study is locked from the inside. Strange lights pulse over the harbor at night. The local fishermen have become secretive — they won't speak about what their nets have been pulling from the deep. An ancient stone church on the cliff has been holding midnight services again after decades of silence. Something very old and very wrong stirs beneath the waves. The town reeks of salt and decay. Create a Sanity component (0=mad, 100=stable) for all agents and the player. Create an OccultKnowledge component (dangerous to accumulate — the more you know, the faster Sanity decays). Create investigation affordances: investigate_clue, read_forbidden_text (costs Sanity), interrogate_witness. Create a system that decays Sanity when OccultKnowledge exceeds 30."
+  },
+  "turns": [
+    {
+      "input": "I carefully examine the professor's study, looking for any clues about what happened.",
+      "narration": "You stand before the Heavy Oak Door, the wood marred by deep, jagged gouges that suggest something frantic tried to claw its way out—or in. The silence behind the barrier is absolute, save for the faint, rhythmic scratching of a quill that ceases the moment you approach. From within, Professor Aldric Marsh’s voice trembles, thin and strained, as he calls out, \"Go away, the pulsing lights are far too bright for company today!\" The air in the corridor grows heavy with the scent of ozone and rotting kelp, emanating from the seams of the locked frame."
+    },
+    {
+      "input": "I pick up the forbidden text and read the first few pages, steeling myself.",
+      "narration": "You gather the Scattered Notes from the floor, their edges frayed and stained with damp ink. As you decipher the frantic, sprawling handwriting, the mention of \"the deep ones\" and \"pulsing lights\" makes the air in the cramped study feel unnervingly thin. The parchment trembles slightly in your grip, cold to the touch, as if it had been submerged in salt water only moments ago."
+    },
+    {
+      "input": "I examine the locked door — how is it locked from the inside if the professor is gone?",
+      "narration": "You press your palm against the Heavy Oak Door, noting that the iron deadbolt is engaged with a force that has splintered the surrounding grain. Deep, jagged gouges mar the timber, suggesting something—or someone—clawed at the frame with frantic desperation rather than using a key. A faint, rhythmic vibration hums against your fingertips, as if the wood itself is shivering in the morning light."
+    },
+    {
+      "input": "I leave the study and head to the harbor to question the fishermen.",
+      "narration": "The salt-crusted docks of Innsmouth Harbor groan under your weight, the air thick with the suffocating stench of rotting kelp and brine. Silas stands hunched over a Strange Net, his unblinking, bulbous eyes fixed on a handful of corroded coins he scrubs with a piece of rough burlap. He barely acknowledges your approach, his fingers tracing the faint, alien sigils on the metal as a faint, bioluminescent slime smears across his weathered skin. \"The 'silver' you received is covered in a strange, bioluminescent slime,\" he mutters, his voice raspy and detached as he pointedly avoids your gaze. \"You must polish it until the mark of the lightless depth is visible, regardless of who is watching.\""
+    },
+    {
+      "input": "I approach the nearest fisherman and ask about Professor Marsh and the strange lights.",
+      "narration": "Silas wipes a thick, bioluminescent slime from his calloused palms onto his oil-slicked trousers, refusing to meet your gaze as he busies himself with the reeking, tangled ropes. He keeps his head ducked low, his bulging eyes darting toward the roiling, dark waters of the cove rather than toward you. With a raspy, dismissive grunt, he mutters, \"Professor Marsh? He was a man who spent too much time lookin' at the water and not enough time fishin' it. Haven't seen him since the tides turned. As for lights, the sea-fire gets bright this time of year. Fog plays tricks on a man's eyes, especially one not used to the salt.\""
+    },
+    {
+      "input": "I press harder — I tell him I know about the midnight services at the church.",
+      "narration": "The morning mist clings to the docks, smelling of brine and decay as Silas fumbles with the slime-slicked strands of his net. He finally looks up, his unblinking eyes wide and glassy, and leans in close enough that you can smell the metallic tang of deep-sea rot on his breath. \"The church... it's the Esoteric Order of Dagon,\" he whispers, his voice trembling with a frantic, jagged rhythm. \"They've been gatherin' at night because the tide is changin', and they're callin' to things beneath the waves. I'm findin' things in my nets, Detective—strange, heavy 'silver' that glows with a light that ain't from this world. I'm scared. I've been tryin' to polish the slime off a piece I found just to see the mark on it. The Professor, he was lookin' for the same things. He knew the lights weren't just fog; they're signals.\""
+    },
+    {
+      "input": "I head to the old church on the cliff.",
+      "narration": "The heavy oak doors of the Ancient Stone Church creak open, revealing a sanctuary choked with the suffocating scent of stagnant saltwater. Father Dagon stands before the jagged Obsidian Altar, his gaunt frame draped in tattered vestments that drip onto the cold floor. He turns slowly, his eyes reflecting the dim, gray light filtering through the cracked stained glass, and he offers a thin, mirthless smile. \"You seek answers in a place that only offers silence, yet you pry as if the very stones might speak of the Professor's final, wet descent.\""
+    },
+    {
+      "input": "I look around the church carefully, examining the altar and any symbols.",
+      "narration": "Father Dagon stands before the jagged Obsidian Altar, his gaunt fingers tracing the dark, viscous stains that mar the cold surface. He keeps his back to you, his shoulders hunched beneath tattered vestments that drip with a briny, unnatural moisture. As you approach the altar to inspect its surface, he wheels around, his eyes wide and bloodshot, and snaps, \"Do not soil your hands with the remnants of a devotion you cannot fathom, stranger.\" He steps firmly between you and the stone, his gaze flickering toward the harbor with a mixture of terror and predatory intent."
+    },
+    {
+      "input": "I ask the priest what he knows about the professor's disappearance.",
+      "narration": "Father Dagon turns slowly, his hollow eyes reflecting the dim, grey morning light filtering through the cracked stained glass. He wipes a smear of brine from his trembling hands, his expression unreadable as he offers a thin, mirthless smile. \"The tides bring many things to our shores, Detective, and the currents take just as much away,\" he rasps, his voice echoing against the cold, damp stone walls. \"Professor Marsh was a man who looked too long at the horizon; perhaps he simply followed the call of the deep. The sea does not give up its secrets easily, nor does it return what it has claimed to the lightless depths.\""
+    },
+    {
+      "input": "I confront him — I tell him I found evidence linking the church to Marsh's research.",
+      "narration": "The mid-day sun casts long, sickly shadows across the Obsidian Altar, highlighting the jagged, dark stains that mar its surface. Father Dagon grips his tattered vestments, his knuckles white against the rotting fabric as he leans into the oppressive silence of the sanctuary. He offers a thin, mirthless smile, his voice raspy and smelling of stagnant salt as he gazes toward the direction of the harbor. \"The Professor was a seeker, Detective,\" he murmurs, his tone chillingly detached. \"He came to this altar not for prayer, but for the truth that lies beneath the foam. He sought the waterlogged scrolls, the ancient skin that holds the secrets of the abyss. I merely... guided him to the water's edge when his curiosity became a burden too heavy for the land to bear. He is with the tides now, in the harbor where the lights pulse and the masters wait.\""
+    }
+  ],
+  "worldRooms": [
+    {
+      "name": "Miskatonic Restricted Archives",
+      "agents": [
+        "Dr. Armitage"
+      ]
+    },
+    {
+      "name": "Professor Marshs Study",
+      "agents": []
+    },
+    {
+      "name": "Innsmouth Harbor",
+      "agents": [
+        "Silas"
+      ]
+    },
+    {
+      "name": "Ancient Stone Church",
+      "agents": [
+        "Father Dagon",
+        "Detective Crane"
+      ]
+    }
+  ],
+  "elapsedSeconds": 200,
+  "logLines": 153
+}

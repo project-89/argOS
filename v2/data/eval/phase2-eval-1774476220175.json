@@ -1,0 +1,591 @@
+{
+  "timestamp": "2026-03-25T22:03:40.175Z",
+  "grade": "C",
+  "totalScore": 75,
+  "maxScore": 100,
+  "scores": [
+    {
+      "name": "Validation Rate",
+      "value": 10,
+      "max": 10,
+      "detail": "5/5 valid policies"
+    },
+    {
+      "name": "Uniqueness",
+      "value": 10,
+      "max": 10,
+      "detail": "5/5 structurally unique"
+    },
+    {
+      "name": "Custom Affordance Usage",
+      "value": 8,
+      "max": 10,
+      "detail": "4/5 agents use custom affordances"
+    },
+    {
+      "name": "Memory/Belief Conditions",
+      "value": 8,
+      "max": 10,
+      "detail": "4/5 agents use has_memory/has_belief/impression"
+    },
+    {
+      "name": "Tree Depth",
+      "value": 8,
+      "max": 10,
+      "detail": "4/5 have depth >= 3 (avg 2.8)"
+    },
+    {
+      "name": "Execution Diversity",
+      "value": 8,
+      "max": 10,
+      "detail": "4/5 have entropy > 1.5 (avg 1.69)"
+    },
+    {
+      "name": "No Stuck Loops",
+      "value": 2,
+      "max": 10,
+      "detail": "1/5 have zero stuck loops"
+    },
+    {
+      "name": "Move Target Validity",
+      "value": 9,
+      "max": 10,
+      "detail": "23/26 moves target valid rooms"
+    },
+    {
+      "name": "Cognition Quality",
+      "value": 9,
+      "max": 10,
+      "detail": "9/10 non-wait cognition actions"
+    },
+    {
+      "name": "Evolution Quality",
+      "value": 3,
+      "max": 10,
+      "detail": "valid=true different=false nodes=2 types=1"
+    }
+  ],
+  "summary": {
+    "passed": 38,
+    "failed": 2,
+    "total": 40
+  },
+  "results": [
+    {
+      "test": "validate:Greta",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Greta",
+      "passed": true,
+      "details": "101 nodes, depth 3"
+    },
+    {
+      "test": "diversity:Greta",
+      "passed": true,
+      "details": "9 distinct action types: rest, interact_with_trait, speak, move, observe, interact_any_affordance, think, reflect, wander"
+    },
+    {
+      "test": "validate:Aldric",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Aldric",
+      "passed": true,
+      "details": "67 nodes, depth 3"
+    },
+    {
+      "test": "diversity:Aldric",
+      "passed": true,
+      "details": "9 distinct action types: rest, interact_with_trait, move, speak, observe, interact_any_affordance, wander, social_visit, think"
+    },
+    {
+      "test": "validate:Sister Maren",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Sister Maren",
+      "passed": true,
+      "details": "58 nodes, depth 3"
+    },
+    {
+      "test": "diversity:Sister Maren",
+      "passed": true,
+      "details": "10 distinct action types: rest, interact_with_trait, reflect, move, speak, observe, interact_any_affordance, social_visit, wander, think"
+    },
+    {
+      "test": "validate:Dex",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Dex",
+      "passed": true,
+      "details": "68 nodes, depth 2"
+    },
+    {
+      "test": "diversity:Dex",
+      "passed": true,
+      "details": "7 distinct action types: interact_with_trait, social_visit, wander, interact_any_affordance, observe, think, wait"
+    },
+    {
+      "test": "validate:Captain Renn",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Captain Renn",
+      "passed": true,
+      "details": "74 nodes, depth 3"
+    },
+    {
+      "test": "diversity:Captain Renn",
+      "passed": true,
+      "details": "9 distinct action types: rest, interact_with_trait, move, speak, observe, interact_any_affordance, wander, social_visit, think"
+    },
+    {
+      "test": "exec:Greta:diversity",
+      "passed": true,
+      "details": "Shannon entropy 2.13 (want > 0.3)"
+    },
+    {
+      "test": "exec:Greta:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Greta:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "exec:Aldric:diversity",
+      "passed": true,
+      "details": "Shannon entropy 1.86 (want > 0.3)"
+    },
+    {
+      "test": "exec:Aldric:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Aldric:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "exec:Sister Maren:diversity",
+      "passed": true,
+      "details": "Shannon entropy 1.04 (want > 0.3)"
+    },
+    {
+      "test": "exec:Sister Maren:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Sister Maren:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "exec:Dex:diversity",
+      "passed": true,
+      "details": "Shannon entropy 1.46 (want > 0.3)"
+    },
+    {
+      "test": "exec:Dex:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Dex:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "exec:Captain Renn:diversity",
+      "passed": true,
+      "details": "Shannon entropy 1.96 (want > 0.3)"
+    },
+    {
+      "test": "exec:Captain Renn:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Captain Renn:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "cognition:Greta",
+      "passed": true,
+      "details": "2/2 non-wait actions"
+    },
+    {
+      "test": "cognition:Aldric",
+      "passed": true,
+      "details": "1/2 non-wait actions"
+    },
+    {
+      "test": "cognition:Sister Maren",
+      "passed": true,
+      "details": "2/2 non-wait actions"
+    },
+    {
+      "test": "cognition:Dex",
+      "passed": true,
+      "details": "2/2 non-wait actions"
+    },
+    {
+      "test": "cognition:Captain Renn",
+      "passed": true,
+      "details": "2/2 non-wait actions"
+    },
+    {
+      "test": "evolve:valid",
+      "passed": true,
+      "details": "Evolved policy is valid"
+    },
+    {
+      "test": "evolve:different",
+      "passed": false,
+      "details": "Evolution produced same policy — LLM failed to fix it"
+    },
+    {
+      "test": "evolve:richer",
+      "passed": true,
+      "details": "2 nodes (stuck had 1)"
+    },
+    {
+      "test": "evolve:no-wait-only",
+      "passed": false,
+      "details": "Still only 'wait' — evolution failed"
+    },
+    {
+      "test": "memory:caught-no-renn",
+      "passed": true,
+      "details": "Dex observes cautiously (observe)"
+    }
+  ],
+  "policyEvals": {
+    "Greta": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 101,
+      "depth": 3,
+      "actionTypes": [
+        "rest",
+        "interact_with_trait",
+        "speak",
+        "move",
+        "observe",
+        "interact_any_affordance",
+        "think",
+        "reflect",
+        "wander"
+      ],
+      "conditionTypes": [
+        "need_below",
+        "last_n_actions_exclude",
+        "need_above",
+        "has_memory",
+        "in_room",
+        "has_belief",
+        "not_in_room",
+        "no_active_movement_goal",
+        "room_has_other_agents",
+        "chance"
+      ],
+      "usesCustomAffordances": true,
+      "usesMemoryConditions": true,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"energy\",\"value\":15}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"rest\"}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":70}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"room\"}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"brawl\"}},{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Tavern Hall\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"speak\"}},{\"type\":\"action\",\"action\":{\"type\":\"speak\",\"content\":\"No fighting in my tavern! Keep it peaceful.\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_belief\",\"includes\":\"low stock\"}},{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Market Square\"}},{\"type\":\"condition\",\"op\":{\"type\":\"no_active_movement_goal\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"move\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Market Square\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_belief\",\"includes\":\"low stock\"}},{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Market Square\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"sellable\",\"affordance\":\"haggle\",\"scope\":\"room\"}]}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Tavern Hall\"}},{\"type\":\"condition\",\"op\":{\"type\":\"no_active_movement_goal\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"move\"}},{\"type\":\"action\",\"action\":{\"typ"
+    },
+    "Aldric": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 67,
+      "depth": 3,
+      "actionTypes": [
+        "rest",
+        "interact_with_trait",
+        "move",
+        "speak",
+        "observe",
+        "interact_any_affordance",
+        "wander",
+        "social_visit",
+        "think"
+      ],
+      "conditionTypes": [
+        "need_below",
+        "last_n_actions_exclude",
+        "need_above",
+        "has_memory",
+        "not_in_room",
+        "in_room",
+        "chance",
+        "room_has_other_agents"
+      ],
+      "usesCustomAffordances": true,
+      "usesMemoryConditions": true,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"energy\",\"value\":15}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"rest\"}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":70}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"room\"}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"needs weapon\"}},{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Forge\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"move\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Forge\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Forge\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"forgeable\",\"affordance\":\"forge_weapon\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Forge\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.5}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":4,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"fire\",\"affordance\":\"tend_fire\",\"scope\":\"room\"}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.4}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"speak\"}},{\"type\":\"action\",\"action\":{\"type\":\"speak\",\"content\":\"Warm greetings to you by the fire.\"}}]},{\"type\":\"weighted_random\",\"choices\":[{\"weight\":4,\"child\":{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"obse"
+    },
+    "Sister Maren": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 58,
+      "depth": 3,
+      "actionTypes": [
+        "rest",
+        "interact_with_trait",
+        "reflect",
+        "move",
+        "speak",
+        "observe",
+        "interact_any_affordance",
+        "social_visit",
+        "wander",
+        "think"
+      ],
+      "conditionTypes": [
+        "need_below",
+        "need_above",
+        "has_memory",
+        "last_n_actions_exclude",
+        "has_belief",
+        "in_room",
+        "not_in_room",
+        "room_has_other_agents",
+        "chance"
+      ],
+      "usesCustomAffordances": true,
+      "usesMemoryConditions": true,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"energy\",\"value\":15}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":70}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"accessible\"}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"brawl\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"reflect\"}},{\"type\":\"action\",\"action\":{\"type\":\"reflect\",\"content\":\"I need to keep the peace in my tavern.\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_belief\",\"includes\":\"busy night\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"serveable\",\"affordance\":\"serve_drink\",\"scope\":\"room\"}]}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Tavern Hall\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"sellable\",\"affordance\":\"haggle\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Tavern Hall\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":1,\"actionType\":\"move\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Tavern Hall\"}}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.4}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"speak\"}},{\"type\":\"action\",\"action\":{\"type\":\"speak\",\"content\":\"Welcome to the tavern! Have a seat.\"}}]},{\"type\":\"weighted_random\",\"choices\":[{\"weight\":3,\"child\":{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\""
+    },
+    "Dex": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 68,
+      "depth": 2,
+      "actionTypes": [
+        "interact_with_trait",
+        "social_visit",
+        "wander",
+        "interact_any_affordance",
+        "observe",
+        "think",
+        "wait"
+      ],
+      "conditionTypes": [
+        "need_below",
+        "room_is_empty",
+        "chance",
+        "last_action_not",
+        "room_has_other_agents"
+      ],
+      "usesCustomAffordances": false,
+      "usesMemoryConditions": false,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"energy\",\"value\":15}},{\"type\":\"interact_with_trait\",\"trait\":\"sleepable\",\"affordance\":\"sleep\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"energy\",\"value\":30}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"accessible\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"comfort\",\"value\":30}},{\"type\":\"interact_with_trait\",\"trait\":\"drinkable\",\"affordance\":\"drink\",\"scope\":\"accessible\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"social\",\"value\":30}},{\"type\":\"interact_with_trait\",\"trait\":\"talkable\",\"affordance\":\"talk\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_is_empty\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.3}},{\"type\":\"condition\",\"op\":{\"type\":\"last_action_not\",\"actionType\":\"move\"}},{\"type\":\"social_visit\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.2}},{\"type\":\"condition\",\"op\":{\"type\":\"last_action_not\",\"actionType\":\"move\"}},{\"type\":\"wander\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.3}},{\"type\":\"condition\",\"op\":{\"type\":\"last_action_not\",\"actionType\":\"interact\"}},{\"type\":\"interact_any_affordance\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.3}},{\"type\":\"condition\",\"op\":{\"type\":\"last_action_not\",\"actionType\":\"observe\"}},{\"type\":\"action\",\"action\":{\"type\":\"observe\",\"target\":\"room\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.3}},{\"type\":\"interact_with_trait\",\"trait\":\"talkable\",\"affordance\":\"talk\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.2}},{\"type\":\"condition\",\"op\":{\""
+    },
+    "Captain Renn": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 74,
+      "depth": 3,
+      "actionTypes": [
+        "rest",
+        "interact_with_trait",
+        "move",
+        "speak",
+        "observe",
+        "interact_any_affordance",
+        "wander",
+        "social_visit",
+        "think"
+      ],
+      "conditionTypes": [
+        "need_below",
+        "last_n_actions_exclude",
+        "need_above",
+        "has_memory",
+        "in_room",
+        "not_in_room",
+        "room_has_other_agents",
+        "chance"
+      ],
+      "usesCustomAffordances": true,
+      "usesMemoryConditions": true,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"energy\",\"value\":15}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"rest\"}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":70}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"room\"}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"threat\"}},{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Barracks\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"patrollable\",\"affordance\":\"patrol\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"threat\"}},{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Barracks\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"move\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Barracks\"}}]}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Forge\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"forgeable\",\"affordance\":\"forge_weapon\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Tavern Hall\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"serveable\",\"affordance\":\"serve_drink\",\"scope\":\"room\"}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.4}},{\"type\":"
+    }
+  },
+  "executionLog": {
+    "Greta": [
+      "observe",
+      "interact→Hearth Fire",
+      "reflect",
+      "observe",
+      "interact→Hearth Fire",
+      "move→Hearth Fire",
+      "observe",
+      "think",
+      "interact→Hearth Fire",
+      "observe",
+      "move→Merchant Stall",
+      "move→Temple"
+    ],
+    "Aldric": [
+      "interact→Iron Anvil",
+      "move→Barracks",
+      "move→Barracks",
+      "observe",
+      "interact→Iron Anvil",
+      "move→Tavern Hall",
+      "observe",
+      "interact→Iron Anvil",
+      "move→Temple",
+      "think",
+      "interact→Iron Anvil",
+      "observe"
+    ],
+    "Sister Maren": [
+      "move→Tavern Hall",
+      "move→Tavern Hall",
+      "interact→Stone Altar",
+      "move→Tavern Hall",
+      "move→Forge",
+      "observe",
+      "move→Tavern Hall",
+      "move→Patrol Route",
+      "move→Forge",
+      "observe",
+      "move→Tavern Hall",
+      "move→Tavern Hall"
+    ],
+    "Dex": [
+      "observe→Market Square",
+      "move→Barracks",
+      "interact→Locked Chest",
+      "move→Forge",
+      "move→Barracks",
+      "move→Tavern Hall",
+      "move→Tavern Hall",
+      "move→Tavern Hall",
+      "interact→Locked Chest",
+      "observe→Market Square",
+      "observe→Market Square",
+      "observe→Market Square"
+    ],
+    "Captain Renn": [
+      "think",
+      "interact→Patrol Route",
+      "observe",
+      "move→Market Square",
+      "move→Tavern Hall",
+      "observe",
+      "interact→Notice Board",
+      "think",
+      "move→Tavern Hall",
+      "observe",
+      "move→Tavern Hall",
+      "interact→Patrol Route"
+    ]
+  },
+  "cognitionLog": {
+    "Greta": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "observe"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "move",
+          "target": "Herb Shelf"
+        }
+      }
+    ],
+    "Aldric": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "move",
+          "target": "Market Square"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ],
+    "Sister Maren": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "move",
+          "target": "Ale Barrel"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "observe"
+        }
+      }
+    ],
+    "Dex": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "interact",
+          "target": "Locked Chest",
+          "content": "examine"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "interact",
+          "target": "Locked Chest",
+          "content": "examine"
+        }
+      }
+    ],
+    "Captain Renn": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "observe"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "move",
+          "target": "Tavern Hall"
+        }
+      }
+    ]
+  },
+  "evolvedPolicy": {
+    "valid": true,
+    "nodeCount": 2,
+    "structurallyDifferent": false,
+    "actionTypes": [
+      "wait"
+    ],
+    "json": "{\"type\":\"action\",\"action\":{\"type\":\"wait\"}}"
+  },
+  "timing": {
+    "generationMs": 107517,
+    "evolutionMs": 33519
+  }
+}

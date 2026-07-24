@@ -1,0 +1,7 @@
+{
+  "name": "OccultKnowledge",
+  "description": "Dangerous forbidden knowledge accumulated by the entity.",
+  "properties": {
+    "level": "number"
+  }
+}

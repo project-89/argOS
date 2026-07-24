@@ -1,0 +1,410 @@
+{
+  "raw": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Blacksmith Forge"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "sleep",
+            "trait": "sleepable"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "eat",
+            "trait": "edible"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "text": "villager hiding wealth"
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 3,
+              "actionType": "interact_with_trait"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "talk",
+            "trait": "talkable"
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 5,
+                  "actionType": "interact_with_trait"
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "affordance": "collect_tax",
+                "trait": "taxable"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 4,
+                  "actionType": "move"
+                }
+              },
+              {
+                "type": "action",
+                "action": {
+                  "type": "move",
+                  "target": "Town Square"
+                }
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 2,
+                  "actionType": "interact_with_trait"
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "affordance": "examine",
+                "trait": "container"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 40
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 5,
+              "actionType": "social_visit"
+            }
+          },
+          {
+            "type": "social_visit"
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1.5,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 0.5,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "normalized": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Blacksmith Forge"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "sleep",
+            "trait": "sleepable"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "eat",
+            "trait": "edible"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "text": "villager hiding wealth"
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 3,
+              "actionType": "interact_with_trait"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "talk",
+            "trait": "talkable"
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 5,
+                  "actionType": "interact_with_trait"
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "affordance": "collect_tax",
+                "trait": "taxable"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 4,
+                  "actionType": "move"
+                }
+              },
+              {
+                "type": "action",
+                "action": {
+                  "type": "move",
+                  "target": "Town Square"
+                }
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 2,
+                  "actionType": "interact_with_trait"
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "affordance": "examine",
+                "trait": "container"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 40
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 5,
+              "actionType": "social_visit"
+            }
+          },
+          {
+            "type": "social_visit"
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1.5,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 0.5,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "error": "has_memory.includes required",
+  "rawError": "has_memory.includes required"
+}

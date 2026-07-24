@@ -1,0 +1,8 @@
+{
+  "name": "Sanity",
+  "description": "Mental stability of the entity. 0 is completely mad, 100 is perfectly stable.",
+  "properties": {
+    "max": "number",
+    "current": "number"
+  }
+}

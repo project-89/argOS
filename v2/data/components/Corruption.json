@@ -1,0 +1,7 @@
+{
+  "name": "Corruption",
+  "description": "How corrupt an entity is",
+  "properties": {
+    "level": "number"
+  }
+}

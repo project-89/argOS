@@ -1,0 +1,358 @@
+{
+  "raw": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Forge"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "sleep",
+            "trait": "sleepable"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern Hall"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "eat",
+            "trait": "edible"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "query": "urgent weapon order for the guards"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "interact",
+              "content": "decorator"
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "has_belief",
+                  "query": "the forge fire is dying down"
+                }
+              },
+              {
+                "type": "action",
+                "action": {
+                  "type": "interact",
+                  "content": "decorator"
+                }
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "action",
+                "action": {
+                  "type": "interact",
+                  "content": "decorator"
+                }
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "action",
+                "action": {
+                  "type": "interact",
+                  "content": "decorator"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 30
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "interact",
+              "content": "decorator"
+            }
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 3,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "normalized": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Forge"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "sleep",
+            "trait": "sleepable"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern Hall"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "eat",
+            "trait": "edible"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "query": "urgent weapon order for the guards"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "interact",
+              "content": "decorator"
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "has_belief",
+                  "query": "the forge fire is dying down"
+                }
+              },
+              {
+                "type": "action",
+                "action": {
+                  "type": "interact",
+                  "content": "decorator"
+                }
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "action",
+                "action": {
+                  "type": "interact",
+                  "content": "decorator"
+                }
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "action",
+                "action": {
+                  "type": "interact",
+                  "content": "decorator"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 30
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "interact",
+              "content": "decorator"
+            }
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 3,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "error": "has_memory.includes required",
+  "rawError": "has_memory.includes required"
+}

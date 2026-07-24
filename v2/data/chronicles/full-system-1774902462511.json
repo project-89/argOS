@@ -1,0 +1,167 @@
+{
+  "meta": {
+    "totalTicks": 0,
+    "runtimeMs": 693662,
+    "totalEvents": 179,
+    "snapshotCount": 0
+  },
+  "eventCounts": {
+    "policy_decision": 78,
+    "bt_compiled": 29,
+    "action_success": 56,
+    "autonomous_goal": 15,
+    "llm_decision": 1
+  },
+  "keyMoments": [
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Elara learned: move:Village Temple:@The Rusty Boar Tavern (tree now 51 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Elara learned: interact:talk:Father Thomas (tree now 56 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Father Thomas learned: interact:examine:Stone Altar (tree now 60 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Elara learned: move:The Rusty Boar Tavern:@Village Temple (tree now 60 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Malcor learned: interact:collect_tax:Tax Ledger (tree now 54 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Malcor learned: move:Blacksmith Forge:@Market Square (tree now 58 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Garrick learned: interact:examine:Heavy Anvil (tree now 62 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Garrick learned: move:Village Temple:@Blacksmith Forge (tree now 66 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Elara learned: move:Market Square:@The Rusty Boar Tavern (tree now 64 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Malcor learned: move:Village Temple:@Blacksmith Forge (tree now 62 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Father Thomas learned: move:Blacksmith Forge:@Village Temple (tree now 64 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Garrick learned: move:Blacksmith Forge:@Village Temple (tree now 70 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Elara learned: move:The Rusty Boar Tavern:@Market Square (tree now 68 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Father Thomas learned: move:Village Temple:@Blacksmith Forge (tree now 68 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Father Thomas learned: interact:talk:Malcor (tree now 73 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Elara learned: interact:talk:Malcor (tree now 73 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Malcor learned: interact:attack:Elara (tree now 67 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Garrick learned: interact:talk:Father Thomas (tree now 75 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Malcor learned: interact:talk:Father Thomas (tree now 72 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Garrick learned: interact:talk:Malcor (tree now 80 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Malcor learned: move:Market Square:@Village Temple (tree now 76 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Elara learned: interact:examine:Bandit Rumors (tree now 77 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Father Thomas learned: move:Market Square:@Village Temple (tree now 77 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Malcor learned: interact:examine:Heavy Anvil (tree now 80 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Father Thomas learned: move:Village Temple:@Market Square (tree now 81 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Malcor learned: interact:pray:Vial of Holy Water (tree now 84 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Garrick learned: interact:take:Pouch of Tax Coins (tree now 84 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Malcor learned: move:Village Temple:@Market Square (tree now 88 nodes)"
+    },
+    {
+      "tick": 0,
+      "type": "bt_compiled",
+      "summary": "Father Thomas learned: interact:talk:Garrick (tree now 86 nodes)"
+    }
+  ],
+  "agentGrowth": {},
+  "llmReduction": [],
+  "evolvedAffordances": [],
+  "mutations": [],
+  "finalSnapshot": null
+}

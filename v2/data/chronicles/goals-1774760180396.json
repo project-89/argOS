@@ -1,0 +1,100 @@
+{
+  "meta": {
+    "totalTicks": 50,
+    "runtimeMs": 517499,
+    "totalEvents": 241,
+    "snapshotCount": 0
+  },
+  "eventCounts": {
+    "world_seed": 1,
+    "autonomous_goal": 8,
+    "llm_decision": 70,
+    "action_success": 59,
+    "bt_compiled": 10,
+    "conversation": 16,
+    "policy_decision": 72,
+    "memory_branch": 5
+  },
+  "keyMoments": [
+    {
+      "tick": 2,
+      "type": "bt_compiled",
+      "summary": "Aldric learned: interact:forge_weapon:Iron Anvil (tree now 9 nodes)"
+    },
+    {
+      "tick": 3,
+      "type": "bt_compiled",
+      "summary": "Dex learned: interact:haggle:Merchant Stall (tree now 9 nodes)"
+    },
+    {
+      "tick": 7,
+      "type": "bt_compiled",
+      "summary": "Dex learned: speak:@Market (tree now 14 nodes)"
+    },
+    {
+      "tick": 12,
+      "type": "bt_compiled",
+      "summary": "Aldric learned: interact:forge_weapon:Iron Anvil:tired (tree now 14 nodes)"
+    },
+    {
+      "tick": 12,
+      "type": "memory_branch",
+      "summary": "Aldric grew memory branch for \"friend\""
+    },
+    {
+      "tick": 12,
+      "type": "memory_branch",
+      "summary": "Aldric grew memory branch for \"hunger\""
+    },
+    {
+      "tick": 12,
+      "type": "memory_branch",
+      "summary": "Aldric grew memory branch for \"exhaustion\""
+    },
+    {
+      "tick": 14,
+      "type": "bt_compiled",
+      "summary": "Greta learned: interact:eat:Roast Mutton (tree now 9 nodes)"
+    },
+    {
+      "tick": 14,
+      "type": "memory_branch",
+      "summary": "Greta grew memory branch for \"hunger\""
+    },
+    {
+      "tick": 16,
+      "type": "bt_compiled",
+      "summary": "Greta learned: move:Market:@Tavern (tree now 17 nodes)"
+    },
+    {
+      "tick": 18,
+      "type": "bt_compiled",
+      "summary": "Dex learned: interact:haggle:Bread Loaf (tree now 18 nodes)"
+    },
+    {
+      "tick": 18,
+      "type": "memory_branch",
+      "summary": "Dex grew memory branch for \"opportunity\""
+    },
+    {
+      "tick": 29,
+      "type": "bt_compiled",
+      "summary": "Dex learned: move:Tavern:@Market (tree now 26 nodes)"
+    },
+    {
+      "tick": 36,
+      "type": "bt_compiled",
+      "summary": "Dex learned: interact:eat:Bread Loaf:hungry (tree now 31 nodes)"
+    },
+    {
+      "tick": 43,
+      "type": "bt_compiled",
+      "summary": "Dex learned: interact:eat:Bread Loaf (tree now 35 nodes)"
+    }
+  ],
+  "agentGrowth": {},
+  "llmReduction": [],
+  "evolvedAffordances": [],
+  "mutations": [],
+  "finalSnapshot": null
+}

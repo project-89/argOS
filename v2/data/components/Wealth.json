@@ -1,8 +1,7 @@
 {
   "name": "Wealth",
-  "description": "Currency and valuables held by an entity",
+  "description": "Tracks an entity's financial wealth in copper coins.",
   "properties": {
-    "currencyType": "string",
-    "amount": "number"
+    "coins": "number"
   }
 }

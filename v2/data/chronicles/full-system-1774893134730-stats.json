@@ -1,0 +1,20 @@
+{
+  "stats": {
+    "totalTicks": 0,
+    "godCommands": 1,
+    "spiritEvents": 7,
+    "agentActions": 211,
+    "goalsGenerated": 4,
+    "systemsCreated": 0,
+    "worldMutations": 0,
+    "moves": 266,
+    "speaks": 0,
+    "interacts": 38,
+    "btCompilations": 52,
+    "errors": 0,
+    "periodChanges": []
+  },
+  "duration": "180.0",
+  "seed": "A medieval village with a blacksmith forge, a tavern, a market square, and a temple. The village has a corrupt tax collector and rumors of bandits in the forest nearby.",
+  "agentCount": 4
+}

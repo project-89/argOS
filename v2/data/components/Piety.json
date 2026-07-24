@@ -1,0 +1,7 @@
+{
+  "name": "Piety",
+  "description": "Tracks the religious devotion of an entity.",
+  "properties": {
+    "level": "number"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-03-26T05:57:50.372Z",
+  "score": 50,
+  "maxScore": 50,
+  "treeSizeBefore": 5,
+  "treeSizeAfter": 18,
+  "compiledBranches": 1,
+  "activeBranches": [
+    "interact:forge_weapon:Iron Anvil:@Forge"
+  ],
+  "actionLog": [
+    "interact→Iron Anvil \"forge_weapon\"",
+    "think \"The rhythm of the hammer is steady today\"",
+    "interact→Iron Anvil \"forge_weapon\"",
+    "think \"The heat from the coals is biting, but t\"",
+    "interact→Iron Anvil \"forge_weapon\"",
+    "speak \"Good steel. Hard to work, but it'll hold\"",
+    "interact→Iron Anvil \"forge_weapon\"",
+    "interact→Iron Anvil \"forge_weapon\"",
+    "interact→Iron Anvil \"forge_weapon\"",
+    "interact→Iron Anvil \"forge_weapon\""
+  ],
+  "sourceLog": [
+    "llm",
+    "llm",
+    "llm",
+    "llm",
+    "llm",
+    "llm",
+    "llm",
+    "llm",
+    "llm",
+    "llm"
+  ],
+  "llmCalls": 10,
+  "policyCalls": 0,
+  "diversity": 1.1567796494470395,
+  "treeValid": true,
+  "affordanceGrew": true,
+  "treeJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"energy\",\"value\":15}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"hunger\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"interact\"}},{\"type\":\"action\",\"action\":{\"type\":\"interact\",\"target\":\"Iron Anvil\",\"content\":\"forge_weapon\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Forge\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.4}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"forge_weapon\",\"affordance\":\"forge_weapon\",\"scope\":\"room\"}],\"_compiled\":\"interact:forge_weapon:Iron Anvil:@Forge\"},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.15}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":4,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"quenchable\",\"affordance\":\"quench_steel\",\"scope\":\"room\"}]},{\"type\":\"llm_fallback\"}]}"
+}

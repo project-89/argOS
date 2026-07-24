@@ -1,0 +1,85 @@
+{
+  "meta": {
+    "totalTicks": 50,
+    "runtimeMs": 810918,
+    "totalEvents": 241,
+    "snapshotCount": 0
+  },
+  "eventCounts": {
+    "world_seed": 1,
+    "autonomous_goal": 8,
+    "llm_decision": 60,
+    "action_success": 56,
+    "bt_compiled": 8,
+    "conversation": 23,
+    "policy_decision": 81,
+    "memory_branch": 4
+  },
+  "keyMoments": [
+    {
+      "tick": 2,
+      "type": "bt_compiled",
+      "summary": "Aldric learned: interact:forge_weapon:Iron Anvil (tree now 9 nodes)"
+    },
+    {
+      "tick": 3,
+      "type": "bt_compiled",
+      "summary": "Dex learned: interact:haggle:Merchant Stall (tree now 9 nodes)"
+    },
+    {
+      "tick": 4,
+      "type": "bt_compiled",
+      "summary": "Dex learned: speak:@Market (tree now 14 nodes)"
+    },
+    {
+      "tick": 8,
+      "type": "bt_compiled",
+      "summary": "Dex learned: move:Tavern:@Market (tree now 18 nodes)"
+    },
+    {
+      "tick": 8,
+      "type": "memory_branch",
+      "summary": "Dex grew memory branch for \"friend\""
+    },
+    {
+      "tick": 8,
+      "type": "memory_branch",
+      "summary": "Dex grew memory branch for \"opportunity\""
+    },
+    {
+      "tick": 11,
+      "type": "bt_compiled",
+      "summary": "Greta learned: interact:eat:Roast Mutton (tree now 9 nodes)"
+    },
+    {
+      "tick": 11,
+      "type": "memory_branch",
+      "summary": "Greta grew memory branch for \"hunger\""
+    },
+    {
+      "tick": 13,
+      "type": "bt_compiled",
+      "summary": "Aldric learned: interact:forge_weapon:Iron Anvil:tired (tree now 14 nodes)"
+    },
+    {
+      "tick": 14,
+      "type": "bt_compiled",
+      "summary": "Greta learned: move:Market:@Tavern (tree now 17 nodes)"
+    },
+    {
+      "tick": 14,
+      "type": "memory_branch",
+      "summary": "Greta grew memory branch for \"opportunity\""
+    },
+    {
+      "tick": 36,
+      "type": "bt_compiled",
+      "summary": "Dex learned: interact:eat:Bread Loaf:hungry (tree now 31 nodes)"
+    }
+  ],
+  "agentGrowth": {},
+  "llmReduction": [],
+  "evolvedAffordances": [],
+  "mutations": [],
+  "finalSnapshot": null
+}

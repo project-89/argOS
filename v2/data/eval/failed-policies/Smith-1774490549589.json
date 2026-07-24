@@ -1,0 +1,442 @@
+{
+  "raw": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "sleep"
+            }
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "eat"
+            }
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "includes": "urgent_sword_order"
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 4,
+              "actionType": "interact_with_trait"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Forge"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "forge_weapon",
+            "trait": "forgeable"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Forge"
+            }
+          },
+          {
+            "type": "selector",
+            "children": [
+              {
+                "type": "sequence",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "last_n_actions_exclude",
+                      "n": 6,
+                      "actionType": "interact_with_trait"
+                    }
+                  },
+                  {
+                    "type": "interact_with_trait",
+                    "affordance": "forge_weapon",
+                    "trait": "forgeable"
+                  }
+                ]
+              },
+              {
+                "type": "sequence",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "last_n_actions_exclude",
+                      "n": 8,
+                      "actionType": "reflect"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "reflect"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 30
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 10,
+              "actionType": "social_visit"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern"
+            }
+          },
+          {
+            "type": "social_visit"
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 3,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "normalized": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "sleep"
+            }
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "eat"
+            }
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "includes": "urgent_sword_order"
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 4,
+              "actionType": "interact_with_trait"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Forge"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "affordance": "forge_weapon",
+            "trait": "forgeable"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Forge"
+            }
+          },
+          {
+            "type": "selector",
+            "children": [
+              {
+                "type": "sequence",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "last_n_actions_exclude",
+                      "n": 6,
+                      "actionType": "interact_with_trait"
+                    }
+                  },
+                  {
+                    "type": "interact_with_trait",
+                    "affordance": "forge_weapon",
+                    "trait": "forgeable"
+                  }
+                ]
+              },
+              {
+                "type": "sequence",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "last_n_actions_exclude",
+                      "n": 8,
+                      "actionType": "reflect"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "reflect"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 30
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 10,
+              "actionType": "social_visit"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern"
+            }
+          },
+          {
+            "type": "social_visit"
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 3,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "error": "unsupported action.type: sleep",
+  "rawError": "unsupported action.type: sleep"
+}

@@ -1,0 +1,458 @@
+{
+  "raw": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Barracks"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "sleepable",
+            "affordance": "sleep"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern Hall"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "edible",
+            "affordance": "eat"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "includes": "guard_patrol_spotted"
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "actions": [
+                "move"
+              ],
+              "n": 3
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern Hall"
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "has_belief",
+                  "includes": "easy_mark_found"
+                }
+              },
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "actions": [
+                    "interact_with_trait"
+                  ],
+                  "n": 4
+                }
+              },
+              {
+                "type": "action",
+                "action": {
+                  "type": "move",
+                  "target": "Market Square"
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "lockpickable",
+                "affordance": "pick_lock"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "has_memory",
+                  "includes": "acquired_loot"
+                }
+              },
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "actions": [
+                    "interact_with_trait"
+                  ],
+                  "n": 3
+                }
+              },
+              {
+                "type": "action",
+                "action": {
+                  "type": "move",
+                  "target": "Market Square"
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "sellable",
+                "affordance": "haggle"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 40
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "actions": [
+                "interact_with_trait"
+              ],
+              "n": 2
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern Hall"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "talkable",
+            "affordance": "talk"
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "observe"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "think"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "wander"
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "social_visit"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "normalized": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Barracks"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "sleepable",
+            "affordance": "sleep"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern Hall"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "edible",
+            "affordance": "eat"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "includes": "guard_patrol_spotted"
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "actions": [
+                "move"
+              ],
+              "n": 3
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern Hall"
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "has_belief",
+                  "includes": "easy_mark_found"
+                }
+              },
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "actions": [
+                    "interact_with_trait"
+                  ],
+                  "n": 4
+                }
+              },
+              {
+                "type": "action",
+                "action": {
+                  "type": "move",
+                  "target": "Market Square"
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "lockpickable",
+                "affordance": "pick_lock"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "has_memory",
+                  "includes": "acquired_loot"
+                }
+              },
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "actions": [
+                    "interact_with_trait"
+                  ],
+                  "n": 3
+                }
+              },
+              {
+                "type": "action",
+                "action": {
+                  "type": "move",
+                  "target": "Market Square"
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "sellable",
+                "affordance": "haggle"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 40
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "actions": [
+                "interact_with_trait"
+              ],
+              "n": 2
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "Tavern Hall"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "talkable",
+            "affordance": "talk"
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "observe"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "think"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "wander"
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "social_visit"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "error": "last_n_actions_exclude.actionType required",
+  "rawError": "last_n_actions_exclude.actionType required"
+}

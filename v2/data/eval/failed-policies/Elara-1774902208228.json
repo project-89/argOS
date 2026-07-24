@@ -1,0 +1,392 @@
+{
+  "raw": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "The Rusty Boar Tavern"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "sleepable",
+            "affordance": "sleep"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "edible",
+            "affordance": "eat"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "text": "bandits in the forest"
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "action_types": [
+                "think"
+              ],
+              "n": 5
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "think"
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "action_types": [
+                    "interact_with_trait"
+                  ],
+                  "n": 3
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "talkable",
+                "affordance": "talk"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "action_types": [
+                    "interact_with_trait"
+                  ],
+                  "n": 4
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "furniture",
+                "affordance": "examine"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "need_below",
+                  "need": "comfort",
+                  "value": 50
+                }
+              },
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "action_types": [
+                    "interact_with_trait"
+                  ],
+                  "n": 6
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "sittable",
+                "affordance": "sit"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 4,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 3,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "normalized": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "energy",
+              "value": 15
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "move",
+              "target": "The Rusty Boar Tavern"
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "sleepable",
+            "affordance": "sleep"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_above",
+              "need": "hunger",
+              "value": 70
+            }
+          },
+          {
+            "type": "interact_with_trait",
+            "trait": "edible",
+            "affordance": "eat"
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "text": "bandits in the forest"
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "action_types": [
+                "think"
+              ],
+              "n": 5
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "think"
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "action_types": [
+                    "interact_with_trait"
+                  ],
+                  "n": 3
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "talkable",
+                "affordance": "talk"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "action_types": [
+                    "interact_with_trait"
+                  ],
+                  "n": 4
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "furniture",
+                "affordance": "examine"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "need_below",
+                  "need": "comfort",
+                  "value": 50
+                }
+              },
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "action_types": [
+                    "interact_with_trait"
+                  ],
+                  "n": 6
+                }
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "sittable",
+                "affordance": "sit"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 4,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 3,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "error": "has_memory.includes required",
+  "rawError": "has_memory.includes required"
+}

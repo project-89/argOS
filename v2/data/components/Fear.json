@@ -1,0 +1,7 @@
+{
+  "name": "Fear",
+  "description": "How afraid an agent is of the bandit threat.",
+  "properties": {
+    "level": "number"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Rumor",
+  "description": "Knowledge tokens passed between agents, carrying a topic and an urgency level.",
+  "properties": {
+    "topic": "string",
+    "spreadCount": "number",
+    "urgency": "number"
+  }
+}

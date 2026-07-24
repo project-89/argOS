@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "totalTicks": 0,
+    "runtimeMs": 283545,
+    "totalEvents": 1174,
+    "snapshotCount": 0
+  },
+  "eventCounts": {
+    "policy_decision": 711,
+    "action_success": 463
+  },
+  "keyMoments": [],
+  "agentGrowth": {},
+  "llmReduction": [],
+  "evolvedAffordances": [],
+  "mutations": [],
+  "finalSnapshot": null
+}

@@ -1,0 +1,586 @@
+{
+  "timestamp": "2026-03-25T21:53:06.953Z",
+  "grade": "B",
+  "totalScore": 80,
+  "maxScore": 100,
+  "scores": [
+    {
+      "name": "Validation Rate",
+      "value": 10,
+      "max": 10,
+      "detail": "5/5 valid policies"
+    },
+    {
+      "name": "Uniqueness",
+      "value": 10,
+      "max": 10,
+      "detail": "5/5 structurally unique"
+    },
+    {
+      "name": "Custom Affordance Usage",
+      "value": 10,
+      "max": 10,
+      "detail": "5/5 agents use custom affordances"
+    },
+    {
+      "name": "Memory/Belief Conditions",
+      "value": 10,
+      "max": 10,
+      "detail": "5/5 agents use has_memory/has_belief/impression"
+    },
+    {
+      "name": "Tree Depth",
+      "value": 10,
+      "max": 10,
+      "detail": "5/5 have depth >= 3 (avg 3.2)"
+    },
+    {
+      "name": "Execution Diversity",
+      "value": 0,
+      "max": 10,
+      "detail": "0/5 have entropy > 1.5 (avg 0.00)"
+    },
+    {
+      "name": "No Stuck Loops",
+      "value": 0,
+      "max": 10,
+      "detail": "0/5 have zero stuck loops"
+    },
+    {
+      "name": "Move Target Validity",
+      "value": 10,
+      "max": 10,
+      "detail": "0/0 moves target valid rooms"
+    },
+    {
+      "name": "Cognition Quality",
+      "value": 10,
+      "max": 10,
+      "detail": "10/10 non-wait cognition actions"
+    },
+    {
+      "name": "Evolution Quality",
+      "value": 10,
+      "max": 10,
+      "detail": "valid=true different=true nodes=41 types=8"
+    }
+  ],
+  "summary": {
+    "passed": 35,
+    "failed": 5,
+    "total": 40
+  },
+  "results": [
+    {
+      "test": "validate:Greta",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Greta",
+      "passed": true,
+      "details": "56 nodes, depth 3"
+    },
+    {
+      "test": "diversity:Greta",
+      "passed": true,
+      "details": "9 distinct action types: rest, interact_with_trait, move, speak, observe, interact_any_affordance, social_visit, wander, think"
+    },
+    {
+      "test": "validate:Aldric",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Aldric",
+      "passed": true,
+      "details": "53 nodes, depth 3"
+    },
+    {
+      "test": "diversity:Aldric",
+      "passed": true,
+      "details": "9 distinct action types: rest, interact_with_trait, move, speak, observe, interact_any_affordance, wander, social_visit, think"
+    },
+    {
+      "test": "validate:Sister Maren",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Sister Maren",
+      "passed": true,
+      "details": "55 nodes, depth 3"
+    },
+    {
+      "test": "diversity:Sister Maren",
+      "passed": true,
+      "details": "8 distinct action types: rest, interact_with_trait, move, speak, observe, interact_any_affordance, wander, think"
+    },
+    {
+      "test": "validate:Dex",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Dex",
+      "passed": true,
+      "details": "55 nodes, depth 4"
+    },
+    {
+      "test": "diversity:Dex",
+      "passed": true,
+      "details": "9 distinct action types: rest, interact_with_trait, move, speak, observe, interact_any_affordance, social_visit, wander, think"
+    },
+    {
+      "test": "validate:Captain Renn",
+      "passed": true,
+      "details": "Valid behavior tree"
+    },
+    {
+      "test": "structure:Captain Renn",
+      "passed": true,
+      "details": "58 nodes, depth 3"
+    },
+    {
+      "test": "diversity:Captain Renn",
+      "passed": true,
+      "details": "9 distinct action types: rest, interact_with_trait, move, speak, observe, interact_any_affordance, social_visit, wander, think"
+    },
+    {
+      "test": "exec:Greta:diversity",
+      "passed": false,
+      "details": "Shannon entropy 0.00 (want > 0.3)"
+    },
+    {
+      "test": "exec:Greta:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Greta:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "exec:Aldric:diversity",
+      "passed": false,
+      "details": "Shannon entropy 0.00 (want > 0.3)"
+    },
+    {
+      "test": "exec:Aldric:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Aldric:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "exec:Sister Maren:diversity",
+      "passed": false,
+      "details": "Shannon entropy 0.00 (want > 0.3)"
+    },
+    {
+      "test": "exec:Sister Maren:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Sister Maren:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "exec:Dex:diversity",
+      "passed": false,
+      "details": "Shannon entropy 0.00 (want > 0.3)"
+    },
+    {
+      "test": "exec:Dex:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Dex:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "exec:Captain Renn:diversity",
+      "passed": false,
+      "details": "Shannon entropy 0.00 (want > 0.3)"
+    },
+    {
+      "test": "exec:Captain Renn:no-all-wait",
+      "passed": true,
+      "details": "Produces real actions"
+    },
+    {
+      "test": "exec:Captain Renn:fallback",
+      "passed": true,
+      "details": "LLM fallback rate 0% (want < 50%)"
+    },
+    {
+      "test": "cognition:Greta",
+      "passed": true,
+      "details": "2/2 non-wait actions"
+    },
+    {
+      "test": "cognition:Aldric",
+      "passed": true,
+      "details": "2/2 non-wait actions"
+    },
+    {
+      "test": "cognition:Sister Maren",
+      "passed": true,
+      "details": "2/2 non-wait actions"
+    },
+    {
+      "test": "cognition:Dex",
+      "passed": true,
+      "details": "2/2 non-wait actions"
+    },
+    {
+      "test": "cognition:Captain Renn",
+      "passed": true,
+      "details": "2/2 non-wait actions"
+    },
+    {
+      "test": "evolve:valid",
+      "passed": true,
+      "details": "Evolved policy is valid"
+    },
+    {
+      "test": "evolve:different",
+      "passed": true,
+      "details": "Evolved policy is structurally different from stuck policy"
+    },
+    {
+      "test": "evolve:richer",
+      "passed": true,
+      "details": "41 nodes (stuck had 1)"
+    },
+    {
+      "test": "evolve:no-wait-only",
+      "passed": true,
+      "details": "8 action types (not just wait)"
+    },
+    {
+      "test": "memory:caught-no-renn",
+      "passed": true,
+      "details": "Dex observes cautiously (observe)"
+    }
+  ],
+  "policyEvals": {
+    "Greta": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 56,
+      "depth": 3,
+      "actionTypes": [
+        "rest",
+        "interact_with_trait",
+        "move",
+        "speak",
+        "observe",
+        "interact_any_affordance",
+        "social_visit",
+        "wander",
+        "think"
+      ],
+      "conditionTypes": [
+        "need_above",
+        "has_memory",
+        "not_in_room",
+        "in_room",
+        "last_n_actions_exclude",
+        "has_belief",
+        "room_has_other_agents",
+        "chance"
+      ],
+      "usesCustomAffordances": true,
+      "usesMemoryConditions": true,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"energy\",\"value\":85}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":75}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"room\"}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"thief\"}},{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Barracks\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Barracks\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"thief\"}},{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Barracks\"}},{\"type\":\"interact_with_trait\",\"trait\":\"patrollable\",\"affordance\":\"patrol\",\"scope\":\"room\"}]}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Temple\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":4,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"sacred\",\"affordance\":\"pray\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_belief\",\"includes\":\"divine guidance\"}},{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Temple\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Temple\"}}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.35}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"speak\"}},{\"type\":\"action\",\"action\":{\"type\":\"speak\",\"content\":\"Blessings of the light be upon you.\"}}]},{\"type\":\"weighted_random\",\"choices\":[{\"weight\":4,\"child\":{\"type\":\"action\",\"action\":{\"type\":\"observe\"}}},{\"weight\":3,\"child\":{\"type\":\"interact_with_trait\",\"trait\":\"readable\",\"affordance\":\"read\",\"scope\":\"room\"}},{\"weight\":2,\"child\":{\"type"
+    },
+    "Aldric": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 53,
+      "depth": 3,
+      "actionTypes": [
+        "rest",
+        "interact_with_trait",
+        "move",
+        "speak",
+        "observe",
+        "interact_any_affordance",
+        "wander",
+        "social_visit",
+        "think"
+      ],
+      "conditionTypes": [
+        "need_above",
+        "has_memory",
+        "in_room",
+        "last_n_actions_exclude",
+        "has_belief",
+        "chance",
+        "room_has_other_agents"
+      ],
+      "usesCustomAffordances": true,
+      "usesMemoryConditions": true,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"energy\",\"value\":85}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":75}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"room\"}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"thief\"}},{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Market Square\"}},{\"type\":\"interact_with_trait\",\"trait\":\"attackable\",\"affordance\":\"attack\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"thief\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Market Square\"}}]}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Barracks\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"patrollable\",\"affordance\":\"patrol\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_belief\",\"includes\":\"duty\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.2}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Barracks\"}}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.3}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":4,\"actionType\":\"speak\"}},{\"type\":\"action\",\"action\":{\"type\":\"speak\",\"content\":\"Move along, no loitering in the area.\"}}]},{\"type\":\"weighted_random\",\"choices\":[{\"weight\":4,\"child\":{\"type\":\"action\",\"action\":{\"type\":\"observe\"}}},{\"weight\":3,\"child\":{\"type\":\"interact_any_affordance\",\"scope\":\"room\"}},{\"weight\":2,\"child\":{\"type\":\"wander\"}},{\"weight\":2,\"child\":{\"type\":\"social_visit\"}},{\"weight\":1,\"child\":{\"type\":\"action\",\"action\":{\"type\":\""
+    },
+    "Sister Maren": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 55,
+      "depth": 3,
+      "actionTypes": [
+        "rest",
+        "interact_with_trait",
+        "move",
+        "speak",
+        "observe",
+        "interact_any_affordance",
+        "wander",
+        "think"
+      ],
+      "conditionTypes": [
+        "need_above",
+        "has_memory",
+        "in_room",
+        "has_belief",
+        "last_n_actions_exclude",
+        "room_has_other_agents",
+        "chance"
+      ],
+      "usesCustomAffordances": true,
+      "usesMemoryConditions": true,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"energy\",\"value\":85}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":80}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"room\"}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"intruder\"}},{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Market Square\"}},{\"type\":\"interact_with_trait\",\"trait\":\"patrollable\",\"affordance\":\"patrol\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"intruder\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Market Square\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_belief\",\"includes\":\"weapon is damaged\"}},{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Forge\"}},{\"type\":\"interact_with_trait\",\"trait\":\"forgeable\",\"affordance\":\"forge_weapon\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_belief\",\"includes\":\"weapon is damaged\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Forge\"}}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Barracks\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":4,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"patrollable\",\"affordance\":\"patrol\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.25}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":2,\"actionType\":\"speak\"}},{\"type\":\"action\",\"action\":{\"type\":\"speak\",\"content\":\"Keep out of trouble.\"}}]},{\"type\":\"weighted_random\",\"choices\":[{\"weight\":4,\"child\":{\"type\":\"action\",\"action\":{\"type\":\"observe\"}}},{\"weight\":3,\"child\":{\"ty"
+    },
+    "Dex": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 55,
+      "depth": 4,
+      "actionTypes": [
+        "rest",
+        "interact_with_trait",
+        "move",
+        "speak",
+        "observe",
+        "interact_any_affordance",
+        "social_visit",
+        "wander",
+        "think"
+      ],
+      "conditionTypes": [
+        "need_above",
+        "has_memory",
+        "in_room",
+        "last_n_actions_exclude",
+        "not_in_room",
+        "chance",
+        "room_has_other_agents"
+      ],
+      "usesCustomAffordances": true,
+      "usesMemoryConditions": true,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"energy\",\"value\":85}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":75}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"room\"}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"weapon order\"}},{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Forge\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"forgeable\",\"affordance\":\"forge_weapon\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"weapon order\"}},{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Forge\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Forge\"}}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Forge\"}},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.4}},{\"type\":\"interact_with_trait\",\"trait\":\"forgeable\",\"affordance\":\"forge_weapon\",\"scope\":\"room\"}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.3}},{\"type\":\"interact_with_trait\",\"trait\":\"fire\",\"affordance\":\"tend_fire\",\"scope\":\"room\"}]}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.3}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":4,\"actionType\":\"speak\"}},{\"type\":\"action\",\"action\":{\"type\":\"speak\",\"content\":\"Welcome to the forge! What can I make for you?\"}}]},{\"type\":\"weighted_random\",\"choices\":[{\"weight\":3,\"child\":{\"type\":\"action\",\"action\":{\"type\":\"observe\"}}},{\"weight\":2,\"child\":{\"type\":\"interact_any_affordance\",\"scope\":\"room\"}},{\"weight\":2,\"chi"
+    },
+    "Captain Renn": {
+      "generated": true,
+      "valid": true,
+      "nodeCount": 58,
+      "depth": 3,
+      "actionTypes": [
+        "rest",
+        "interact_with_trait",
+        "move",
+        "speak",
+        "observe",
+        "interact_any_affordance",
+        "social_visit",
+        "wander",
+        "think"
+      ],
+      "conditionTypes": [
+        "need_above",
+        "has_memory",
+        "not_in_room",
+        "in_room",
+        "last_n_actions_exclude",
+        "chance",
+        "room_has_other_agents"
+      ],
+      "usesCustomAffordances": true,
+      "usesMemoryConditions": true,
+      "policyJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"energy\",\"value\":85}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":75}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"room\"}]}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"suspicious activity\"}},{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Market Square\"}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Market Square\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"suspicious activity\"}},{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Market Square\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"patrollable\",\"affordance\":\"patrol\",\"scope\":\"room\"}]}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"not_in_room\",\"roomName\":\"Barracks\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.2}},{\"type\":\"action\",\"action\":{\"type\":\"move\",\"target\":\"Barracks\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Barracks\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":4,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"patrollable\",\"affordance\":\"patrol\",\"scope\":\"room\"}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.3}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"speak\"}},{\"type\":\"action\",\"action\":{\"type\":\"speak\",\"content\":\"Stay out of trouble, citizen.\"}}]},{\"type\":\"weighted_random\",\"choices\":[{\"weight\":4,\"child\":{\"type\":\"action\",\"action\":{\"type"
+    }
+  },
+  "executionLog": {
+    "Greta": [
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest"
+    ],
+    "Aldric": [
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest"
+    ],
+    "Sister Maren": [
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest"
+    ],
+    "Dex": [
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest"
+    ],
+    "Captain Renn": [
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest",
+      "rest"
+    ]
+  },
+  "cognitionLog": {
+    "Greta": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "rest"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "rest"
+        }
+      }
+    ],
+    "Aldric": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "rest"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "rest"
+        }
+      }
+    ],
+    "Sister Maren": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "rest"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "rest"
+        }
+      }
+    ],
+    "Dex": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "rest"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "rest"
+        }
+      }
+    ],
+    "Captain Renn": [
+      {
+        "tick": 0,
+        "action": {
+          "type": "rest"
+        }
+      },
+      {
+        "tick": 1,
+        "action": {
+          "type": "rest"
+        }
+      }
+    ]
+  },
+  "evolvedPolicy": {
+    "valid": true,
+    "nodeCount": 41,
+    "structurallyDifferent": true,
+    "actionTypes": [
+      "rest",
+      "interact_with_trait",
+      "think",
+      "speak",
+      "wander",
+      "interact_any_affordance",
+      "social_visit",
+      "observe"
+    ],
+    "json": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"energy\",\"value\":85}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_above\",\"need\":\"hunger\",\"value\":75}},{\"type\":\"interact_with_trait\",\"trait\":\"edible\",\"affordance\":\"eat\",\"scope\":\"room\"}]},{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"has_memory\",\"includes\":\"lost\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":4,\"actionType\":\"think\"}},{\"type\":\"action\",\"action\":{\"type\":\"think\",\"content\":\"I must figure out where I am and find someone who can give me directions.\"}}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"in_room\",\"roomName\":\"Market Square\"}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":5,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"sellable\",\"affordance\":\"haggle\",\"scope\":\"room\"}]}]},{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"room_has_other_agents\"}},{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.4}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":3,\"actionType\":\"speak\"}},{\"type\":\"action\",\"action\":{\"type\":\"speak\",\"content\":\"Excuse me, are you familiar with this village? I seem to have lost my way.\"}}]},{\"type\":\"weighted_random\",\"choices\":[{\"weight\":4,\"child\":{\"type\":\"wander\"}},{\"weight\":3,\"child\":{\"type\":\"interact_any_affordance\",\"scope\":\"room\"}},{\"weight\":2,\"child\":{\"type\":\"social_visit\"}},{\"weight\":2,\"child\":{\"type\":\"action\",\"action\":{\"type\":\"observe\"}}},{\"weight\":1,\"child\":{\"type\":\"action\",\"action\":{\"type\":\"think\",\"content\":\"I should keep moving until things look familiar.\"}}}]}]}"
+  },
+  "timing": {
+    "generationMs": 74118,
+    "evolutionMs": 27435
+  }
+}

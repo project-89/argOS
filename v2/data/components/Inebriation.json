@@ -1,0 +1,8 @@
+{
+  "name": "Inebriation",
+  "description": "Tracks how drunk an entity is",
+  "properties": {
+    "level": "number",
+    "tolerance": "number"
+  }
+}

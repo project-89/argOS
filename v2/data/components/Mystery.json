@@ -1,0 +1,8 @@
+{
+  "name": "Mystery",
+  "description": "A component to track mysterious auras and silence.",
+  "properties": {
+    "aura": "string",
+    "silence": "number"
+  }
+}

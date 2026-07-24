@@ -1,0 +1,8 @@
+{
+  "name": "BanditThreat",
+  "description": "Tracks the level of bandit threat and rumor spread.",
+  "properties": {
+    "rumorSpread": "number",
+    "level": "number"
+  }
+}

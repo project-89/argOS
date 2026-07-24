@@ -1,0 +1,584 @@
+{
+  "raw": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "need_below",
+                  "need": "energy",
+                  "value": 15
+                }
+              },
+              {
+                "type": "selector",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "in_room",
+                      "location": "Temple"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Temple"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "sleepable",
+                "affordance": "sleep"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "need_above",
+                  "need": "hunger",
+                  "value": 70
+                }
+              },
+              {
+                "type": "selector",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "in_room",
+                      "location": "Tavern Hall"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Tavern Hall"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "edible",
+                "affordance": "eat"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "includes": "injured_person"
+            }
+          },
+          {
+            "type": "selector",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "in_room",
+                  "location": "Barracks"
+                }
+              },
+              {
+                "type": "sequence",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "last_n_actions_exclude",
+                      "n": 3,
+                      "actionType": "move"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Barracks"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 5,
+              "actionType": "reflect"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "reflect"
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 4,
+                  "actionType": "interact_with_trait"
+                }
+              },
+              {
+                "type": "selector",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "in_room",
+                      "location": "Market Square"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Market Square"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "brewable",
+                "affordance": "brew_potion"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 4,
+                  "actionType": "interact_with_trait"
+                }
+              },
+              {
+                "type": "selector",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "in_room",
+                      "location": "Temple"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Temple"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "sacred",
+                "affordance": "pray"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 30
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 6,
+              "actionType": "social_visit"
+            }
+          },
+          {
+            "type": "social_visit"
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "normalized": {
+    "type": "selector",
+    "children": [
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "need_below",
+                  "need": "energy",
+                  "value": 15
+                }
+              },
+              {
+                "type": "selector",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "in_room",
+                      "location": "Temple"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Temple"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "sleepable",
+                "affordance": "sleep"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "need_above",
+                  "need": "hunger",
+                  "value": 70
+                }
+              },
+              {
+                "type": "selector",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "in_room",
+                      "location": "Tavern Hall"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Tavern Hall"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "edible",
+                "affordance": "eat"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "has_memory",
+              "includes": "injured_person"
+            }
+          },
+          {
+            "type": "selector",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "in_room",
+                  "location": "Barracks"
+                }
+              },
+              {
+                "type": "sequence",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "last_n_actions_exclude",
+                      "n": 3,
+                      "actionType": "move"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Barracks"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 5,
+              "actionType": "reflect"
+            }
+          },
+          {
+            "type": "action",
+            "action": {
+              "type": "reflect"
+            }
+          }
+        ]
+      },
+      {
+        "type": "selector",
+        "children": [
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 4,
+                  "actionType": "interact_with_trait"
+                }
+              },
+              {
+                "type": "selector",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "in_room",
+                      "location": "Market Square"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Market Square"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "brewable",
+                "affordance": "brew_potion"
+              }
+            ]
+          },
+          {
+            "type": "sequence",
+            "children": [
+              {
+                "type": "condition",
+                "op": {
+                  "type": "last_n_actions_exclude",
+                  "n": 4,
+                  "actionType": "interact_with_trait"
+                }
+              },
+              {
+                "type": "selector",
+                "children": [
+                  {
+                    "type": "condition",
+                    "op": {
+                      "type": "in_room",
+                      "location": "Temple"
+                    }
+                  },
+                  {
+                    "type": "action",
+                    "action": {
+                      "type": "move",
+                      "target": "Temple"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "interact_with_trait",
+                "trait": "sacred",
+                "affordance": "pray"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "sequence",
+        "children": [
+          {
+            "type": "condition",
+            "op": {
+              "type": "need_below",
+              "need": "social",
+              "value": 30
+            }
+          },
+          {
+            "type": "condition",
+            "op": {
+              "type": "last_n_actions_exclude",
+              "n": 6,
+              "actionType": "social_visit"
+            }
+          },
+          {
+            "type": "social_visit"
+          }
+        ]
+      },
+      {
+        "type": "weighted_random",
+        "choices": [
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 2,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          },
+          {
+            "weight": 1,
+            "child": {
+              "type": "action",
+              "action": {
+                "type": "interact",
+                "content": "undefined"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "error": "in_room.roomName required",
+  "rawError": "in_room.roomName required"
+}

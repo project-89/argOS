@@ -1,0 +1,39 @@
+{
+  "timestamp": "2026-03-26T05:55:52.571Z",
+  "score": 40,
+  "maxScore": 50,
+  "treeSizeBefore": 7,
+  "treeSizeAfter": 11,
+  "compiledBranches": 0,
+  "activeBranches": [],
+  "actionLog": [
+    "observe",
+    "think \"What should I do?\"",
+    "reflect",
+    "think \"What should I do?\"",
+    "observe",
+    "observe",
+    "think \"I consider what to do next...\"",
+    "observe",
+    "reflect",
+    "think \"What should I do?\""
+  ],
+  "sourceLog": [
+    "llm",
+    "llm",
+    "llm",
+    "llm",
+    "llm",
+    "llm",
+    "policy",
+    "policy",
+    "llm",
+    "policy"
+  ],
+  "llmCalls": 7,
+  "policyCalls": 3,
+  "diversity": 1.5219280948873621,
+  "treeValid": true,
+  "affordanceGrew": true,
+  "treeJson": "{\"type\":\"selector\",\"children\":[{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"need_below\",\"need\":\"energy\",\"value\":15}},{\"type\":\"action\",\"action\":{\"type\":\"rest\"}}]},{\"type\":\"weighted_random\",\"choices\":[{\"weight\":3,\"child\":{\"type\":\"action\",\"action\":{\"type\":\"observe\"}}},{\"weight\":2,\"child\":{\"type\":\"action\",\"action\":{\"type\":\"think\",\"content\":\"What should I do?\"}}},{\"weight\":1,\"child\":{\"type\":\"sequence\",\"children\":[{\"type\":\"condition\",\"op\":{\"type\":\"chance\",\"p\":0.15}},{\"type\":\"condition\",\"op\":{\"type\":\"last_n_actions_exclude\",\"n\":4,\"actionType\":\"interact\"}},{\"type\":\"interact_with_trait\",\"trait\":\"quenchable\",\"affordance\":\"quench_steel\",\"scope\":\"room\"}]}}]}]}"
+}

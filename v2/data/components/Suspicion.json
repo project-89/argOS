@@ -1,0 +1,8 @@
+{
+  "name": "Suspicion",
+  "description": "Tracks how suspicious an agent is of their surroundings.",
+  "properties": {
+    "level": "number",
+    "isAlerted": "boolean"
+  }
+}

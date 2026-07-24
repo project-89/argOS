@@ -1,0 +1,8 @@
+{
+  "name": "Thirst",
+  "description": "Hydration level, 0-100, higher is more thirsty.",
+  "properties": {
+    "max": "number",
+    "current": "number"
+  }
+}
