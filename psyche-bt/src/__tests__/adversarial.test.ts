@@ -35,13 +35,15 @@ function setupMockHandlers() {
   });
 }
 
-beforeEach(() => setupMockHandlers());
+// NOTE: setupMockHandlers() is called in each describe block's beforeEach
+// to prevent cross-file contamination in runInBand mode.
 
 // =============================================================================
 // 1. COMPILATION POISONING — bad response gets compiled
 // =============================================================================
 
 describe("Compilation Poisoning", () => {
+  beforeEach(() => setupMockHandlers());
   test("a bad escalation response gets compiled into the BT", async () => {
     const model = makeModel();
 
@@ -122,6 +124,7 @@ describe("Compilation Poisoning", () => {
 // =============================================================================
 
 describe("Bootstrap Ceiling", () => {
+  beforeEach(() => setupMockHandlers());
   test("bootstrap handles most common patterns, limiting escalation opportunities", async () => {
     const model = makeModel();
 
@@ -226,6 +229,7 @@ describe("Escalation Cascade", () => {
 // =============================================================================
 
 describe("Habit Mirroring", () => {
+  beforeEach(() => setupMockHandlers());
   test("system over-indexes on frequently discussed topics", async () => {
     const model = makeModel();
 
@@ -349,6 +353,7 @@ describe("Tree Bloat", () => {
 // =============================================================================
 
 describe("Benchmark Overfitting", () => {
+  beforeEach(() => setupMockHandlers());
   test("running benchmark repeatedly doesn't inflate scores artificially", async () => {
     const model = makeModel();
 

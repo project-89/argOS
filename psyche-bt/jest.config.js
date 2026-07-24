@@ -5,4 +5,5 @@ export default {
   moduleNameMapper: { "^(\\.{1,2}/.*)\\.js$": "$1" },
   transform: { "^.+\\.ts$": ["ts-jest", { useESM: true }] },
   testMatch: ["**/src/__tests__/**/*.test.ts"],
+  testPathIgnorePatterns: ["/node_modules/", "/psyche-chassis/"],
 };

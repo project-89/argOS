@@ -64,69 +64,87 @@ export interface ExecutionTrace {
 }
 
 // =============================================================================
-// TRACE RECORDING — accumulate steps during a conversation
+// TRACE CONTEXT — per-instance state for parallel execution
 // =============================================================================
 
-let activeTrace: Partial<ExecutionTrace> | null = null;
-let traceSteps: TracedStep[] = [];
+/**
+ * Per-instance trace state. Each swarm instance gets its own context,
+ * enabling true parallel plan compilation.
+ */
+export interface TraceContext {
+  activeTrace: Partial<ExecutionTrace> | null;
+  traceSteps: TracedStep[];
+}
+
+/** Create a fresh trace context for a swarm instance. */
+export function createTraceContext(): TraceContext {
+  return { activeTrace: null, traceSteps: [] };
+}
+
+// Default context for backward compat (chat CLI, eval, etc.)
+const defaultTraceContext: TraceContext = { activeTrace: null, traceSteps: [] };
+
+// =============================================================================
+// TRACE RECORDING — accumulate steps during a conversation
+// =============================================================================
 
 /**
  * Start recording a new execution trace.
  * Called when an escalation begins a multi-step response.
  */
-export function beginTrace(goal: string, reasoning: string, topics: string[], emotionalState: string): void {
-  activeTrace = { goal, reasoning, topics, emotionalState };
-  traceSteps = [];
+export function beginTrace(goal: string, reasoning: string, topics: string[], emotionalState: string, ctx: TraceContext = defaultTraceContext): void {
+  ctx.activeTrace = { goal, reasoning, topics, emotionalState };
+  ctx.traceSteps = [];
 }
 
 /**
  * Record a tool call step in the active trace.
  * Called each time a tool executes during the traced interaction.
  */
-export function recordStep(step: TracedStep): void {
-  if (!activeTrace) return;
-  traceSteps.push(step);
+export function recordStep(step: TracedStep, ctx: TraceContext = defaultTraceContext): void {
+  if (!ctx.activeTrace) return;
+  ctx.traceSteps.push(step);
 }
 
 /**
  * Complete the active trace with a success/failure signal.
  * Returns the full trace for compilation.
  */
-export function completeTrace(success: boolean, userFollowUp?: string): ExecutionTrace | null {
-  if (!activeTrace || traceSteps.length === 0) {
-    activeTrace = null;
-    traceSteps = [];
+export function completeTrace(success: boolean, userFollowUp?: string, ctx: TraceContext = defaultTraceContext): ExecutionTrace | null {
+  if (!ctx.activeTrace || ctx.traceSteps.length === 0) {
+    ctx.activeTrace = null;
+    ctx.traceSteps = [];
     return null;
   }
 
   const trace: ExecutionTrace = {
-    goal: activeTrace.goal || "unknown goal",
-    topics: activeTrace.topics || [],
-    emotionalState: activeTrace.emotionalState || "neutral",
-    reasoning: activeTrace.reasoning || "",
-    steps: [...traceSteps],
+    goal: ctx.activeTrace.goal || "unknown goal",
+    topics: ctx.activeTrace.topics || [],
+    emotionalState: ctx.activeTrace.emotionalState || "neutral",
+    reasoning: ctx.activeTrace.reasoning || "",
+    steps: [...ctx.traceSteps],
     success,
     userFollowUp,
   };
 
-  activeTrace = null;
-  traceSteps = [];
+  ctx.activeTrace = null;
+  ctx.traceSteps = [];
   return trace;
 }
 
 /**
  * Discard the active trace without compiling.
  */
-export function discardTrace(): void {
-  activeTrace = null;
-  traceSteps = [];
+export function discardTrace(ctx: TraceContext = defaultTraceContext): void {
+  ctx.activeTrace = null;
+  ctx.traceSteps = [];
 }
 
 /**
  * Check if there's an active trace being recorded.
  */
-export function hasActiveTrace(): boolean {
-  return activeTrace !== null && traceSteps.length > 0;
+export function hasActiveTrace(ctx: TraceContext = defaultTraceContext): boolean {
+  return ctx.activeTrace !== null && ctx.traceSteps.length > 0;
 }
 
 // =============================================================================

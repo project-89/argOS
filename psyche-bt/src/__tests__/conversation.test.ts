@@ -2,6 +2,7 @@ import { createPersonModel, setEmotionalState, getEscalationRate } from "../ecs/
 import { createBootstrapTree } from "../bt/bootstrap.js";
 import { countNodes } from "../bt/evaluator.js";
 import { processTurn, setHandlers } from "../engine/conversation.js";
+import { resetDefaultContext } from "../compiler/bt-compiler.js";
 import type { AgentAction } from "../bt/types.js";
 
 function makeModel() {
@@ -13,6 +14,8 @@ function makeModel() {
 
 describe("Conversation Engine", () => {
   beforeEach(() => {
+    // Reset module-level compiler state between tests
+    resetDefaultContext();
     // Set up mock handlers (no real LLM)
     setHandlers({
       escalation: async (msg, model) => ({
@@ -62,12 +65,13 @@ describe("Conversation Engine", () => {
     const model = makeModel();
     const initialNodes = model.policy.totalNodes;
 
-    // Turn 1: escalates (novel topic)
-    await processTurn("I'm stressed about the gallery show deadline coming up", model);
+    // Turn 1: novel topic that bypasses ALL bootstrap patterns (no stress/excitement/etc.)
+    // This guarantees escalation regardless of ε-greedy exploration coin flip
+    await processTurn("Can you help me plan my sister's surprise birthday party next weekend?", model);
     expect(model.totalEscalations).toBeGreaterThan(0);
 
     // Turn 2: positive follow-up → immune system evaluates compilation
-    await processTurn("Thanks, that's helpful! The deadline is Friday.", model);
+    await processTurn("Thanks, that's helpful! She turns 30 on Saturday.", model);
 
     // With immune system: compilation only happens if quality + specificity pass
     // The mock handler produces a generic response that may not meet thresholds

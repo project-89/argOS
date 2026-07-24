@@ -21,10 +21,12 @@ import {
 } from "../ecs/person-store.js";
 import {
   captureDecision, resolveDecisionSuccess, growTree, hasPendingCapture,
+  type CompilerContext,
 } from "../compiler/bt-compiler.js";
 import {
   beginTrace, recordStep, completeTrace, hasActiveTrace,
   compilePlan, growTreeWithPlan,
+  type TraceContext,
 } from "../compiler/plan-compiler.js";
 import { shouldExplore } from "../compiler/immune-system.js";
 import { executeTool, getTool } from "../tools/registry.js";
@@ -99,10 +101,15 @@ export function setHandlers(config: {
 
 /**
  * Process one user message. The complete pipeline.
+ *
+ * @param compilerCtx Optional per-instance compiler context for parallel swarm training.
+ * @param traceCtx Optional per-instance trace context for parallel plan compilation.
  */
 export async function processTurn(
   userMessage: string,
   model: PersonModel,
+  compilerCtx?: CompilerContext,
+  traceCtx?: TraceContext,
 ): Promise<TurnResult> {
   // 0. Record the user message
   addMessage(model, { role: "user", content: userMessage });
@@ -133,8 +140,8 @@ export async function processTurn(
 
   // 2. If there's a pending compilation from last turn, evaluate with immune system
   //    Pass the user's current message for negative sentiment checking
-  if (hasPendingCapture()) {
-    const branch = resolveDecisionSuccess(model, userMessage);
+  if (hasPendingCapture(compilerCtx)) {
+    const branch = resolveDecisionSuccess(model, userMessage, compilerCtx);
     if (branch) {
       growTree(model, branch);
     }
@@ -289,7 +296,7 @@ export async function processTurn(
     case "escalate":
     case "none": {
       // Escalation path: try runtime swarm FIRST, fall back to expensive model
-      turnResult = await handleEscalationWithSwarm(userMessage, model, btResult.trace);
+      turnResult = await handleEscalationWithSwarm(userMessage, model, btResult.trace, compilerCtx, traceCtx);
       llmCalls = turnResult.llmCalls;
       break;
     }
@@ -360,6 +367,8 @@ async function handleEscalationWithSwarm(
   userMessage: string,
   model: PersonModel,
   btTrace: string[],
+  compilerCtx?: CompilerContext,
+  traceCtx?: TraceContext,
 ): Promise<TurnResult> {
   // If runtime swarm is enabled, try it first
   if (runtimeSwarmEnabled) {
@@ -376,7 +385,7 @@ async function handleEscalationWithSwarm(
         action: swarmResult.action,
         topics: model.conversation.currentTopics,
         emotionalState: model.conversation.emotionalState,
-      });
+      }, compilerCtx);
 
       // Begin trace for potential plan compilation (if tool calls were made)
       if (swarmResult.toolCalls.length > 0) {
@@ -385,9 +394,10 @@ async function handleEscalationWithSwarm(
           swarmResult.reasoning,
           model.conversation.currentTopics,
           model.conversation.emotionalState,
+          traceCtx,
         );
         for (const step of swarmResult.toolCalls) {
-          recordStep(step);
+          recordStep(step, traceCtx);
         }
       }
 
@@ -413,7 +423,7 @@ async function handleEscalationWithSwarm(
   }
 
   // Fall back to expensive model escalation
-  return handleEscalation(userMessage, model, btTrace);
+  return handleEscalation(userMessage, model, btTrace, compilerCtx, traceCtx);
 }
 
 // =============================================================================
@@ -424,6 +434,8 @@ async function handleEscalation(
   userMessage: string,
   model: PersonModel,
   btTrace: string[],
+  compilerCtx?: CompilerContext,
+  traceCtx?: TraceContext,
 ): Promise<TurnResult> {
   model.totalEscalations++;
 
@@ -448,17 +460,18 @@ async function handleEscalation(
       action: result.action,
       topics: model.conversation.currentTopics,
       emotionalState: model.conversation.emotionalState,
-    });
+    }, compilerCtx);
 
     // Also begin a trace for potential multi-step compilation
     // If the escalation triggered tool calls, recordStep was called during execution
     // The trace completes on the next turn's positive follow-up
-    if (!hasActiveTrace()) {
+    if (!hasActiveTrace(traceCtx)) {
       beginTrace(
         userMessage,
         result.reasoning,
         model.conversation.currentTopics,
         model.conversation.emotionalState,
+        traceCtx,
       );
       // Record the response itself as a step
       recordStep({
@@ -467,7 +480,7 @@ async function handleEscalation(
         output: result.response,
         success: true,
         description: `Responded: ${result.response.slice(0, 60)}`,
-      });
+      }, traceCtx);
     }
 
     return {

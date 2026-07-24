@@ -31,13 +31,15 @@ import { createPersonModel } from "../ecs/person-store.js";
 import { createBootstrapTree } from "../bt/bootstrap.js";
 import { countNodes, insertBranch } from "../bt/evaluator.js";
 import { processTurn, setHandlers } from "../engine/conversation.js";
-import { resolveDecisionFailure } from "../compiler/bt-compiler.js";
+import { createCompilerContext, resolveDecisionFailure, type CompilerContext } from "../compiler/bt-compiler.js";
+import { createTraceContext, type TraceContext } from "../compiler/plan-compiler.js";
 import { runBenchmark, DEFAULT_BENCHMARK } from "../engine/benchmark.js";
 import { harvestBranches } from "./branch-harvester.js";
 import { clusterBranches, DEFAULT_CLUSTER_CONFIG } from "./pattern-clusterer.js";
 import { buildSpeciesTree } from "./species-merger.js";
 import { loadPerson, savePerson } from "../persistence/store.js";
 import { maintainTree, type MaintenanceResult } from "../compiler/tree-maintenance.js";
+import { evolvePrompt, registerPrompt, getEvolutionStats } from "../compiler/prompt-evolution.js";
 
 // =============================================================================
 // TRAINING SIGNALS — extracted from the person's real history
@@ -305,6 +307,9 @@ export interface NightlyResult {
   deduplicated: number;
   chanceNodesRemoved: number;
 
+  // Prompt evolution
+  promptEvolutions: Array<{ name: string; changeSummary: string }>;
+
   // Validation
   validated: boolean;
   regressionDetected: boolean;
@@ -360,26 +365,26 @@ export async function runNightlyTraining(
   );
 
   // 4. SWARM — run instances starting from the person's CURRENT tree
-  log(`Running swarm (${config.instanceCount} instances)...`);
-  const instanceResults = [];
+  //    Now PARALLEL thanks to per-instance CompilerContext
+  log(`Running swarm (${config.instanceCount} instances, parallel)...`);
 
-  for (let i = 0; i < scripts.length; i++) {
-    const script = scripts[i];
-
-    // Clone the person's model for this instance (start from their tree, not bootstrap)
+  const swarmPromises = scripts.map(async (script, i) => {
+    // Each instance gets its own compiler context — no shared state
+    const compilerCtx = createCompilerContext();
+    const traceCtx = createTraceContext();
     const instanceModel = cloneModelForTraining(model, `train_${i}`);
 
     let escalations = 0;
     for (const message of script.messages) {
       try {
-        const result = await processTurn(message, instanceModel);
+        const result = await processTurn(message, instanceModel, compilerCtx, traceCtx);
         if (result.escalated) escalations++;
       } catch {
         escalations++;
       }
     }
 
-    instanceResults.push({
+    return {
       instanceId: `train_${i}_${script.category}`,
       model: instanceModel,
       turnsProcessed: script.messages.length,
@@ -387,10 +392,10 @@ export async function runNightlyTraining(
       compiledCount: instanceModel.policy.compiledBranches - model.policy.compiledBranches,
       treeNodes: instanceModel.policy.totalNodes,
       elapsedMs: 0,
-    });
+    };
+  });
 
-    resolveDecisionFailure();
-  }
+  const instanceResults = await Promise.all(swarmPromises);
 
   const totalNewBranches = instanceResults.reduce((s, r) => s + r.compiledCount, 0);
   log(`  New branches compiled across swarm: ${totalNewBranches}`);
@@ -412,6 +417,7 @@ export async function runNightlyTraining(
       afterEscalationRate: baselineEsc,
       nodesAdded: 0, branchesAdded: 0, escalationDelta: 0,
       pruned: 0, deduplicated: 0, chanceNodesRemoved: 0,
+      promptEvolutions: [],
       validated: true, regressionDetected: false, saved: false,
       weakTopicsTargeted: signals.weakTopics, topicsCovered: [],
       elapsedMs: Date.now() - start,
@@ -461,6 +467,32 @@ export async function runNightlyTraining(
   const afterMaintenanceNodes = model.policy.totalNodes;
   const afterMaintenanceBranches = model.policy.compiledBranches;
 
+  // 7c. EVOLVE — iterate on system prompts
+  log(`Evolving system prompts...`);
+  const promptEvolutions: Array<{ name: string; changeSummary: string }> = [];
+  const promptNames = ['escalation_system', 'runtime_system', 'analysis_system'];
+  for (const promptName of promptNames) {
+    // Register prompts if not already registered (first nightly run)
+    registerPrompt(promptName, `Default ${promptName} prompt`);
+    try {
+      const result = await evolvePrompt(promptName, model, async (promptContent) => {
+        // Score = escalation rate with this prompt variant
+        const benchModel = cloneModelForTraining(model, `prompt_eval`);
+        const run = await runBenchmark(benchModel);
+        resolveDecisionFailure();
+        return run.results.filter(r => r.escalated).length / run.results.length;
+      });
+      if (result) {
+        promptEvolutions.push({ name: promptName, changeSummary: result.changeSummary });
+        log(`  ${promptName}: evolved → "${result.changeSummary}"`);
+      } else {
+        log(`  ${promptName}: current version is best`);
+      }
+    } catch (err) {
+      log(`  ${promptName}: evolution failed — ${(err as Error).message}`);
+    }
+  }
+
   // 8. VALIDATE — benchmark the improved tree
   log(`Validating improved tree...`);
   const afterEsc = await averageBenchmark(model, 3);
@@ -501,6 +533,7 @@ export async function runNightlyTraining(
     pruned: maintenance.pruned,
     deduplicated: maintenance.deduplicated,
     chanceNodesRemoved: maintenance.chanceNodesRemoved,
+    promptEvolutions,
     validated: true,
     regressionDetected,
     saved,

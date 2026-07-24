@@ -17,6 +17,29 @@ import type { PersonModel } from "../ecs/types.js";
 import type { AgentAction } from "../bt/types.js";
 import type { EscalationHandler, RuntimeHandler, AnalysisHandler } from "../engine/conversation.js";
 import { getRecentMessages, getActiveIntentions } from "../ecs/person-store.js";
+import { registerPrompt, getPrompt, recordPromptUse } from "../compiler/prompt-evolution.js";
+
+// =============================================================================
+// REGISTER BASE PROMPTS for evolution tracking
+// =============================================================================
+
+const BASE_ESCALATION_PROMPT = `You are a helpful AI companion. You know this person well and want to help them.
+
+RULES:
+- Respond naturally, matching their communication style.
+- Reference things you know about them (from memory and hypotheses).
+- Be concise — match their typical message length.
+- If they're stressed, be supportive before being practical.
+- If they ask a question, try to answer from what you know.`;
+
+const BASE_RUNTIME_PROMPT = `Fill this response template naturally. Use the context to fill in details.
+Keep it concise and conversational. Don't add extra content beyond what the template asks for.`;
+
+const BASE_ANALYSIS_PROMPT = `Analyze this message for topics, named entities, and emotional state.`;
+
+registerPrompt('escalation_system', BASE_ESCALATION_PROMPT);
+registerPrompt('runtime_system', BASE_RUNTIME_PROMPT);
+registerPrompt('analysis_system', BASE_ANALYSIS_PROMPT);
 
 // =============================================================================
 // ESCALATION — Flash handles novel situations
@@ -35,6 +58,9 @@ const escalationSchema = {
 
 export const escalationHandler: EscalationHandler = async (userMessage, model) => {
   const context = buildFullContext(model);
+  recordPromptUse('escalation_system');
+
+  const systemPrompt = getPrompt('escalation_system') || BASE_ESCALATION_PROMPT;
 
   const response = await ai.models.generateContent({
     model: REASONING_MODEL,
@@ -42,16 +68,7 @@ export const escalationHandler: EscalationHandler = async (userMessage, model) =
       temperature: 0.5,
       responseMimeType: "application/json",
       responseSchema: escalationSchema,
-      systemInstruction: `You are a helpful AI companion. You know this person well and want to help them.
-
-${context}
-
-RULES:
-- Respond naturally, matching their communication style.
-- Reference things you know about them (from memory and hypotheses).
-- Be concise — match their typical message length.
-- If they're stressed, be supportive before being practical.
-- If they ask a question, try to answer from what you know.`,
+      systemInstruction: `${systemPrompt}\n\n${context}`,
     },
     contents: userMessage,
   });
@@ -80,20 +97,16 @@ export const runtimeHandler: RuntimeHandler = async (template, context, model) =
   const recent = getRecentMessages(model, 4)
     .map(m => `${m.role}: ${m.content}`)
     .join("\n");
+  recordPromptUse('runtime_system');
+
+  const systemPrompt = getPrompt('runtime_system') || BASE_RUNTIME_PROMPT;
 
   const response = await ai.models.generateContent({
     model: RUNTIME_MODEL,
     config: {
       temperature: 0.6,
       maxOutputTokens: 256,
-      systemInstruction: `Fill this response template naturally. Use the context to fill in details.
-Keep it concise and conversational. Don't add extra content beyond what the template asks for.
-
-Context:
-${context}
-
-Recent conversation:
-${recent}`,
+      systemInstruction: `${systemPrompt}\n\nContext:\n${context}\n\nRecent conversation:\n${recent}`,
     },
     contents: `Template: ${template}\n\nGenerate the response:`,
   });
@@ -128,6 +141,7 @@ const analysisSchema = {
 };
 
 export const analysisHandler: AnalysisHandler = async (message, _model) => {
+  recordPromptUse('analysis_system');
   try {
     const response = await ai.models.generateContent({
       model: RUNTIME_MODEL,
@@ -137,7 +151,7 @@ export const analysisHandler: AnalysisHandler = async (message, _model) => {
         responseMimeType: "application/json",
         responseSchema: analysisSchema,
       },
-      contents: `Analyze this message for topics, named entities, and emotional state:\n\n"${message}"`,
+      contents: `${getPrompt('analysis_system') || BASE_ANALYSIS_PROMPT}:\n\n"${message}"`,
     });
 
     const json = JSON.parse(response.text || "{}");

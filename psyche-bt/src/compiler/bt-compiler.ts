@@ -6,6 +6,10 @@
  * → creates a new BT branch so Flash Lite handles it next time.
  *
  * This is the System 2 → System 1 compilation step.
+ *
+ * CompilerContext: Per-instance state for parallel swarm training.
+ * Each swarm instance gets its own context, eliminating the module-level
+ * pendingCapture bottleneck that forced sequential execution.
  */
 
 import type { BehaviorNode, ConditionOp, AgentAction, CompiledBranch } from "../bt/types.js";
@@ -37,14 +41,35 @@ export interface CapturedDecision {
 }
 
 // =============================================================================
-// PENDING CAPTURES — decisions waiting for success/failure signal
+// COMPILER CONTEXT — per-instance state for parallel execution
 // =============================================================================
 
-let pendingCapture: CapturedDecision | null = null;
+/**
+ * Per-instance compiler state. Each swarm instance gets its own context,
+ * enabling true parallel training (Promise.all instead of sequential).
+ */
+export interface CompilerContext {
+  pendingCapture: CapturedDecision | null;
+  lastCompilationDecision: CompilationDecision | null;
+}
+
+/** Create a fresh compiler context for a swarm instance. */
+export function createCompilerContext(): CompilerContext {
+  return { pendingCapture: null, lastCompilationDecision: null };
+}
+
+// Default context for backward compat (chat CLI, eval, benchmark, etc.)
+const defaultContext: CompilerContext = { pendingCapture: null, lastCompilationDecision: null };
+
+/** Reset the default context — used for test isolation. */
+export function resetDefaultContext(): void {
+  defaultContext.pendingCapture = null;
+  defaultContext.lastCompilationDecision = null;
+}
 
 /** Capture an LLM decision for potential compilation. */
-export function captureDecision(decision: CapturedDecision): void {
-  pendingCapture = decision;
+export function captureDecision(decision: CapturedDecision, ctx: CompilerContext = defaultContext): void {
+  ctx.pendingCapture = decision;
 }
 
 /**
@@ -53,15 +78,16 @@ export function captureDecision(decision: CapturedDecision): void {
  * and condition specificity requirements.
  *
  * @param userFollowUp The user's follow-up message (for sentiment analysis)
+ * @param ctx Compiler context (defaults to module-level for backward compat)
  */
-export function resolveDecisionSuccess(model: PersonModel, userFollowUp?: string): CompiledBranch | null {
-  if (!pendingCapture) return null;
-  const decision = pendingCapture;
-  pendingCapture = null;
+export function resolveDecisionSuccess(model: PersonModel, userFollowUp?: string, ctx: CompilerContext = defaultContext): CompiledBranch | null {
+  if (!ctx.pendingCapture) return null;
+  const decision = ctx.pendingCapture;
+  ctx.pendingCapture = null;
 
   // Immune system check: negative feedback guard
   if (userFollowUp && isNegativeFeedback(userFollowUp)) {
-    lastCompilationDecision = {
+    ctx.lastCompilationDecision = {
       shouldCompile: false,
       reason: "Negative feedback detected",
     };
@@ -78,7 +104,7 @@ export function resolveDecisionSuccess(model: PersonModel, userFollowUp?: string
     conditions.map(c => (c as any).op).filter(Boolean),
   );
 
-  lastCompilationDecision = immuneCheck;
+  ctx.lastCompilationDecision = immuneCheck;
 
   if (!immuneCheck.shouldCompile) {
     return null;
@@ -88,21 +114,18 @@ export function resolveDecisionSuccess(model: PersonModel, userFollowUp?: string
   return compileToBranch(decision, model);
 }
 
-/** Last compilation decision (for debugging/testing) */
-let lastCompilationDecision: CompilationDecision | null = null;
-
-export function getLastCompilationDecision(): CompilationDecision | null {
-  return lastCompilationDecision;
+export function getLastCompilationDecision(ctx: CompilerContext = defaultContext): CompilationDecision | null {
+  return ctx.lastCompilationDecision;
 }
 
 /** Mark the pending decision as failed — don't compile. */
-export function resolveDecisionFailure(): void {
-  pendingCapture = null;
+export function resolveDecisionFailure(ctx: CompilerContext = defaultContext): void {
+  ctx.pendingCapture = null;
 }
 
 /** Check if there's a pending capture waiting for resolution. */
-export function hasPendingCapture(): boolean {
-  return pendingCapture !== null;
+export function hasPendingCapture(ctx: CompilerContext = defaultContext): boolean {
+  return ctx.pendingCapture !== null;
 }
 
 // =============================================================================
