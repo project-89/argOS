@@ -288,19 +288,9 @@ async function runPhase(world: any, agents: AgentInfo[], from: number, to: numbe
       if (result.status !== "fulfilled") continue;
       const { a, action } = result.value;
 
+      // executeActions now handles move → setLocatedIn directly
       try {
-        // Handle movement
-        if (action.type === "move" && action.target) {
-          const allRooms = Array.from(query(world, [Room as any, Name as any]));
-          const targetRoom = allRooms.find(r =>
-            String(Name.value[r] || "").toLowerCase() === action.target!.toLowerCase());
-          if (targetRoom !== undefined) setLocatedIn(world, a.eid, targetRoom);
-        }
-
-        // Execute for affordance resolution + BT compilation
-        try {
-          await executeActions(world, [{ eid: a.eid, action: action as any }] as any);
-        } catch {}
+        await executeActions(world, [{ eid: a.eid, action: action as any }] as any);
       } catch {}
 
       // Simulate need decay
