@@ -8,6 +8,7 @@ import { getAvailableAffordances } from "../world/affordance-availability";
 import { getMovementTarget } from "../systems/builtin-systems";
 import { getSkillTree, recordSkillOutcome } from "./skill-registry";
 import { getComponent, entityHasComponent } from "../ecs/component-registry";
+import { getCurrentPeriod, getActiveWorldEvents } from "../systems/world-clock";
 
 export type PolicyAction = {
   type: "speak" | "observe" | "move" | "interact" | "think" | "wait" | "rest" | "reflect";
@@ -55,7 +56,9 @@ export type ConditionOp =
   | { type: "last_n_actions_exclude"; n: number; actionType: string }
   | { type: "component_above"; component: string; field: string; value: number }
   | { type: "component_below"; component: string; field: string; value: number }
-  | { type: "has_component"; component: string };
+  | { type: "has_component"; component: string }
+  | { type: "time_is"; period: string }          // "morning" | "midday" | "evening" | "night"
+  | { type: "has_world_event"; eventType?: string; name?: string }; // Check for active events
 
 export type PolicyEvalResult =
   | { kind: "action"; action: PolicyAction; trace: string[] }
@@ -275,6 +278,18 @@ export function validateBehaviorNode(
       case "has_component": {
         const comp2 = String((op as any).component || "").trim();
         if (!comp2) return "has_component.component required";
+        return null;
+      }
+      case "time_is": {
+        const period = String((op as any).period || "").trim();
+        if (!period) return "time_is.period required";
+        return null;
+      }
+      case "has_world_event": {
+        // At least one of eventType or name must be specified
+        const evtType = String((op as any).eventType || "").trim();
+        const evtName = String((op as any).name || "").trim();
+        if (!evtType && !evtName) return "has_world_event needs eventType or name";
         return null;
       }
       default:
@@ -593,6 +608,16 @@ function evalCondition(world: World, agentEid: number, op: ConditionOp): boolean
     }
     case "has_component": {
       return entityHasComponent(world, agentEid, op.component);
+    }
+    case "time_is": {
+      const currentPeriod = getCurrentPeriod(world);
+      return currentPeriod === op.period;
+    }
+    case "has_world_event": {
+      const events = getActiveWorldEvents(world);
+      if (op.eventType) return events.some(e => e.eventType === op.eventType);
+      if (op.name) return events.some(e => e.name.toLowerCase().includes(op.name!.toLowerCase()));
+      return events.length > 0;
     }
   }
 }

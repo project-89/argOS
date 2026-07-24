@@ -39,7 +39,7 @@ import {
   recordSuccessfulAction,
   type Stimulus,
 } from "./sensory-system";
-import { getMovementTarget, setMovementTarget } from "../systems/builtin-systems";
+import { getMovementTarget, setMovementTarget, clearMovementTarget } from "../systems/builtin-systems";
 import {
   isValidAction,
   suggestValidAction,
@@ -53,6 +53,7 @@ import { resolveDecision } from "./bt-compiler";
 import { chronicle } from "./simulation-chronicle";
 import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "./procedural-skills";
 import { compileCompletedPlanToProceduralMacro } from "./plan-compiler";
+import { advanceGoalTick, expireStaleGoals } from "./autonomous-goals";
 import { setGoalContract } from "./goal-contract";
 import {
   runPlanningSystem,
@@ -1447,6 +1448,17 @@ export async function runCognitionCycle(
   const maxAgentsThisTick = options.maxAgents ?? AGENTS_PER_TICK;
   const enablePlanning = options.enablePlanning ?? true; // Planning ON by default!
 
+  // Advance autonomous goal cooldown counter
+  advanceGoalTick();
+
+  // Expire stale goals so agents can generate new ones
+  // Goals that have been active for 2+ minutes without completion are expired
+  const allAgentsForGoalExpiry = Array.from(query(world, [Agent as any])).filter(
+    (eid: number) => Agent.active[eid]);
+  for (const eid of allAgentsForGoalExpiry) {
+    expireStaleGoals(world, eid);
+  }
+
   // === PLANNING PHASE ===
   // Generate plans for agents with goals but no active plan
   // This is crucial for multi-step reasoning!
@@ -2030,8 +2042,12 @@ export function executeActions(
             break;
           }
 
-          // Set movement target so agent moves towards what they're observing
-          setMovementTarget(eid, observeTargetEid);
+          // Only set grid movement target if agent has no current room (grid-only mode).
+          // In room-based simulation, agents are already co-located with observable objects.
+          // Setting movementTarget here previously blocked all future room-based moves.
+          if (getRoomForEntity(world, eid) === undefined) {
+            setMovementTarget(eid, observeTargetEid);
+          }
           const targetName = Name.value[observeTargetEid] || action.target;
           const targetDesc = Description.value[observeTargetEid] || "You see nothing special.";
           // Read state from ECS ObjectState component (not ObjectMeta)
@@ -2168,8 +2184,10 @@ export function executeActions(
                 }
               }
 
-		          // Set movement target so agent moves towards the object they're interacting with
-		          setMovementTarget(eid, targetEid);
+		          // Only set grid movement target if agent has no current room (grid-only mode).
+		          if (getRoomForEntity(world, eid) === undefined) {
+		            setMovementTarget(eid, targetEid);
+		          }
 
 		          // Create effect context
 	            const rawAffordanceArgs = (validatedAction.content || "").split(" ").slice(1).join(" ").trim();
@@ -2451,52 +2469,66 @@ export function executeActions(
             const hasCurrentRoom = roomEid !== undefined;
 
             if (hasCurrentRoom) {
-              // Agent is in a room - use Goal-based movement
-              // Create a movement goal - GoalPursuitSystem will execute the actual movement
-              // Parse reason from action.content if available
+              // Execute the room transition immediately.
+              // Previously this only created a Goal and relied on GoalPursuitSystem →
+              // Movement → RoomArrival (a 3-system chain that often doesn't run in tests
+              // or async contexts). Now we move the agent directly AND create the goal
+              // so the learning system can still compile the move into a BT branch.
               const reason = action.content || undefined;
-
-              // Calculate priority based on agent's arousal (urgency)
               const arousal = Mind.arousal[eid] || 0.5;
-              const priority = Math.round(3 + arousal * 7); // 3-10 based on arousal
+              const priority = Math.round(3 + arousal * 7);
 
-              const goalEid = createMovementGoal(world, eid, destName, reason, priority);
-
-              if (goalEid !== undefined) {
-                // Update agent's focus
-                Mind.focus[eid] = `going to ${destName}`;
-                Mind.arousal[eid] = Math.min(1, arousal + 0.1);
-
-                // Broadcast intent to room (others can see them getting ready to leave)
-                broadcastVisual(world, roomEid, `${name} prepares to head toward ${destName}`, name, eid);
-
-                console.log(`🎯 ${name} intends to go to ${destName} (goal created, GoalPursuitSystem will execute)`);
-
-                // Compile LLM move decision into BT branch
-                resolveDecision(world, eid, true);
-
-                // Notify agent of their plan (cognitive feedback)
-                queueStimulus({
-                  targetEid: eid,
-                  type: "intent",
-                  modality: "cognitive",
-                  content: `You decide to go to ${destName}${reason ? ` to ${reason}` : ""}.`,
-                  source: "self",
-                });
-
-                extractKnowledgeFromInteraction(world, eid, {
-                  type: "movement_intent",
-                  content: `Planning to travel from ${sourceName} to ${destName}`,
-                  context: `Currently in ${sourceName}`,
-                }).catch(() => {});
-              } else {
-                addPerception(world, eid, {
-                  type: "action_result",
-                  content: `You are already heading to ${destName}.`,
-                  source: "movement",
-                  intensity: 0.5,
-                });
+              // Actually move the agent
+              setLocatedIn(world, eid, destRoom);
+              clearMovementTarget(eid);
+              // Snap GridPosition to destination room so grid-based systems stay in sync
+              if (GridPosition.x[destRoom] !== undefined) {
+                GridPosition.x[eid] = GridPosition.x[destRoom];
+                GridPosition.y[eid] = GridPosition.y[destRoom];
               }
+
+              // Update agent's focus
+              Mind.focus[eid] = `arrived at ${destName}`;
+              Mind.arousal[eid] = Math.min(1, arousal + 0.1);
+
+              // Broadcast departure and arrival
+              broadcastVisual(world, roomEid!, `${name} heads toward ${destName}`, name, eid);
+              broadcastVisual(world, destRoom, `${name} arrives from ${sourceName}`, name, eid);
+
+              console.log(`🚶 ${name} moves from ${sourceName} to ${destName}`);
+
+              // Create a completed movement goal for the learning system
+              // (goal-learning.ts compiles completed goals into skills)
+              const goalEid = createMovementGoal(world, eid, destName, reason, priority);
+              if (goalEid !== undefined) {
+                Goal.status[goalEid] = "completed";
+                Goal.progress[goalEid] = 100;
+              }
+
+              // Compile LLM move decision into BT branch
+              resolveDecision(world, eid, true);
+
+              // Notify agent they arrived
+              queueStimulus({
+                targetEid: eid,
+                type: "action_result",
+                modality: "cognitive",
+                content: `You traveled from ${sourceName} to ${destName}${reason ? ` to ${reason}` : ""}.`,
+                source: "self",
+              });
+
+              // Record the arrival as a success
+              chronicle.record("action_success", {
+                agent: name,
+                action: `move→${destName}`,
+                from: sourceName,
+              });
+
+              extractKnowledgeFromInteraction(world, eid, {
+                type: "movement",
+                content: `Traveled from ${sourceName} to ${destName}`,
+                context: `Now in ${destName}`,
+              }).catch(() => {});
             } else if (hasGridPos && GridPosition.x[destRoom] !== undefined) {
               // Agent has NO room but has GridPosition - use grid-based movement to room
               // This is the key fix: agents stuck "somewhere" can now physically move to rooms

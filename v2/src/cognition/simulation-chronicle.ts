@@ -49,6 +49,7 @@ export type ChronicleEventType =
   | "policy_generated"       // LLM generated a behavior policy
   | "policy_evolved"         // Watcher triggered policy evolution
   | "goal_skill_compiled"    // goal completion → skill
+  | "autonomous_goal"        // agent set own goal autonomously
   // Agent behavior
   | "llm_decision"           // LLM made a decision (with reasoning)
   | "policy_decision"        // BT handled a decision (no LLM)
@@ -108,6 +109,8 @@ export interface ChronicleSnapshot {
 // CHRONICLE
 // =============================================================================
 
+export type ChronicleListener = (entry: ChronicleEntry) => void;
+
 class SimulationChronicle {
   private entries: ChronicleEntry[] = [];
   private snapshots: ChronicleSnapshot[] = [];
@@ -118,6 +121,9 @@ class SimulationChronicle {
   // Per-agent counters
   private agentLLMCalls: Map<string, number> = new Map();
   private agentPolicyCalls: Map<string, number> = new Map();
+
+  // Event listeners for real-time event processing
+  private listeners: ChronicleListener[] = [];
 
   /** Set the current simulation tick */
   setTick(tick: number): void {
@@ -135,6 +141,11 @@ class SimulationChronicle {
       data,
     };
     this.entries.push(entry);
+
+    // Notify listeners
+    for (const listener of this.listeners) {
+      try { listener(entry); } catch {}
+    }
 
     // Track LLM vs policy calls
     if (type === "llm_decision" && data.agent) {
@@ -158,6 +169,25 @@ class SimulationChronicle {
   /** Get entries in a tick range */
   getByTickRange(from: number, to: number): ChronicleEntry[] {
     return this.entries.filter(e => e.tick >= from && e.tick <= to);
+  }
+
+  /** Get all entries for a specific tick */
+  getEventsForTick(tick: number): ChronicleEntry[] {
+    return this.entries.filter(e => e.tick === tick);
+  }
+
+  /** Get all entries */
+  getAll(): ChronicleEntry[] {
+    return [...this.entries];
+  }
+
+  /** Subscribe to chronicle events in real-time */
+  subscribe(listener: ChronicleListener): () => void {
+    this.listeners.push(listener);
+    return () => {
+      const idx = this.listeners.indexOf(listener);
+      if (idx >= 0) this.listeners.splice(idx, 1);
+    };
   }
 
   /** Get LLM call count for an agent */

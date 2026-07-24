@@ -49,18 +49,29 @@ export const INTERACT_ANY: BehaviorNode = {
   type: "interact_any_affordance", scope: "room",
 };
 
+/** Social interaction: when others are nearby, let the LLM decide what to say */
+const SPEAK_TO_NEARBY: BehaviorNode = {
+  type: "sequence",
+  children: [
+    { type: "condition", op: { type: "room_has_other_agents" } },
+    { type: "condition", op: { type: "chance", p: 0.5 } },
+    { type: "llm_fallback" },
+  ],
+};
+
 /**
  * Rich fallback: replaces WAIT as terminal node in all templates.
  * Weighted random selection ensures agents always do SOMETHING.
- * Wait is ~8% instead of the old 50%.
+ * Includes social actions: speak when others nearby, visit agents elsewhere.
  */
 export const RICH_FALLBACK: BehaviorNode = {
   type: "weighted_random",
   choices: [
     { weight: 4, child: OBSERVE_ROOM },
     { weight: 3, child: { type: "interact_any_affordance", scope: "room" } },
+    { weight: 3, child: SPEAK_TO_NEARBY },
     { weight: 3, child: { type: "action", action: { type: "think", content: "I take stock of my situation..." } } },
-    { weight: 3, child: WANDER },
+    { weight: 2, child: WANDER },
     { weight: 2, child: SOCIAL_VISIT },
     { weight: 2, child: { type: "interact_with_trait", trait: "talkable", affordance: "talk", scope: "room" } },
     { weight: 1, child: WAIT },

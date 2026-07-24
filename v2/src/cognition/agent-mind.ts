@@ -31,6 +31,8 @@ import { captureLLMDecision } from "./bt-compiler";
 import { trackGoalAction, formatAspirationsForContext } from "./goal-learning";
 import { formatSkillsForContext } from "./skill-registry";
 import { chronicle } from "./simulation-chronicle";
+import { generateAutonomousGoal, shouldGenerateGoal, advanceGoalTick } from "./autonomous-goals";
+import { formatWorldTimeForContext } from "../systems/world-clock";
 
 const model = agentModel;
 
@@ -272,7 +274,6 @@ function normalizeSelectedAction(world: World, agentEid: number, action: AgentAc
   // Returning "wait" keeps the event stream honest (no state change) and avoids thrash scoring.
   if (action.type === "move" && action.target) {
     const wanted = String(action.target || "").trim().toLowerCase();
-
     // Validate target is actually a room — reject moves to objects/agents/etc.
     const allRooms = Array.from(query(world as any, [Room as any, Name as any]));
     const isRoom = allRooms.some(rid => {
@@ -280,7 +281,6 @@ function normalizeSelectedAction(world: World, agentEid: number, action: AgentAc
       return rn && rn === wanted;
     });
     if (!isRoom) {
-      // Target is not a room — convert to observe (they probably want to interact with it)
       return { type: "observe", target: action.target };
     }
 
@@ -294,7 +294,6 @@ function normalizeSelectedAction(world: World, agentEid: number, action: AgentAc
     }
 
     // Suppress ALL moves when agent is already in transit (grid movement or goal-based).
-    // This prevents templates from fighting each other (e.g. wander vs return-to-home).
     const movTarget = getMovementTarget(agentEid);
     if (movTarget !== undefined) {
       return { type: "wait" };
@@ -557,6 +556,70 @@ function buildKnowledgeContext(world: World, eid: number, othersInRoom: string[]
   return lines.join("\n");
 }
 
+function buildSocialContext(world: World, agentEid: number, othersInRoom: string[]): string {
+  if (othersInRoom.length === 0) return "You are alone. No social obligations.";
+
+  const lines: string[] = [];
+  const agentName = Name.value[agentEid] || "";
+  const personality = hasComponent(world as any, agentEid, Personality as any) ? {
+    agreeableness: Personality.agreeableness[agentEid] ?? 0.5,
+    extraversion: Personality.extraversion[agentEid] ?? 0.5,
+  } : { agreeableness: 0.5, extraversion: 0.5 };
+
+  // Social norms preamble
+  lines.push("When someone is present and speaks to you:");
+  lines.push("- ALWAYS acknowledge them and respond to what they said BEFORE pursuing your own agenda.");
+  lines.push("- Consider whether they might be able to help with your current concerns.");
+  lines.push("- A stranger who just arrived might have news, skills, or resources you need.");
+  if (personality.agreeableness > 0.6) {
+    lines.push("- You are naturally warm and accommodating — make them feel welcome.");
+  } else if (personality.agreeableness < 0.3) {
+    lines.push("- You are gruff and direct, but still answer questions when asked.");
+  }
+
+  // Per-person assessment with graduated disclosure
+  for (const otherName of othersInRoom) {
+    const impression = getImpressionOf(world, agentEid, otherName);
+    const allAgents = Array.from(query(world as any, [Agent as any, Name as any]));
+    const otherEid = allAgents.find(e => Name.value[e] === otherName);
+    const otherRole = otherEid ? (Agent.role[otherEid] || "") : "";
+
+    // Count conversation depth — how many times have we spoken?
+    let conversationDepth = 0;
+    if (otherEid) {
+      try {
+        const convEids = getRelationTargets(world as any, agentEid, HasConversation as any);
+        conversationDepth = convEids.filter(cid =>
+          hasComponent(world as any, cid, ConversationTurn as any) &&
+          (ConversationTurn.content[cid] || "").toLowerCase().includes(otherName.toLowerCase())
+        ).length;
+      } catch {}
+    }
+
+    if (impression) {
+      const s = impression.overallSentiment;
+      const feel = s > 0.3 ? "positively" : s < -0.3 ? "warily" : "neutrally";
+      lines.push(`- ${otherName} (${otherRole}): You feel ${feel} toward them. You've spoken ${conversationDepth > 0 ? conversationDepth + " times" : "briefly"}.`);
+    } else {
+      lines.push(`- ${otherName}: A stranger${otherRole ? ` who appears to be a ${otherRole}` : ""}. You haven't met before.`);
+      lines.push(`  Consider: could this person help with your goals? Do they have information you need?`);
+    }
+
+    // Graduated information disclosure guidance
+    if (conversationDepth <= 1) {
+      lines.push(`  DISCLOSURE LEVEL: GUARDED. This is a new acquaintance. Be polite but share only surface-level information. Deflect sensitive questions. BUT still answer what they ask — don't ignore the question.`);
+    } else if (conversationDepth <= 3) {
+      lines.push(`  DISCLOSURE LEVEL: OPENING. You've talked a few times. Share hints and partial truths. Let slip small details that show you know more than you're saying. Drop a clue or name they haven't heard.`);
+    } else if (conversationDepth <= 6) {
+      lines.push(`  DISCLOSURE LEVEL: TRUSTING. You've had real conversations. Share real concerns, admit fears, reveal pieces of what you know. If they've been helpful, be more forthcoming.`);
+    } else {
+      lines.push(`  DISCLOSURE LEVEL: CONFIDING. This person has earned your trust through sustained interaction. Share deeper secrets if pressed. Be honest about your real motivations and fears.`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 function buildAgentContext(world: World, eid: number): string {
   const name = Name.value[eid];
   const description = Description.value[eid];
@@ -660,6 +723,9 @@ CURRENT STATE:
 - Current Focus: ${focus || "nothing specific"}
 ${personalityTraits ? `- Temperament: ${formatPersonality(personalityTraits)}` : ""}
 
+SOCIAL AWARENESS:
+${buildSocialContext(world, eid, othersInRoom)}
+
 ACTIVE GOALS:
 ${activeGoals.length > 0
   ? activeGoals.map(gid => {
@@ -689,7 +755,9 @@ ${formatInsightsForContext(world, eid)}
 
 ${formatAspirationsForContext(eid)}
 
-${formatSkillsForContext(eid)}`;
+${formatSkillsForContext(eid)}
+
+${formatWorldTimeForContext(world)}`;
 }
 
 export async function agentThink(world: World, eid: number): Promise<AgentAction> {
@@ -778,8 +846,29 @@ export async function agentThink(world: World, eid: number): Promise<AgentAction
     }
   }
 
-  // Deterministic policy layer: optional behavior tree / policy graph. Runs before any LLM call.
-  const policy = evaluateBehaviorPolicy(world, eid);
+  // ── Autonomous Goal Generation (parallel cognitive process) ──
+  if (getConfiguredGeminiApiKey() && shouldGenerateGoal(world, eid)) {
+    generateAutonomousGoal(world, eid).catch(() => {});
+  }
+
+  // ── Directed Speech Override ──
+  // When someone speaks directly to this agent, bypass the BT and go to LLM.
+  // The BT handles routine behavior but social response to speech takes priority.
+  const hasPendingSpeech = (() => {
+    if (!getConfiguredGeminiApiKey()) return false;
+    const perceptionEids = getAgentPerceptions(world, eid);
+    return perceptionEids.some(pid => {
+      if (!hasComponent(world as any, pid, Perception as any)) return false;
+      const pType = Perception.type[pid] || "";
+      const pTimestamp = Perception.timestamp[pid] || 0;
+      return (pType === "directed_speech" || pType === "speech") &&
+             (Date.now() - pTimestamp) < 10000;
+    });
+  })();
+
+  // Deterministic policy layer — skip if someone just spoke to us
+  if (!hasPendingSpeech) {
+    const policy = evaluateBehaviorPolicy(world, eid);
   if (policy.kind === "action") {
     const name = Name.value[eid];
     console.log(`[${name}] uses policy: ${policy.action.type}${policy.action.target ? ` -> ${policy.action.target}` : ""}`);
@@ -787,6 +876,19 @@ export async function agentThink(world: World, eid: number): Promise<AgentAction
       agent: name,
       action: `${policy.action.type}${policy.action.target ? "→" + policy.action.target : ""}`,
     });
+
+    // Capture policy-driven interact/move actions for BT compilation.
+    // When these succeed in executeActions, resolveDecision() will compile
+    // the context into a new BT branch — enabling template agents to GROW
+    // their trees from experience, not just follow pre-built patterns.
+    const pa = policy.action;
+    if (pa.type === "interact" || pa.type === "move") {
+      const affordance = pa.type === "interact" ? (pa.content?.split(/\s+/)[0] || undefined) : undefined;
+      captureLLMDecision(world, eid, `policy:${pa.type}`,
+        { type: pa.type as any, target: pa.target, content: pa.content },
+        affordance);
+    }
+
     return normalizeSelectedAction(world, eid, policy.action as any);
   }
   if (policy.kind === "start_procedure") {
@@ -798,6 +900,13 @@ export async function agentThink(world: World, eid: number): Promise<AgentAction
       if (afterStart) return afterStart as any;
       return { type: "wait" };
     }
+  }
+  } // end if (!hasPendingSpeech)
+
+  // When someone spoke to us, log that we're bypassing the BT to respond
+  if (hasPendingSpeech) {
+    const name = Name.value[eid];
+    console.log(`[${name}] has pending speech — bypassing BT for LLM response`);
   }
 
   // Deterministic contract-driven action selection (non-org steps):
@@ -920,7 +1029,7 @@ Stay in character. Be concise. React naturally to your perceptions and surroundi
     addConversationTurn(world, eid, "assistant", text);
 
     console.log(`[${name}] thinks: "${result.innerThought || ""}"`);
-    console.log(`[${name}] action: ${action.type}${action.content ? ` - "${action.content}"` : ""}`);
+    console.log(`[${name}] action: ${action.type}${action.target ? ` → ${action.target}` : ""}${action.content ? ` - "${action.content}"` : ""}`);
 
     // Capture this LLM decision for potential BT compilation
     captureLLMDecision(world, eid, result.innerThought || "",
