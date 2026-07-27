@@ -182,10 +182,35 @@ eid      47             ← transient, per-process, recycled. What BitECS querie
 The only prior art in the entire corpus is `LSE/src/god.ts`'s `entityMap: {name → eid}` — a
 *name-addressed* mutation API, which was the right instinct and was dropped.
 
-**[OPEN]** NodeId format. Recommend a prefixed, sortable ID (`chr_`, `loc_`, `org_`, `obj_`,
-`med_`, `evt_`) — the prefix makes altitude-2 events self-describing and debuggable, and sortability
-gives cheap chronological ordering. Should match whatever the studio already uses. **This is the
-first thing to align with the narrative studio's schema.**
+### Closed — the format is normative **[2026-07-27]**
+
+`narrative-canon/docs/CHANGE_RECORD_SPEC.md` §3 is **[NORMATIVE]** and closes this. ArgOS adopts it
+verbatim:
+
+```
+NodeId ::= <kind> "_" <ULID>     e.g.  character_01J8F3K2QX7YB4N0WZ5MV6RTAC
+```
+
+- **Opaque.** Compare byte-wise; never parse beyond the `<kind>` prefix.
+- **Never derived from a mutable field.** Deterministic slugs are forbidden — two producers
+  independently creating "Malcor" would both mint `character_malcor`, and under a component-granular
+  merge that *silently fuses two different characters*. Opaque IDs fail safe; slugs fail silent.
+- **Globally unique** across every world, branch, repository and producer.
+- **Decentralised minting.** Any producer MAY mint at `create` without coordination; ULID entropy
+  makes independent minting collision-free.
+- **`nodeKind` enum** reconciled across both systems: `character` · `location` · `object` ·
+  `organization` · `faction` · `creature` · `concept` · `artifact` · `media-asset` ·
+  `narrative-node` · `fact` · `theme` · `audience`.
+- **`merge`** is a core verb: the absorbed NodeId becomes a permanent, transitively-resolving
+  read-time redirect, never rewritten in place.
+
+Two consequences for §5's node model: `narrative-node` is load-bearing (the whole `drama.*` story
+depends on arcs and beats being graph nodes), and **`fact` is a node kind** — `reveal`'s subject
+*is* a fact, so facts cannot be free strings.
+
+**ArgOS is the producer with the most to change and the least to unlearn:** it has no durable node
+identity at all today — `world-persistence.ts:21-31` serialises the raw recycled BitECS eid. This
+is Phase 1 of §18 and it is unblocked now.
 
 ---
 
@@ -235,13 +260,17 @@ here; its three abandoned safeguards are restored as requirements in §7),
 
 ---
 
-## 6. The Change Record and the Commit **[OPEN — yours to standardise]**
+## 6. The Change Record and the Commit **[ADOPTED — external standard]**
 
-This section states **requirements**, not a schema. The narrative-studio event schema is being
-standardised separately and ArgOS should conform to it rather than invent a parallel one. What
-follows is the specification that standardisation must satisfy, derived from proven failures.
+The normative format is **`narrative-canon/docs/CHANGE_RECORD_SPEC.md` v0.4**. ArgOS conforms to it
+as a producer; it does not define a parallel format. That document is the authority for the Event
+shape, the verb vocabulary, the fold, identity, time, effects and canonization.
 
-### Why this is stated as requirements
+What follows is retained for one reason: it records **why** these requirements exist, drawn from
+failures proven in this codebase. A future editor tempted to relax one should read the receipt
+first.
+
+### Why this was stated as requirements
 
 There have been **eight prior attempts** at an event/state shape in this project, and six of them
 are live in the codebase right now, sharing no schema:
@@ -280,23 +309,67 @@ A change record must carry:
 6. **Logical clock**, not wall-clock (§8).
 7. **Commit grouping.** Changes group into an atomic, addressable, replayable unit.
 
-### Open questions for the schema work
+### The standard **[ADOPTED — 2026-07-27]**
 
-- **What bounds a commit?** A tick? An agent turn? A narrative beat? An author's editing session?
-  Recommend: a **beat** for simulation-produced commits (altitude-2 aligned), a **session** for
-  authoring. Beats are what a reader experiences and what a panel depicts.
-- **What does squash mean when two changes touch the same field?** Last-write-wins is mechanically
-  correct and narratively lossy — it discards the *middle* of a scene. Recommend squash produce a
-  **view**, not a destructive rewrite: the range stays, the summary is derived. This preserves
-  "recomposable at any point."
-- **Is a squashed commit lossy?** If squash is a view, no. This is the safer default and it is
-  reversible; the opposite is not.
-- **Two altitudes or one?** Recommend the stream carry **altitude 2 only**, with altitude 1 retained
-  locally in a ring buffer for debugging and exact replay. The studio should never see
-  `Needs.hunger: 40 → 42`.
+The requirements above are met. `narrative-canon/docs/CHANGE_RECORD_SPEC.md` **v0.4** is the
+normative standard; ArgOS conforms to it rather than defining a parallel format. Every requirement
+listed above maps to a section there, and the decisions this document previously left open are
+settled:
 
-**Supersedes:** `designDocsBackup/archive/core/event-system.md` (its field set is the template
-above), and — on implementation — all six live event sinks and the drifted UI schema, by name.
+| Was open here | Settled there |
+|---|---|
+| Commit boundary | §11.1 — a **beat** for simulation, a **session** for authoring, a **document** for ingest |
+| Squash semantics | §14 — **a view, never a rewrite**; the range stays, the summary is derived |
+| Stream altitude | §1 — **altitude 2 only**; altitude 1 stays in a local ring buffer, never transported |
+| Identity | §3 — see §4 above |
+| Merge / conflict | §12.6 validity intervals; branch merge still scoped as draft |
+
+Three of its rulings are load-bearing for ArgOS specifically:
+
+- **§2 — an Event carrying zero Changes is invalid and MUST be rejected at commit.** This is the
+  Keystone Rule (§3 of this document) as a schema constraint. It is why ungrounded narration becomes
+  unrepresentable rather than merely discouraged.
+- **§8.4 — the lift is stateful.** `before` is the `after` of the previous altitude-2 Event on that
+  coordinate, not the value at window-open. That requires a last-emitted table keyed by coordinate,
+  which the runtime does not have today. **This table is the 1↔2 layer §2 identifies as missing.**
+- **§9 — effects are collected, never executed**, at most once, driven by commit arrival and never
+  by replay. `run_tool` and `emit_stimulus` are effects, not verbs — see §6.5.
+
+### What ArgOS owes
+
+| Obligation | Spec | Status |
+|---|---|---|
+| Durable NodeId + `nodeKind` + `merge` | §3 | **unblocked — Phase 1** |
+| L1: emit valid Events at the lift | §15 | blocked on the record channel (below) |
+| L1r: apply change records into BitECS (the *lower*, 2→1) | §15 | blocked on the same |
+| Seeded RNG + logical clock | §7, and §8 of this document | independent, can start any time |
+
+ArgOS conforms at **L1 + L1r**, not L2. It does not maintain a parallel altitude-2 component table:
+the BitECS world *is* its fold, and the lower is a projector run at boot, not a standing table.
+Maintaining both would be the twentieth representation of world state — precisely the pathology
+§0 of this document exists to end.
+
+### Still open, and it gates the emitters
+
+**The record channel.** The spec exiles authored records from the format (§12.7 — correctly;
+dissolving them into components buys nothing and breaks every editor) but does not yet specify how
+they are transported. A change-only stream cannot express **Producer II** (§11): you cannot replay
+an event about a character who does not exist yet, so *record-then-change* is not a convention, it
+is forced ordering.
+
+Proposed resolution, under discussion: **one commit, two channels** — changes on story time,
+records on edit time, giving the honest fold signature `fold(commitRange, storyTime)`. Records merge
+field-level last-write-wins; only components need interval algebra. The boundary test is §12.7's
+own and should be normative rather than descriptive: *does it vary as a result of story events?* If
+yes it is a component, whatever it looks like. Mythopia's `mood_baseline` and `mood_emission`
+already moved across on that test; `Location.connections{traversal.days}` fails it too — a bridge
+collapsing is a story event.
+
+**Sequencing:** identity first, emitters after the record channel lands. Building the lift against a
+half-specified instantiation contract would mean rebuilding it.
+
+**Supersedes:** `designDocsBackup/archive/core/event-system.md`, and — on implementation — all six
+live event sinks and the drifted UI schema, by name.
 
 ---
 
@@ -1134,14 +1207,29 @@ Steward, Lawgiver, Watcher.
 
 Ordered by how much they block.
 
-1. **NodeId format** (§4) — must align with the studio. *Blocks everything.*
-2. **Commit boundary** (§6) — beat, tick, turn, or session?
-3. **Squash semantics** (§6) — view or destructive rewrite? *Recommend view.*
-4. **Stream altitude** (§6) — altitude 2 only, or both? *Recommend 2 only.*
-5. **Merge and conflict semantics** (§6) — what happens when a human edits a character in the studio
-   while a simulation has advanced past that point? The only gesture in the corpus is
-   `llm-grounding.md:31`'s **retcon as costed optimisation** — choose the revision with least impact
-   on established narrative. That is a good starting principle and needs an algorithm.
-6. **Ledger location** — inside ArgOS, or a shared package the studio also consumes?
-7. **World namespacing** (§7) — the studio implies many coexisting worlds. A run is a branch; what is
+### Closed **[2026-07-27]**
+
+| Was | Closed by |
+|---|---|
+| ~~NodeId format~~ — *blocked everything* | `CHANGE_RECORD_SPEC.md` §3 **[NORMATIVE]**; adopted in §4 |
+| ~~Commit boundary~~ | spec §11.1 — beat / session / document |
+| ~~Squash semantics~~ | spec §14 — a view, never a rewrite |
+| ~~Stream altitude~~ | spec §1 — altitude 2 only |
+| ~~Merge and conflict semantics~~ (partial) | spec §12.6 validity intervals; branch merge remains draft |
+
+### Open
+
+1. **The record channel** (§6) — how authored records transport. *Gates the emitters and the whole
+   Studio→Simulation direction.* Proposal on the table: one commit, two channels.
+2. **Where a Change lives in nit's op model** — a field of the `WorldEvent` payload, or a top-level
+   graph operation. Resolved in principle: **the payload field, with `changes[]` immutable once
+   committed** (labels and coordinates stay mutable, so the authoring surface survives). Pending
+   ratification.
+3. **Branch merge semantics** — component-granular, keyed on `(timelineId, node, component,
+   interval)`. Drafted, not ratified.
+4. **Agent perception over MCP resources, or internal?** (§6.5) — recommend internal; perception is
+   on the hot path and must not pay protocol cost.
+5. **World namespacing** (§7) — the studio implies many coexisting worlds. A run is a branch; what is
    a world?
+6. **Ledger location** — inside ArgOS, or a shared package the studio also consumes? *Increasingly
+   moot: the standard lives in narrative-canon and ArgOS conforms as a producer.*
