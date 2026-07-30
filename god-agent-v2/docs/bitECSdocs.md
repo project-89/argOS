@@ -174,7 +174,7 @@ assert(eid1 !== eid3); // With versioning, eid1 and eid3 will not be the same
 
 #### ⚠️ Caution with TypedArrays
 
-When using entity ID versioning, be cautious if you are using the entity ID as an index into a sparse TypedArray. The versioning mechanism will technically change the entity ID by large amounts, which can lead to issues where the entity ID overshoots the length of the TypedArray. This can cause unexpected behavior in your system, because Javascript does not throw when trying to access an index that is out of bounds. Make sure your TypedArrays are large enough, or otherwise just handle recycling manually.
+When using entity ID versioning, be cautious if you are using the entity ID as an index into a sparse TypedArray. The versioning mechanism will technically change the entity ID by large amounts, which can lead to issues where the entity ID overshoots the length of the TypedArray. This can cause unexpected behavior in your system, because JavaScript does not throw when trying to access an index that is out of bounds. Make sure your TypedArrays are large enough, or otherwise just handle recycling manually.
 
 ## Component
 
