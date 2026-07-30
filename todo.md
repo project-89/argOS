@@ -2,7 +2,7 @@
 
 ## Unorganzied
 
-[] - Seperate out systems into 2 loops
+[] - Separate out systems into 2 loops
 [] - Spawn subagents to handle tasks
 [] - Options as to whether an agent can update its own goals
 

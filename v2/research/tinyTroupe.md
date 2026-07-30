@@ -434,7 +434,7 @@ story = TinyStory(world)
 
 # possibly wrap this in a loop
 
-continuation = story.continue_story("The team finishes the engagement with the current customer and immediatly after receives a new request from a new customer. Make sure the new customer and its problems are **very different** from the previous ones (e.g., different organization types, sizes, domains, concerns, economic conditions, markets, etc.). The new customer is introduced, its problems are explained, and the team starts working again on this new challenge.")
+continuation = story.continue_story("The team finishes the engagement with the current customer and immediately after receives a new request from a new customer. Make sure the new customer and its problems are **very different** from the previous ones (e.g., different organization types, sizes, domains, concerns, economic conditions, markets, etc.). The new customer is introduced, its problems are explained, and the team starts working again on this new challenge.")
 world.broadcast(continuation)  
 \end{codebox}
 
