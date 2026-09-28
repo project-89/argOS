@@ -10,7 +10,7 @@ import { registerSystem, type SystemRegistry, type SystemDefinition } from "../e
 import { type BuildRequest, type BuildJob, type BuildStatus, type ComponentSpec, type EntitySnapshot, type Scalar, testSchema, SYSTEM_API, PROTECTED_MANAGED_COMPONENTS, MANAGED_SYSTEM_CAPABILITIES, PRIVATE_MANAGED_COMPONENTS } from "./contracts";
 import { captureEntities, ManagedSystemWorker } from "./system-sandbox";
 import { prepareRelease, type PreparedRelease } from "./release";
-import { codexBuilder, geminiBuilder, type SystemBuilder } from "./builders";
+import { claudeBuilder, codexBuilder, geminiBuilder, type SystemBuilder } from "./builders";
 import { getNativeRuntimeServices } from "../runtime/native-services";
 import { getWorldAuthoringContext } from "../world/world-specification";
 import { buildWorkSourceCurrent, identifyBuildWork } from "./build-work-identity";
@@ -19,7 +19,7 @@ import { captureRepairAdmission, type RepairAdmission } from "./repair-admission
 export type CodingReleaseContext = Readonly<{ componentNames: readonly string[] }>;
 
 export interface CodingDaemonConfig {
-  backend?: "codex" | "gemini";
+  backend?: "codex" | "gemini" | "claude";
   directory?: string;
   timeoutMs?: number;
   pollMs?: number;
@@ -139,7 +139,8 @@ export class CodingDaemon {
       throw new Error("Coding authoring context must be a host string of at most 12000 characters");
     this.hostAuthoringContext = config.authoringContext?.trim() ?? "";
     this.directory=path.resolve(config.directory ?? path.join("data","live-builds",world.meta.name.replace(/[^A-Za-z0-9_-]/g,"_").slice(0,80)));
-    this.builder=builder ?? ((config.backend ?? process.env.ARGOS_CODE_BUILDER ?? "codex")==="gemini" ? geminiBuilder : codexBuilder);
+    const backend=config.backend ?? process.env.ARGOS_CODE_BUILDER ?? "codex";
+    this.builder=builder ?? (backend==="gemini" ? geminiBuilder : backend==="claude" ? claudeBuilder : codexBuilder);
     services.set(world,this);
   }
   setEventHandler(callback:(event:BuildEvent)=>void):void { this.onEvent=callback; }

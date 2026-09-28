@@ -9,6 +9,8 @@ import { systemBakerModel } from "../llm/config";
 import { SYSTEM_API, identifier, scalar, componentSchema, systemSchema, testSchema, type BuildJob } from "./contracts";
 import { prepareRelease } from "./release";
 import { runCodexWorker } from "./codex-transport";
+import { claudeBuilderArgs, runClaudeWorker } from "./claude-transport";
+import { cliChildPath, resolveCodingCli } from "./cli-resolve";
 
 export type BuildContext = { job: BuildJob; directory: string; context: string; signal: AbortSignal; progress: (message:string)=>void };
 export type SystemBuilder = (context: BuildContext) => Promise<void>;
@@ -107,8 +109,33 @@ export const codexBuilder: SystemBuilder = async ({job,directory,context,signal,
   const env: NodeJS.ProcessEnv={};
   // Auth stays in the user's existing Codex auth store, not in the candidate package.
   for(const key of ["PATH","HOME","CODEX_HOME","TMPDIR","USER","LANG","SYSTEMROOT"]) if(process.env[key]) env[key]=process.env[key];
-  await runCodexWorker({command:process.env.ARGOS_CODEX_BIN || "codex",args,directory,env,signal,progress,
+  const command=resolveCodingCli("codex",{explicit:process.env.ARGOS_CODEX_BIN});
+  if(!command)throw new Error("Codex CLI not found: set ARGOS_CODEX_BIN or install codex");
+  env.PATH=cliChildPath(command,env.PATH);
+  await runCodexWorker({command,args,directory,env,signal,progress,
     diagnostics:async value=>{await writeFile(path.join(directory,"worker-diagnostics.json"),JSON.stringify(value,null,2));},
     input:`Implement the engineering request in REQUEST.json. Follow SYSTEM_API.md. You may read, write, and test files ONLY in this candidate workspace. This is a bounded Argos system task, not permission to change the host project or inspect credentials. Do not run network clients or install dependencies. Write actual component JSON and TypeScript system files, plus release.json last. Run node validate.mjs and fix failures before finishing. validate.mjs is a bundled host validator: execute it, do not print its source. Do not modify validate.mjs or weaken supplied acceptance criteria.\nRequest: ${job.request.instruction}`,
   });
+};
+
+/** Claude Code as the builder, on the user's Claude subscription: API keys and a
+ * shell-level ANTHROPIC_MODEL are deliberately not inherited. Same workspace,
+ * request files and bundled validator as the Codex builder. */
+export const claudeBuilder: SystemBuilder = async ({job,directory,context,signal,progress}) => {
+  await writeFile(path.join(directory,"REQUEST.json"),context);
+  await writeFile(path.join(directory,"SYSTEM_API.md"),SYSTEM_API);
+  let validator=fileURLToPath(new URL("./validate-candidate.js",import.meta.url));
+  if(!existsSync(validator))validator=validator.replace(/\.js$/,".ts");
+  await build({entryPoints:[validator],outfile:path.join(directory,"validate.mjs"),bundle:true,platform:"node",format:"esm",logLevel:"silent",
+    banner:{js:'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);'}});
+  const command=resolveCodingCli("claude",{explicit:process.env.ARGOS_CLAUDE_BIN});
+  if(!command)throw new Error("Claude Code CLI not found: set ARGOS_CLAUDE_BIN or install claude");
+  const env: NodeJS.ProcessEnv={};
+  for(const key of ["PATH","HOME","TMPDIR","USER","LANG","SYSTEMROOT","CLAUDE_CONFIG_DIR"]) if(process.env[key]) env[key]=process.env[key];
+  env.PATH=cliChildPath(command,env.PATH);
+  const {resultText}=await runClaudeWorker({command,args:claudeBuilderArgs(process.env.ARGOS_CLAUDE_MODEL?.trim()||"sonnet"),directory,env,signal,progress,
+    diagnostics:async value=>{await writeFile(path.join(directory,"worker-diagnostics.json"),JSON.stringify(value,null,2));},
+    input:`Implement the engineering request in REQUEST.json. Follow SYSTEM_API.md. You may read, write, and test files ONLY in this candidate workspace. This is a bounded Argos system task, not permission to change the host project or inspect credentials. Do not use the network or install dependencies. Write actual component JSON and TypeScript system files, plus release.json last. Run \`node validate.mjs\` and fix failures before finishing. validate.mjs is a bundled host validator: execute it, do not print its source. Do not modify validate.mjs or weaken supplied acceptance criteria.\nRequest: ${job.request.instruction}`,
+  });
+  await writeFile(path.join(directory,"worker-summary.txt"),resultText);
 };

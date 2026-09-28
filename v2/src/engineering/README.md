@@ -73,11 +73,15 @@ and authoring tools; generated system code cannot spawn arbitrary entities.
 Set environment variables in the existing local `.env` (never commit keys):
 
 ```dotenv
-ARGOS_CODE_BUILDER=codex
-# Optional if codex is not on PATH:
+ARGOS_CODE_BUILDER=codex          # or claude, or gemini
+# The codex/claude binaries are found on PATH, ~/.local/bin, Homebrew, or any
+# ~/.nvm/versions/node/*/bin (a CLI installed under another Node still runs under
+# that Node). Set these only to pin an exact absolute path:
 # ARGOS_CODEX_BIN=/absolute/path/to/codex
-# Optional explicit Codex model override; otherwise use the CLI default:
+# ARGOS_CLAUDE_BIN=/absolute/path/to/claude
+# Optional explicit model overrides; otherwise the CLI default:
 # ARGOS_CODEX_MODEL=...
+# ARGOS_CLAUDE_MODEL=sonnet        # alias resolves to the newest Sonnet (claude-sonnet-5-5 on 2026-09-28)
 
 # Gemini roles all default to gemini-3.8-flash:
 ARGOS_AGENT_MODEL=gemini-3.8-flash
@@ -87,6 +91,11 @@ ARGOS_RENDER_MODEL=gemini-3.8-flash
 ```
 
 `ARGOS_CODE_BUILDER=gemini` selects a bounded three-attempt implement/test loop.
+`ARGOS_CODE_BUILDER=claude` runs Claude Code headless (`claude -p`) in the same
+candidate workspace on the user's Claude subscription: `ANTHROPIC_API_KEY` and a
+shell-level `ANTHROPIC_MODEL` are not inherited, the session's tools are limited to
+Read/Write/Edit/Glob/Grep/Bash, Bash is pre-approved only for `node validate.mjs`,
+and web tools are denied.
 Both backends use the same independent admission tests. Model parameter
 normalization removes obsolete sampling settings and maps `minimal` thinking
 to `low` for Gemini 3.8. Other configured model families pass through unchanged.
