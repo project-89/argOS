@@ -375,7 +375,10 @@ export class SpatialDemo {
     const catalog = loadSpatialAssetCatalog();
     for (const row of catalog.rejected) console.warn(`[SpatialCatalog] skipped ${row.file}: ${row.error}`);
     const seconds = options.seconds ?? 600;
-    if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > (options.development ? 3600 : 600)) throw new Error("Session duration exceeds this profile's 10-second to 10-minute (development: 60-minute) bounds");
+    // An explicit spending bound, not a default: unset sessions still run 10 minutes
+    // (30 in development). Inhabiting and interviewing need room, and pausing no
+    // longer consumes session time, so an operator may ask for up to an hour.
+    if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > 3600) throw new Error("Session duration must be between 10 seconds and 60 minutes (ARGOS_SPATIAL_SECONDS)");
     if (options.development && (!options.evolving || options.scenario !== "town" || options.weatherMechanic || options.world
       || !options.development.directory?.trim())) throw Error("World development requires its evolving authored town and release directory, without the single-weather canary");
     if (options.world && options.scenario === "blackout") throw Error("Custom spatial worlds cannot substitute for the Blackout fixture");
