@@ -14,6 +14,7 @@ because the components exist.
 | Document | Purpose |
 | --- | --- |
 | [Agent guidance](AGENTS.md) | Editing, authority, privacy and verification rules |
+| [Repository status](../docs/STATUS.md) | Commits, validation scope, known failures and cleanup recovery |
 | [CANON](../CANON.md) | Architectural intent and historical design decisions |
 | [Cognitive architecture](COGNITIVE_ARCHITECTURE.md) | Implemented cognition and source map |
 | [Actor controller](src/cognition/ACTOR-CONTROLLER.md) | Current ownership, selection, admission and handoffs |

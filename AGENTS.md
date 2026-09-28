@@ -10,6 +10,8 @@ directory unless the task explicitly concerns another project. Read
    may belong to the user or another agent.
 2. Read [`v2/README.md`](v2/README.md) for the source map, commands and current
    implementation boundaries.
+   Read [`docs/STATUS.md`](docs/STATUS.md) for the repository checkpoint and known
+   test failures; a clean working tree is not a full-suite or behavioral pass.
 3. Read [`CANON.md`](CANON.md) for architectural intent. Its historical
    supersession statements and implementation inventories are not proof that a
    migration is complete. Use dated implementation records and source for what

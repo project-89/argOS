@@ -14,6 +14,7 @@ library usage, current demos and tests. Agents should first read
 | Start here for… | Document |
 | --- | --- |
 | Running or developing the engine | [Argos v2 README](v2/README.md) |
+| Repository checkpoint, known test failures and cleanup | [Repository status](docs/STATUS.md) |
 | Architectural intent | [CANON](CANON.md) |
 | Implemented cognition | [Cognitive architecture](v2/COGNITIVE_ARCHITECTURE.md) |
 | Current implementation/evidence checkpoint | [Tick cost and Narrator delivery](v2/src/demo/TICK-AND-NARRATOR-DELIVERY-CHECKPOINT.md) |
