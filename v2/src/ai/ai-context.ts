@@ -1,8 +1,8 @@
 import { generateText, generateObject } from "ai";
-import { google } from "@ai-sdk/google";
+import { createArgosModel as google, MODEL_IDS } from "../llm/config";
 import { z } from 'zod/v3';
 
-const model = google("gemini-2.5-flash");
+const model = google(MODEL_IDS.flash);
 
 /**
  * Extract first valid JSON object from text using balanced brace matching.

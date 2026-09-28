@@ -11,6 +11,9 @@ import {
   entityExists,
 } from "bitecs";
 import type { World } from "./world";
+import { allocateWorldEntity } from "../runtime/world-construction-budget";
+import { assertParticipantMutationAllowed } from "../runtime/participant-identities";
+import { prepareComponentEncodedValues } from "./component-value-formats";
 import { AllComponents, Name, Description, GridPosition, Sprite, WorldMap } from "./components";
 import { AllRelations } from "./relations";
 import {
@@ -31,8 +34,9 @@ import {
   moveEntity,
   isWalkable,
 } from "../world/ascii-world";
-import { requestRoomPopulation } from "../spirits/steward-spirit";
+import { requestRoomPopulationForRoom } from "../spirits/steward-spirit";
 import { resolveEntityId, resolveEntityName, syncEntityRegistryFromWorld } from "./entity-lookup";
+import { getDirectContainer, getRoomForEntity } from "./location";
 
 export interface EntityRegistry {
   byName: Map<string, number>;
@@ -82,6 +86,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
       name: string;
       role: string;
       systemPrompt: string;
+      past?: import("../cognition/character-past-schema").CharacterPast;
       description?: string;
       roomName?: string;
     }): ToolResult => {
@@ -91,6 +96,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
           name: params.name,
           role: params.role,
           systemPrompt: params.systemPrompt,
+          past: params.past,
           description: params.description,
           roomId,
         });
@@ -149,13 +155,9 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
         registerEntity(registry, params.name, eid);
 
         // Queue for population by The Steward
-        const request = requestRoomPopulation(
-          params.roomType,
-          params.name,
-          params.context || {},
-          params.constraints || {},
-          0 // GodAI EID (will be set properly in context)
-        );
+        const request = requestRoomPopulationForRoom(world, eid, {
+          roomType: params.roomType, context: params.context, constraints: params.constraints,
+        });
 
         return {
           success: true,
@@ -170,6 +172,15 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
       } catch (e) {
         return { success: false, result: null, error: String(e) };
       }
+    },
+
+    populateRoom: (params: { roomEid: number; roomType?: string; context?: { worldTheme?: string; primaryFunction?: string };
+      constraints?: { maxItems?: number; requiredItems?: string[]; budgetLevel?: "sparse" | "normal" | "abundant" } }): ToolResult => {
+      try {
+        const request = requestRoomPopulationForRoom(world, params.roomEid, params);
+        return { success: true, result: { roomEid: params.roomEid, populationRequestId: request.id,
+          status: "queued", message: "Population delegated; no entity has been created by this request yet." } };
+      } catch (error) { return { success: false, result: null, error: String(error) }; }
     },
 
     createObject: (params: {
@@ -223,7 +234,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
     }): ToolResult => {
       try {
         const roomId = params.roomName ? lookupEntity(registry, params.roomName) : undefined;
-        const eid = addEntity(world);
+        const eid = allocateWorldEntity(world, "entity");
         
         addComponent(world, eid, Name);
         addComponent(world, eid, Description);
@@ -276,9 +287,11 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
         if (!component) {
           return { success: false, result: null, error: `Component not found: ${params.componentName}` };
         }
+        assertParticipantMutationAllowed(world,eid,params.componentName,params.values);
+        const prepared=prepareComponentEncodedValues(params.componentName,params.values,!hasComponent(world,eid,component));
         addComponent(world, eid, component);
-        if (params.values) {
-          for (const [key, value] of Object.entries(params.values)) {
+        if (prepared) {
+          for (const [key, value] of Object.entries(prepared)) {
             if (key in component) {
               (component as any)[key][eid] = value;
             }
@@ -303,6 +316,7 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
         if (!component) {
           return { success: false, result: null, error: `Component not found: ${params.componentName}` };
         }
+        assertParticipantMutationAllowed(world,eid,params.componentName);
         removeComponent(world, eid, component);
         return { success: true, result: { entity: params.entityName, component: params.componentName } };
       } catch (e) {
@@ -324,10 +338,12 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
         if (!component) {
           return { success: false, result: null, error: `Component not found: ${params.componentName}` };
         }
+        assertParticipantMutationAllowed(world,eid,params.componentName,params.values);
+        const prepared=prepareComponentEncodedValues(params.componentName,params.values,!hasComponent(world,eid,component));
         if (!hasComponent(world, eid, component)) {
           addComponent(world, eid, component);
         }
-        for (const [key, value] of Object.entries(params.values)) {
+        for (const [key, value] of Object.entries(prepared)) {
           if (key in component) {
             (component as any)[key][eid] = value;
           }
@@ -490,6 +506,23 @@ export function createEcsTools(world: World, registry: EntityRegistry) {
         return { success: false, result: null, error: `Entity not found: ${params.name}` };
       }
       return { success: true, result: { id: eid, name: params.name } };
+    },
+
+    getEntityLocation: (params: { entityName: string }): ToolResult => {
+      // Presence checks must not fuzzily resolve a deleted "Mara's phone" to
+      // "Mara" and report that the missing prop still exists.
+      const wanted = params.entityName.trim().toLowerCase();
+      const matches = wanted ? [...query(world, [Name])].filter(id => String(Name.value[id] || "").trim().toLowerCase() === wanted) : [];
+      if (matches.length > 1) return { success: false, result: null, error: `Ambiguous entity name: ${params.entityName}` };
+      const eid = matches[0];
+      if (eid === undefined || !entityExists(world, eid)) return { success: false, result: null, error: `Entity not found: ${params.entityName}` };
+      const container = getDirectContainer(world, eid);
+      const room = hasComponent(world, eid, AllComponents.Room) ? eid : getRoomForEntity(world, eid);
+      return { success: true, result: { entityId: eid, name: Name.value[eid],
+        container: container === undefined ? null : { entityId: container, name: Name.value[container] },
+        room: room === undefined ? null : { entityId: room, name: Name.value[room] },
+        held: container !== undefined && hasComponent(world, container, AllComponents.Agent),
+      } };
     },
 
     listEntities: (): ToolResult => {

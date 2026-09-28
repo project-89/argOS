@@ -21,6 +21,40 @@ describe("SimulationBus", () => {
     bus.removeAllListeners();
   });
 
+  test("typed observers cannot abort delivery and once/rejected promises remain bounded", async () => {
+    const delivered: string[] = [];
+    bus.once("systems", () => { throw new Error("PRIVATE observer failure"); });
+    bus.subscribe("systems", () => { delivered.push("system"); });
+    bus.subscribeAll(async () => { throw new Error("PRIVATE async observer failure"); });
+    bus.subscribeAll(() => { delivered.push("wildcard"); });
+    const event = { type: "system:build", timestamp: 1, jobId: "fixture", status: "active", source: "test", message: "PRIVATE payload" } as SimulationEvent;
+    expect(() => bus.emit(event)).not.toThrow();
+    await Promise.resolve(); await Promise.resolve();
+    expect(delivered).toEqual(["system", "wildcard"]);
+    expect(bus.getObserverHealth()).toMatchObject({ failures: 2, lastFailure: { channel: "*", eventType: "system:build" } });
+    bus.emit(event); await Promise.resolve(); await Promise.resolve();
+    expect(delivered).toEqual(["system", "wildcard", "system", "wildcard"]);
+    expect(bus.getObserverHealth().failures).toBe(3); // once observer was removed
+    expect(JSON.stringify(bus.getObserverHealth())).not.toContain("PRIVATE");
+    const health = bus.getObserverHealth(); health.lastFailure!.channel = "changed";
+    expect(bus.getObserverHealth().lastFailure?.channel).toBe("*");
+    bus.on("raw", () => { throw new Error("raw EventEmitter contract"); });
+    expect(() => bus.emit("raw")).toThrow("raw EventEmitter contract");
+  });
+
+  test("specific actor/room and async channel failures cannot block aggregate observers", async () => {
+    const delivered: string[] = [];
+    bus.on("agent:Mara", () => { throw new Error("bad actor observer"); });
+    bus.subscribe("agents", async () => { throw new Error("bad async channel observer"); });
+    bus.on("room:Kitchen", () => { throw new Error("bad room observer"); });
+    bus.subscribeAll(event => { delivered.push(event.type); });
+    bus.emit({ type: "agent:action", timestamp: 1, agentId: 1, agentName: "Mara", action: "move" } as SimulationEvent);
+    bus.emit({ type: "room:state", timestamp: 1, roomName: "Kitchen" } as SimulationEvent);
+    await Promise.resolve(); await Promise.resolve();
+    expect(delivered).toEqual(["agent:action", "room:state"]);
+    expect(bus.getObserverHealth().failures).toBe(3);
+  });
+
   describe("Basic Event Emission", () => {
     it("should emit and receive events", (done) => {
       bus.subscribeAll((event) => {

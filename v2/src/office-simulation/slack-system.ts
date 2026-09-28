@@ -309,7 +309,7 @@ export function sendMessage(
 
     // Queue as stimulus if it's a DM or mention
     if (notification.type === "dm" || notification.type === "mention") {
-      queueStimulus({
+      queueStimulus(world, {
         targetEid: memberEid,
         type: "notification",
         content: `[Slack ${notification.type === "dm" ? "DM" : "mention"}] ${authorName}: "${content.slice(0, 80)}${content.length > 80 ? "..." : ""}"`,
@@ -627,7 +627,7 @@ export function handleExternalMessage(
       externalMessageCallback(memberEid, authorName, content, channelName);
     } else {
       // Fallback to stimulus queue
-      queueStimulus({
+      queueStimulus(world, {
         targetEid: memberEid,
         type: "notification",
         content: `[Slack #${channelName}] ${authorName}: "${content}"`,

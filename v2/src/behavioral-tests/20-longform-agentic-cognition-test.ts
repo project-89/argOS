@@ -403,7 +403,7 @@ Rules:
   Goal.progress[goalEid] = 0;
 
   // Initial briefing stimulus.
-  queueStimulus({
+  queueStimulus(world, {
     targetEid: agentEid,
     type: "mission_brief",
     modality: "cognitive",
@@ -450,7 +450,7 @@ function runDeterministicSystems(tw: TestWorld, cycle: number): void {
           data.type === "auditory" ? "auditory" :
           data.type === "cognitive" ? "cognitive" :
           "cognitive";
-        queueStimulus({
+        queueStimulus(tw.world, {
           targetEid: data.targetEid,
           type: data.type || "stimulus",
           content: data.content || "",

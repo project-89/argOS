@@ -1,7 +1,11 @@
+import { stampGoalTiming } from "../ecs/temporal-age";
+import { setGoalInactivityBudget } from "../cognition/goal-inactivity-budget";
+import { bindSupportingGoal } from "../cognition/goal-dependents";
+import { currentOccurrenceDay, lookupScheduleOccurrence, recordScheduleOccurrence, scheduledGoalOccurrence, retireReplacedScheduleOccurrences } from "../cognition/schedule-occurrences";
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext } from "../ecs/dynamic-systems";
 import { entityExists, hasComponent, query, getRelationTargets } from "bitecs";
-import { Agent, DayPlanState, Goal, Name, Plan, Room, Schedule } from "../ecs/components";
+import { Agent, DayPlanState, Goal, GoalLifecycle, Name, Plan, Room, Schedule } from "../ecs/components";
 import { HasGoal } from "../ecs/relations";
 import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import { getCurrentActivity, getCurrentDay, getCurrentHour, getSchedule } from "../cognition/schedule-system";
@@ -12,6 +16,27 @@ import { getAgentProceduralSkills } from "../cognition/procedural-skills";
 import { ensureGoalSignature, goalSignatureId } from "../cognition/goal-contract";
 
 type ActivityType = "eat_meal" | "sleep_block" | "work_block" | "socialize_block" | "leisure_block";
+
+/** Queuing is not lived task time. Both activation paths start the same bounded
+ * attempt as an activity discovered now, regardless of a pause or old save. */
+function activateScheduledGoal(world: World, goalEid: number): void {
+  Goal.status[goalEid] = "active";
+  Goal.createdAt[goalEid] = Date.now();
+  const attemptMs = scheduledAttemptMs(goalEid);
+  setGoalInactivityBudget(world, goalEid, attemptMs);
+  Goal.deadline[goalEid] = Goal.createdAt[goalEid] + attemptMs;
+  stampGoalTiming(world, goalEid);
+}
+
+function scheduledAttemptMs(goalEid: number): number {
+  try {
+    const params = JSON.parse(Goal.paramsJson[goalEid] || "{}");
+    if (params.activityType === "work_block")
+      return (Number.isFinite(params.durationHours) && params.durationHours > 0
+        ? Math.min(24, params.durationHours) : 1) * 3600_000 + 180_000;
+  } catch { /* Legacy non-work attempts retain their existing budget. */ }
+  return 180_000;
+}
 
 function normalize(s: string): string {
   return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -76,18 +101,6 @@ function findOtherAgentInRoom(world: World, roomEid: number, selfEid: number): n
   return undefined;
 }
 
-function findObservableTargetInRoom(world: World, roomEid: number, selfEid: number): number | undefined {
-  for (const contentEid of listDirectContents(world as any, roomEid)) {
-    if (contentEid === roomEid) continue;
-    if (!entityExists(world as any, contentEid)) continue;
-    // Observing self is allowed (and better than failing on a room entity).
-    if (contentEid === selfEid) return contentEid;
-    // Otherwise prefer any non-room entity (agents or objects).
-    return contentEid;
-  }
-  return undefined;
-}
-
 function findRoomWithAffordanceTarget(
   world: World,
   actorEid: number,
@@ -110,29 +123,7 @@ function findRoomWithAffordanceTarget(
   return null;
 }
 
-function hasActiveGoalWithSignature(world: World, agentEid: number, signature: string): boolean {
-  const goalEids = getRelationTargets(world as any, agentEid, HasGoal as any) as number[];
-  for (const gid of goalEids) {
-    if (!entityExists(world as any, gid)) continue;
-    if (!hasComponent(world as any, gid, Goal as any)) continue;
-    const status = String(Goal.status[gid] || "");
-    if (status === "completed" || status === "expired" || status === "failed") continue;
-    if (String(Goal.signature[gid] || "") === signature) return true;
-  }
-  return false;
-}
-
-function findGoalBySignature(world: World, agentEid: number, signature: string): number | undefined {
-  const goalEids = getRelationTargets(world as any, agentEid, HasGoal as any) as number[];
-  for (const gid of goalEids) {
-    if (!entityExists(world as any, gid)) continue;
-    if (!hasComponent(world as any, gid, Goal as any)) continue;
-    if (String(Goal.signature[gid] || "") === signature) return gid;
-  }
-  return undefined;
-}
-
-function ensureMoveToRoomGoal(world: World, ctx: SystemContext, agentEid: number, roomName: string, priority: number): void {
+function ensureMoveToRoomGoal(world: World, ctx: SystemContext, agentEid: number, roomName: string, priority: number, parentGoal: number): void {
   const wanted = normalize(roomName);
   if (!wanted) return;
 
@@ -149,6 +140,9 @@ function ensureMoveToRoomGoal(world: World, ctx: SystemContext, agentEid: number
     if (String(Goal.status[gid] || "") !== "active") continue;
     const kind = String(Goal.kind[gid] || "");
     if (kind !== "move_to_room") continue;
+    if (!hasComponent(world, gid, GoalLifecycle) || GoalLifecycle.parentGoalEid[gid] !== parentGoal
+      || GoalLifecycle.parentCreatedAt[gid] !== Goal.createdAt[parentGoal]
+      || GoalLifecycle.parentSignature[gid] !== Goal.signature[parentGoal]) continue;
     try {
       const parsed = JSON.parse(String(Goal.paramsJson[gid] || "{}"));
       const rn = normalize(String(parsed?.roomName || ""));
@@ -167,6 +161,7 @@ function ensureMoveToRoomGoal(world: World, ctx: SystemContext, agentEid: number
   Goal.progress[goalEid] = 0;
   Goal.deadline[goalEid] = Date.now() + 2 * 60 * 1000;
   Goal.createdAt[goalEid] = Date.now();
+  stampGoalTiming(world, goalEid);
   setGoalContract(world as any, goalEid, {
     version: 1,
     kind: "move_to_room",
@@ -174,6 +169,7 @@ function ensureMoveToRoomGoal(world: World, ctx: SystemContext, agentEid: number
     success: { type: "in_room", roomName },
     description: Goal.description[goalEid],
   });
+  bindSupportingGoal(world, agentEid, goalEid, parentGoal);
 }
 
 function hasGoalMacroForSignature(world: World, agentEid: number, goalEid: number): boolean {
@@ -265,13 +261,9 @@ function buildScheduledActivityContract(input: {
       version: 1,
       kind: "scheduled_activity",
       params: { activityType: input.activityType, label: input.label, roomName: input.roomName, startHour: input.startHour, durationHours: input.durationHours },
-      success: {
-        type: "all_of",
-        conditions: [
-          { type: "in_room", roomName: input.roomName },
-          { type: "did_action_type", actionType: "interact" },
-        ],
-      },
+      success: { type: "productive_time", roomName: input.roomName,
+        atLeastMs: Number.isFinite(input.durationHours) && input.durationHours! > 0
+          ? Math.min(24, input.durationHours!) * 3600_000 : 3600_000 },
       description: `Follow schedule: ${input.label} (${input.roomName})`,
     };
   }
@@ -293,10 +285,6 @@ function buildScheduledActivityContract(input: {
 }
 
 export function createScheduledActivityGoalSystem(): SystemDefinition {
-  // Track recently completed schedule goals to prevent re-creation spam
-  const completedCooldowns = new Map<string, number>(); // "agentEid:signature" -> completedAtMs
-  const SCHEDULE_COOLDOWN_MS = 60_000; // Don't re-create for 60s after completion
-
   return {
     name: "ScheduledActivityGoals",
     description: "Creates typed scheduled activity goals (meals/sleep/work/leisure/socialize) and movement subgoals",
@@ -317,6 +305,7 @@ FOR EACH agent WITH Schedule:
         if (!Agent.active[agentEid]) continue;
 
         // Only operate on agents that have a schedule.
+        retireReplacedScheduleOccurrences(world, agentEid);
         const scheduleEid = getSchedule(world as any, agentEid);
         if (!scheduleEid) continue;
         if (!hasComponent(world as any, scheduleEid, Schedule as any)) continue;
@@ -326,6 +315,30 @@ FOR EACH agent WITH Schedule:
         const classified = classifyActivity(current.name);
         if (!classified) continue;
 
+        const day = currentOccurrenceDay(world, current);
+        const occurrence = lookupScheduleOccurrence(world, agentEid, scheduleEid, current, day);
+        if (occurrence.state === "blocked") continue;
+
+        // A slot is one intention, not one per room the actor passes through.
+        // In particular an unspecified location must not be re-resolved to the
+        // actor's new room and mint a different success contract on every move.
+        const existingSlot = occurrence.state === "seen" ? occurrence.goal : findUnsettledGoalForSlot(world, agentEid, {
+          activityType: classified.type, startHour: Number(current.startHour),
+        });
+        if (existingSlot !== undefined) {
+          if (Goal.status[existingSlot] === "queued") {
+            activateScheduledGoal(world, existingSlot);
+            Goal.priority[existingSlot] = Math.min(10, Math.max(1, Number(current.priority || Goal.priority[existingSlot] || 6)));
+            try {
+              const destination = JSON.parse(Goal.paramsJson[existingSlot] || "{}").roomName;
+              if (typeof destination === "string" && destination.trim())
+                ensureMoveToRoomGoal(world, ctx, agentEid, destination, Goal.priority[existingSlot], existingSlot);
+            } catch { /* Malformed legacy contracts cannot invent a destination. */ }
+          }
+          continue;
+        }
+        if (occurrence.state === "seen") continue; // Settled or collected, not a fresh admission.
+
         const needsTarget = classified.type === "sleep_block" || classified.type === "eat_meal";
         const desiredAffordances =
           classified.type === "sleep_block"
@@ -333,7 +346,7 @@ FOR EACH agent WITH Schedule:
             : classified.type === "eat_meal"
               ? ["eat", "drink"]
               : classified.type === "work_block"
-                ? ["search_files", "browse_web", "run_command"]
+                ? ["write_document", "review_document"]
                 : classified.type === "leisure_block"
                   ? ["sit", "browse_web", "drink"]
                   : [];
@@ -349,9 +362,6 @@ FOR EACH agent WITH Schedule:
 
         const roomName = String(Name.value[resolvedRoomEid] || current.location || "").trim();
         if (!roomName) continue;
-
-        // Movement is a subgoal (so we keep accomplishment goals separate from navigation).
-        ensureMoveToRoomGoal(world as any, ctx, agentEid, roomName, Math.max(3, current.priority || 5));
 
         const contract = buildScheduledActivityContract({
           activityType: classified.type,
@@ -369,61 +379,16 @@ FOR EACH agent WITH Schedule:
         Goal.priority[tempGoalEid] = Math.min(10, Math.max(1, current.priority || 6));
         Goal.status[tempGoalEid] = "active";
         Goal.progress[tempGoalEid] = 0;
-        Goal.deadline[tempGoalEid] = Date.now() + 3 * 60 * 1000;
-        // For correctness, prefer "activation time" as createdAt. This is an active-now goal, so set it.
-        Goal.createdAt[tempGoalEid] = Date.now();
-        const sig = setGoalContract(world as any, tempGoalEid, contract);
-
-        // Check cooldown: don't re-create goals that were recently completed
-        const cooldownKey = `${agentEid}:${sig}`;
-        const completedAt = completedCooldowns.get(cooldownKey);
-        if (completedAt !== undefined && Date.now() - completedAt < SCHEDULE_COOLDOWN_MS) {
-          ctx.removeEntity(world as any, tempGoalEid);
-          continue;
-        }
-
-        // If agent already has a non-completed scheduled activity goal for this signature, discard temp.
-        if (hasActiveGoalWithSignature(world as any, agentEid, sig)) {
-          // If it exists but is queued (from preplanning), activate it now.
-          const existing = findGoalBySignature(world as any, agentEid, sig);
-          if (existing !== undefined && String(Goal.status[existing] || "") === "queued") {
-            Goal.status[existing] = "active";
-            Goal.createdAt[existing] = Date.now();
-            Goal.priority[existing] = Math.min(10, Math.max(1, Number(current.priority || Goal.priority[existing] || 6)));
-            ensureMoveToRoomGoal(world as any, ctx, agentEid, roomName, Goal.priority[existing] || 6);
-          }
-          // best-effort removal: goal entities are unattached (no HasGoal relation).
-          // Removing them avoids registry clutter.
-          ctx.removeEntity(world as any, tempGoalEid);
-          continue;
-        }
-
-        // Track completion for cooldown when goal is evaluated as complete
-        // (Listen for the goal being completed by goal evaluation system)
-        const onComplete = () => {
-          completedCooldowns.set(cooldownKey, Date.now());
-          // Clean old entries periodically
-          if (completedCooldowns.size > 200) {
-            const now = Date.now();
-            for (const [k, v] of completedCooldowns) {
-              if (now - v > SCHEDULE_COOLDOWN_MS * 2) completedCooldowns.delete(k);
-            }
-          }
-        };
-        // We can't directly observe goal completion from here, but we can check
-        // if the goal will be immediately completed (agent already satisfies success conditions)
-        // and set the cooldown proactively.
-        const agentRoom = getRoomForEntity(world as any, agentEid);
-        const agentRoomName = agentRoom !== undefined ? String(Name.value[agentRoom] || "").trim().toLowerCase() : "";
-        if (agentRoomName && agentRoomName === roomName.trim().toLowerCase()) {
-          // Agent is already in the target room — goal will likely complete immediately
-          completedCooldowns.set(cooldownKey, Date.now());
-          ctx.removeEntity(world as any, tempGoalEid);
-          continue;
-        }
+        setGoalContract(world as any, tempGoalEid, contract);
+        // Resolve the contract's duration before stamping its lived-time bounds.
+        activateScheduledGoal(world, tempGoalEid);
 
         // Attach goal to agent.
         ctx.addComponent(world as any, agentEid, HasGoal(tempGoalEid) as any);
+        if (!recordScheduleOccurrence(world, agentEid, scheduleEid, current, day, tempGoalEid)) {
+          ctx.removeEntity(world, tempGoalEid); continue;
+        }
+        ensureMoveToRoomGoal(world, ctx, agentEid, roomName, Math.max(3, current.priority || 5), tempGoalEid);
         ctx.emit("goal_created", {
           agent: Name.value[agentEid],
           goal: Goal.description[tempGoalEid],
@@ -458,14 +423,17 @@ function timeWindowContainsHour(startHour: number, durationHours: number, hour: 
   return h >= start || h < end;
 }
 
-function findQueuedGoalForSlot(world: World, agentEid: number, slot: { activityType: string; startHour: number }): number | undefined {
+function findUnsettledGoalForSlot(world: World, agentEid: number, slot: { activityType: string; startHour: number }): number | undefined {
   const goals = getRelationTargets(world as any, agentEid, HasGoal as any) as number[];
   for (const gid of goals) {
     if (!entityExists(world as any, gid)) continue;
     if (!hasComponent(world as any, gid, Goal as any)) continue;
     if (String(Goal.kind[gid] || "") !== "scheduled_activity") continue;
+    // Compatibility only. Newly admitted goals are matched by durable occurrence,
+    // not by yesterday's same activity/start hour or a room-dependent signature.
+    if (hasComponent(world, gid, GoalLifecycle) && GoalLifecycle.source[gid] === "schedule") continue;
     const status = String(Goal.status[gid] || "");
-    if (status !== "queued") continue;
+    if (!["queued", "active", "paused", "pending"].includes(status)) continue;
     try {
       const params = JSON.parse(String(Goal.paramsJson[gid] || "{}"));
       if (String(params?.activityType || "") !== slot.activityType) continue;
@@ -479,7 +447,8 @@ function findQueuedGoalForSlot(world: World, agentEid: number, slot: { activityT
 }
 
 /**
- * DayPlanPreplanner - Seeds queued scheduled_activity goals for the whole day (once per sim day).
+ * DayPlanPreplanner - Seeds each source/day/activity occurrence once. Rechecking
+ * the ledger also admits an edited/replaced schedule during the same day.
  *
  * These goals remain queued until their time window begins, at which point DayPlanActivationSystem
  * flips them to active and stamps createdAt so evaluation/macros are gated to the activity window.
@@ -490,11 +459,10 @@ export function createDayPlanPreplannerSystem(): SystemDefinition {
     description: "Seeds queued scheduled activity goals for the full day from each agent's schedule",
     pseudocode: `
 FOR EACH agent WITH Schedule:
-  IF DayPlanState.plannedDay != world.time.simulationDay:
-    FOR EACH scheduled activity in Schedule.activities:
-      if supported:
-        create Goal(kind=scheduled_activity, status=queued) with startHour/duration in params
-    set DayPlanState.plannedDay = current day
+  FOR EACH scheduled activity in Schedule.activities:
+    IF supported AND source/day/activity has no admission receipt:
+      create Goal(kind=scheduled_activity, status=queued); record occurrence
+  set DayPlanState.plannedDay = current day
 `,
     frequency: 2000,
     active: true,
@@ -505,6 +473,7 @@ FOR EACH agent WITH Schedule:
       const agents = Array.from(ctx.query(world as any, [Agent, Name] as any)) as number[];
       for (const agentEid of agents) {
         if (!Agent.active[agentEid]) continue;
+        retireReplacedScheduleOccurrences(world, agentEid);
         const scheduleEid = getSchedule(world as any, agentEid);
         if (!scheduleEid) continue;
         if (!hasComponent(world as any, scheduleEid, Schedule as any)) continue;
@@ -514,9 +483,6 @@ FOR EACH agent WITH Schedule:
           DayPlanState.plannedDay[agentEid] = 0;
           DayPlanState.lastPlannedAt[agentEid] = 0;
         }
-
-        const already = Number(DayPlanState.plannedDay[agentEid] || 0);
-        if (already === day) continue;
 
         const activities = parseActivitiesJson(String(Schedule.activities[scheduleEid] || ""));
         for (const raw of activities) {
@@ -529,8 +495,10 @@ FOR EACH agent WITH Schedule:
           const classified = classifyActivity(name);
           if (!classified) continue;
 
+          if (lookupScheduleOccurrence(world, agentEid, scheduleEid, raw, day).state !== "available") continue;
+
           // Avoid duplicates for the (activityType,startHour) slot.
-          const existingQueued = findQueuedGoalForSlot(world as any, agentEid, { activityType: classified.type, startHour });
+          const existingQueued = findUnsettledGoalForSlot(world as any, agentEid, { activityType: classified.type, startHour });
           if (existingQueued !== undefined) continue;
 
           // Best-effort resolve to a real room name; use affordance grounding when possible.
@@ -540,7 +508,7 @@ FOR EACH agent WITH Schedule:
               : classified.type === "eat_meal"
                 ? ["eat", "drink"]
                 : classified.type === "work_block"
-                  ? ["search_files", "browse_web", "run_command"]
+                  ? ["write_document", "review_document"]
                   : classified.type === "leisure_block"
                     ? ["sit", "browse_web", "drink", "read"]
                     : [];
@@ -572,9 +540,10 @@ FOR EACH agent WITH Schedule:
           Goal.priority[goalEid] = Math.min(10, Math.max(1, Number.isFinite(priority) ? priority : 5));
           Goal.status[goalEid] = "queued";
           Goal.progress[goalEid] = 0;
-          Goal.deadline[goalEid] = Date.now() + 24 * 60 * 60 * 1000;
+          Goal.deadline[goalEid] = 0; // The active attempt's budget begins on activation.
           Goal.createdAt[goalEid] = 0; // stamped on activation
           setGoalContract(world as any, goalEid, contract);
+          if (!recordScheduleOccurrence(world, agentEid, scheduleEid, raw, day, goalEid)) ctx.removeEntity(world, goalEid);
         }
 
         DayPlanState.plannedDay[agentEid] = day;
@@ -620,6 +589,13 @@ FOR EACH agent WITH queued scheduled_activity goals:
           const status = String(Goal.status[goalEid] || "");
           if (status !== "queued") continue;
 
+          if (hasComponent(world, goalEid, GoalLifecycle) && GoalLifecycle.source[goalEid] === "schedule") {
+            const occurrence = scheduledGoalOccurrence(world, agentEid, goalEid);
+            if (!occurrence) { Goal.status[goalEid] = "retired"; continue; }
+            if (occurrence.phase === "past") { Goal.status[goalEid] = "expired"; continue; }
+            if (occurrence.phase === "future") continue;
+          }
+
           let params: any = null;
           try {
             params = JSON.parse(String(Goal.paramsJson[goalEid] || "{}"));
@@ -635,11 +611,10 @@ FOR EACH agent WITH queued scheduled_activity goals:
           if (!roomName.trim()) continue;
 
           if (timeWindowContainsHour(startHour, durationHours, hour)) {
-            Goal.status[goalEid] = "active";
-            Goal.createdAt[goalEid] = Date.now();
+            activateScheduledGoal(world, goalEid);
             // Provide a bit of urgency as the window progresses.
             Goal.priority[goalEid] = Math.min(10, Math.max(1, Number(Goal.priority[goalEid] || 5)));
-            ensureMoveToRoomGoal(world as any, ctx, agentEid, roomName, Goal.priority[goalEid] || 5);
+            ensureMoveToRoomGoal(world as any, ctx, agentEid, roomName, Goal.priority[goalEid] || 5, goalEid);
             continue;
           }
 
@@ -696,7 +671,8 @@ FOR EACH agent WITH active scheduled_activity goal:
 
           // Skip if we already have an active plan for this goal.
           const existingPlan = getPlanForGoal(world as any, agentEid, goalEid);
-          if (existingPlan && hasComponent(world as any, existingPlan, Plan as any) && String(Plan.status[existingPlan] || "") === "active") {
+          if (existingPlan !== undefined && hasComponent(world as any, existingPlan, Plan as any)
+            && ["active", "awaiting_evidence"].includes(String(Plan.status[existingPlan] || ""))) {
             continue;
           }
 
@@ -713,6 +689,10 @@ FOR EACH agent WITH active scheduled_activity goal:
           }
           const roomName = params && typeof params.roomName === "string" ? params.roomName : "";
           const activityType = params && typeof params.activityType === "string" ? params.activityType : "";
+          // A work period is not a command to manufacture a report, send mail,
+          // or endlessly inspect oneself. Content and task selection belong to
+          // cognition/planning; only their admitted operations earn work time.
+          if (activityType === "work_block") continue;
 
           const targetRoomEid = roomByName.get(normalize(roomName));
           if (targetRoomEid === undefined) continue;
@@ -762,20 +742,9 @@ FOR EACH agent WITH active scheduled_activity goal:
             continue;
           }
 
-          // No obvious target: still create a minimal plan so the activity can be "done" deterministically.
-          const observeTargetEid = findObservableTargetInRoom(world as any, targetRoomEid, agentEid);
-          const observeTargetName = observeTargetEid !== undefined ? String(Name.value[observeTargetEid] || "").trim() : "";
-          const plan = observeTargetName
-            ? {
-                steps: [
-                  { description: `Observe ${observeTargetName}.`, actionType: "observe", target: observeTargetName },
-                  { description: `Examine ${observeTargetName}.`, actionType: "interact", target: observeTargetName, content: "examine" },
-                ],
-              }
-            : {
-                steps: [{ description: "Wait for a moment.", actionType: "wait" }],
-              };
-          createPlanEntity(world as any, agentEid, goalEid, plan as any);
+          // A missing opportunity is not a completed activity. Leave the goal
+          // available for deliberation; an observe/examine loop cannot supply
+          // the absent meal, rest, or leisure affordance.
         }
       }
     },

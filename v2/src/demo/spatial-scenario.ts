@@ -1,0 +1,103 @@
+/** Authored world package: data supplies opportunities; native cognition chooses
+ * what to do with them. This is not a controller or a construction permission. */
+import type { AgentConfig } from "../index";
+import type { CharacterAppearanceConfig } from "../rendering/character-appearance";
+import { SPATIAL_ASSETS, validateSpatialBlueprint, type SpatialBlueprint, type SpatialBounds } from "./spatial-catalog";
+import { createSpatialGeometry, findSpatialPath } from "../world/spatial-path";
+
+export interface SpatialResident extends AgentConfig {
+  id: string;
+  homeRoomId?: string;
+  startRoomId: string;
+  assetId: string;
+  personality?: string;
+  aspirations: string[];
+  appearance: CharacterAppearanceConfig;
+  needs: { hunger: number; energy: number };
+  initialGoal: { description: string; priority: number; kind?: "custom" | "social" };
+  phoneId?: string;
+  phoneContact?: { name: string; description: string; memory: string };
+  initialObservation?: string;
+}
+
+export interface SpatialScenarioDefinition {
+  id: string;
+  title: string;
+  blueprint: SpatialBlueprint;
+  bounds: SpatialBounds;
+  residents: SpatialResident[];
+  maxWorldEntities: number;
+  /** Explicit host choice; a larger town changes resolution, not clock/speed. */
+  navigationCellSize?: .25 | .5;
+}
+
+/** Preflight before createSimulation allocates anything. Validate the renderer,
+ * navigation and resident bindings as one package, then detach caller data.
+ * The host's bounded navigation grid and per-session construction ceiling cannot be
+ * bypassed by a pretty scene or a resident naming an uninstalled object. */
+export function validateSpatialScenario(input: SpatialScenarioDefinition): SpatialScenarioDefinition {
+  const value = structuredClone(input);
+  value.blueprint = validateSpatialBlueprint(value.blueprint);
+  const { bounds: b, blueprint, residents } = value;
+  const cellSize = value.navigationCellSize ?? .25;
+  if (cellSize !== .25 && cellSize !== .5) throw Error("Unsupported navigation resolution");
+  if (!value.id?.trim() || !value.title?.trim() || !b || !Object.values(b).every(Number.isFinite)
+    || b.maxX <= b.minX || b.maxY <= b.minY
+    || (Math.floor((b.maxX - b.minX) / cellSize) + 1) * (Math.floor((b.maxY - b.minY) / cellSize) + 1) > 10000)
+    throw Error("Scenario exceeds the bounded spatial grid");
+  if (!Number.isSafeInteger(value.maxWorldEntities) || value.maxWorldEntities < 1 || value.maxWorldEntities > 1000)
+    throw Error("Scenario needs a bounded construction budget");
+  const count = blueprint.rooms.length + blueprint.props.length + blueprint.walls.length + blueprint.spawns.length;
+  if (count > value.maxWorldEntities) throw Error("Scenario seed exceeds its construction budget");
+  if (blueprint.rooms.some(r => r.bounds.minX < b.minX || r.bounds.minY < b.minY || r.bounds.maxX > b.maxX || r.bounds.maxY > b.maxY))
+    throw Error("Scenario room leaves the navigation bounds");
+  const names = [...blueprint.rooms, ...blueprint.props, ...blueprint.spawns].map(row => row.name.toLowerCase().trim());
+  names.push(...blueprint.walls.map(row => row.id.toLowerCase()));
+  if (new Set(names).size !== names.length) throw Error("Scenario names must resolve unambiguously");
+  if (!residents.length || residents.length !== blueprint.spawns.length || new Set(residents.map(r => r.id)).size !== residents.length)
+    throw Error("Every spawn needs exactly one resident");
+  const phones = new Set<string>();
+  for (const r of residents) {
+    const spawn = blueprint.spawns.find(s => s.id === r.id), room = blueprint.rooms.find(room => room.id === r.startRoomId);
+    if (!spawn || !room || spawn.name !== r.name || spawn.roomId !== room.id || r.startRoom !== room.name || spawn.assetId !== r.assetId
+      || r.homeRoomId && !blueprint.rooms.some(room => room.id === r.homeRoomId))
+      throw Error("Resident identity, appearance and starting room must agree with the blueprint");
+    if (!r.needs || ![r.needs.hunger, r.needs.energy].every(n => Number.isFinite(n) && n >= 0 && n <= 100)
+      || !r.initialGoal?.description?.trim() || r.initialGoal.description.trim().length > 300
+      || !Number.isInteger(r.initialGoal.priority) || r.initialGoal.priority < 1 || r.initialGoal.priority > 10
+      || r.initialGoal.kind !== undefined && !["custom", "social"].includes(r.initialGoal.kind)
+      || !Array.isArray(r.aspirations) || !r.aspirations.length || r.aspirations.length > 12
+      || r.aspirations.some(a => typeof a !== "string" || !a.trim() || a.length > 500))
+      throw Error("Resident needs, aspirations and opening intention must be bounded and explicit");
+    if (r.phoneContact && (!r.phoneId || !r.phoneContact.name.trim() || !r.phoneContact.description.trim() || !r.phoneContact.memory.trim()))
+      throw Error("A phone relationship requires a bound physical phone and authored context");
+    if (r.phoneId) {
+      const phone = blueprint.props.find(p => p.id === r.phoneId);
+      if (!phone || phone.assetId !== "phone" || phones.has(r.phoneId)) throw Error("Resident phone must be unique and physically installed");
+      phones.add(r.phoneId);
+    }
+  }
+  if (cellSize !== .25) {
+    // A layout connected on the fine catalog grid may be impassable at the
+    // selected motor resolution. Check the real continuous collision geometry
+    // and endpoint connectors, still before allocating any ECS identity.
+    const obstacles = [...blueprint.walls, ...blueprint.props.flatMap(p => {
+      const collider = SPATIAL_ASSETS[p.assetId].collider;
+      return collider ? [{ position: p.position, ...collider }] : [];
+    })].map(c => ({ minX: c.position.x - c.halfWidth, maxX: c.position.x + c.halfWidth,
+      minY: c.position.y - c.halfDepth, maxY: c.position.y + c.halfDepth }));
+    const shape = createSpatialGeometry(b, blueprint.rooms.map(r => r.bounds), obstacles, .18, cellSize);
+    for (const room of blueprint.rooms) {
+      if (!findSpatialPath(blueprint.rooms[0].entry, room.entry, b, cellSize, shape)) throw Error("Room is unreachable at the selected navigation resolution");
+      const anchors = [...blueprint.props.filter(p => p.roomId === room.id).flatMap(p => p.interactionAnchors.map(a => ({ x: p.position.x + a.x, y: p.position.y + a.y }))),
+        ...blueprint.spawns.filter(s => s.roomId === room.id).map(s => s.position)];
+      if (anchors.some(a => !findSpatialPath(room.entry, a, b, cellSize, shape))) throw Error("Interaction is unreachable at the selected navigation resolution");
+    }
+  }
+  return value;
+}
+
+/** Keep visual/interaction metadata out of the cognitive character config. */
+export function spatialAgentConfig(r: SpatialResident): AgentConfig {
+  return { name: r.name, role: r.role, description: r.description, systemPrompt: r.systemPrompt, startRoom: r.startRoom, past: r.past };
+}

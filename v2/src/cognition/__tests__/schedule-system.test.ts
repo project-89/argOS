@@ -29,6 +29,8 @@ import {
   type ScheduledActivity,
 } from "../schedule-system";
 
+const describeLlm = process.env.ARGOS_RUN_LLM_TESTS === "1" ? describe : describe.skip;
+
 // =============================================================================
 // TEST HELPERS
 // =============================================================================
@@ -242,19 +244,19 @@ describe("Schedule System", () => {
       expect(lunch).toBeDefined();
       expect(dinner).toBeDefined();
 
-      // Should have work
-      const work = schedule.find(a => a.name === "work");
-      expect(work).toBeDefined();
+      // An unspecified daily routine is not evidence of employment.
+      expect(schedule.some(a => a.name.includes("work"))).toBe(false);
     });
 
-    test("should cover 24 hours reasonably", () => {
+    test("leaves daytime gaps for the actor's own purposes", () => {
       const schedule = createDefaultSchedule("merchant");
 
       // Calculate total hours covered
       const totalHours = schedule.reduce((sum, a) => sum + a.duration, 0);
 
-      // Should cover most of the day
-      expect(totalHours).toBeGreaterThanOrEqual(20);
+      expect(totalHours).toBeGreaterThan(0);
+      expect(totalHours).toBeLessThan(24);
+      expect(schedule.some(a => a.startHour === 8 || a.startHour === 13)).toBe(false);
     });
   });
 
@@ -342,7 +344,7 @@ describe("Schedule System", () => {
     });
   });
 
-  describe("LLM Schedule Generation", () => {
+  describeLlm("LLM Schedule Generation", () => {
     test("should generate schedule via LLM", async () => {
       const world = createTestWorld();
       const roomEid = createTestRoom(world, "Village");

@@ -15,7 +15,7 @@
  */
 
 import { generateText, generateObject } from "ai";
-import { google } from "@ai-sdk/google";
+import { createArgosModel as google, MODEL_IDS } from "../llm/config";
 import { z } from "zod/v3";
 import { Name, Personality, Agent, Description } from "./components";
 
@@ -122,7 +122,7 @@ export interface PersonaFactoryConfig {
   model?: ReturnType<typeof google>;
 }
 
-const defaultModel = google("gemini-2.5-flash-preview-05-20");
+const defaultModel = google(MODEL_IDS.flash);
 
 // Generate sampling dimensions from natural language description
 export async function generateSamplingDimensions(
@@ -189,13 +189,13 @@ export async function generatePersona(
   const result = await generateObject({
     model,
     schema: PersonaSchema,
-    prompt: `Generate a detailed, realistic persona with these characteristics:
+    prompt: `Create a fictional person with these characteristics:
 
 ${constraints}
 
 ${additionalCharacteristics ? `Additional requirements:\n${additionalCharacteristics}` : ""}
 
-Create a coherent, believable person with a rich backstory. All details should be consistent with the given characteristics.`,
+Fill in unspecified details consistently with the supplied characteristics.`,
   });
 
   return result.object;
@@ -240,11 +240,11 @@ export async function generateSinglePersona(
   const result = await generateObject({
     model,
     schema: PersonaSchema,
-    prompt: `Generate a detailed persona based on this description:
+    prompt: `Create a fictional person from this description:
 
 "${description}"
 
-Create a coherent, believable person with rich details. Fill in reasonable details where not specified.`,
+Fill in unspecified details consistently with the description.`,
   });
 
   return result.object;
@@ -256,14 +256,16 @@ export function applyPersonaToEntity(
   persona: Persona
 ): void {
   Name.value[eid] = persona.name;
-  Description.value[eid] = persona.backstory || `${persona.name}, ${persona.age}, ${persona.occupation.title}`;
+  // Description is exposed to other characters. Private history belongs in
+  // this actor's system prompt, not in a publicly observable appearance field.
+  Description.value[eid] = `${persona.name}, ${persona.age}, ${persona.occupation.title}`;
 
-  // Big Five personality (convert 0-1 to 0-100 for our components)
-  Personality.openness[eid] = Math.round(persona.personality.openness * 100);
-  Personality.conscientiousness[eid] = Math.round(persona.personality.conscientiousness * 100);
-  Personality.extraversion[eid] = Math.round(persona.personality.extraversion * 100);
-  Personality.agreeableness[eid] = Math.round(persona.personality.agreeableness * 100);
-  Personality.neuroticism[eid] = Math.round(persona.personality.neuroticism * 100);
+  // Native cognition and authored demos consume canonical 0–1 traits.
+  Personality.openness[eid] = persona.personality.openness;
+  Personality.conscientiousness[eid] = persona.personality.conscientiousness;
+  Personality.extraversion[eid] = persona.personality.extraversion;
+  Personality.agreeableness[eid] = persona.personality.agreeableness;
+  Personality.neuroticism[eid] = persona.personality.neuroticism;
 
   // Generate system prompt from persona
   Agent.systemPrompt[eid] = generateSystemPromptFromPersona(persona);
@@ -313,12 +315,7 @@ ${persona.backstory ? `BACKSTORY:\n${persona.backstory}` : ""}
 
 ${persona.currentSituation ? `CURRENT SITUATION:\n${persona.currentSituation}` : ""}
 
-INSTRUCTIONS:
-- Always stay in character as ${persona.name}
-- Respond consistently with your personality traits and communication style
-- Your beliefs and values should influence your responses
-- Draw on your skills and background when relevant
-- Express your characteristic behaviors and quirks naturally`;
+Use this background as context for your choices and speech.`;
 }
 
 // Merge persona fragments into a base persona

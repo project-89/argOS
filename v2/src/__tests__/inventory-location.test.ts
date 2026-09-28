@@ -5,15 +5,17 @@
  * with Inventory.items treated as a compatibility cache only.
  */
 
-import { getRelationTargets } from "bitecs";
+import { addComponent, getRelationTargets } from "bitecs";
 import { createSystemRegistry, type SystemRegistry } from "../ecs/dynamic-systems";
 import { createArgosWorld } from "../ecs/world";
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "../ecs/prefabs";
-import { Inventory, ObjectState, Perception } from "../ecs/components";
+import { Container, Inventory, ObjectState, Perception, Surface } from "../ecs/components";
+import { syncInventoryCache, tryAddToInventory, tryRemoveFromInventory } from "../ecs/inventory";
 import { LocatedIn } from "../ecs/relations";
 import { getDirectContainer, listDirectContents, setLocatedIn } from "../ecs/location";
 import { executeActions } from "../cognition/cognition-system";
 import { getAgentPerceptions } from "../cognition/agent-mind";
+import { getAgentVisualEntities } from "../cognition/world-capabilities";
 
 describe("Inventory via LocatedIn", () => {
   let world: ReturnType<typeof createArgosWorld>;
@@ -23,6 +25,22 @@ describe("Inventory via LocatedIn", () => {
     world = createArgosWorld("TestWorld");
     initializePrefabs(world);
     registry = createSystemRegistry();
+  });
+
+  it("keeps non-agent container counts consistent across real transfers", () => {
+    const room = createRoomEntity(world, { name: "Room" });
+    const actor = createAgentEntity(world, { name: "Mara", role: "resident", systemPrompt: "test", roomId: room });
+    const cupboard = createObjectEntity(world, { name: "Cupboard", roomId: room, portable: false });
+    const table = createObjectEntity(world, { name: "Table", roomId: room, portable: false });
+    const fuse = createObjectEntity(world, { name: "Fuse", roomId: room, portable: true });
+    addComponent(world, cupboard, Container); addComponent(world, table, Surface);
+    setLocatedIn(world, fuse, cupboard); syncInventoryCache(world, cupboard); syncInventoryCache(world, table);
+    expect(Container.currentCount[cupboard]).toBe(1);
+    expect(tryAddToInventory(world, actor, fuse).success).toBe(true);
+    expect(Container.currentCount[cupboard]).toBe(0);
+    expect(tryRemoveFromInventory(world, actor, fuse, table).success).toBe(true);
+    expect(Surface.currentCount[table]).toBe(1);
+    expect(getDirectContainer(world, fuse)).toBe(table);
   });
 
   it("pickup moves item from room to agent; drop moves item back to room", () => {
@@ -86,6 +104,42 @@ describe("Inventory via LocatedIn", () => {
 
     expect(getDirectContainer(world, foodEid)).toBe(agentEid);
     expect(listDirectContents(world, agentEid)).toContain(foodEid);
+  });
+
+  it("physically picks up a visible item from a typed tabletop without a fake open trait", () => {
+    const room = createRoomEntity(world, { name: "Room" });
+    const actor = createAgentEntity(world, { name: "Mara", role: "resident", systemPrompt: "test", roomId: room });
+    const table = createObjectEntity(world, { name: "Table", roomId: room, portable: false });
+    const phone = createObjectEntity(world, { name: "Phone", roomId: room, portable: true, traits: ["takeable"] });
+    addComponent(world, table, Surface);
+    setLocatedIn(world, phone, table);
+    syncInventoryCache(world, table);
+    expect(getAgentVisualEntities(world, actor)).toContain(phone);
+    expect(Surface.currentCount[table]).toBe(1);
+
+    executeActions(world, [{ eid: actor, action: { type: "pickup", target: "Phone" } }], registry);
+
+    expect(getDirectContainer(world, phone)).toBe(actor);
+    expect(JSON.parse(Inventory.items[actor])).toContain(phone);
+    expect(Surface.currentCount[table]).toBe(0);
+  });
+
+  it.each(["closed", "locked"])("%s enclosure state blocks pickup despite a stale open trait", state => {
+    const room = createRoomEntity(world, { name: "Room" });
+    const actor = createAgentEntity(world, { name: "Mara", role: "resident", systemPrompt: "test", roomId: room });
+    const chest = createObjectEntity(world, { name: "Chest", roomId: room, portable: false, traits: ["open"] });
+    const key = createObjectEntity(world, { name: "Key", roomId: room, portable: true, traits: ["takeable"] });
+    addComponent(world, chest, Container);
+    ObjectState.current[chest] = state;
+    setLocatedIn(world, key, chest);
+    syncInventoryCache(world, chest);
+    expect(getAgentVisualEntities(world, actor)).not.toContain(key);
+
+    executeActions(world, [{ eid: actor, action: { type: "pickup", target: "Key" } }], registry);
+
+    expect(getDirectContainer(world, key)).toBe(chest);
+    expect(JSON.parse(Inventory.items[actor] || "[]")).not.toContain(key);
+    expect(Container.currentCount[chest]).toBe(1);
   });
 
   it("pickup can match a base noun even when the object name includes adjectives", () => {

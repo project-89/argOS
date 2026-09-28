@@ -6,8 +6,11 @@ import {
   observe,
   onSet,
   onGet,
+  removeEntity,
+  getEntityComponents,
 } from "bitecs";
 import type { World } from "./world";
+import { allocateWorldEntity } from "../runtime/world-construction-budget";
 import { Name, Description, Agent, Mind, Room, PhysicalObject, StimulusSource, GodAgent, Position, GridPosition, Needs, Health, Inventory, ObjectType, ObjectState, Traits } from "./components";
 import { setLocatedIn } from "./location";
 import {
@@ -15,8 +18,16 @@ import {
   setDynamicComponentValue,
   createDynamicComponent,
 } from "./dynamic-components";
-import { setAspirations } from "../cognition/goal-learning";
+import { setAspirations, setCoreDrives, clearAspirations } from "../cognition/goal-learning";
 import { generateDeterministicAspirations } from "../cognition/autonomous-goals";
+import { initializeRegistry } from "./component-registry";
+import { stampObjectStateTime } from "../world/object-state-time";
+import { setObjectDescription } from "../world/object-state";
+import { characterPastSchema, type CharacterPast } from "../cognition/character-past-schema";
+import { getWorldCharacterSeed } from "../world/world-specification";
+import { initializeCharacterNarrative } from "../cognition/narrative-memory";
+import { getCommittedEvents } from "../runtime/committed-events";
+import { assertAgentIdentityAvailable, beginParticipantEmbodiment, type ParticipantEmbodimentGrant } from "../runtime/participant-identities";
 
 let AgentPrefab: number;
 let RoomPrefab: number;
@@ -24,7 +35,33 @@ let ObjectPrefab: number;
 let StimulusSourcePrefab: number;
 let GodAgentPrefab: number;
 
+const agentComponents = [Name, Description, Agent, Mind, GridPosition, Needs, Health, Inventory, ObjectType, ObjectState, Traits];
+const roomComponents = [Name, Description, Room, Position, GridPosition, ObjectType, ObjectState, Traits];
+const objectComponents = [Name, Description, PhysicalObject, GridPosition, ObjectType, ObjectState, Traits];
+
+export type AgentEntityConfig = {
+  name: string; role: string; systemPrompt: string; description?: string; roomId?: number;
+  /** Explicit creation-only private history; never a live identity rewrite. */
+  past?: CharacterPast;
+  /** Host-held permission, never a model-authored component or JSON flag. */
+  participantGrant?: ParticipantEmbodimentGrant;
+  /** Initial grid position; otherwise spawn near the containing room. */
+  gridPosition?: { x: number; y: number };
+};
+export type RoomEntityConfig = {
+  name: string; description?: string; capacity?: number; ambience?: string; x?: number; y?: number;
+};
+export type ObjectEntityConfig = {
+  name: string; description?: string; material?: string; weight?: number; portable?: boolean;
+  roomId?: number; traits?: string[]; gridPosition?: { x: number; y: number };
+};
+
 export function initializePrefabs(world: World): void {
+  // Prefabs and generated systems share the unified component registry.
+  // Initializing here makes the invariant true for every supported boot path,
+  // including tests and embedders that construct a world directly.
+  initializeRegistry(world);
+
   observe(world, onSet(Name), (eid, params: { value: string }) => {
     Name.value[eid] = params.value;
   });
@@ -104,36 +141,13 @@ export function initializePrefabs(world: World): void {
   }));
 
   AgentPrefab = addPrefab(world);
-  addComponent(world, AgentPrefab, Name);
-  addComponent(world, AgentPrefab, Description);
-  addComponent(world, AgentPrefab, Agent);
-  addComponent(world, AgentPrefab, Mind);
-  addComponent(world, AgentPrefab, GridPosition);
-  addComponent(world, AgentPrefab, Needs);
-  addComponent(world, AgentPrefab, Health);
-  addComponent(world, AgentPrefab, Inventory);
-  addComponent(world, AgentPrefab, ObjectType);
-  addComponent(world, AgentPrefab, ObjectState);
-  addComponent(world, AgentPrefab, Traits);
+  for (const component of agentComponents) addComponent(world, AgentPrefab, component);
 
   RoomPrefab = addPrefab(world);
-  addComponent(world, RoomPrefab, Name);
-  addComponent(world, RoomPrefab, Description);
-  addComponent(world, RoomPrefab, Room);
-  addComponent(world, RoomPrefab, Position);
-  addComponent(world, RoomPrefab, GridPosition); // For movement system targeting
-  addComponent(world, RoomPrefab, ObjectType);
-  addComponent(world, RoomPrefab, ObjectState);
-  addComponent(world, RoomPrefab, Traits);
+  for (const component of roomComponents) addComponent(world, RoomPrefab, component);
 
   ObjectPrefab = addPrefab(world);
-  addComponent(world, ObjectPrefab, Name);
-  addComponent(world, ObjectPrefab, Description);
-  addComponent(world, ObjectPrefab, PhysicalObject);
-  addComponent(world, ObjectPrefab, GridPosition); // For movement system targeting
-  addComponent(world, ObjectPrefab, ObjectType);
-  addComponent(world, ObjectPrefab, ObjectState);
-  addComponent(world, ObjectPrefab, Traits);
+  for (const component of objectComponents) addComponent(world, ObjectPrefab, component);
 
   StimulusSourcePrefab = addPrefab(world);
   addComponent(world, StimulusSourcePrefab, Name);
@@ -147,23 +161,39 @@ export function initializePrefabs(world: World): void {
 
 export function createAgentEntity(
   world: World,
-  config: {
-    name: string;
-    role: string;
-    systemPrompt: string;
-    description?: string;
-    roomId?: number;
-    /** Initial grid position (x, y) - defaults to random 0-20 */
-    gridPosition?: { x: number; y: number };
-  }
+  config: AgentEntityConfig
 ): number {
-  const eid = addEntity(world);
-  addComponent(world, eid, IsA(AgentPrefab));
+  config = { ...config, past: config.past ?? getWorldCharacterSeed(world, config.name)?.past };
+  if (config.past !== undefined) config = { ...config, past: characterPastSchema.parse(config.past) };
+  if (getCommittedEvents(world).stopped) throw new Error("Cannot create an NPC in a stopped world");
+  assertAgentIdentityAvailable(world,config.name,config.participantGrant);
+  const eid = allocateWorldEntity(world, "agent");
+  try {
+    addComponent(world, eid, IsA(AgentPrefab));
+    return initializeAgentEntity(world, eid, config);
+  } catch(error) {
+    const components=[...getEntityComponents(world,eid)];removeEntity(world,eid);
+    for(const component of components) for(const field of Object.values(component))
+      if(field && typeof field === "object") delete (field as Record<number,unknown>)[eid];
+    clearAspirations(world, eid);
+    throw error;
+  }
+}
+
+/** Initialize a freshly allocated NPC, shared by authored and validated generated
+ * entities. This is construction, not a reset of an existing actor's mind. */
+export function initializeAgentEntity(world: World, eid: number, config: AgentEntityConfig): number {
+  config = { ...config, past: config.past ?? getWorldCharacterSeed(world, config.name)?.past };
+  const past = config.past === undefined ? undefined : characterPastSchema.parse(config.past);
+  if (getCommittedEvents(world).stopped) throw new Error("Cannot initialize an NPC in a stopped world");
+  assertAgentIdentityAvailable(world,config.name,config.participantGrant);
+  const finishEmbodiment=beginParticipantEmbodiment(world,config.name,config.participantGrant);
+  for (const component of agentComponents) addComponent(world, eid, component);
 
   Name.value[eid] = config.name;
   Description.value[eid] = config.description ?? "";
   Agent.role[eid] = config.role;
-  Agent.systemPrompt[eid] = config.systemPrompt;
+  Agent.systemPrompt[eid] = config.systemPrompt + (past ? `\nPRIVATE LIFE BEFORE THIS SCENE:\n${past.background}` : "");
   Agent.active[eid] = true;
   Mind.mode[eid] = "reactive";
   Mind.arousal[eid] = 0.5;
@@ -214,6 +244,7 @@ export function createAgentEntity(
   ObjectState.current[eid] = "idle";
   ObjectState.previous[eid] = "";
   ObjectState.lockedUntil[eid] = 0;
+  stampObjectStateTime(world, eid);
   Traits.active[eid] = JSON.stringify(["talkable", "examinable", "attackable", "alive"]);
 
   // Legacy mirror (compat)
@@ -228,8 +259,11 @@ export function createAgentEntity(
 
   // Seed aspirations from role (deterministic, no LLM needed)
   const aspirations = generateDeterministicAspirations(config.role);
-  setAspirations(eid, aspirations);
+  if (past) setCoreDrives(world, eid, past.drives);
+  else setAspirations(world, eid, aspirations);
 
+  finishEmbodiment(eid);
+  if (past) initializeCharacterNarrative(world, eid, past);
   return eid;
 }
 
@@ -258,17 +292,17 @@ export function resetRoomPositionCounter(): void {
 
 export function createRoomEntity(
   world: World,
-  config: {
-    name: string;
-    description?: string;
-    capacity?: number;
-    ambience?: string;
-    x?: number;
-    y?: number;
-  }
+  config: RoomEntityConfig
 ): number {
-  const eid = addEntity(world);
+  const eid = allocateWorldEntity(world, "room");
   addComponent(world, eid, IsA(RoomPrefab));
+  return initializeRoomEntity(world, eid, config);
+}
+
+/** Same spatial/affordance baseline for authored and freshly generated rooms.
+ * Connectivity remains a separate explicit route operation. */
+export function initializeRoomEntity(world: World, eid: number, config: RoomEntityConfig): number {
+  for (const component of roomComponents) addComponent(world, eid, component);
 
   Name.value[eid] = config.name;
   Description.value[eid] = config.description ?? "";
@@ -293,6 +327,7 @@ export function createRoomEntity(
   ObjectState.current[eid] = "normal";
   ObjectState.previous[eid] = "";
   ObjectState.lockedUntil[eid] = 0;
+  stampObjectStateTime(world, eid);
   Traits.active[eid] = JSON.stringify(["container", "location"]);
 
   roomPositionCounter++;
@@ -302,22 +337,21 @@ export function createRoomEntity(
 
 export function createObjectEntity(
   world: World,
-  config: {
-    name: string;
-    description?: string;
-    material?: string;
-    weight?: number;
-    portable?: boolean;
-    roomId?: number;
-    traits?: string[];
-    gridPosition?: { x: number; y: number };
-  }
+  config: ObjectEntityConfig
 ): number {
-  const eid = addEntity(world);
+  const eid = allocateWorldEntity(world, "object");
   addComponent(world, eid, IsA(ObjectPrefab));
+  return initializeObjectEntity(world, eid, config);
+}
+
+/** Canonical physical/affordance baseline for a freshly allocated object, shared
+ * by authored props and validated builders. Not a reset of existing objects. */
+export function initializeObjectEntity(world: World, eid: number, config: ObjectEntityConfig): number {
+  for (const component of objectComponents) addComponent(world, eid, component);
 
   Name.value[eid] = config.name;
   Description.value[eid] = config.description ?? "";
+  if (config.description) setObjectDescription(world, eid, config.description, "author");
   PhysicalObject.material[eid] = config.material ?? "unknown";
   PhysicalObject.weight[eid] = config.weight ?? 1;
   PhysicalObject.portable[eid] = config.portable ?? true;
@@ -328,6 +362,7 @@ export function createObjectEntity(
   ObjectState.current[eid] = "normal";
   ObjectState.previous[eid] = "";
   ObjectState.lockedUntil[eid] = 0;
+  stampObjectStateTime(world, eid);
 
   // Set default object traits for affordance system (canonical Traits component)
   const defaultTraits = ["examinable"];
@@ -374,7 +409,7 @@ export function createObjectEntity(
     GridPosition.x[eid] = config.gridPosition.x;
     GridPosition.y[eid] = config.gridPosition.y;
     GridPosition.facing[eid] = "south";
-  } else if (GridPosition.x[eid] === undefined) {
+  } else if (config.roomId === undefined || GridPosition.x[config.roomId] === undefined) {
     // Fallback to random position
     GridPosition.x[eid] = Math.floor(Math.random() * 20);
     GridPosition.y[eid] = Math.floor(Math.random() * 20);
@@ -394,7 +429,7 @@ export function createStimulusSourceEntity(
     roomId?: number;
   }
 ): number {
-  const eid = addEntity(world);
+  const eid = allocateWorldEntity(world, "stimulus_source");
   addComponent(world, eid, IsA(StimulusSourcePrefab));
 
   Name.value[eid] = config.name;

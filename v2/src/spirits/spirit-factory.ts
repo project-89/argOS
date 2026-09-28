@@ -113,9 +113,13 @@ export interface SpiritProposal {
   description: string;
   specification: any;  // Type-specific details
   rationale: string;   // Why this is needed
-  status: "pending" | "approved" | "rejected" | "executed";
+  status: "pending" | "approved" | "building" | "rejected" | "executed" | "failed";
   approvedBy?: number;
   rejectionReason?: string;
+  /** Explicit bounded redesign of a failed proposal; never an automatic retry. */
+  revisionOf?: string;
+  /** Host-issued observation scope; copied/restored pending scopes need re-observation. */
+  observationScopeId?: string;
 }
 
 /**
@@ -216,8 +220,9 @@ export function createDynamicSpirit(
   }
 
   // Create extended state
-  const dynamicState: DynamicSpiritState = {
-    ...spiritState,
+  // One live spirit owns its hierarchy, inbox and specialist state. A copied
+  // wrapper diverges from registry identity and loses freshness guarantees.
+  const dynamicState: DynamicSpiritState = Object.assign(spiritState, {
     spiritType: config.type,
     watchConfig: config.watchConfig,
     architectConfig: config.architectConfig,
@@ -225,7 +230,7 @@ export function createDynamicSpirit(
     artificerConfig: config.artificerConfig,
     proposals: [],
     executionHistory: [],
-  };
+  });
 
   // Store in factory registry
   factoryState.createdSpirits.set(spiritState.eid, dynamicState);
@@ -435,9 +440,8 @@ export function submitProposal(
     status: "pending",
   };
 
-  // Auto-approve when: approval mode is "auto" OR architect can execute directly
-  if (dynamicState.architectConfig?.proposalApproval === "auto" ||
-      dynamicState.architectConfig?.canExecuteDirectly) {
+  // Permission to execute approved work is not permission to approve it.
+  if (dynamicState.architectConfig?.proposalApproval === "auto") {
     proposal.status = "approved";
     proposal.approvedBy = spiritEid;
   }
@@ -503,7 +507,7 @@ export function getApprovedProposals(): SpiritProposal[] {
  */
 export function markProposalExecuted(proposalId: string): boolean {
   const proposal = factoryState.pendingProposals.find(p => p.id === proposalId);
-  if (!proposal || proposal.status !== "approved") {
+  if (!proposal || !["approved", "building"].includes(proposal.status)) {
     return false;
   }
 
@@ -511,6 +515,16 @@ export function markProposalExecuted(proposalId: string): boolean {
 
   console.log(`[SpiritFactory] Proposal executed: ${proposalId}`);
 
+  return true;
+}
+
+/** Mark an approved proposal terminally failed so it is not retried forever. */
+export function markProposalFailed(proposalId: string, reason: string): boolean {
+  const proposal = factoryState.pendingProposals.find(p => p.id === proposalId);
+  if (!proposal || !["approved", "building"].includes(proposal.status)) return false;
+  proposal.status = "failed";
+  proposal.rejectionReason = reason;
+  console.log(`[SpiritFactory] Proposal failed: ${proposalId} - ${reason}`);
   return true;
 }
 

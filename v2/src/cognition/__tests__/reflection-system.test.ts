@@ -26,6 +26,8 @@ import {
   formatInsightsForContext,
   type ReflectionResult,
 } from "../reflection-system";
+
+const describeLlm = process.env.ARGOS_RUN_LLM_TESTS === "1" ? describe : describe.skip;
 import { addMemory } from "../knowledge-graph";
 
 // =============================================================================
@@ -277,7 +279,7 @@ describe("Reflection System", () => {
     });
   });
 
-  describe("LLM Reflection Generation", () => {
+  describeLlm("LLM Reflection Generation", () => {
     test("should generate reflection with memories", async () => {
       const world = createTestWorld();
       const agentEid = createTestAgent(world, "Oscar");
@@ -306,7 +308,7 @@ describe("Reflection System", () => {
     });
   });
 
-  describe("Maybe Reflect", () => {
+  describeLlm("Maybe Reflect", () => {
     test("should not reflect when below threshold", async () => {
       const world = createTestWorld();
       const agentEid = createTestAgent(world, "Quinn");
@@ -335,7 +337,7 @@ describe("Reflection System", () => {
     }, 30000);
   });
 
-  describe("Run Reflection System", () => {
+  describeLlm("Run Reflection System", () => {
     test("should run reflection for all qualifying agents", async () => {
       const world = createTestWorld();
 

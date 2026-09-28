@@ -1,4 +1,6 @@
+import { stampGoalTiming, stampSimulationTime } from "../ecs/temporal-age";
 import { generateText } from "ai";
+import { getCodingDaemon } from "../engineering/coding-daemon";
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemRegistry, SystemContext, CognitiveContext, GoalData, MemoryData, BeliefData, ThoughtData, ImpressionData } from "../ecs/dynamic-systems";
 import { AllComponents, Goal, Memory, Belief, Thought, Impression } from "../ecs/components";
@@ -296,7 +298,6 @@ export function validateSystemCode(code: string, design: SystemDesignDoc): {
 
   // Check that modified components from design are actually written
   if (design.modifiedComponents && design.modifiedComponents.length > 0) {
-    let missingComponentWrites = 0;
     for (const component of design.modifiedComponents) {
       const normalized = component.endsWith("s") ? component.slice(0, -1) : component;
       const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -325,14 +326,8 @@ export function validateSystemCode(code: string, design: SystemDesignDoc): {
       const hasDirectWrite = writePatterns.some((pattern) => pattern.test(code));
 
       if (!hasDirectWrite && !hasHelperWrite) {
-        missingComponentWrites++;
-        // Downgrade to suggestion if the code has other valid state changes
-        if (totalStateChanges > 0) {
-          suggestions.push(`Design specifies ${component} should be modified — write pattern not detected (may use indirect access)`);
-        } else {
-          issues.push(`Design specifies ${component} should be modified, but no writes to ${component} found`);
-          suggestions.push(`Add write: ${component}.someProperty[eid] = newValue`);
-        }
+        issues.push(`Design specifies ${component} should be modified, but no writes to ${component} found`);
+        suggestions.push(`Add write: ${component}.someProperty[eid] = newValue`);
       }
     }
   }
@@ -369,6 +364,7 @@ export const SYSTEM_TEMPLATES = {
   needsDecay: `
 // Needs Decay System - increases hunger/thirst over time
 const agents = Array.from(ctx.query(world, [Agent, Needs]));
+const elapsedSeconds = Math.max(0, ctx.delta) / 1000;
 
 for (const eid of agents) {
   if (!Agent.active[eid]) continue;
@@ -377,17 +373,18 @@ for (const eid of agents) {
   // - Hunger: 0 = full, 100 = starving
   // - Energy: 0 = exhausted, 100 = fully rested
   const currentHunger = Needs.hunger[eid] || 0;
-  const hungerRate = 2; // per tick (~10s in slice-of-life preset)
-  Needs.hunger[eid] = Math.min(100, currentHunger + hungerRate);
+  const hungerRate = 0.2; // units per in-world second (formerly 2 per 10s invocation)
+  Needs.hunger[eid] = Math.min(100, currentHunger + hungerRate * elapsedSeconds);
 
   // Energy decreases when active
   const currentEnergy = Needs.energy[eid] ?? 100;
-  const energyDrain = 1;
-  Needs.energy[eid] = Math.max(0, currentEnergy - energyDrain);
+  const energyDrain = 0.1; // units per in-world second
+  Needs.energy[eid] = Math.max(0, currentEnergy - energyDrain * elapsedSeconds);
 
   // High hunger affects mood
   if (Needs.hunger[eid] >= 70) {
-    Mind.arousal[eid] = Math.min(1, (Mind.arousal[eid] || 0.5) + 0.05);
+    const hungrySeconds = Math.max(0, elapsedSeconds - Math.max(0, 70 - currentHunger) / hungerRate);
+    Mind.arousal[eid] = Math.min(1, (Mind.arousal[eid] ?? 0.5) + 0.005 * hungrySeconds);
     Mind.focus[eid] = "hungry";
   }
 
@@ -1048,7 +1045,7 @@ HasGoal - agent has a goal entity
 IMPORTANT: These are the ONLY functions available on ctx. Do NOT use anything else!
 
 ctx.tick - current tick number
-ctx.delta - milliseconds since last tick
+ctx.delta - in-world milliseconds since this system last ran; integrate physical rates using this, not invocation count or Date.now()
 ctx.elapsed - total elapsed milliseconds
 ctx.emit(eventType, data) - emit an event (NOT ctx.events! Use ctx.emit!)
 ctx.log(message) - log a message
@@ -1543,6 +1540,8 @@ export function testSystem(
       Goal.status[goalEid] = data.status ?? "active";
       Goal.progress[goalEid] = data.progress ?? 0;
       Goal.deadline[goalEid] = data.deadline ?? 0;
+      Goal.createdAt[goalEid] = data.createdAt ?? Date.now();
+      stampGoalTiming(w, goalEid);
       return goalEid;
     },
     createMemory: (w: World, agentEid: number, data: MemoryData): number => {
@@ -1555,6 +1554,8 @@ export function testSystem(
       Memory.importance[memEid] = data.importance ?? 0.5;
       Memory.timestamp[memEid] = Date.now();
       Memory.lastRecalled[memEid] = Date.now();
+      stampSimulationTime(w, memEid, "Memory.timestamp", Memory.timestamp[memEid]);
+      stampSimulationTime(w, memEid, "Memory.lastRecalled", Memory.lastRecalled[memEid]);
       Memory.recallCount[memEid] = 0;
       return memEid;
     },
@@ -1578,6 +1579,7 @@ export function testSystem(
       Thought.type[thoughtEid] = data.type ?? "reflection";
       Thought.salience[thoughtEid] = data.salience ?? 0.5;
       Thought.timestamp[thoughtEid] = Date.now();
+      stampSimulationTime(w, thoughtEid, "Thought.timestamp", Thought.timestamp[thoughtEid]);
       return thoughtEid;
     },
     createImpression: (w: World, agentEid: number, data: ImpressionData): number => {
@@ -1635,6 +1637,10 @@ export function testSystem(
       if (updates.status !== undefined) Goal.status[eid] = updates.status;
       if (updates.progress !== undefined) Goal.progress[eid] = updates.progress;
       if (updates.deadline !== undefined) Goal.deadline[eid] = updates.deadline;
+      if (updates.createdAt !== undefined) Goal.createdAt[eid] = updates.createdAt;
+      if (updates.createdAt !== undefined) stampGoalTiming(world, eid);
+      else if (updates.deadline !== undefined) stampSimulationTime(world, eid, "Goal.deadline", updates.deadline,
+        world.time.elapsed + Math.max(0, updates.deadline - Date.now()));
     },
     completeGoal: (w: World, eid: number): void => {
       Goal.status[eid] = "completed";
@@ -1818,7 +1824,7 @@ export async function bakeSystem(
             name: finalName,
             description: description,
             pseudocode: "Template-based system: " + templateMatch.name,
-            frequency: 10000,
+            frequency: templateMatch.name === "NeedsDecay" ? 0 : 10000,
             active: false,
             lastRun: 0,
             code: templateMatch.template,
@@ -1990,6 +1996,11 @@ export async function modifySystem(
   registry: SystemRegistry
 ): Promise<SystemBakeResult> {
   const existingSystem = registry.systems.get(systemName);
+  const daemon=getCodingDaemon(world);
+  if(daemon?.ownsSystem(systemName)) {
+    const job=daemon.enqueue({source:"The Tinker",instruction:`Repair managed system ${systemName}: ${modification}. Preserve its contract and add a regression test.`});
+    return {success:false,error:`Repair queued as ${job.id}; inspect coding job status. No live code modified.`};
+  }
   if (!existingSystem) {
     return { success: false, error: `System not found: ${systemName}` };
   }
@@ -2073,7 +2084,7 @@ export function createTemplateSystem(
     name: templateName.charAt(0).toUpperCase() + templateName.slice(1),
     description: `Template system: ${templateName}`,
     pseudocode: `Pre-built template: ${templateName}`,
-    frequency: 10000,
+    frequency: templateName === "needsDecay" ? 0 : 10000,
     active: false,
     lastRun: 0,
     code: template,

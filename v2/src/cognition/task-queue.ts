@@ -12,7 +12,7 @@
  * bridging the gap between reactive simulation and proactive planning.
  */
 
-import { google } from "@ai-sdk/google";
+import { createArgosModel as google, MODEL_IDS } from "../llm/config";
 import { generateObject } from "ai";
 import { z } from "zod";
 import type { World } from "../ecs/world";
@@ -445,7 +445,7 @@ export async function generateTasksFromGoal(
   agentContext: string,
   maxTasks: number = 5
 ): Promise<Task[]> {
-  const model = google("gemini-2.0-flash");
+  const model = google(MODEL_IDS.flash);
 
   const response = await generateObject({
     model,
@@ -467,9 +467,7 @@ Goal: ${goal}
 Agent Context:
 ${agentContext}
 
-Create ${maxTasks} or fewer concrete, actionable tasks.
-Order them logically and specify dependencies.
-Each task should be completable in a single work session.`,
+Propose up to ${maxTasks} concrete tasks using the agent's known capabilities and remaining needs. Treat claims as attributed information and completed steps as complete. Keep missing prerequisites explicit instead of assuming they have been met. Use dependency indices that refer to earlier tasks in this list. Return an empty tasks array when the goal is already satisfied or no useful task is supported.`,
   });
 
   const createdTasks: Task[] = [];
@@ -516,7 +514,7 @@ export async function autoPrioritizeTasks(
   context: string
 ): Promise<void> {
   const queue = getTaskQueue(agentEid);
-  const model = google("gemini-2.0-flash");
+  const model = google(MODEL_IDS.flash);
 
   const taskSummaries = queue.tasks
     .filter(t => t.status === "pending")
@@ -524,6 +522,7 @@ export async function autoPrioritizeTasks(
       id: t.id,
       title: t.title,
       deadline: t.deadline,
+      blockedBy: t.blockedBy ?? [],
       currentPriority: t.priority,
     }));
 
@@ -544,13 +543,9 @@ Context:
 ${context}
 
 Tasks:
-${taskSummaries.map(t => `- ${t.id}: ${t.title} (current: ${t.currentPriority})`).join("\n")}
+${JSON.stringify(taskSummaries)}
 
-Consider:
-- Deadlines
-- Dependencies
-- Current situation
-- What would have the most impact right now`,
+Recommend only priority changes justified by the supplied deadlines, dependencies or current situation. Preserve priorities when no new evidence warrants a change; return an empty priorities array if none are needed. Refer only to task IDs in this list.`,
   });
 
   for (const update of response.object.priorities) {

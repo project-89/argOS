@@ -499,12 +499,12 @@ async function main(): Promise<void> {
     requestRule(
       "Make harvest food spoilage visible: perishable food left out becomes stale after some time.",
       { worldTheme: "fantasy", desiredBehavior: "Food decays over time without AI and can be perceived." },
-      "stress_test"
+      "stress_test", sim.world
     );
     requestRule(
       "Ambient festival music occasionally drifts through the Village Square while the festival is active.",
       { worldTheme: "fantasy", desiredBehavior: "A simple periodic ambient event tied to festival traits/state." },
-      "stress_test"
+      "stress_test", sim.world
     );
   }
 

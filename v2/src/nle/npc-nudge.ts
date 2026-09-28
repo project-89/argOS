@@ -2,9 +2,8 @@
  * NPC Nudge — DM/NLE Channel to Daemon System
  *
  * Provides a clean interface for the NLE and DM to influence NPC
- * behavior through the daemon system. Nudges are soft suggestions
- * that bias the NPC's next cognition cycle without overriding
- * their autonomy.
+ * behavior through the daemon system. Nudges are optional suggestions,
+ * not execution authority, experienced memories, or selected goals.
  *
  * Types of nudges:
  *   - "arrive" — go to a specific location
@@ -15,23 +14,29 @@
  *   - "change_goal" — shift focus to a new objective
  */
 
-import { query, hasComponent } from "bitecs";
-import { Agent, Name } from "../ecs/components";
+import { randomUUID } from "node:crypto";
+import { query } from "bitecs";
+import { Agent, Name, Room } from "../ecs/components";
 import { addPerception } from "../cognition/agent-mind";
-import { addMemory } from "../cognition/knowledge-graph";
-import { createIntentGoal, getActiveGoals } from "../cognition/cognition-system";
+import { chronicle } from "../cognition/simulation-chronicle";
+import { workingMemoryEntityRef } from "../cognition/working-memory";
+import { readSimulationTime } from "../ecs/simulation-time";
 import { queueNarrativeNudge, type DaemonRegistry } from "../spirits/agent-daemon";
 import type { World } from "../ecs/world";
+import { getRoomForEntity } from "../ecs/location";
+import { getCommittedSource } from "../runtime/committed-events";
+import { assertSimulationTaskActive } from "../runtime/task-scope";
 
 // =============================================================================
 // STATE
 // =============================================================================
 
-let daemonRegistry: DaemonRegistry | null = null;
+const daemonRegistries = new WeakMap<World, DaemonRegistry>();
 
-/** Set the daemon registry for NPC nudging. */
-export function setNudgeDaemonRegistry(registry: DaemonRegistry): void {
-  daemonRegistry = registry;
+/** Set this world's daemon registry; another running world cannot replace it. */
+export function setNudgeDaemonRegistry(world: World, registry: DaemonRegistry): void {
+  assertSimulationTaskActive();
+  daemonRegistries.set(world, registry);
 }
 
 // =============================================================================
@@ -51,106 +56,75 @@ export function nudgeNpc(
     reason: string;     // Why (for daemon context)
     priority?: "low" | "normal" | "high";
   },
+  /** Runtime-only evidence/plan lease, never authority supplied in model JSON. */
+  isCurrent?: () => boolean,
 ): boolean {
+  assertSimulationTaskActive();
+  if (isCurrent) { try { if (isCurrent() !== true) return false; } catch { return false; } }
+  if (getCommittedSource(world).stopped || typeof npcName !== "string" || !npcName.trim()
+    || !nudge || !["arrive", "interact", "resolve", "escalate", "reflect", "change_goal"].includes(nudge.type)
+    || typeof nudge.action !== "string" || !nudge.action.trim() || nudge.action.length > 2000
+    || typeof nudge.reason !== "string" || nudge.reason.length > 2000) return false;
+  const matches = [...query(world, [Agent, Name])].filter(eid => Agent.active[eid]
+    && Name.value[eid]?.toLowerCase() === npcName.trim().toLowerCase());
+  if (matches.length !== 1) return false;
+  const npcEid = matches[0], exactName = Name.value[npcEid];
   // Try daemon system first
+  const daemonRegistry = daemonRegistries.get(world);
   if (daemonRegistry) {
-    const success = queueNarrativeNudge(daemonRegistry, npcName, {
+    const success = queueNarrativeNudge(daemonRegistry, exactName, {
       type: nudge.type,
       action: nudge.action,
       reason: nudge.reason,
       source: "narrator",
       priority: nudge.priority || "normal",
-    });
+    }, { world, agentEid: npcEid, ...(isCurrent ? { isCurrent } : {}) });
     if (success) {
       console.log(`[NLE] Nudged ${npcName} via daemon: ${nudge.type} — "${nudge.action}"`);
       return true;
     }
   }
 
-  // Fallback: direct perception injection
-  const allAgents = Array.from(query(world as any, [Agent as any, Name as any]));
-  const npcEid = allAgents.find(eid =>
-    (Name.value[eid] || "").toLowerCase().includes(npcName.toLowerCase()));
-
-  if (npcEid === undefined) return false;
-
-  // Inject as a strong internal perception that biases their next decision
-  switch (nudge.type) {
-    case "arrive":
-      addPerception(world, npcEid, {
-        type: "intent",
-        content: `You feel a strong urge to go to ${nudge.action}. ${nudge.reason}`,
-        source: "intuition",
-        intensity: 0.9,
-      });
-      break;
-
-    case "interact":
-      addPerception(world, npcEid, {
-        type: "intent",
-        content: `Something compels you to ${nudge.action}. ${nudge.reason}`,
-        source: "intuition",
-        intensity: 0.8,
-      });
-      break;
-
-    case "resolve":
-    case "escalate":
-      addPerception(world, npcEid, {
-        type: "event",
-        content: nudge.action,
-        source: "world",
-        intensity: 0.9,
-      });
-      break;
-
-    case "reflect":
-      addMemory(world, npcEid, {
-        type: "episodic",
-        content: nudge.action,
-        importance: 80,
-        emotionalValence: 0,
-        timestamp: Date.now(),
-      });
-      break;
-
-    case "change_goal":
-      // Check if they already have this goal
-      const goals = getActiveGoals(world, npcEid);
-      const alreadyHas = goals.some(g =>
-        g.description.toLowerCase().includes(nudge.action.toLowerCase().slice(0, 20)));
-      if (!alreadyHas) {
-        createIntentGoal(world, npcEid, nudge.action, 8);
-      }
-      break;
-  }
+  // No daemon is not permission to take over the NPC. All kinds remain
+  // advisory intentions: never a goal, experienced memory, or public event.
+  if (isCurrent) { try { if (isCurrent() !== true) return false; } catch { return false; } }
+  const sourceId = getCommittedSource(world).sourceId;
+  const actorKey = workingMemoryEntityRef(world, npcEid)?.key;
+  const issuedAtSimMs = readSimulationTime(world);
+  const perceptionEid = addPerception(world, npcEid, {
+    type: "intent", source: "narrative suggestion", intensity: 0.3,
+    content: `An optional possibility to consider (${nudge.type}): ${nudge.action}. ${nudge.reason} This is a suggestion, not proof or an obligation; weigh it against your own experiences and priorities.`,
+  });
+  // Transport proof only: this says nothing about whether the NPC considered
+  // the suggestion or whether a subsequent action was caused by it.
+  if (perceptionEid >= 0) chronicle.record("narrative_nudge_lifecycle", {
+    nudgeId: `direct-nudge:${randomUUID()}`, route: "direct", stage: "perception_delivered",
+    sourceId, agent: exactName, actorKey, issuedAtSimMs, atSimMs: readSimulationTime(world), perceptionEid,
+  }, "Narrative advice transport: perception_delivered");
 
   console.log(`[NLE] Nudged ${npcName} directly: ${nudge.type} — "${nudge.action}"`);
   return true;
 }
 
 /**
- * Nudge all NPCs in a room with an environmental cue.
- * Used for setting atmosphere before a dramatic beat.
+ * Offer an optional consideration to the active NPCs in an exact room.
+ * A suggestion is not a fabricated shared environmental event.
  */
 export function nudgeRoom(world: World, roomName: string, content: string): void {
+  assertSimulationTaskActive();
+  if (getCommittedSource(world).stopped || typeof roomName !== "string" || !roomName.trim()) return;
   const allAgents = Array.from(query(world as any, [Agent as any, Name as any]));
-  const { getRoomForEntity } = require("../ecs/location");
-  const { Room } = require("../ecs/components");
   const allRooms = Array.from(query(world as any, [Room, Name]));
 
-  const roomEid = allRooms.find((eid: number) =>
-    (Name.value[eid] || "").toLowerCase().includes(roomName.toLowerCase()));
-  if (roomEid === undefined) return;
+  const rooms = allRooms.filter((eid: number) =>
+    (Name.value[eid] || "").toLowerCase() === roomName.trim().toLowerCase());
+  if (rooms.length !== 1) return;
+  const roomEid = rooms[0];
 
   for (const agentEid of allAgents) {
     if (getRoomForEntity(world, agentEid) === roomEid) {
-      addPerception(world, agentEid, {
-        type: "environmental",
-        content,
-        source: "world",
-        intensity: 0.7,
-      });
+      nudgeNpc(world, Name.value[agentEid], { type: "reflect", action: content,
+        reason: "A narrative possibility, not a physical event in the room", priority: "normal" });
     }
   }
 }

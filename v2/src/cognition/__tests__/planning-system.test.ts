@@ -28,6 +28,8 @@ import {
   type GeneratedPlan,
 } from "../planning-system";
 
+const describeLlm = process.env.ARGOS_RUN_LLM_TESTS === "1" ? describe : describe.skip;
+
 // =============================================================================
 // TEST HELPERS
 // =============================================================================
@@ -333,7 +335,7 @@ describe("Planning System", () => {
     });
   });
 
-  describe("LLM Plan Generation", () => {
+  describeLlm("LLM Plan Generation", () => {
     test("should generate plan for goal via LLM", async () => {
       const world = createTestWorld();
       const roomEid = createTestRoom(world, "Village Square");

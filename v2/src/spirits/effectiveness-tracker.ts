@@ -17,6 +17,8 @@ import { query } from "bitecs";
 import { Agent, Mind, Needs, Health, Attention, WorkingMemory } from "../ecs/components";
 import type { World } from "../ecs/world";
 import type { SystemRegistry, SystemDefinition } from "../ecs/dynamic-systems";
+import { analyzeSystemComplexity } from "./artificer-spirit";
+import { reportGap } from "./observation-aggregator";
 
 // =============================================================================
 // COMPONENT SAMPLING
@@ -455,10 +457,8 @@ export function computeSystemHealth(
   systemRegistry: SystemRegistry
 ): SystemHealthScore {
   // Get static complexity score (if the Artificer has analyzed it)
-  // We import lazily to avoid circular deps
   let staticComplexity = 50; // default
   try {
-    const { analyzeSystemComplexity } = require("./artificer-spirit");
     const analysis = analyzeSystemComplexity(systemRegistry, systemName);
     if (analysis) staticComplexity = analysis.score;
   } catch {}
@@ -578,7 +578,6 @@ export function runPostTickAnalysis(tick: number): SystemConflict[] {
   // Report high-severity conflicts to observation aggregator
   for (const c of conflicts.filter(c => c.severity === "high")) {
     try {
-      const { reportGap } = require("./observation-aggregator");
       reportGap(
         "EffectivenessTracker",
         "performance_issue",

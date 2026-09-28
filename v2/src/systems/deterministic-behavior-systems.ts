@@ -9,7 +9,7 @@
 
 import type { World } from "../ecs/world";
 import {
-  Agent, Mind, Name, Needs, GridPosition, Goal, Plan, Schedule, Room,
+  Agent, Mind, Name, Needs, GridPosition, Goal, GoalLifecycle, PendingToolJob, Plan, Schedule, Room,
   AllComponents
 } from "../ecs/components";
 import {
@@ -18,8 +18,15 @@ import {
 import type { SystemContext } from "../ecs/dynamic-systems";
 import { ActionRegistry } from "../cognition/action-registry";
 import { setGoalContract } from "../cognition/goal-contract";
+import { retireGoalPlans } from "../cognition/plan-state";
 import { getRoomForEntity } from "../ecs/location";
 import { setLocatedIn } from "../ecs/location";
+import { getAgentWorldCapabilities } from "../cognition/world-capabilities";
+import { isResting, updateRestState } from "../cognition/rest-state";
+import { reconcileCoordinationGoals } from "../cognition/coordination-memory";
+import { pendingIntentionReview } from "../cognition/goal-lifecycle";
+import { readSimulationTime } from "../ecs/simulation-time";
+import { getStampedSimulationTime, readStampedSimulationTime, simulationDeadlinePassed, stampGoalTiming, stampSimulationTime } from "../ecs/temporal-age";
 
 // =============================================================================
 // REGISTER SYSTEM-PROVIDED ACTIONS
@@ -38,7 +45,7 @@ ActionRegistry.registerSystemActions("DeterministicBehavior", [
   },
   {
     name: "rest",
-    description: "Rest at current location to restore energy (effective at home/inn)",
+    description: "Rest at the current location; energy recovers over simulation time until another action interrupts it",
     requiresTarget: false,
     requiresContent: false,
     category: "self",
@@ -162,8 +169,9 @@ export function scheduleExecutionSystem(world: World, ctx: SystemContext): void 
     GoalComp.priority[goalEid] = urgency;
     GoalComp.status[goalEid] = "active";
     GoalComp.progress[goalEid] = 0;
-    GoalComp.deadline[goalEid] = ctx.elapsed + (currentActivity.duration || 1) * 60 * 60 * 1000;
-    (GoalComp as any).createdAt[goalEid] = Date.now();
+    GoalComp.createdAt[goalEid] = Date.now();
+    GoalComp.deadline[goalEid] = GoalComp.createdAt[goalEid] + (currentActivity.duration || 1) * 60 * 60 * 1000;
+    stampGoalTiming(world, goalEid);
     setGoalContract(world, goalEid, {
       version: 1,
       kind: "move_to_room",
@@ -201,6 +209,10 @@ export function scheduleExecutionSystem(world: World, ctx: SystemContext): void 
  * 4. Advance to next step when complete
  */
 export function goalPursuitSystem(world: World, ctx: SystemContext): void {
+  // The legacy direct-room writer has the same authority boundary as the grid
+  // goal pursuer: live cognition must choose and execute the move. A schedule
+  // or need activating a goal cannot teleport an AI-controlled actor.
+  if (world.meta.aiEnabled === true) return;
   const {
     Agent: AgentComp,
     Mind: MindComp,
@@ -238,6 +250,10 @@ export function goalPursuitSystem(world: World, ctx: SystemContext): void {
 
     const topGoal = movementGoal ?? activeGoals[0];
     const goalDesc = GoalComp.description[topGoal] || "";
+
+    // Package-owned locomotion must receive an intention through cognition, not
+    // be teleported here by an independently selected schedule/movement goal.
+    if (movementGoal !== undefined && getAgentWorldCapabilities(world, eid)?.ownsMovement) continue;
 
     // Execute movement goals.
     let targetLocation: string | null = null;
@@ -444,7 +460,7 @@ export function needsBasedMovementSystem(world: World, ctx: SystemContext): void
       needPriority = Math.min(10, Math.max(1, Math.floor(hunger / 10)));
     }
     // Energy <= 25 is critical
-    else if (energy <= 25) {
+    else if (energy <= 25 && !isResting(world, eid)) {
       criticalNeed = "energy";
       needPriority = Math.min(10, Math.max(1, Math.floor((100 - energy) / 10)));
     }
@@ -503,7 +519,9 @@ export function needsBasedMovementSystem(world: World, ctx: SystemContext): void
     GoalComp.priority[goalEid] = needPriority;
     GoalComp.status[goalEid] = "active";
     GoalComp.progress[goalEid] = 0;
-    (GoalComp as any).createdAt[goalEid] = Date.now();
+    GoalComp.createdAt[goalEid] = Date.now();
+    GoalComp.deadline[goalEid] = 0;
+    stampGoalTiming(world, goalEid);
     setGoalContract(world, goalEid, {
       version: 1,
       kind: "move_to_room",
@@ -531,43 +549,85 @@ export function needsBasedMovementSystem(world: World, ctx: SystemContext): void
 // GOAL CLEANUP SYSTEM
 // =============================================================================
 
-/**
- * Cleans up completed/failed goals and removes stale ones.
- *
- * Logic:
- * 1. Find goals that are completed/failed
- * 2. Remove them after a delay
- * 3. Remove goals past their deadline
- */
+const RECENT_GOAL_RETENTION_MS = 60_000;
+const PAUSED_INTENTION_RETENTION_MS = 5 * 60_000;
+const GOAL_OUTCOME_MARK = "GoalCleanup.observedState";
+
+/** Keep recent outcomes available to cognition, then remove settled artifacts.
+ * Source timestamps remain epoch-domain data; their stamped simulation times
+ * determine expiry and retention. Preparing/pausing a world cannot age its
+ * intentions. Pending physical work and resumable plans are not collected. */
 export function goalCleanupSystem(world: World, ctx: SystemContext): void {
   const { Goal: GoalComp, Name: NameComp } = ctx.components;
-  const { HasGoal: HasGoalRel } = ctx.relations;
-
   const agents = Array.from(ctx.query(world, [Agent, Name]));
-
+  const now = Date.now(), simNow = readSimulationTime(world);
+  const plansByGoal = new Map<number, number[]>(), ownersByGoal = new Map<number, number[]>();
+  for (const plan of ctx.query(world, [Plan])) {
+    const goal = Plan.goalEid[plan], plans = plansByGoal.get(goal) || [];
+    plans.push(plan); plansByGoal.set(goal, plans);
+  }
+  for (const actor of agents) for (const goal of ctx.getRelationTargets(world, actor, HasGoal)) {
+    const owners = ownersByGoal.get(goal) || []; owners.push(actor); ownersByGoal.set(goal, owners);
+  }
   for (const eid of agents) {
     const goalEids = ctx.getRelationTargets(world, eid, HasGoal);
 
     for (const goalEid of goalEids) {
       if (!ctx.hasComponent(world, goalEid, Goal)) continue;
 
-      const status = GoalComp.status[goalEid];
+      let status = GoalComp.status[goalEid];
       const deadline = GoalComp.deadline[goalEid] || 0;
-
-      // Remove completed/failed goals
-      if (status === "completed" || status === "failed") {
-        ctx.removeEntity(world, goalEid);
-        continue;
-      }
-
-      // Fail goals past deadline
-      if (deadline > 0 && ctx.elapsed > deadline) {
+      const awaitingReview = !!pendingIntentionReview(world, eid, goalEid);
+      const expired = (["active", "in_progress"].includes(status) || awaitingReview)
+        && simulationDeadlinePassed(world, goalEid, "Goal.deadline", deadline);
+      if (expired) {
         GoalComp.status[goalEid] = "failed";
+        status = "failed";
+        // Expiration retires the intention, not a running physical callback and
+        // not its historical completed-step cursor. A late receipt stays separate.
+        retireGoalPlans(world, goalEid, plansByGoal.get(goalEid) || []);
         ctx.emit("goal_expired", {
           agent: NameComp.value[eid],
           goal: GoalComp.description[goalEid],
         });
       }
+      const generated = ctx.hasComponent(world, goalEid, GoalLifecycle)
+        && ["foreground", "autonomous"].includes(GoalLifecycle.source[goalEid]);
+      const terminal = ["completed", "failed", "retired", "expired"].includes(status);
+      const pausedEpisode = generated && status === "paused" && !awaitingReview && GoalLifecycle.mode[goalEid] === "exploratory";
+      const birth = GoalComp.createdAt[goalEid] || 0;
+      const episode = JSON.stringify([birth, GoalComp.signature[goalEid], GoalComp.description[goalEid], status]);
+      let observedAt = getStampedSimulationTime(world, goalEid, GOAL_OUTCOME_MARK, birth, episode);
+      if (!terminal && !pausedEpisode) {
+        // Persist resumption as well as settlement: a restored active episode
+        // must not inherit a previously completed episode's retention age.
+        if (observedAt === undefined) stampSimulationTime(world, goalEid, GOAL_OUTCOME_MARK, birth, simNow, episode);
+        continue;
+      }
+      if (observedAt === undefined) {
+        const previousOutcome = getStampedSimulationTime(world, goalEid, GOAL_OUTCOME_MARK, birth);
+        const savedAt = generated ? GoalLifecycle.settledAt[goalEid] : undefined;
+        // A restored generated outcome may predate our first cleanup pass.
+        // A new expiration or changed status starts a new retention episode.
+        const restored = !expired && previousOutcome === undefined && Number.isFinite(savedAt) && savedAt! > 0;
+        observedAt = restored ? Math.min(simNow, readStampedSimulationTime(world, goalEid, "GoalLifecycle.settledAt", savedAt!)) : simNow;
+        stampSimulationTime(world, goalEid, GOAL_OUTCOME_MARK, birth, observedAt, episode);
+        if (generated) {
+          GoalLifecycle.settledAt[goalEid] = restored ? savedAt! : now;
+          stampSimulationTime(world, goalEid, "GoalLifecycle.settledAt", GoalLifecycle.settledAt[goalEid], observedAt);
+        }
+      }
+      const retention = pausedEpisode ? PAUSED_INTENTION_RETENTION_MS : RECENT_GOAL_RETENTION_MS;
+      if (simNow - observedAt < retention) continue;
+      const owners = ownersByGoal.get(goalEid) || [];
+      if (owners.some(actor => ctx.hasComponent(world, actor, PendingToolJob) || getAgentWorldCapabilities(world, actor)?.busy())) continue;
+      const plans = plansByGoal.get(goalEid) || [];
+      if (plans.some(plan => ["active", "paused", "awaiting_evidence"].includes(Plan.status[plan]))) continue;
+      // Retain each owner's supported completion gate before destroying the
+      // goal entity. Cleanup is not a withdrawal and does not confer knowledge.
+      for (const owner of owners) reconcileCoordinationGoals(world, owner);
+      for (const plan of plans) ctx.removeEntity(world, plan);
+      ctx.removeEntity(world, goalEid);
     }
   }
 }
@@ -607,7 +667,7 @@ export function needsDecaySystem(world: World, ctx: SystemContext): void {
     const arousal = MindComp.arousal[eid] || 0.5;
     const oldEnergy = NeedsComp.energy[eid] ?? 100;
     const energyDrain = ENERGY_RATE * (1 + arousal) * 100 * deltaSeconds; // More active = more drain
-    NeedsComp.energy[eid] = Math.max(0, oldEnergy - energyDrain);
+    if (!isResting(world, eid)) NeedsComp.energy[eid] = Math.max(0, oldEnergy - energyDrain);
 
     // Social need increases (faster for extroverts if we had personality)
     const oldSocial = NeedsComp.social[eid] ?? 50;
@@ -663,7 +723,7 @@ export function locationNeedSatisfactionSystem(world: World, ctx: SystemContext)
     }
 
     // Check if location restores energy
-    if (energyLocations.some(loc => roomName.includes(loc))) {
+    if (!isResting(world, eid) && energyLocations.some(loc => roomName.includes(loc))) {
       const oldEnergy = NeedsComp.energy[eid] ?? 100;
       if (oldEnergy < 100) {
         const gain = ENERGY_SATISFY_RATE * 100 * deltaSeconds;
@@ -711,6 +771,12 @@ export const deterministicBehaviorSystems = {
 
 // System definitions for registration
 export const DETERMINISTIC_SYSTEM_DEFINITIONS = [
+  {
+    name: "RestRecovery",
+    description: "Recovers energy during an active rest state using elapsed simulation time",
+    frequency: 0,
+    run: (world: World, ctx: SystemContext) => updateRestState(world, ctx.delta),
+  },
   {
     name: "ScheduleExecutionSystem",
     description: "Creates movement goals from agent schedules",

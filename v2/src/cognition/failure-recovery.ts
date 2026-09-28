@@ -23,7 +23,6 @@ type RecoveryEpisode = {
   createdAtMs: number;
   lastUsedAtMs: number;
   triedPickup: Set<string>;
-  triedMoves: Set<string>;
   triedContainers: Set<string>;
   triedObservations: Set<string>;
   askedForHelp: boolean;
@@ -31,7 +30,16 @@ type RecoveryEpisode = {
 };
 
 // Per-agent recovery episode keyed by the latest failure signature.
-const recoveryEpisodes = new Map<number, RecoveryEpisode>();
+const recoveryEpisodes = new WeakMap<World, Map<number, RecoveryEpisode>>();
+
+function getRecoveryEpisodes(world: World): Map<number, RecoveryEpisode> {
+  let episodes = recoveryEpisodes.get(world);
+  if (!episodes) {
+    episodes = new Map();
+    recoveryEpisodes.set(world, episodes);
+  }
+  return episodes;
+}
 
 function normalizeName(s: string): string {
   return s.trim().toLowerCase();
@@ -113,11 +121,8 @@ function findEntityByNameInRoom(world: World, roomEid: number | undefined, wante
     }
   }
 
-  // Fallback: global scan.
-  for (let eid = 0; eid < (Name.value as any).length; eid++) {
-    const n = Name.value[eid];
-    if (typeof n === "string" && normalizeName(n) === wanted) return eid;
-  }
+  // Unknown locations belong to memory/reasoning, not a global ECS name scan.
+  // The recovery reflex must not reveal an unseen entity or its current room.
   return undefined;
 }
 
@@ -166,46 +171,30 @@ function parseVisibleHere(message: string): string[] {
     .slice(0, 6);
 }
 
-function actionSig(a: RecoveryAction): string {
-  return JSON.stringify(a);
-}
-
-function getOrInitEpisode(agentEid: number, failureSig: string, failureTs: number): RecoveryEpisode {
+function getOrInitEpisode(world: World, agentEid: number, failureSig: string, failureTs: number): RecoveryEpisode {
   const now = Date.now();
-  const existing = recoveryEpisodes.get(agentEid);
-  if (!existing || existing.failureSig !== failureSig || existing.failureTs !== failureTs || now - existing.lastUsedAtMs > RECOVERY_DEDUP_WINDOW_MS) {
+  const episodes = getRecoveryEpisodes(world);
+  const existing = episodes.get(agentEid);
+  // A fresh timestamp on the same failure is not new evidence that a failed
+  // tactic will work. Keep its retry history until feedback or expiry.
+  if (!existing || existing.failureSig !== failureSig || now - existing.lastUsedAtMs > RECOVERY_DEDUP_WINDOW_MS) {
     const ep: RecoveryEpisode = {
       failureSig,
       failureTs,
       createdAtMs: now,
       lastUsedAtMs: now,
       triedPickup: new Set(),
-      triedMoves: new Set(),
       triedContainers: new Set(),
       triedObservations: new Set(),
       askedForHelp: false,
       attemptedPatchRegen: false,
     };
-    recoveryEpisodes.set(agentEid, ep);
+    episodes.set(agentEid, ep);
     return ep;
   }
+  existing.failureTs = failureTs;
   existing.lastUsedAtMs = now;
   return existing;
-}
-
-function tryMoveToEntityRoom(world: World, agentEid: number, targetName: string, ep: RecoveryEpisode): RecoveryAction | null {
-  const agentRoom = getRoomForEntity(world as any, agentEid);
-  const targetEid = findEntityByNameInRoom(world, undefined, targetName);
-  if (targetEid === undefined) return null;
-  const targetRoom = getRoomForEntity(world as any, targetEid);
-  if (targetRoom === undefined) return null;
-  if (agentRoom !== undefined && targetRoom === agentRoom) return null;
-  const roomName = String(Name.value[targetRoom] || "").trim();
-  if (!roomName) return null;
-  const key = normalizeName(roomName);
-  if (ep.triedMoves.has(key)) return null;
-  ep.triedMoves.add(key);
-  return { type: "move", target: roomName, content: `recover access to ${targetName}` };
 }
 
 /**
@@ -224,14 +213,20 @@ export function selectFailureRecoveryAction(world: World, agentEid: number): Rec
   // If we have a newer success/action_result/observation, do not keep "recovering" from an older failure.
   // Ignore speech-only "success" so agents don't talk their way out of unresolved grounding failures.
   const latestResultTs = getLatestPerceptionTs(world, agentEid, "action_result", ["speech"]);
-  if (latestResultTs >= failure.ts && latestResultTs > 0) return null;
+  if (latestResultTs >= failure.ts && latestResultTs > 0) {
+    getRecoveryEpisodes(world).delete(agentEid);
+    return null;
+  }
   // Successful observations also count as recovery (observe sends type "observation" not "action_result")
   const latestObsTs = getLatestPerceptionTs(world, agentEid, "observation");
-  if (latestObsTs >= failure.ts && latestObsTs > 0) return null;
+  if (latestObsTs >= failure.ts && latestObsTs > 0) {
+    getRecoveryEpisodes(world).delete(agentEid);
+    return null;
+  }
 
   const failureSig = `${failure.source}|${failure.content.slice(0, 300)}`;
   const roomEid = getRoomForEntity(world as any, agentEid);
-  const ep = getOrInitEpisode(agentEid, failureSig, failure.ts);
+  const ep = getOrInitEpisode(world, agentEid, failureSig, failure.ts);
 
   // 0) Workspace coding recovery: if a git_apply_from_last_gemini step failed, regenerate the patch.
   // This prevents loops like: git_apply -> fail -> git_apply -> fail, when the patch hunks don't match the file.
@@ -272,9 +267,6 @@ export function selectFailureRecoveryAction(world: World, agentEid: number): Rec
       ep.triedPickup.add(key);
       return { type: "pickup", target: pickupName };
     }
-    // If we've already tried to pick it up here, try going to where it actually is (if known).
-    const move = tryMoveToEntityRoom(world, agentEid, pickupName, ep);
-    if (move) return move;
   }
 
   // 1b) If we lack a tool trait, try to pick up any visible object that provides it.
@@ -333,12 +325,8 @@ export function selectFailureRecoveryAction(world: World, agentEid: number): Rec
   // 4) Try observing the most likely mentioned target (quoted string) if present.
   const quoted = parseFirstQuoted(failure.content);
   if (quoted) {
-    // If the quoted thing exists elsewhere, relocate before continuing.
-    const move = tryMoveToEntityRoom(world, agentEid, quoted, ep);
-    if (move) return move;
-
     const key = normalizeName(quoted);
-    if (!ep.triedObservations.has(key)) {
+    if (!ep.triedObservations.has(key) && findEntityByNameInRoom(world, roomEid, quoted) !== undefined) {
       ep.triedObservations.add(key);
       return { type: "observe", target: quoted };
     }

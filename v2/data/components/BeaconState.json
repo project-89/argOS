@@ -1,0 +1,8 @@
+{
+  "name": "BeaconState",
+  "description": "Tracks the state of an oil-burning beacon",
+  "properties": {
+    "oilLevel": "number",
+    "brightness": "number"
+  }
+}

@@ -2,7 +2,7 @@
  * World Clock System — Pure ECS time management
  *
  * Creates and maintains a clock entity with WorldClock component.
- * Advances time each tick: morning → midday → evening → night → morning (new day).
+ * Projects the authoritative simulation calendar; polling does not advance time.
  *
  * Also manages WorldEvent entities:
  *   - Expires events whose duration has elapsed
@@ -16,6 +16,8 @@ import { addEntity, addComponent, removeEntity, query, hasComponent } from "bite
 import { WorldClock, WorldEvent, Name, Agent } from "../ecs/components";
 import type { World } from "../ecs/world";
 import { chronicle } from "../cognition/simulation-chronicle";
+import { formatSimulationHour, readSimulationTime, simulationDayPhase } from "../ecs/simulation-time";
+import { getStampedSimulationTime, stampSimulationTime } from "../ecs/temporal-age";
 
 // =============================================================================
 // CONSTANTS
@@ -25,6 +27,12 @@ export const PERIODS = ["morning", "midday", "evening", "night"] as const;
 export type Period = typeof PERIODS[number];
 
 const DEFAULT_TICKS_PER_PERIOD = 20;
+const LEGACY_EVENT_TICK_MS = 1_000;
+const PERIOD_HOUR: Record<Period, number> = { morning: 5, midday: 12, evening: 18, night: 21 };
+function calendarPeriod(world: World): Period {
+  const hour = world.time.simulationHour;
+  return hour >= 5 && hour < 12 ? "morning" : hour >= 12 && hour < 18 ? "midday" : hour >= 18 && hour < 21 ? "evening" : "night";
+}
 
 // =============================================================================
 // CLOCK ENTITY MANAGEMENT
@@ -35,32 +43,36 @@ export function createWorldClock(
   world: World,
   options: { ticksPerPeriod?: number; startPeriod?: Period; startDay?: number } = {},
 ): number {
+  if (options.startPeriod !== undefined && !PERIODS.includes(options.startPeriod)) throw new RangeError("Invalid starting calendar period");
+  if (options.startDay !== undefined && (!Number.isSafeInteger(options.startDay) || options.startDay < 1)) throw new RangeError("Starting day must be a positive integer");
+  if (options.ticksPerPeriod !== undefined && (!Number.isSafeInteger(options.ticksPerPeriod) || options.ticksPerPeriod <= 0)) throw new RangeError("Legacy display slots must be a positive integer");
+  if (options.startPeriod) {
+    world.time.simulationHour = options.startPeriod === "morning" ? 8 : PERIOD_HOUR[options.startPeriod];
+    world.time.timeOfDay = simulationDayPhase(world.time.simulationHour);
+  }
+  if (options.startDay !== undefined) world.time.simulationDay = options.startDay;
   const eid = addEntity(world);
   addComponent(world, eid, WorldClock as any);
   addComponent(world, eid, Name as any);
 
   Name.value[eid] = "WorldClock";
-  WorldClock.period[eid] = options.startPeriod || "morning";
+  WorldClock.period[eid] = calendarPeriod(world);
   WorldClock.tick[eid] = 0;
   WorldClock.ticksPerPeriod[eid] = options.ticksPerPeriod ?? DEFAULT_TICKS_PER_PERIOD;
-  WorldClock.day[eid] = options.startDay ?? 1;
-  WorldClock.totalTicks[eid] = 0;
+  WorldClock.day[eid] = world.time.simulationDay;
+  WorldClock.totalTicks[eid] = world.time.tick;
 
   return eid;
 }
 
-/** Get the current time period. Returns "morning" if no clock exists. */
+/** Get the current time period, even without a legacy projection entity. */
 export function getCurrentPeriod(world: World): Period {
-  const clocks = Array.from(query(world as any, [WorldClock as any]));
-  if (clocks.length === 0) return "morning";
-  return (WorldClock.period[clocks[0]] || "morning") as Period;
+  return calendarPeriod(world);
 }
 
 /** Get the current day number. */
 export function getCurrentDay(world: World): number {
-  const clocks = Array.from(query(world as any, [WorldClock as any]));
-  if (clocks.length === 0) return 1;
-  return WorldClock.day[clocks[0]] || 1;
+  return world.time.simulationDay;
 }
 
 /** Get full clock state for context injection. */
@@ -73,15 +85,15 @@ export function getClockState(world: World): {
 } {
   const clocks = Array.from(query(world as any, [WorldClock as any]));
   if (clocks.length === 0) {
-    return { period: "morning", day: 1, tickInPeriod: 0, ticksPerPeriod: DEFAULT_TICKS_PER_PERIOD, totalTicks: 0 };
+    return { period: calendarPeriod(world), day: world.time.simulationDay, tickInPeriod: 0, ticksPerPeriod: DEFAULT_TICKS_PER_PERIOD, totalTicks: world.time.tick };
   }
   const eid = clocks[0];
   return {
-    period: (WorldClock.period[eid] || "morning") as Period,
-    day: WorldClock.day[eid] || 1,
+    period: calendarPeriod(world),
+    day: world.time.simulationDay,
     tickInPeriod: WorldClock.tick[eid] || 0,
     ticksPerPeriod: WorldClock.ticksPerPeriod[eid] || DEFAULT_TICKS_PER_PERIOD,
-    totalTicks: WorldClock.totalTicks[eid] || 0,
+    totalTicks: world.time.tick,
   };
 }
 
@@ -90,9 +102,8 @@ export function getClockState(world: World): {
 // =============================================================================
 
 /**
- * Advance the world clock by one tick.
- * When a period ends, transitions to the next period.
- * When night ends, advances to a new day.
+ * Refresh the legacy calendar projection after physical time has advanced.
+ * MUD input and LIL turns call this safely without creating a second clock.
  * Returns the new period if it changed, null otherwise.
  */
 export function advanceWorldClock(world: World): Period | null {
@@ -100,36 +111,28 @@ export function advanceWorldClock(world: World): Period | null {
   if (clocks.length === 0) return null;
 
   const eid = clocks[0];
-  WorldClock.totalTicks[eid] = (WorldClock.totalTicks[eid] || 0) + 1;
-  WorldClock.tick[eid] = (WorldClock.tick[eid] || 0) + 1;
+  migrateLegacyEvents(world, WorldClock.totalTicks[eid] || 0);
+  const period = calendarPeriod(world), changed = period !== WorldClock.period[eid] || world.time.simulationDay !== WorldClock.day[eid];
+  WorldClock.period[eid] = period;
+  WorldClock.day[eid] = world.time.simulationDay;
+  WorldClock.totalTicks[eid] = world.time.tick;
+  // This entity is a calendar projection, never another physical clock. Legacy
+  // display slots remain available but cannot turn polling into lived time.
+  const hours = period === "night" ? 8 : period === "morning" ? 7 : period === "midday" ? 6 : 3;
+  const elapsedHours = (world.time.simulationHour - PERIOD_HOUR[period] + 24) % 24;
+  WorldClock.tick[eid] = Math.floor(elapsedHours / hours * (WorldClock.ticksPerPeriod[eid] || DEFAULT_TICKS_PER_PERIOD));
+  if (changed) chronicle.record("phase_change", { period, day: world.time.simulationDay, totalTicks: world.time.tick });
+  return changed ? period : null;
+}
 
-  const ticksPerPeriod = WorldClock.ticksPerPeriod[eid] || DEFAULT_TICKS_PER_PERIOD;
-
-  if (WorldClock.tick[eid] >= ticksPerPeriod) {
-    // Period transition
-    WorldClock.tick[eid] = 0;
-    const currentPeriod = WorldClock.period[eid] || "morning";
-    const currentIdx = PERIODS.indexOf(currentPeriod as Period);
-    const nextIdx = (currentIdx + 1) % PERIODS.length;
-    const nextPeriod = PERIODS[nextIdx];
-
-    WorldClock.period[eid] = nextPeriod;
-
-    // New day when cycling back to morning
-    if (nextPeriod === "morning") {
-      WorldClock.day[eid] = (WorldClock.day[eid] || 1) + 1;
-    }
-
-    chronicle.record("phase_change", {
-      period: nextPeriod,
-      day: WorldClock.day[eid],
-      totalTicks: WorldClock.totalTicks[eid],
-    });
-
-    return nextPeriod;
+function migrateLegacyEvents(world: World, legacyTicks: number): void {
+  for (const eid of query(world, [WorldEvent])) {
+    if (Number.isFinite(WorldEvent.durationMs[eid])
+      && getStampedSimulationTime(world, eid, "WorldEvent.startTick", WorldEvent.startTick[eid] || 0) !== undefined) continue;
+    WorldEvent.durationMs[eid] = Math.max(0, WorldEvent.duration[eid] || 0) * LEGACY_EVENT_TICK_MS;
+    const age = Math.max(0, legacyTicks - (WorldEvent.startTick[eid] || 0)) * LEGACY_EVENT_TICK_MS;
+    stampSimulationTime(world, eid, "WorldEvent.startTick", WorldEvent.startTick[eid] || 0, readSimulationTime(world) - age);
   }
-
-  return null;
 }
 
 // =============================================================================
@@ -145,10 +148,13 @@ export function createWorldEvent(
     description: string;
     priority?: number;
     duration?: number;       // 0 = permanent
+    durationMs?: number;     // Explicit in-world milliseconds; preferred over legacy duration ticks
     affectsGoals?: Record<string, number>;  // e.g. { social: 2, survive: -1 }
     location?: string;       // "" = global
   },
 ): number {
+  const durationMs = config.durationMs ?? (config.duration ?? 0) * LEGACY_EVENT_TICK_MS;
+  if (!Number.isFinite(durationMs) || durationMs < 0) throw new RangeError("World event duration must be non-negative in-world milliseconds");
   const eid = addEntity(world);
   addComponent(world, eid, WorldEvent as any);
   addComponent(world, eid, Name as any);
@@ -159,12 +165,14 @@ export function createWorldEvent(
   WorldEvent.description[eid] = config.description;
   WorldEvent.priority[eid] = config.priority ?? 50;
   WorldEvent.duration[eid] = config.duration ?? 0;
+  WorldEvent.durationMs[eid] = durationMs;
   WorldEvent.affectsGoals[eid] = JSON.stringify(config.affectsGoals || {});
   WorldEvent.location[eid] = config.location || "";
 
   // Start tick from world clock
   const clock = getClockState(world);
   WorldEvent.startTick[eid] = clock.totalTicks;
+  stampSimulationTime(world, eid, "WorldEvent.startTick", WorldEvent.startTick[eid]);
 
   chronicle.record("crisis_event", {
     name: config.name,
@@ -205,16 +213,18 @@ export function getActiveWorldEvents(world: World): Array<{
 
 /** Expire world events that have exceeded their duration. */
 export function expireWorldEvents(world: World): number {
-  const clock = getClockState(world);
+  const clockEntity = Array.from(query(world, [WorldClock]))[0];
+  migrateLegacyEvents(world, clockEntity === undefined ? world.time.tick : WorldClock.totalTicks[clockEntity] || 0);
   const eventEids = Array.from(query(world as any, [WorldEvent as any]));
   let expired = 0;
 
   for (const eid of eventEids) {
-    const duration = WorldEvent.duration[eid] || 0;
+    const duration = WorldEvent.durationMs[eid] || 0;
     if (duration <= 0) continue; // Permanent event
 
     const startTick = WorldEvent.startTick[eid] || 0;
-    if (clock.totalTicks - startTick >= duration) {
+    const startedAt = getStampedSimulationTime(world, eid, "WorldEvent.startTick", startTick) ?? readSimulationTime(world);
+    if (readSimulationTime(world) - startedAt >= duration) {
       const name = WorldEvent.name[eid] || "unknown event";
       console.log(`[WorldEvent] "${name}" ended (duration expired)`);
       chronicle.record("crisis_event", { name, ended: true });
@@ -235,15 +245,11 @@ export function formatWorldTimeForContext(world: World): string {
   const clock = getClockState(world);
   const events = getActiveWorldEvents(world);
 
-  const periodDescriptions: Record<string, string> = {
-    morning: "It is morning — time for work, chores, and starting the day's tasks.",
-    midday: "It is midday — time to eat, rest briefly, and tend to basic needs.",
-    evening: "It is evening — time to wind down, socialize, share stories, and visit the tavern.",
-    night: "It is night — time to rest, sleep, and reflect on the day.",
-  };
-
-  let context = `\nTIME OF DAY: ${clock.period.toUpperCase()} (Day ${clock.day})`;
-  context += `\n${periodDescriptions[clock.period] || ""}`;
+  // Report the calendar, not a generic agenda. A broad period alone cannot
+  // establish whether a remembered appointment is due.
+  let context = `\nTIME OF DAY: ${simulationDayPhase(world.time.simulationHour).toUpperCase()} (Day ${clock.day})`;
+  context += `\nCURRENT WORLD TIME: ${formatSimulationHour(world.time.simulationHour)} (Day ${clock.day})`;
+  context += `\nLIVED TIME: ${(readSimulationTime(world) / 1000).toFixed(1)} seconds elapsed in this simulation, not time spent computing or rendering.`;
 
   if (events.length > 0) {
     context += `\n\nACTIVE EVENTS:`;

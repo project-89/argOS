@@ -393,7 +393,7 @@ async function main() {
     for (const a of agents) {
       const name = Name.value[a] || "?";
       const role = Agent.role[a] || "";
-      const aspirations = getAspirations(a);
+      const aspirations = getAspirations(sim.world, a);
       origLog(`    ${C.cyan}${name}${C.reset} (${role})${aspirations.length > 0 ? ` — ${C.dim}${aspirations[0]}${C.reset}` : ""}`);
     }
     for (const o of objects) {

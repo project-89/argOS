@@ -1,18 +1,25 @@
+import { stampGoalTiming } from "../ecs/temporal-age";
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext } from "../ecs/dynamic-systems";
 import { query, entityExists, addComponent, removeComponent, hasComponent, getRelationTargets, addEntity } from "bitecs";
 import { Name, Agent, Mind, Room, StimulusSource, GridPosition, Needs, ObjectState, Goal, PhysicalObject, Container, BehaviorPolicy } from "../ecs/components";
-import { LocatedIn, SleepingOn, HasGoal } from "../ecs/relations";
+import { LocatedIn, SleepingOn, HasGoal, HasPlan } from "../ecs/relations";
 import { getDirectContainer, getRoomForEntity, setLocatedIn } from "../ecs/location";
 import { getDynamicComponentValue } from "../ecs/dynamic-components";
 import { ActionRegistry } from "../cognition/action-registry";
 import { setGoalContract } from "../cognition/goal-contract";
+import { retireGoalPlans } from "../cognition/plan-state";
 import { goalEvaluationSystem } from "./goal-evaluation-system";
 import { goalCleanupSystem, goalPursuitSystem, needsBasedMovementSystem, scheduleExecutionSystem } from "./deterministic-behavior-systems";
+import { getAgentWorldCapabilities } from "../cognition/world-capabilities";
 import { ensureSchedulesForCurrentDay, runScheduleSystem } from "../cognition/schedule-system";
 import { createScheduleAdaptationSystem } from "../cognition/schedule-adaptation";
 import { createDayPlanActivationSystem, createDayPlanPreplannerSystem, createScheduledActivityGoalSystem, createScheduledActivityTemplatePlannerSystem } from "./scheduled-activity-systems";
 import { createOfficeToolJobSystem } from "./office-tool-job-system";
+import { createRepoIntegratorSystem } from "./repo-integrator-system";
+import { isResting, updateRestState } from "../cognition/rest-state";
+import { isSimulationResourceBusy } from "../runtime/simulation-timeline";
+import { readSimulationTime } from "../ecs/simulation-time";
 
 // =============================================================================
 // REGISTER BUILTIN SYSTEM ACTIONS
@@ -69,42 +76,20 @@ export function getMovementTarget(agentEid: number): number | undefined {
 }
 
 export function createTimeProgressionSystem(): SystemDefinition {
+  const observedPhases = new WeakMap<World, string>();
   return {
     name: "TimeProgression",
-    description: "Advances world time and triggers time-based events",
-    pseudocode: "Increment time, update time of day, broadcast changes",
-    frequency: 30000,
+    description: "Projects the authoritative simulation calendar into ambience and time-change events",
+    pseudocode: "Observe simulation calendar and broadcast phase changes",
+    frequency: 0,
     active: true,
     lastRun: 0,
     compiledFn: (world: World, ctx: SystemContext) => {
-      // Read current simulation time from world context (not closure!)
-      const worldContext = world as any;
-      let hour = worldContext.time?.simulationHour ?? 8;
-      let day = worldContext.time?.simulationDay ?? 1;
-      const previousTimeOfDay = worldContext.time?.timeOfDay ?? "morning";
-
-      // Advance by 1 hour
-      hour += 1;
-      if (hour >= 24) {
-        hour = 0;
-        day += 1;
-      }
-
-      // Calculate time of day
-      let newTimeOfDay = previousTimeOfDay;
-      if (hour >= 5 && hour < 8) newTimeOfDay = "dawn";
-      else if (hour >= 8 && hour < 12) newTimeOfDay = "morning";
-      else if (hour >= 12 && hour < 14) newTimeOfDay = "midday";
-      else if (hour >= 14 && hour < 18) newTimeOfDay = "afternoon";
-      else if (hour >= 18 && hour < 21) newTimeOfDay = "evening";
-      else if (hour >= 21 || hour < 5) newTimeOfDay = "night";
-
-      // CRITICAL: Write back to world context so other systems can read it
-      if (worldContext.time) {
-        worldContext.time.simulationHour = hour;
-        worldContext.time.simulationDay = day;
-        worldContext.time.timeOfDay = newTimeOfDay;
-      }
+      // Physics, calendar and action intervals share one clock. This system is
+      // a projection, not a second clock that adds an hour every wall 30 seconds.
+      const { simulationHour: hour, simulationDay: day, timeOfDay: newTimeOfDay } = world.time;
+      const previousTimeOfDay = observedPhases.get(world) ?? "morning";
+      observedPhases.set(world, newTimeOfDay);
 
       // Emit time change event and update room ambience when time of day changes
       if (newTimeOfDay !== previousTimeOfDay) {
@@ -150,17 +135,17 @@ export function createTimeProgressionSystem(): SystemDefinition {
 /**
  * DailySchedulePlanner - Ensures every active agent has a daily schedule for the current sim day.
  *
- * - Deterministic by default (creates default schedules).
+ * - Deterministic by default (installs baseline rhythms, carries existing daily routines forward).
  * - If `world.meta.generateSchedules` is true and LLM is enabled, regenerates schedules daily via LLM.
  */
 export function createDailySchedulePlannerSystem(): SystemDefinition {
   return {
     name: "DailySchedulePlanner",
-    description: "Creates/regenerates agent schedules once per simulation day",
+    description: "Installs baseline routines or carries existing schedules forward; replans only when enabled",
     pseudocode: `
 FOR EACH active agent:
   IF no Schedule OR Schedule.plannedDay != world.time.simulationDay:
-    create schedule (LLM if enabled, else default)
+    create a baseline if missing; otherwise carry it forward (LLM replan only if enabled)
 `,
     frequency: 2000,
     active: true,
@@ -175,8 +160,8 @@ FOR EACH active agent:
 
       const maxAgents = useLLM ? 1 : 50;
       const result = await ensureSchedulesForCurrentDay(world as any, { useLLM, maxAgents });
-      if (result.created > 0 || result.regenerated > 0) {
-        ctx.log(`[SchedulePlanner] created=${result.created} regenerated=${result.regenerated} (useLLM=${useLLM})`);
+      if (result.created > 0 || result.regenerated > 0 || result.carriedForward > 0) {
+        ctx.log(`[SchedulePlanner] created=${result.created} regenerated=${result.regenerated} carriedForward=${result.carriedForward} (useLLM=${useLLM})`);
       }
     },
   };
@@ -361,21 +346,44 @@ export function createRelationshipEvolutionSystem(): SystemDefinition {
 }
 
 export function createMovementSystem(): SystemDefinition {
+  const budgets = new WeakMap<World, Map<number, { target: number; ms: number }>>();
   return {
     name: "Movement",
     description: "Moves agents towards their targets on the grid",
-    pseudocode: "For each agent with a target, move one step closer",
-    frequency: 500, // Move every 500ms for smoother movement
+    pseudocode: "Integrate one grid step per 500 in-world milliseconds toward each native target",
+    frequency: 0,
     active: true,
     lastRun: 0,
+    nextDeadline: world => {
+      const worldBudgets = budgets.get(world), now = readSimulationTime(world);
+      let next: number | undefined;
+      for (const eid of query(world, [Agent, GridPosition])) {
+        const target = movementTargets.get(eid);
+        if (!Agent.active[eid] || target === undefined || !entityExists(world, target)
+          || isSimulationResourceBusy(world, eid, "body") || getAgentWorldCapabilities(world, eid)?.ownsMovement
+          || getAgentWorldCapabilities(world, eid)?.busy()) continue;
+        const coords = [GridPosition.x[eid], GridPosition.y[eid], GridPosition.x[target], GridPosition.y[target]];
+        if (!coords.every(Number.isFinite) || Math.hypot(coords[2] - coords[0], coords[3] - coords[1]) < 2) continue;
+        const budget = worldBudgets?.get(eid), due = now + 500 - (budget?.target === target ? budget.ms : 0);
+        next = next === undefined ? due : Math.min(next, due);
+      }
+      return next;
+    },
     compiledFn: (world: World, ctx: SystemContext) => {
       const agents = Array.from(ctx.query(world, [Agent, GridPosition])).filter(eid => entityExists(world, eid));
+      let worldBudgets = budgets.get(world);
+      if (!worldBudgets) budgets.set(world, worldBudgets = new Map());
+      for (const eid of worldBudgets.keys()) if (!entityExists(world, eid)) worldBudgets.delete(eid);
 
       for (const agentEid of agents) {
         if (!entityExists(world, agentEid)) continue;
 
         const targetEid = movementTargets.get(agentEid);
-        if (!targetEid || !entityExists(world, targetEid)) continue;
+        if (isSimulationResourceBusy(world, agentEid, "body") || getAgentWorldCapabilities(world, agentEid)?.ownsMovement || getAgentWorldCapabilities(world, agentEid)?.busy()
+          || targetEid === undefined || !entityExists(world, targetEid)) {
+          worldBudgets.delete(agentEid);
+          continue;
+        }
 
         // Get current and target positions
         const currentX = GridPosition.x[agentEid];
@@ -383,8 +391,10 @@ export function createMovementSystem(): SystemDefinition {
         const targetX = GridPosition.x[targetEid];
         const targetY = GridPosition.y[targetEid];
 
-        if (currentX === undefined || currentY === undefined ||
-            targetX === undefined || targetY === undefined) continue;
+        if (![currentX, currentY, targetX, targetY].every(Number.isFinite)) {
+          worldBudgets.delete(agentEid);
+          continue;
+        }
 
         // Calculate distance
         const dx = targetX - currentX;
@@ -394,6 +404,7 @@ export function createMovementSystem(): SystemDefinition {
         // If close enough, stop moving
         if (distance < 2) {
           movementTargets.delete(agentEid);
+          worldBudgets.delete(agentEid);
           ctx.emit("movement_complete", {
             agent: Name.value[agentEid],
             target: Name.value[targetEid],
@@ -402,15 +413,22 @@ export function createMovementSystem(): SystemDefinition {
           continue;
         }
 
-        // Move one step towards target
-        const stepSize = 1;
+        const previousBudget = worldBudgets.get(agentEid);
+        const availableMs = (previousBudget?.target === targetEid ? previousBudget.ms : 0) + ctx.delta;
+        const availableSteps = Math.floor(availableMs / 500);
+        worldBudgets.set(agentEid, { target: targetEid, ms: availableMs % 500 });
+        if (availableSteps <= 0) continue;
+
+        // Keep the existing axis-aligned grid route, but consume its physical
+        // step budget rather than taking one step per arbitrary executor call.
         let newX = currentX;
         let newY = currentY;
-
-        if (Math.abs(dx) > Math.abs(dy)) {
-          newX = currentX + (dx > 0 ? stepSize : -stepSize);
-        } else if (dy !== 0) {
-          newY = currentY + (dy > 0 ? stepSize : -stepSize);
+        for (let step = 0; step < availableSteps; step++) {
+          const remainingX = targetX - newX;
+          const remainingY = targetY - newY;
+          if (Math.hypot(remainingX, remainingY) < 2) break;
+          if (Math.abs(remainingX) > Math.abs(remainingY)) newX += Math.sign(remainingX);
+          else if (remainingY !== 0) newY += Math.sign(remainingY);
         }
 
         // Update position
@@ -427,6 +445,13 @@ export function createMovementSystem(): SystemDefinition {
           target: targetName,
           distance: Math.round(distance)
         });
+        if (Math.hypot(targetX - newX, targetY - newY) < 2) {
+          movementTargets.delete(agentEid);
+          worldBudgets.delete(agentEid);
+          ctx.emit("movement_complete", {
+            agent: agentName, target: targetName, position: { x: newX, y: newY },
+          });
+        }
       }
     },
   };
@@ -571,9 +596,9 @@ FOR EACH agent WITH Agent, GridPosition:
   ELSE:
     Find closest room within ARRIVAL_THRESHOLD
 `,
-    // Run at least once per ECS tick in typical harness configs (2Hz / 500ms) to avoid
-    // brief "no current room" windows that cause repeated move thrash.
-    frequency: 500,
+    // Containment is a consequence of each physical boundary, not a separate
+    // 500ms sampling clock that could lag a spoken word at a room crossing.
+    frequency: 0,
     active: true,
     lastRun: 0,
     compiledFn: (world: World, ctx: SystemContext) => {
@@ -594,6 +619,7 @@ FOR EACH agent WITH Agent, GridPosition:
         if (!entityExists(world, agentEid)) continue;
 
         const agentX = GridPosition.x[agentEid];
+        if (getAgentWorldCapabilities(world, agentEid)?.ownsMovement || getAgentWorldCapabilities(world, agentEid)?.busy()) continue;
         const agentY = GridPosition.y[agentEid];
 
         if (agentX === undefined || agentY === undefined) continue;
@@ -789,12 +815,21 @@ FOR EACH agent WITH active Goal matching "Go to <room>":
     compiledFn: (world: World, ctx: SystemContext) => {
       // Step-based pursuit: translate movement goals into grid movement targets.
       // Movement + RoomArrival then handle locomotion and canonical room containment.
+      // In an AI world, an active goal is a candidate intention, not authority
+      // to move the actor. The cognitive executor admits explicit moves (and
+      // installs native grid targets when needed). Keep this independent goal
+      // arbiter only for no-AI/legacy worlds, just like idle wandering.
+      if (world.meta.aiEnabled === true) return;
       const agents = Array.from(ctx.query(world, [Agent, Mind, Name, GridPosition])).filter((eid) => entityExists(world, eid));
       const rooms = Array.from(ctx.query(world, [Room, Name, GridPosition])).filter((eid) => entityExists(world, eid));
-      const nowMs = Date.now();
+      const nowMs = world.time.elapsed;
 
       for (const agentEid of agents) {
         if (!Agent.active[agentEid]) continue;
+
+        // Domain locomotion (doors, timed journeys, interrupted routes) must go
+        // through the ordinary intention -> package -> physical proof pipeline.
+        if (getAgentWorldCapabilities(world, agentEid)?.ownsMovement) continue;
 
         const currentTarget = getMovementTarget(agentEid);
         const lock = movementLocks.get(agentEid);
@@ -858,6 +893,7 @@ FOR EACH agent WITH active Goal matching "Go to <room>":
           if (hereName.includes(wantedRoom) || hereAmbience.includes(wantedRoom)) {
             Goal.status[topGoalEid] = "completed";
             Goal.progress[topGoalEid] = 100;
+            retireGoalPlans(world, topGoalEid, ctx.getRelationTargets(world, agentEid, HasPlan));
             Mind.focus[agentEid] = "arrived";
             clearMovementTarget(agentEid);
             movementLocks.delete(agentEid);
@@ -876,6 +912,7 @@ FOR EACH agent WITH active Goal matching "Go to <room>":
 
         if (targetRoomEid === undefined) {
           Goal.status[topGoalEid] = "failed";
+          retireGoalPlans(world, topGoalEid, ctx.getRelationTargets(world, agentEid, HasPlan));
           movementLocks.delete(agentEid);
           continue;
         }
@@ -978,6 +1015,9 @@ FOR EACH agent WITHOUT active goals AND needs are okay:
     active: true,
     lastRun: 0,
     compiledFn: (world: World, ctx: SystemContext) => {
+      // This is the no-AI fallback. A live character may choose quiet or rest;
+      // periodic random movement must not overrule its own decision loop.
+      if (world.meta.aiEnabled === true) return;
       const rooms = Array.from(ctx.query(world, [Room, Name])).filter((eid) => entityExists(world, eid));
       if (rooms.length < 2) return;
 
@@ -990,6 +1030,7 @@ FOR EACH agent WITHOUT active goals AND needs are okay:
 
         const hunger = Needs.hunger[agentEid] || 0;
         const energy = Needs.energy[agentEid] ?? 100;
+        if (isResting(world, agentEid)) continue;
         if (hunger >= 60) continue;
         if (energy <= 35) continue;
 
@@ -1018,6 +1059,7 @@ FOR EACH agent WITHOUT active goals AND needs are okay:
         Goal.progress[goalEid] = 0;
         Goal.deadline[goalEid] = Date.now() + 2 * 60 * 1000;
         Goal.createdAt[goalEid] = Date.now();
+        stampGoalTiming(world, goalEid);
         setGoalContract(world, goalEid, {
           version: 1,
           kind: "move_to_room",
@@ -1078,6 +1120,15 @@ FOR EACH agent WITH SleepingOn(target):
   };
 }
 
+export function createRestRecoverySystem(): SystemDefinition {
+  return {
+    name: "RestRecovery", description: "Recovers energy during an admitted rest state over simulation time",
+    pseudocode: "For resting actors, recover energy using this tick's elapsed time; maintain rest until a competing action.",
+    frequency: 0, active: true, lastRun: 0,
+    compiledFn: (world, ctx) => updateRestState(world, ctx.delta),
+  };
+}
+
 export const BUILTIN_SYSTEMS = {
   TimeProgression: createTimeProgressionSystem,
   DailySchedulePlanner: createDailySchedulePlannerSystem,
@@ -1089,6 +1140,7 @@ export const BUILTIN_SYSTEMS = {
   ScheduledActivityGoals: createScheduledActivityGoalSystem,
   ScheduledActivityTemplatePlanner: createScheduledActivityTemplatePlannerSystem,
   OfficeToolJobSystem: createOfficeToolJobSystem,
+  RepoIntegratorSystem: createRepoIntegratorSystem,
   SocialDynamics: createSocialDynamicsSystem,
   NarrativeEvents: createNarrativeEventSystem,
   RelationshipEvolution: createRelationshipEvolutionSystem,
@@ -1098,6 +1150,7 @@ export const BUILTIN_SYSTEMS = {
   GoalCleanupSystem: createGoalCleanupSystem,
   IdleWanderSystem: createIdleWanderSystem,
   SleepWakeSystem: createSleepWakeSystem,
+  RestRecovery: createRestRecoverySystem,
   Movement: createMovementSystem,
   RoomArrival: createRoomArrivalSystem,
   LocationIntegrity: createLocationIntegritySystem,

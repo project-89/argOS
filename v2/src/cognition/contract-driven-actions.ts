@@ -1,8 +1,11 @@
 import type { World } from "../ecs/world";
-import { getRelationTargets, hasComponent, query } from "bitecs";
+import { entityExists, getRelationTargets, hasComponent, query } from "bitecs";
 import { Agent, Goal, KanbanBoard, KanbanCard, KanbanColumn, LastAction, LastToolResult, Name, ObjectState, OrgGovernance, Room, ToolResult, Traits, WikiDoc } from "../ecs/components";
 import { HasGoal, HasToolResult } from "../ecs/relations";
 import { getDirectContainer, getRoomForEntity, listDirectContents } from "../ecs/location";
+import { getAgentWorldCapabilities } from "./world-capabilities";
+import { snapshotActorContinuation } from "./actor-continuation";
+import { situatedPlanGoal } from "./decision-policy";
 
 export type GoalSuccessV1 =
   | { type: "all_of"; conditions: GoalSuccessV1[] }
@@ -55,6 +58,28 @@ function hasTrait(world: World, eid: number, wanted: string): boolean {
 
 function normalize(s: string): string {
   return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** A success predicate names an outcome, not an executable route. Deterministic
+ * shortcuts may use only the movement authority's currently admitted one-step
+ * destinations. If prerequisites block that route, yield to plans/cognition;
+ * do not spend the actor's next turn on an already-known impossible move. */
+function selectContractMovement(world: World, agentEid: number, destination: string): ContractDrivenAction | null {
+  const wanted = normalize(destination); if (!wanted) return null;
+  // Actions address labels. Reject ambiguous identities, including an object or
+  // character with the same label as a room, rather than trusting array order.
+  const matches = [...query(world, [Name])].filter(eid => entityExists(world, eid) && normalize(Name.value[eid]) === wanted);
+  if (matches.length !== 1 || !hasComponent(world, matches[0], Room)) return null;
+  const target = matches[0];
+  if (getRoomForEntity(world, agentEid) === target) return null;
+  const capabilities = getAgentWorldCapabilities(world, agentEid);
+  if (capabilities?.movementTargets) {
+    const targets = capabilities.movementTargets();
+    if (!Array.isArray(targets) || !targets.includes(target)) return null;
+  } else if (capabilities?.ownsMovement) return null;
+  // Legacy native room worlds have no package topology; keep their established
+  // room movement behavior. The real executor still validates every action.
+  return { type: "move", target: Name.value[target] };
 }
 
 function isOpenContainer(world: World, eid: number): boolean {
@@ -447,7 +472,7 @@ function selectMissingGroundedStep(
 
   // Optional "destination" hint used by benchmark tasks.
   const destination = typeof (params as any).destination === "string" ? String((params as any).destination).trim() : "";
-  if (destination && agentRoomName && agentRoomName !== destination) return { type: "move", target: destination };
+  if (destination && agentRoomName && agentRoomName !== destination) return selectContractMovement(world, agentEid, destination);
 
   const isSatisfiedForAgent = (node: GoalSuccessV1): boolean => {
     if (node.type === "all_of") return (node.conditions || []).every(isSatisfiedForAgent);
@@ -483,7 +508,7 @@ function selectMissingGroundedStep(
   const roomReq = missing.find((n) => n.type === "in_room") as any;
   if (roomReq && typeof roomReq.roomName === "string") {
     const dest = String(roomReq.roomName || "").trim();
-    if (dest && agentRoomName !== dest) return { type: "move", target: dest };
+    if (dest && agentRoomName !== dest) return selectContractMovement(world, agentEid, dest);
   }
 
   // Tool-based requirements (terminal/workstation).
@@ -629,7 +654,7 @@ No blocking issues were found during this pass. If you notice flakiness later, i
         if (keyEid !== undefined) {
           const keyRoom = getRoomForEntity(world, keyEid);
           const keyRoomName = keyRoom !== undefined ? String(Name.value[keyRoom] || "") : "";
-          if (keyRoomName && agentRoomName !== keyRoomName) return { type: "move", target: keyRoomName };
+          if (keyRoomName && agentRoomName !== keyRoomName) return selectContractMovement(world, agentEid, keyRoomName);
           return { type: "pickup", target: keyName };
         }
       }
@@ -640,7 +665,7 @@ No blocking issues were found during this pass. If you notice flakiness later, i
 
     // Prefer moving to the container's room (if known), otherwise the item's room.
     const desiredRoom = containerRoomName || itemRoomName;
-    if (desiredRoom && agentRoomName !== desiredRoom) return { type: "move", target: desiredRoom };
+    if (desiredRoom && agentRoomName !== desiredRoom) return selectContractMovement(world, agentEid, desiredRoom);
 
     // If item is not accessible, try to unlock/open its container when known.
     if (agentRoom !== undefined && !isAccessibleInRoom(world, agentRoom, itemEid)) {
@@ -687,9 +712,19 @@ No blocking issues were found during this pass. If you notice flakiness later, i
 export function selectContractDrivenAction(world: World, agentEid: number): ContractDrivenAction | null {
   if (!hasComponent(world as any, agentEid, Agent as any)) return null;
 
+  // A contract proves how to finish a purpose; it does not select a different
+  // purpose after each primitive. Even priority-mode actors own their explicit
+  // continuation. Expired/restored/unbound choices require reconsideration,
+  // never a fallback to an unrelated (often scheduled) goal.
+  const continuation = snapshotActorContinuation(world, agentEid);
+  const selectedGoal = continuation ? situatedPlanGoal(world, agentEid) : undefined;
+  if (continuation && (continuation.status !== "dispatched" || selectedGoal === undefined)) return null;
+
   const goals = getRelationTargets(world as any, agentEid, HasGoal as any)
     .filter((gid: number) => hasComponent(world as any, gid, Goal as any))
     .filter((gid: number) => String(Goal.status[gid] || "") === "active")
+    .filter((gid: number) => selectedGoal !== undefined ? gid === selectedGoal
+      : world.meta.aiEnabled === false || Goal.kind[gid] !== "scheduled_activity")
     .sort((a: number, b: number) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0));
 
   for (const goalEid of goals) {

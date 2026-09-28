@@ -189,7 +189,7 @@ async function main() {
   makeAgent("Dex", "merchant", "A charming merchant who trades at the market", "Market");
 
   for (const a of agents) {
-    const aspirations = getAspirations(a.eid);
+    const aspirations = getAspirations(world, a.eid);
     info(`${a.name} (${a.role}) — Aspirations: ${aspirations.join("; ")}`);
   }
 

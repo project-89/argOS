@@ -13,13 +13,16 @@
  */
 
 import type { World } from "../ecs/world";
-import { query, getRelationTargets, hasComponent, entityExists } from "bitecs";
-import { Name, Description, Agent, Mind, Room, StimulusSource, Traits, Inventory, ObjectState, ObjectType } from "../ecs/components";
-import { getRoomForEntity, listDirectContents } from "../ecs/location";
+import { hasComponent, entityExists } from "bitecs";
+import { Name, Description, Agent, Room, StimulusSource, Traits, ObjectState, ObjectType, Container, Surface } from "../ecs/components";
+import { getDirectContainer, getRoomForEntity, listDirectContents } from "../ecs/location";
+import { isEntityPresent } from "../ecs/entity-presence";
 import { getAvailableAffordances } from "../world/affordance-availability";
 import { getEffectiveActorTraits } from "../world/effect-executor";
 import { worldSchema } from "../world/schema";
-import { safeGetRelationTargets } from "../ecs/dynamic-systems";
+import { filterPerceivableStimuli, getAgentSensoryCapabilities, normalizeSensoryEvent, type SensoryCapabilities, type SensoryEvent, type SensoryModality } from "./sensory-capabilities";
+import { getAgentVisualEntities, getObservedHeldItemExteriors, getObservedPublicActivity } from "./world-capabilities";
+export type { SensoryModality, SensoryCapabilities } from "./sensory-capabilities";
 
 function parseTraitsJson(raw: unknown): string[] {
   if (typeof raw !== "string" || !raw.trim()) return [];
@@ -32,29 +35,25 @@ function parseTraitsJson(raw: unknown): string[] {
   }
 }
 
-function hasTrait(world: World, eid: number, trait: string): boolean {
-  const wanted = String(trait || "").trim().toLowerCase();
-  if (!wanted) return false;
-  if (!hasComponent(world, eid, Traits)) return false;
-  return parseTraitsJson(Traits.active[eid]).some((t) => t.toLowerCase() === wanted);
+function currentObjectState(world: World, eid: number): string {
+  return hasComponent(world, eid, ObjectState) ? ObjectState.current[eid] || "" : "";
 }
-
-function isOpenContainer(world: World, eid: number): boolean {
-  const state = String(ObjectState?.current?.[eid] || "").toLowerCase();
-  if (state === "open") return true;
-  return hasTrait(world, eid, "open");
+function description(world: World, eid: number): string {
+  return hasComponent(world, eid, Description) ? Description.value[eid] || "" : "";
+}
+function activeTraits(world: World, eid: number): string[] {
+  return hasComponent(world, eid, Traits) ? parseTraitsJson(Traits.active[eid]) : [];
+}
+function visualPlacement(world: World, eid: number, roomEid: number, visible: Set<number>): string {
+  const parent = getDirectContainer(world, eid);
+  if (parent === undefined || parent === roomEid || !visible.has(parent)) return "";
+  const relation = hasComponent(world, parent, Surface) && !hasComponent(world, parent, Container) ? "on" : "inside";
+  return ` (${relation} ${Name.value[parent] || "visible surface"})`;
 }
 
 // ============================================================================
 // SENSORY MODALITIES
 // ============================================================================
-
-export type SensoryModality =
-  | "visual"      // Sight - room layout, people, objects, visible actions
-  | "auditory"    // Hearing - speech, sounds, ambient noise
-  | "olfactory"   // Smell - food, smoke, decay, perfume
-  | "tactile"     // Touch - physical contact, temperature, pain
-  | "cognitive";  // Sixth sense - affordances, intuitions, danger, memories
 
 export interface Stimulus {
   modality: SensoryModality;
@@ -65,22 +64,6 @@ export interface Stimulus {
   timestamp: number;
 }
 
-export interface SensoryCapabilities {
-  visual: number;      // 0 = blind, 1 = normal, >1 = enhanced
-  auditory: number;    // 0 = deaf, 1 = normal, >1 = enhanced
-  olfactory: number;   // Smell sensitivity
-  tactile: number;     // Touch sensitivity
-  cognitive: number;   // Intuition/sixth sense strength
-}
-
-const DEFAULT_CAPABILITIES: SensoryCapabilities = {
-  visual: 1,
-  auditory: 1,
-  olfactory: 0.5,
-  tactile: 1,
-  cognitive: 0.5,  // By default, agents have limited cognitive perception
-};
-
 // ============================================================================
 // STIMULUS GENERATION
 // ============================================================================
@@ -88,71 +71,55 @@ const DEFAULT_CAPABILITIES: SensoryCapabilities = {
 /**
  * Generate all stimuli an agent would perceive this tick.
  *
- * Environmental stimuli (room, people, objects, sounds, smells, affordances)
+ * Environmental stimuli (room, people, objects, sounds, smells)
  * are CACHED and only regenerated when the room state fingerprint changes or
- * the cache TTL expires (10s). This prevents identical stimuli from flooding
- * the agent every tick.
+ * the cache TTL expires (10s), avoiding redundant formatting work.
  *
+ * Affordances are recomputed because capabilities can change without a visible
+ * room change (held tools, new systems, or a world capability port).
  * Event-based stimuli (speech, actions, arrivals) always pass through fresh.
  */
 export function generateStimuliForAgent(
   world: World,
   agentEid: number,
-  pendingEvents: Array<{ modality: SensoryModality; type: string; content: string; source: string; intensity?: number }>
+  pendingEvents: readonly SensoryEvent[]
 ): Stimulus[] {
   // Validate agent exists
-  if (!entityExists(world, agentEid)) return [];
+  if (!isEntityPresent(world, agentEid)) return [];
 
-  const capabilities = getAgentCapabilities(world, agentEid);
+  const capabilities = getAgentSensoryCapabilities(world, agentEid);
   const roomEid = getRoomForEntity(world, agentEid);
-
-  if (roomEid === undefined || !entityExists(world, roomEid)) return [];
-
-  // Environmental stimuli — cached per agent+room fingerprint
-  const stimuli = [...getCachedEnvironmentalStimuli(world, agentEid, roomEid, capabilities)];
-
-  // Event-based stimuli — always fresh, never cached
-  for (const event of pendingEvents) {
-    const capabilityLevel = capabilities[event.modality] || 0;
-    if (capabilityLevel > 0) {
+  const hasRoom = roomEid !== undefined && isEntityPresent(world, roomEid);
+  // A detached actor can still receive mental input and its own execution feedback.
+  const stimuli = hasRoom ? [...getCachedEnvironmentalStimuli(world, agentEid, roomEid, capabilities)] : [];
+  // Local object affordances and state are derived from sight, not an omniscient
+  // fallback channel. Explicit cognitive input remains available without sight.
+  if (hasRoom && capabilities.cognitive > 0 && capabilities.visual > 0) {
+    stimuli.push(...generateCognitiveStimuli(world, agentEid, roomEid, capabilities.cognitive));
+    const notableStates = getNotableObjectStates(world, agentEid);
+    if (notableStates.length > 0) {
       stimuli.push({
-        modality: event.modality,
-        type: event.type,
-        content: event.content,
-        source: event.source,
-        intensity: (event.intensity ?? 1) * capabilityLevel,
-        timestamp: Date.now(),
+        modality: "cognitive", type: "awareness",
+        content: `Objects needing attention: ${notableStates.join(", ")}`,
+        source: "intuition", intensity: 0.7, timestamp: Date.now(),
       });
     }
   }
 
-  return stimuli;
-}
-
-/**
- * Get agent's sensory capabilities (can be modified by traits, items, conditions)
- */
-function getAgentCapabilities(world: World, agentEid: number): SensoryCapabilities {
-  // Start with defaults
-  const caps = { ...DEFAULT_CAPABILITIES };
-
-  // Check for modifying traits - read from ECS Traits.active component
-  const traitsJson = Traits?.active?.[agentEid];
-  if (traitsJson) {
-    try {
-      const traits = JSON.parse(traitsJson) as string[];
-
-      // Trait-based modifications
-      if (traits.includes("blind")) caps.visual = 0;
-      if (traits.includes("deaf")) caps.auditory = 0;
-      if (traits.includes("keen_sight")) caps.visual = 1.5;
-      if (traits.includes("keen_hearing")) caps.auditory = 1.5;
-      if (traits.includes("intuitive")) caps.cognitive = 1;
-      if (traits.includes("psychic")) caps.cognitive = 1.5;
-    } catch { /* ignore parse errors */ }
+  // Event-based stimuli — always fresh, never cached
+  for (const event of filterPerceivableStimuli(world, agentEid, pendingEvents)) {
+    const capabilityLevel = capabilities[event.modality];
+    stimuli.push({
+      modality: event.modality,
+      type: event.type,
+      content: event.content,
+      source: event.source,
+      intensity: event.intensity * capabilityLevel,
+      timestamp: Number.isFinite(event.timestamp) ? event.timestamp! : Date.now(),
+    });
   }
 
-  return caps;
+  return stimuli;
 }
 
 // ============================================================================
@@ -167,7 +134,7 @@ function generateVisualStimuli(
 ): Stimulus[] {
   const stimuli: Stimulus[] = [];
   const roomName = Name.value[roomEid] || "Unknown Location";
-  const roomDesc = Description.value[roomEid] || "";
+  const roomDesc = description(world, roomEid);
   const roomAmbience = Room.ambience[roomEid] || "";
 
   // Room environment
@@ -186,20 +153,21 @@ function generateVisualStimuli(
   });
 
   // Other people present
-  const allAgents = Array.from(query(world, [Agent])).filter(eid => entityExists(world, eid));
+  const visible = getAgentVisualEntities(world, agentEid);
+  const visibleSet = new Set(visible);
   const peopleLines: string[] = [];
+  const heldExteriors = getObservedHeldItemExteriors(world, agentEid);
 
-  for (const otherEid of allAgents) {
-    if (otherEid === agentEid) continue;
-    if (!entityExists(world, otherEid)) continue;
-
-    const otherRoom = getRoomForEntity(world, otherEid);
-    if (otherRoom === roomEid) {
+  for (const otherEid of visible) {
+    if (hasComponent(world, otherEid, Agent)) {
       const otherName = Name.value[otherEid] || "someone";
-      const otherDesc = Description.value[otherEid];
-      // Read state from ECS ObjectState component (not ObjectMeta)
-      const currentState = ObjectState?.current?.[otherEid];
+      const otherDesc = description(world, otherEid);
+      // Generic Agent ObjectState may be mental prose or stale 'idle'. Only
+      // explicitly public physical activity describes what a person is doing.
+      const currentState = getObservedPublicActivity(world, agentEid, otherEid);
       const state = currentState && currentState !== "normal" ? ` (${currentState})` : "";
+      const held = heldExteriors.filter(item => item.holderEid === otherEid).map(item => item.name);
+      if (held.length) peopleLines.push(`${otherName} is holding ${held.join(" and ")}.`);
 
       if (otherDesc) {
         peopleLines.push(`${otherName}${state}: ${otherDesc.slice(0, 80)}`);
@@ -220,40 +188,27 @@ function generateVisualStimuli(
     });
   }
 
-  // Objects in room
-  const contents = listDirectContents(world, roomEid);
+  // The shared resolver admits native open-container contents and rejects
+  // concealed leaves/ancestors, closed interiors and foreign inventories.
   const objectLines: string[] = [];
 
-  for (const contentEid of contents) {
-    if (!entityExists(world, contentEid)) continue;
+  for (const contentEid of visible) {
     if (hasComponent(world, contentEid, Agent)) continue;
 
     const objName = Name.value[contentEid];
     if (objName) {
       // Description.value is updated from WorldSchema by ObjectManager.transitionState()
-      const objDesc = Description.value[contentEid];
+      const objDesc = description(world, contentEid);
       // Read state from ECS ObjectState component (not ObjectMeta)
-      const currentState = ObjectState?.current?.[contentEid];
+      const currentState = currentObjectState(world, contentEid);
       const state = currentState && currentState !== "normal" ? ` [${currentState}]` : "";
+      const placement = visualPlacement(world, contentEid, roomEid, visibleSet);
 
       if (objDesc) {
         // Show full description - it contains important state info from WorldSchema
-        objectLines.push(`- ${objName}${state}: ${objDesc}`);
+        objectLines.push(`- ${objName}${state}${placement}: ${objDesc}`);
       } else {
-        objectLines.push(`- ${objName}${state}`);
-      }
-
-      // If this is an open container, show a small sample of its direct contents (grounding for container tasks).
-      if (isOpenContainer(world, contentEid)) {
-        const inner = listDirectContents(world, contentEid)
-          .filter((eid) => entityExists(world, eid) && !hasComponent(world, eid, Agent))
-          .slice(0, 6);
-        if (inner.length > 0) {
-          const innerNames = inner.map((eid) => Name.value[eid]).filter((n): n is string => typeof n === "string" && n.trim().length > 0);
-          if (innerNames.length > 0) {
-            objectLines.push(`  (inside ${objName}): ${innerNames.join(", ")}`);
-          }
-        }
+        objectLines.push(`- ${objName}${state}${placement}`);
       }
     }
   }
@@ -282,13 +237,13 @@ function generateAmbientAuditoryStimuli(
   sensitivity: number
 ): Stimulus[] {
   const stimuli: Stimulus[] = [];
-  if (!entityExists(world, roomEid)) return stimuli;
+  if (!isEntityPresent(world, roomEid)) return stimuli;
 
   // Find stimulus sources in room that emit sounds
   const contents = listDirectContents(world, roomEid);
 
   for (const contentEid of contents) {
-    if (!entityExists(world, contentEid)) continue;
+    if (!isEntityPresent(world, contentEid)) continue;
     if (!hasComponent(world, contentEid, StimulusSource)) continue;
 
     const stimType = StimulusSource.stimulusType[contentEid];
@@ -334,26 +289,20 @@ function generateOlfactoryStimuli(
   sensitivity: number
 ): Stimulus[] {
   const stimuli: Stimulus[] = [];
-  if (!entityExists(world, roomEid)) return stimuli;
+  if (!isEntityPresent(world, roomEid)) return stimuli;
 
   // Find things that smell
   const contents = listDirectContents(world, roomEid);
 
   for (const contentEid of contents) {
-    if (!entityExists(world, contentEid)) continue;
+    if (!isEntityPresent(world, contentEid)) continue;
 
     // Read traits from ECS Traits.active component (not ObjectMeta)
-    const traitsJson = Traits?.active?.[contentEid];
-    if (!traitsJson) continue;
-
-    let traits: string[] = [];
-    try {
-      traits = JSON.parse(traitsJson) as string[];
-    } catch { continue; }
+    const traits = activeTraits(world, contentEid);
 
     const sourceName = Name.value[contentEid] || "something";
     // Read state from ECS ObjectState component
-    const currentState = ObjectState?.current?.[contentEid];
+    const currentState = currentObjectState(world, contentEid);
 
     // Things that typically have smells
     if (traits.includes("edible") && currentState === "fresh") {
@@ -403,33 +352,15 @@ function generateCognitiveStimuli(
 
   // Only generate cognitive stimuli if sensitivity is high enough
   if (sensitivity < 0.3) return stimuli;
-  if (!entityExists(world, agentEid) || !entityExists(world, roomEid)) return stimuli;
+  if (!isEntityPresent(world, agentEid) || !isEntityPresent(world, roomEid)) return stimuli;
 
   // Affordance awareness - what actions are possible
-  const contents = listDirectContents(world, roomEid);
+  const contents = getAgentVisualEntities(world, agentEid);
   const affordanceAwareness: string[] = [];
 
-  // Check other agents for interaction possibilities
-  const allAgents = Array.from(query(world, [Agent])).filter(eid => entityExists(world, eid));
-  for (const otherEid of allAgents) {
-    if (otherEid === agentEid) continue;
-    if (!entityExists(world, otherEid)) continue;
-
-    const otherRoom = getRoomForEntity(world, otherEid);
-    if (otherRoom === roomEid) {
-      const otherName = Name.value[otherEid] || "someone";
-      const affordances = getAvailableAffordances(world, agentEid, otherEid);
-      if (affordances.length > 0) {
-        affordanceAwareness.push(`${otherName}: ${affordances.map(a => a.name).join(", ")}`);
-      }
-    }
-  }
-
-  // Check objects for interaction possibilities
+  // This default intuition is sight-derived, not a second way to discover
+  // concealed targets. Explicit mental events retain their own admission path.
   for (const contentEid of contents) {
-    if (!entityExists(world, contentEid)) continue;
-    if (hasComponent(world, contentEid, Agent)) continue;
-
     const objName = Name.value[contentEid];
     if (!objName) continue;
 
@@ -452,18 +383,9 @@ function generateCognitiveStimuli(
 
   // Danger sense - if there are hostile entities
   const dangerSources: string[] = [];
-  for (const contentEid of [...contents, ...allAgents]) {
-    if (contentEid === agentEid) continue;
-    if (!entityExists(world, contentEid)) continue;
-
+  for (const contentEid of contents) {
     // Read traits from ECS Traits.active component (not ObjectMeta)
-    const traitsJson = Traits?.active?.[contentEid];
-    if (!traitsJson) continue;
-
-    let traits: string[] = [];
-    try {
-      traits = JSON.parse(traitsJson) as string[];
-    } catch { continue; }
+    const traits = activeTraits(world, contentEid);
 
     const name = Name.value[contentEid] || "something";
 
@@ -527,6 +449,7 @@ export function getInventoryItemNames(arg1: World | number, arg2?: number): stri
 
   const itemIds = listDirectContents(arg1, arg2);
   return itemIds
+    .filter(eid=>isEntityPresent(arg1,eid))
     .map(eid => Name?.value?.[eid])
     .filter((n): n is string => typeof n === "string" && n.length > 0);
 }
@@ -542,39 +465,35 @@ interface CachedStimuli {
   timestamp: number;
 }
 
-const stimulusCache = new Map<number, CachedStimuli>();
+let stimulusCaches = new WeakMap<World, Map<number, CachedStimuli>>();
 const CACHE_TTL_MS = 10_000; // Force refresh every 10s even if unchanged
 
 /**
  * Compute a lightweight fingerprint of a room's state.
  * If the fingerprint hasn't changed, we can reuse cached stimuli.
  */
-function computeRoomFingerprint(world: World, agentEid: number, roomEid: number): string {
-  const contents = listDirectContents(world, roomEid);
-  const parts: string[] = [];
-
-  // Room description/ambience (could change via God AI)
-  parts.push(String(Description.value[roomEid] || ""));
-  parts.push(String(Room.ambience[roomEid] || ""));
-
-  // Count + names of agents in room
-  const allAgents = Array.from(query(world, [Agent])).filter(
-    eid => eid !== agentEid && entityExists(world, eid) && getRoomForEntity(world, eid) === roomEid
-  );
-  parts.push(`agents:${allAgents.map(e => Name.value[e] || e).sort().join(",")}`);
-
-  // Object names + states (sorted for stability)
-  const objParts: string[] = [];
-  for (const eid of contents) {
-    if (!entityExists(world, eid) || hasComponent(world, eid, Agent)) continue;
-    const name = Name.value[eid] || "";
-    const state = ObjectState?.current?.[eid] || "";
-    objParts.push(`${name}:${state}`);
+function computeRoomFingerprint(world: World, agentEid: number, roomEid: number, capabilities: SensoryCapabilities): string {
+  const parts: unknown[] = [capabilities];
+  if (capabilities.visual > 0) {
+    parts.push([Name.value[roomEid] || "", description(world, roomEid), Room.ambience[roomEid] || ""]);
+    const visible = getAgentVisualEntities(world, agentEid);
+    const visibleSet = new Set(visible);
+    parts.push(getObservedHeldItemExteriors(world, agentEid));
+    parts.push(visible.map(eid => {
+      if (hasComponent(world, eid, Agent)) {
+        return [eid, Name.value[eid], description(world, eid).slice(0, 80), getObservedPublicActivity(world, agentEid, eid)];
+      }
+      return [eid, Name.value[eid], currentObjectState(world, eid), description(world, eid),
+        visualPlacement(world, eid, roomEid, visibleSet)];
+    }).sort((a, b) => Number(a[0]) - Number(b[0])));
   }
-  objParts.sort();
-  parts.push(`objs:${objParts.join(",")}`);
-
-  return parts.join("|");
+  // These small source projections deliberately share their actual emission
+  // rules with the output. Hidden is not silent; irrelevant raw traits, sealed
+  // contents and disabled modalities must not affect cache invalidation.
+  const emission = (stimuli: Stimulus[]) => stimuli.map(s => [s.type, s.source, s.content, s.intensity]);
+  if (capabilities.auditory > 0) parts.push(emission(generateAmbientAuditoryStimuli(world, roomEid, capabilities.auditory)));
+  if (capabilities.olfactory > 0) parts.push(emission(generateOlfactoryStimuli(world, roomEid, capabilities.olfactory)));
+  return JSON.stringify(parts);
 }
 
 /**
@@ -588,7 +507,12 @@ function getCachedEnvironmentalStimuli(
   capabilities: SensoryCapabilities,
 ): Stimulus[] {
   const now = Date.now();
-  const fingerprint = computeRoomFingerprint(world, agentEid, roomEid);
+  let stimulusCache = stimulusCaches.get(world);
+  if (!stimulusCache) {
+    stimulusCache = new Map();
+    stimulusCaches.set(world, stimulusCache);
+  }
+  const fingerprint = computeRoomFingerprint(world, agentEid, roomEid, capabilities);
   const cached = stimulusCache.get(agentEid);
 
   if (
@@ -597,7 +521,7 @@ function getCachedEnvironmentalStimuli(
     cached.fingerprint === fingerprint &&
     (now - cached.timestamp) < CACHE_TTL_MS
   ) {
-    return cached.stimuli;
+    return cached.stimuli.map(stimulus => ({ ...stimulus, timestamp: now }));
   }
 
   // Regenerate
@@ -611,44 +535,37 @@ function getCachedEnvironmentalStimuli(
   if (capabilities.olfactory > 0) {
     stimuli.push(...generateOlfactoryStimuli(world, roomEid, capabilities.olfactory));
   }
-  if (capabilities.cognitive > 0) {
-    stimuli.push(...generateCognitiveStimuli(world, agentEid, roomEid, capabilities.cognitive));
-  }
-
-  // Add notable object states
-  const notableStates = getNotableObjectStates(world, roomEid);
-  if (notableStates.length > 0) {
-    stimuli.push({
-      modality: "cognitive",
-      type: "awareness",
-      content: `Objects needing attention: ${notableStates.join(", ")}`,
-      source: "intuition",
-      intensity: 0.7,
-      timestamp: now,
-    });
-  }
 
   stimulusCache.set(agentEid, { roomEid, fingerprint, stimuli, timestamp: now });
-  return stimuli;
+  return stimuli.map(stimulus => ({ ...stimulus }));
 }
 
 /** Evict cache for a removed agent */
-export function evictStimulusCache(agentEid: number): void {
-  stimulusCache.delete(agentEid);
+export function evictStimulusCache(agentEid: number): void;
+export function evictStimulusCache(world: World, agentEid: number): void;
+export function evictStimulusCache(worldOrEid: World | number, agentEid?: number): void {
+  if (typeof worldOrEid === "number") {
+    // Legacy callers do not supply a world. Invalidate rather than guess which
+    // world's similarly numbered actor owns the cache entry.
+    stimulusCaches = new WeakMap();
+  } else if (agentEid !== undefined) {
+    stimulusCaches.get(worldOrEid)?.delete(agentEid);
+  }
 }
 
 // Track recent successful actions per agent for better memory
 const recentSuccesses = new Map<number, string[]>();
+const worldRecentSuccesses = new WeakMap<World, Map<number, string[]>>();
 const MAX_RECENT_ACTIONS = 5;
 
 /**
- * Get notable object states in a room (things that might need action)
+ * Get notable object states visible to this actor (things that might need action).
  * Shows: locked, wet, dull, rusty, empty, etc.
  * Also shows what's BLOCKING certain actions (prerequisites)
  */
-export function getNotableObjectStates(world: World, roomEid: number): string[] {
+export function getNotableObjectStates(world: World, agentEid: number): string[] {
   const notable: string[] = [];
-  const contents = listDirectContents(world, roomEid);
+  const contents = getAgentVisualEntities(world, agentEid);
 
   for (const eid of contents) {
     if (!entityExists(world, eid)) continue;
@@ -658,23 +575,17 @@ export function getNotableObjectStates(world: World, roomEid: number): string[] 
     if (!objName) continue;
 
     // Check object state from ECS ObjectState component (not ObjectMeta)
-    const state = ObjectState?.current?.[eid];
+    const state = currentObjectState(world, eid);
 
     // Check traits for blocked actions - from ECS Traits.active
-    const traitsJson = Traits?.active?.[eid];
-    let traits: string[] = [];
-    if (traitsJson) {
-      try {
-        traits = JSON.parse(traitsJson) as string[];
-      } catch { }
-    }
+    const traits = activeTraits(world, eid);
 
     // Build a status string showing state and any blockers
     const statuses: string[] = [];
 
     // DYNAMIC: Check if current state has blockedTraits in WorldSchema
     // A state is "notable" if it's blocking some capability
-    const typeId = ObjectType?.typeId?.[eid];
+    const typeId = hasComponent(world, eid, ObjectType) ? ObjectType.typeId[eid] : undefined;
     if (state && typeId) {
       const typeDef = worldSchema.getObjectType(typeId);
       if (typeDef) {
@@ -704,19 +615,33 @@ export function getNotableObjectStates(world: World, roomEid: number): string[] 
   return notable;
 }
 
-export function recordSuccessfulAction(agentEid: number, action: string): void {
-  if (!recentSuccesses.has(agentEid)) {
-    recentSuccesses.set(agentEid, []);
+export function recordSuccessfulAction(agentEid: number, action: string): void;
+export function recordSuccessfulAction(world: World, agentEid: number, action: string): void;
+export function recordSuccessfulAction(worldOrEid: World | number, eidOrAction: number | string, actionArg?: string): void {
+  const agentEid = typeof worldOrEid === "number" ? worldOrEid : eidOrAction as number;
+  const action = typeof worldOrEid === "number" ? eidOrAction as string : actionArg!;
+  let histories = recentSuccesses;
+  if (typeof worldOrEid !== "number") {
+    histories = worldRecentSuccesses.get(worldOrEid) ?? new Map();
+    worldRecentSuccesses.set(worldOrEid, histories);
   }
-  const actions = recentSuccesses.get(agentEid)!;
+  if (!histories.has(agentEid)) {
+    histories.set(agentEid, []);
+  }
+  const actions = histories.get(agentEid)!;
   actions.push(action);
   if (actions.length > MAX_RECENT_ACTIONS) {
     actions.shift();
   }
 }
 
-export function getRecentSuccesses(agentEid: number): string[] {
-  return recentSuccesses.get(agentEid) || [];
+export function getRecentSuccesses(agentEid: number): string[];
+export function getRecentSuccesses(world: World, agentEid: number): string[];
+export function getRecentSuccesses(worldOrEid: World | number, agentEid?: number): string[] {
+  const actions = typeof worldOrEid === "number"
+    ? recentSuccesses.get(worldOrEid)
+    : worldRecentSuccesses.get(worldOrEid)?.get(agentEid!);
+  return [...(actions ?? [])];
 }
 
 // ============================================================================
@@ -725,11 +650,11 @@ export function getRecentSuccesses(agentEid: number): string[] {
 
 /**
  * Format stimuli into a prompt-friendly text for the agent
- * Action results/failures are shown FIRST and prominently to prevent hallucination
+ * Action feedback comes before observations; inventory is separate from hand occupancy.
  * Optional agentEid enables showing current capabilities
  */
 export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number, world?: World): string {
-  if (stimuli.length === 0 && !agentEid) return "You perceive nothing unusual.";
+  if (stimuli.length === 0 && agentEid === undefined) return "No current perceptions.";
 
   // Group by modality
   const byModality = new Map<SensoryModality, Stimulus[]>();
@@ -737,36 +662,34 @@ export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number, w
     if (!byModality.has(stim.modality)) {
       byModality.set(stim.modality, []);
     }
-    byModality.get(stim.modality)!.push(stim);
+    const ageSeconds = Math.max(0, Math.floor((Date.now() - stim.timestamp) / 1000));
+    // A delayed event stays past evidence inside an otherwise current room view.
+    byModality.get(stim.modality)!.push(ageSeconds > 0
+      ? { ...stim, content: `${stim.content} [${stim.source}, ${ageSeconds}s ago]` }
+      : stim);
   }
 
   const sections: string[] = [];
 
-  // ⚠️ ACTION FEEDBACK FIRST - This is critical for preventing hallucination
-  // Pull out action_result and action_failed from cognitive stimuli and show them prominently
+  // Keep feedback before sensory context. The failure heading is also a legacy reader marker.
   const cognitive = byModality.get("cognitive") || [];
   const actionFeedback = cognitive.filter(s => s.type === "action_result" || s.type === "action_failed");
   const otherCognitive = cognitive.filter(s => s.type !== "action_result" && s.type !== "action_failed");
 
   if (actionFeedback.length > 0) {
-    // Check if there are failures - if so, make them VERY prominent
     const failures = actionFeedback.filter(s => s.type === "action_failed");
     const successes = actionFeedback.filter(s => s.type === "action_result");
 
     if (failures.length > 0) {
-      sections.push("🚨🚨🚨 CRITICAL - YOUR LAST ACTION FAILED 🚨🚨🚨");
-      sections.push("════════════════════════════════════════════");
+      sections.push("🚨 CRITICAL - YOUR LAST ACTION FAILED");
       for (const stim of failures) {
-        sections.push(`❌ ${stim.content}`);
+        sections.push(`  ${stim.content}`);
       }
-      sections.push("════════════════════════════════════════════");
-      sections.push("⛔ DO NOT proceed as if this action succeeded!");
-      sections.push("⛔ You must try a DIFFERENT approach.");
       sections.push("");
     }
 
     if (successes.length > 0) {
-      sections.push("✅ YOUR LAST ACTION SUCCEEDED:");
+      sections.push("YOUR LAST ACTION SUCCEEDED:");
       for (const stim of successes) {
         sections.push(`  ${stim.content}`);
       }
@@ -774,19 +697,20 @@ export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number, w
     }
   }
 
-  // 🎒 SELF-AWARENESS - Show agent their ACTUAL state (prevents hallucination)
-  // This section is CRITICAL - it shows undeniable facts about what the agent has
+  // Inventory comes from the canonical world relationship when available.
   if (agentEid !== undefined) {
     const inventoryItems = world ? getInventoryItemNames(world, agentEid) : [];
     const capabilities = world ? getAgentToolCapabilities(world, agentEid) : [];
-    const recentActions = getRecentSuccesses(agentEid);
+    const recentActions = world ? getRecentSuccesses(world, agentEid) : getRecentSuccesses(agentEid);
 
     // Always show inventory section - even if empty
-    sections.push("🎒 YOUR INVENTORY (THIS IS WHAT YOU ACTUALLY HAVE):");
-    if (inventoryItems.length > 0) {
-      sections.push(`  You are holding: ${inventoryItems.join(", ")}`);
+    sections.push("YOUR INVENTORY:");
+    if (!world) {
+      sections.push("  Inventory unavailable in this snapshot.");
+    } else if (inventoryItems.length > 0) {
+      sections.push(`  Possessions: ${inventoryItems.join(", ")}`);
     } else {
-      sections.push(`  You are NOT holding anything. Your hands are empty.`);
+      sections.push("  Inventory is empty.");
     }
 
     // Show derived capabilities from items
@@ -804,7 +728,7 @@ export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number, w
   // Visual
   const visual = byModality.get("visual");
   if (visual && visual.length > 0) {
-    sections.push("👁️ SIGHT:");
+    sections.push("SIGHT:");
     for (const stim of visual) {
       sections.push(`  ${stim.content}`);
     }
@@ -813,16 +737,20 @@ export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number, w
   // Auditory
   const auditory = byModality.get("auditory");
   if (auditory && auditory.length > 0) {
-    sections.push("👂 SOUND:");
+    sections.push("SOUND:");
     for (const stim of auditory) {
       sections.push(`  ${stim.content}`);
     }
+  } else {
+    // Absence in this sample is not a claim about earlier samples, unheard
+    // rooms, or absolute silence. Object descriptions are not sound events.
+    sections.push("SOUND:", "  No auditory events supplied in this sensory sample.");
   }
 
   // Olfactory
   const olfactory = byModality.get("olfactory");
   if (olfactory && olfactory.length > 0) {
-    sections.push("👃 SMELL:");
+    sections.push("SMELL:");
     for (const stim of olfactory) {
       sections.push(`  ${stim.content}`);
     }
@@ -831,30 +759,29 @@ export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number, w
   // Tactile
   const tactile = byModality.get("tactile");
   if (tactile && tactile.length > 0) {
-    sections.push("✋ TOUCH:");
+    sections.push("TOUCH:");
     for (const stim of tactile) {
       sections.push(`  ${stim.content}`);
     }
   }
 
-  // ⚠️ OBJECT STATES - Show what needs attention (locked, unreachable, etc.)
+  // Observed object states, such as locked or unreachable.
   const awarenessStimuli = otherCognitive.filter(s => s.type === "awareness");
   const remainingCognitive = otherCognitive.filter(s => s.type !== "awareness");
 
   if (awarenessStimuli.length > 0) {
-    sections.push("⚠️ IMPORTANT - OBJECTS NEEDING ACTION:");
+    sections.push("OBJECT STATES:");
     for (const stim of awarenessStimuli) {
       // Parse out the objects and show them individually for clarity
       const content = stim.content.replace("Objects needing attention: ", "");
       sections.push(`  ${content}`);
     }
-    sections.push("  (You must resolve these states before certain actions work)");
     sections.push("");
   }
 
   // Other Cognitive (affordances, intuition, etc)
   if (remainingCognitive.length > 0) {
-    sections.push("🧠 INTUITION:");
+    sections.push("OTHER PERCEPTIONS:");
     for (const stim of remainingCognitive) {
       sections.push(`  ${stim.content}`);
     }
@@ -866,59 +793,17 @@ export function formatStimuliForPrompt(stimuli: Stimulus[], agentEid?: number, w
 /**
  * Convert a simple event into a stimulus with appropriate modality
  */
-export function eventToStimulus(
-  event: { type: string; content: string; source: string }
-): { modality: SensoryModality; type: string; content: string; source: string; intensity: number } {
-  // Map event types to modalities
-  let modality: SensoryModality = "visual";
-  let intensity = 1;
+export function eventToStimulus<T extends SensoryEvent>(event: T): T & { modality: SensoryModality; intensity: number } {
+  return normalizeSensoryEvent(event);
+}
 
-  switch (event.type) {
-    case "speech":
-    case "sound":
-    case "noise":
-      modality = "auditory";
-      intensity = 0.9;
-      break;
-
-    case "smell":
-    case "odor":
-      modality = "olfactory";
-      intensity = 0.7;
-      break;
-
-    case "touch":
-    case "pain":
-    case "temperature":
-      modality = "tactile";
-      intensity = 0.8;
-      break;
-
-    case "intuition":
-    case "memory":
-    case "affordances":
-    case "danger":
-    case "action_result":
-    case "action_failed":
-      modality = "cognitive";
-      intensity = 0.8;
-      break;
-
-    case "action":
-    case "arrival":
-    case "departure":
-    case "movement":
-    default:
-      modality = "visual";
-      intensity = 0.8;
-      break;
-  }
-
-  return {
-    modality,
-    type: event.type,
-    content: event.content,
-    source: event.source,
-    intensity,
-  };
+/** Stable observable signature for idle scheduling; clocks and private minds are absent. */
+export function getAgentSensoryFingerprint(world: World, eid: number): string {
+  return JSON.stringify({
+    room: getRoomForEntity(world, eid) ?? null,
+    senses: getAgentSensoryCapabilities(world, eid),
+    inventory: getInventoryItemNames(world, eid),
+    tools: getAgentToolCapabilities(world, eid),
+    observations: generateStimuliForAgent(world, eid, []).map(s => [s.modality, s.type, s.source, s.content, s.intensity]),
+  });
 }

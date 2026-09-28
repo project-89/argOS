@@ -104,7 +104,7 @@ export function buildWorldSnapshot(world: World, viewerEid: number): WorldSnapsh
         const role = Agent.role[eid] || "";
         const desc = Description.value[eid] || "";
         const goals = getActiveGoals(world, eid);
-        const aspirations = getAspirations(eid);
+        const aspirations = getAspirations(world, eid);
 
         // Get recent memories for dialogue grounding
         const memoryEids = getAgentMemories(world, eid);

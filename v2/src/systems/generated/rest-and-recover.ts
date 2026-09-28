@@ -1,4 +1,5 @@
 import type { World } from "../../ecs/world";
+import { integrateLegacyRateSteps } from "../legacy-rate-time";
 import type { SystemContext } from "../system-loader";
 
 export const name = "RestAndRecover";
@@ -6,7 +7,11 @@ export const description = "Gradually returns agent arousal/mood towards a neutr
 export const frequency = 10;
 export const active = true;
 
+export const temporalStepMs = 10000; // Explicit in-world duration for one historical law step.
 export function run(world: World, ctx: SystemContext): void {
+  integrateLegacyRateSteps(world, ctx, "rest-and-recover", temporalStepMs, runLaw);
+}
+function runLaw(world: World, ctx: SystemContext): void {
   const { Mind } = ctx.components;
   const agents = Array.from(ctx.query(world, [Mind]));
   for (const eid of agents) {

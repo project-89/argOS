@@ -146,6 +146,8 @@ export interface DivineMessage {
   id: string;
   timestamp: number;
   from: number;                     // Spirit entity ID
+  /** Historical label captured on emission; not a lookup of a possibly reused ID. */
+  senderLabel?: string;
   to: number;                       // Target spirit entity ID
   type: MessageType;
   domain: SpiritDomain;
@@ -370,9 +372,12 @@ export interface Intervention {
   content: string;
   reason: string;
   result?: string;
+  /** Untrusted model citations, validated against this inference's issued records. */
+  evidenceIds?: unknown;
 }
 
 export type InterventionType =
+  | "world_effect"
   | "inject_stimulus"
   | "modify_mood"
   | "spawn_npc"
@@ -395,9 +400,12 @@ export interface SpiritCognitionInput {
   recentEvents: Observation[];
   incomingMessages: DivineMessage[];
   activeDirectives: Directive[];
+  interventionEvidence?: { records: readonly import("./spirit-intervention-evidence").SpiritEvidenceRecord[]; omittedRecords: number };
+  physicalEffectPolicy?: { restricted: boolean; description?: string };
 }
 
 export interface SpiritCognitionOutput {
+  discarded?: "stale_cycle";
   thoughts: string;                 // Internal reasoning
   observations: Observation[];      // New observations
   reports: DivineMessage[];         // Messages to send
@@ -430,6 +438,7 @@ export interface AgentSnapshot {
   focus: string;
   active: boolean;
   recentThoughts: string[];
+  goals?: Array<{ eid: number; description: string; priority: number }>;
 }
 
 export interface RoomSnapshot {
@@ -438,6 +447,9 @@ export interface RoomSnapshot {
   description: string;
   occupants: string[];
   objects: string[];
+  objectPlacements?: Array<{ eid: number; name: string; container: string | null; held: boolean;
+    /** Public ECS presentation only; no dynamic/private component dump. */
+    state?: string; description?: string }>;
   ambience: string;
 }
 

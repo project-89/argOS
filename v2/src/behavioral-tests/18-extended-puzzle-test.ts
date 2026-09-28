@@ -1031,7 +1031,7 @@ async function runExtendedPuzzleTest(): Promise<void> {
   log.info("  Phase 5: Fill pot → cook stew → eat!\n");
 
   // Give initial perception
-  queueStimulus({
+  queueStimulus(tw.world, {
     targetEid: tw.agentEid,
     type: "observation",
     content: `You find yourself in an abandoned cellar. Your stomach growls painfully.

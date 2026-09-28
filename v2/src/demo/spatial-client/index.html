@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Argos — A world that keeps living</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main id="app">
+    <section id="stage" aria-label="Live three dimensional simulation">
+      <div id="canvas-host"></div>
+      <div id="scene-labels" aria-hidden="true"></div>
+      <header class="stage-header">
+        <a class="brand" href="#" id="brand-link" aria-label="Argos world overview"><span class="brand-mark">◈</span><span>ARGOS<small>LIVING WORLDS</small></span></a>
+        <div class="connection-pill"><span id="connection-dot" class="status-dot"></span><span id="connection">Connecting</span><span class="pill-divider"></span><span id="clock">00:00</span></div>
+        <button id="toggle-panel" class="icon-button" aria-label="Toggle character panel" title="Character panel">◧</button>
+      </header>
+      <div class="world-heading"><span class="eyebrow">A LITTLE WORLD. REAL CONSEQUENCES.</span><h1 id="world-title">A life of their own.</h1><p id="world-description">A shared world.<br>You’re someone on the other side.</p></div>
+      <div id="scenario-banner" class="scenario-banner" role="status" hidden><span class="scenario-spark" aria-hidden="true">ϟ</span><div><strong id="scenario-title"></strong><p id="scenario-phase"></p></div><span id="scenario-power"></span></div>
+      <div id="renderer-error" role="alert" hidden></div>
+      <div class="stage-bottom">
+        <div class="camera-tools" aria-label="Camera controls"><button id="camera-home" title="See the whole world">↗ <span>Overview</span></button><button id="camera-follow" title="Follow the selected character">◎ <span>Follow</span></button><button id="camera-interiors" title="Reveal building interiors" aria-pressed="false" hidden>⌂ <span>Interiors</span></button><button id="fullscreen" title="Fullscreen">⛶</button></div>
+        <div class="playback-tools"><span id="run-mode">Simulation ready</span><button id="start" class="primary">Start world <span>↗</span></button><button id="stop" hidden>Stop world</button></div>
+      </div>
+      <div class="stage-caption"><span class="tiny-dot"></span> Argos is the world. This is just the window. <span class="camera-hint">Drag to orbit · Scroll to zoom · Select a character</span></div>
+      <div id="toast" role="status" aria-live="polite" hidden></div>
+    </section>
+    <aside id="sidebar" aria-label="World interaction panel">
+      <div class="sidebar-heading"><span class="eyebrow">ON THE INSIDE</span><div><h2 id="roster-title">Meet the minds.</h2><span class="small-label" id="actor-count">—</span></div></div>
+      <div id="characters" role="group" aria-label="Choose a character"></div>
+      <section class="mind-section" aria-labelledby="thought-heading">
+        <div class="section-heading"><h3 id="thought-heading">Current thought</h3><span id="thought-age" class="small-label">—</span></div>
+        <blockquote id="thought">Their next thought will appear here.</blockquote>
+        <div class="activity-line"><span class="activity-icon">↳</span><span id="activity">Waiting for the world</span></div>
+        <div class="place-line"><span>⌖</span><span id="location">—</span><span id="thought-provenance">Private, operator view</span></div>
+        <div class="goal-card"><span class="eyebrow" id="goal-heading">LEADING GOAL</span><p id="current-goal">No active goal yet.</p><span class="goal-note" id="goal-note">An intention, not a guaranteed next action.</span></div>
+        <div id="needs-readout" class="needs-readout" role="group" aria-label="Native physical needs" hidden><div title="Higher means hungrier"><span>Hunger</span><strong id="need-hunger"></strong></div><div title="Higher means more energy"><span>Energy</span><strong id="need-energy"></strong></div></div>
+      </section>
+      <section id="house-spirit" class="house-spirit-section" aria-labelledby="house-spirit-heading" hidden>
+        <div class="section-heading"><h3 id="house-spirit-heading">Ask the house spirit</h3><span class="small-label">WORLD CONTROL</span></div>
+        <p id="house-spirit-summary" class="section-copy">Available in a running Blackout session.</p>
+        <p class="section-copy spirit-boundary">Change supported parts of the house—not a character’s mind. The spirit checks each request.</p>
+        <div class="world-command-examples" aria-label="House spirit request examples">
+          <button type="button" data-world-example="Turn the light back off">Turn the light back off</button>
+          <button type="button" data-world-example="Restore power">Restore power</button>
+          <button type="button" data-world-example="Open the supplies box">Open the supplies box</button>
+          <button type="button" data-world-example="Close the supplies box">Close the supplies box</button>
+        </div>
+        <form id="world-command-form" aria-busy="false"><label class="sr-only" for="world-command-input">Request to the house spirit</label><textarea id="world-command-input" rows="2" maxlength="500" placeholder="Turn the light back off…" required disabled></textarea><button id="world-command-send" type="submit" disabled>Ask the house spirit ↗</button></form>
+        <div id="world-command-receipt" class="world-command-receipt" role="status" aria-live="polite" hidden><strong id="world-command-outcome"></strong><p id="world-command-detail"></p><small id="world-command-time"></small></div>
+      </section>
+      <section class="phone-section" aria-labelledby="phone-heading">
+        <div class="section-heading"><h3 id="phone-heading">A line into the world</h3><span class="small-label">TWO WAY</span></div>
+        <p id="phone-detail" class="section-copy">Text their phone. What they do with it is up to them.</p>
+        <div id="messages" class="messages" role="log" aria-live="polite"><div class="empty-messages"><span>↗</span><p>Start a conversation<br>across the fourth wall.</p></div></div>
+        <form id="message-form" class="composer"><label class="sr-only" for="message-input">Message the selected character</label><textarea id="message-input" rows="2" maxlength="500" placeholder="There’s something you should know…" required></textarea><button type="submit" title="Send message" aria-label="Send message">↗</button></form>
+      </section>
+      <section class="thought-section" aria-labelledby="plant-heading">
+        <div class="section-heading"><h3 id="plant-heading">A quiet suggestion</h3><span class="small-label">INFLUENCE</span></div>
+        <p class="section-copy">Plant a thought, not an instruction they must obey.</p>
+        <form id="thought-form"><label class="sr-only" for="thought-input">Thought to plant</label><div class="thought-composer"><input id="thought-input" maxlength="500" placeholder="Maybe I could use some fresh air…" required><button type="submit" aria-label="Plant thought">✧</button></div></form>
+      </section>
+      <section class="growth-section" aria-labelledby="growth-heading">
+        <div class="section-heading"><h3 id="growth-heading">Beyond these walls</h3><span id="growth-kind" class="small-label">WORLD BUILDING</span></div>
+        <p id="growth-detail" class="section-copy">An authored café expansion can become a real, connected place.</p>
+        <div id="town-life" hidden>
+          <div class="town-life-weather"><span aria-hidden="true" id="town-weather-icon">○</span><strong id="town-weather-label"></strong><small id="town-life-status"></small></div>
+          <div id="town-story" class="town-change" aria-label="Story brief and narrator review" hidden></div>
+          <div id="town-spirits" class="town-spirits" aria-label="Spirit activity"></div>
+          <p id="town-growth-budget" class="section-copy"></p>
+          <p id="town-mechanic" class="section-copy" hidden></p>
+          <ol id="town-changes" class="town-changes" aria-label="Recent world changes"></ol>
+          <p id="town-changes-empty" class="section-copy">No changes reported yet.</p>
+          <p class="town-life-note">Approved is not yet applied. Used means a character actually used it.</p>
+        </div>
+        <button id="grow" class="growth-button"><span class="growth-icon">⌘</span><span>Add the neighborhood café<small>Bounded catalog construction</small></span><span>↗</span></button>
+      </section>
+      <section id="god-control" class="god-control-section" aria-labelledby="god-control-heading" hidden>
+        <div class="section-heading"><h3 id="god-control-heading">Ask God</h3><span class="small-label">DEVELOPMENT</span></div>
+        <p id="god-control-status" class="section-copy"></p>
+        <p class="section-copy">Operator requests for the world—not messages to a resident. God may inspect, explain, or use the capabilities listed below.</p>
+        <details class="god-capabilities"><summary>Enabled capabilities and limits</summary><ul id="god-capabilities"></ul><p id="god-limits" class="section-copy"></p></details>
+        <div id="god-messages" class="god-messages" role="log" aria-label="Operator conversation with God" aria-live="polite"></div>
+        <form id="god-command-form" aria-busy="false"><label class="sr-only" for="god-command-input">Development request to God</label><textarea id="god-command-input" rows="3" maxlength="2000" placeholder="Inspect the world, explain an issue, or request a supported change…" required disabled></textarea><button id="god-command-send" type="submit" disabled>Ask God ↗</button></form>
+        <p id="god-command-receipt" class="section-copy god-command-receipt" role="status" aria-live="polite" hidden></p>
+        <div id="god-builds" hidden><h4>Build jobs</h4><ol id="god-jobs" class="town-changes" aria-label="Development build jobs"></ol></div>
+        <p class="town-life-note">A reply is not an applied change. Job status is separate; confirmed native effects appear in the world and its event records.</p>
+      </section>
+      <section id="generated-details" class="generated-details-section" aria-labelledby="generated-details-heading" hidden>
+        <div class="section-heading"><h3 id="generated-details-heading">Generated details</h3><span class="small-label">PUBLIC MEASUREMENTS</span></div>
+        <p class="section-copy">Committed numeric and true/false values. Field names have no implied units, animation, or physical effect.</p>
+        <div id="generated-details-list" class="generated-details-list"></div>
+      </section>
+      <details id="world-details"><summary>Under the hood <span>+</span></summary><div id="world-stats"></div><div id="event-list"></div></details>
+      <details id="operator-details"><summary>Operator test controls <span>+</span></summary><p class="section-copy">These are explicit operator actions, not autonomous NPC choices.</p><form id="action-form"><select id="action-type" aria-label="Operator action"><option value="move">Move</option><option value="pickup">Pick up</option><option value="interact">Interact</option><option value="drop">Drop</option></select><select id="action-target" aria-label="Action target"></select><input id="action-content" placeholder="Operation, e.g. sit" aria-label="Interaction operation"><button type="submit">Dispatch test action</button></form><p id="action-receipt" class="section-copy" role="status" aria-live="polite">Dispatch is a request. Its native outcome appears here.</p></details>
+      <footer class="sidebar-footer"><span>Persistent state. Independent minds.</span><a href="/assets/ATTRIBUTION.md" target="_blank" rel="noopener">Assets ↗</a></footer>
+    </aside>
+  </main>
+  <script type="module" src="/client.js"></script>
+</body>
+</html>

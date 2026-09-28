@@ -12,13 +12,14 @@
  */
 
 import type { World } from "../ecs/world";
-import { query, hasComponent } from "bitecs";
+import { query, hasComponent, entityExists } from "bitecs";
 import {
-  Agent, Name, Room, Needs, Health, Inventory, Mind, Description,
-  CombatStats, InCombat, StimulusSource, Item, Appearance, Traits
+  Agent, Name, Room, Needs, Health, Inventory, StimulusSource, Traits
 } from "../ecs/components";
-import { getRoomForEntity, listDirectContents } from "../ecs/location";
+import { getRoomForEntity } from "../ecs/location";
 import { getAvailableAffordances } from "../world/affordance-availability";
+import { getAgentTangibleEntities, getAgentVisualEntities, getAgentWorldCapabilities } from "./world-capabilities";
+import { getAgentSensoryCapabilities } from "./sensory-capabilities";
 
 // =============================================================================
 // TYPE DEFINITIONS
@@ -41,6 +42,7 @@ export interface AffordanceInstance {
   description: string;             // What this specific affordance does
   affordanceName?: string;         // For "interact": the concrete affordance name
   contentHint?: string;            // Suggested content string (e.g., "open", "eat the apple")
+  commandHelp?: string;            // Observed implementation's argument syntax/limits
   priority?: number;               // Suggested priority (higher = more relevant)
 }
 
@@ -93,7 +95,7 @@ class ActionRegistryClass {
 
     this.coreActions.set("observe", {
       name: "observe",
-      description: "Pay close attention to someone or something",
+      description: "Visually inspect someone or something (not sustained auditory listening)",
       requiresTarget: true,
       requiresContent: false,
       targetTypes: ["agent", "object", "any"],
@@ -127,7 +129,7 @@ class ActionRegistryClass {
 
     this.coreActions.set("wait", {
       name: "wait",
-      description: "Do nothing, just exist in the moment",
+      description: "Wait; optionally keep listening using a listed listeningTo execution",
       requiresTarget: false,
       requiresContent: false,
       category: "self",
@@ -301,8 +303,9 @@ export function buildAvailableActionsContext(
   world: World,
   agentEid: number
 ): AvailableActionsContext {
+  const canSee = getAgentSensoryCapabilities(world, agentEid).visual > 0;
   const context: AvailableActionsContext = {
-    coreActions: ActionRegistry.getCoreActions(),
+    coreActions: ActionRegistry.getCoreActions().filter(action => canSee || !["observe", "examine"].includes(action.name)),
     componentActions: [],
     locationAffordances: [],
     objectAffordances: [],
@@ -311,10 +314,20 @@ export function buildAvailableActionsContext(
   };
 
   // 1. Get component-based actions
-  context.componentActions = getComponentBasedActions(world, agentEid);
+  context.componentActions = getComponentBasedActions(world, agentEid).filter(action => canSee || !["observe", "examine"].includes(action.name));
 
   // 2. Get available locations
   context.availableLocations = getAvailableLocations(world, agentEid);
+  if (getAgentWorldCapabilities(world, agentEid)?.movementTargets && !context.availableLocations.length) {
+    context.coreActions = context.coreActions.filter(action => action.name !== "move");
+  }
+
+  // Discovery uses the same pure surfaces as sight. Own direct possessions are
+  // known through touch, not permission to inspect labels or sealed interiors.
+  const visual = new Set(getAgentVisualEntities(world, agentEid));
+  const tangible = new Set(getAgentTangibleEntities(world, agentEid));
+  context.objectAffordances = getObjectAffordances(world, agentEid, visual, tangible);
+  context.socialAffordances = getSocialAffordances(world, agentEid, visual);
 
   // 3. Get current room context
   const roomEid = getRoomForEntity(world, agentEid);
@@ -323,11 +336,6 @@ export function buildAvailableActionsContext(
     // Location-specific affordances
     context.locationAffordances = getLocationAffordances(world, roomEid);
 
-    // Object affordances in the room
-    context.objectAffordances = getObjectAffordances(world, agentEid, roomEid);
-
-    // Social affordances with other agents
-    context.socialAffordances = getSocialAffordances(world, agentEid, roomEid);
   }
 
   return context;
@@ -369,14 +377,20 @@ function getAvailableLocations(world: World, agentEid: number): Array<{ name: st
   const locations: Array<{ name: string; description: string }> = [];
   const currentRoomEid = getRoomForEntity(world, agentEid);
 
-  // Get ALL rooms in the world — including newly created ones
-  const allRooms = Array.from(query(world, [Room]));
+  const capabilities = getAgentWorldCapabilities(world, agentEid);
+  const movementTargets = capabilities?.movementTargets;
+  const supplied = capabilities?.movementTargets?.();
+  // Packages own physical topology. Legacy room worlds retain their authored
+  // room-name catalog, but an explicit empty or invalid route list stays empty.
+  const allRooms = movementTargets ? Array.isArray(supplied) ? supplied : [] : Array.from(query(world, [Room]));
 
-  for (const roomEid of allRooms) {
+  for (const roomEid of new Set(allRooms)) {
+    if (!Number.isSafeInteger(roomEid) || !entityExists(world, roomEid) || !hasComponent(world, roomEid, Room) || !hasComponent(world, roomEid, Name)) continue;
     const roomName = Name.value[roomEid];
     if (roomName && (currentRoomEid === undefined || roomEid !== currentRoomEid)) {
-      const desc = Description.value?.[roomEid] || "";
-      locations.push({ name: roomName, description: String(desc).slice(0, 100) });
+      // A route/map label does not grant sight of another room's current contents.
+      // Prior descriptions can still be recalled through the actor's own memory.
+      locations.push({ name: roomName, description: "" });
     }
   }
 
@@ -419,12 +433,11 @@ function hasTrait(world: World, eid: number, trait: string): boolean {
 function getObjectAffordances(
   world: World,
   agentEid: number,
-  roomEid: number
+  visual: ReadonlySet<number>,
+  tangible: ReadonlySet<number>
 ): AffordanceInstance[] {
   const affordances: AffordanceInstance[] = [];
-
-  // Get objects directly located in the room (canonical containment)
-  const contents = listDirectContents(world, roomEid);
+  const contents = new Set([...visual, ...tangible]);
 
   const MAX_AFFORDANCES_PER_OBJECT = 6;
 
@@ -435,10 +448,19 @@ function getObjectAffordances(
     const objectName = Name.value[objectEid];
     if (!objectName) continue;
 
+    const owned = tangible.has(objectEid);
+    if (owned && hasComponent(world, agentEid, Inventory)) {
+      affordances.push({ action: "drop", target: objectName, description: `Put down your ${objectName}`, priority: 3 });
+    }
+    // A name already known by possession is not a new visual observation. Do
+    // not call a package affordance producer for unseen labels/control values.
+    // Core use/interact still allow deliberately chosen remembered commands.
+    if (!visual.has(objectEid)) continue;
+
     // Pickup suggestions should align with deterministic pickup grounding:
     // - requires actor inventory action availability
     // - requires target trait "takeable"
-    if (hasComponent(world, agentEid, Inventory) && hasTrait(world, objectEid, "takeable")) {
+    if (!owned && hasComponent(world, agentEid, Inventory) && hasTrait(world, objectEid, "takeable")) {
       affordances.push({
         action: "pickup",
         target: objectName,
@@ -450,20 +472,21 @@ function getObjectAffordances(
     // Affordance-based interaction suggestions (worldSchema + canUseAffordance)
     const available = getAvailableAffordances(world, agentEid, objectEid);
     const filtered = available
-      .map((a) => a.name)
       // Avoid double-teaching the same verb through multiple channels.
       // `examine` exists as a first-class action, so keep it out of "interact" suggestions.
-      .filter((name) => name !== "examine")
-      .sort((a, b) => a.localeCompare(b))
+      .filter((a) => a.name !== "examine")
+      .sort((a, b) => a.name.localeCompare(b.name))
       .slice(0, MAX_AFFORDANCES_PER_OBJECT);
 
-    for (const affordanceName of filtered) {
+    for (const definition of filtered) {
+      const affordanceName = definition.name;
       affordances.push({
         action: "interact",
         target: objectName,
         affordanceName,
         contentHint: affordanceName,
-        description: `Interact with ${objectName} using "${affordanceName}"`,
+        ...(definition.description ? { commandHelp: definition.description.slice(0, 400) } : {}),
+        description: `Interact with ${objectName} using "${affordanceName}"${definition.description ? `: ${definition.description.slice(0, 600)}` : ""}`,
         priority: 4,
       });
     }
@@ -489,17 +512,15 @@ function getObjectAffordances(
 function getSocialAffordances(
   world: World,
   agentEid: number,
-  roomEid: number
+  visual: ReadonlySet<number>
 ): AffordanceInstance[] {
   const affordances: AffordanceInstance[] = [];
+  // Heard speakers remain in owned dialogue/perceptions. Enumerating every
+  // co-located entity would reveal silent people when sight is unavailable.
+  if (getAgentSensoryCapabilities(world, agentEid).visual <= 0) return affordances;
 
-  // Find other agents in the room
-  const allAgents = Array.from(query(world, [Agent]));
-
-  for (const otherEid of allAgents) {
-    if (otherEid === agentEid) continue;
-
-    if (getRoomForEntity(world, otherEid) !== roomEid) continue;
+  for (const otherEid of visual) {
+    if (otherEid === agentEid || !hasComponent(world, otherEid, Agent)) continue;
 
     const otherName = Name.value[otherEid];
     if (!otherName) continue;
@@ -587,7 +608,7 @@ export function formatActionsForPrompt(
     lines.push("");
   }
 
-  // Available locations — include descriptions so the agent knows what's there
+  // Destinations for one movement action, not observations of remote rooms.
   if (context.availableLocations.length > 0) {
     lines.push("PLACES YOU CAN GO:");
     for (const loc of context.availableLocations) {
@@ -609,6 +630,7 @@ export function formatActionsForPrompt(
   if (context.objectAffordances.length > 0) {
     lines.push("OBJECTS YOU CAN INTERACT WITH:");
     const uniqueObjects = new Map<string, AffordanceInstance[]>();
+    let helpBudget = 4000;
     for (const aff of context.objectAffordances) {
       if (!uniqueObjects.has(aff.target)) {
         uniqueObjects.set(aff.target, []);
@@ -617,6 +639,7 @@ export function formatActionsForPrompt(
     }
     for (const [target, affs] of uniqueObjects) {
       const pickups = affs.some((a) => a.action === "pickup");
+      const drops = affs.some((a) => a.action === "drop");
       const observes = affs.some((a) => a.action === "observe");
       const interactNames = affs
         .filter((a) => a.action === "interact")
@@ -625,10 +648,16 @@ export function formatActionsForPrompt(
 
       const parts: string[] = [];
       if (pickups) parts.push("pickup");
+      if (drops) parts.push("drop (your possession)");
       if (interactNames.length > 0) parts.push(`interact via: ${[...new Set(interactNames)].join(", ")}`);
       if (observes) parts.push("observe");
 
       lines.push(`  - ${target}: ${parts.join("; ")}`);
+      for (const aff of affs.filter(a => a.action === "interact" && a.commandHelp)) {
+        const text = `    ${JSON.stringify(aff.affordanceName)}: ${JSON.stringify(aff.commandHelp)}`;
+        if (text.length > helpBudget) continue;
+        lines.push(text); helpBudget -= text.length;
+      }
     }
     lines.push("");
   }
@@ -656,9 +685,9 @@ export function formatActionsForPrompt(
     const social = Needs.social[agentEid] ?? 50;
 
     lines.push("YOUR NEEDS:");
-    lines.push(`  - Hunger: ${hunger.toFixed(0)}%${hunger >= 70 ? " (CRITICAL - find food!)" : ""}`);
-    lines.push(`  - Energy: ${energy.toFixed(0)}%${energy <= 30 ? " (LOW - need rest!)" : ""}`);
-    lines.push(`  - Social: ${social.toFixed(0)}%${social <= 30 ? " (lonely - seek company!)" : ""}`);
+    lines.push(`  - Hunger: ${hunger.toFixed(0)}%${hunger >= 70 ? " (high)" : ""}`);
+    lines.push(`  - Energy: ${energy.toFixed(0)}%${energy <= 30 ? " (low)" : ""}`);
+    lines.push(`  - Social satisfaction: ${social.toFixed(0)}%${social <= 30 ? " (low)" : ""}`);
     lines.push("");
   }
 

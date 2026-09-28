@@ -6,7 +6,7 @@ import { getRecentActions } from "./agent-action-history";
 import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import { getAvailableAffordances } from "../world/affordance-availability";
 import { getMovementTarget } from "../systems/builtin-systems";
-import { getSkillTree, recordSkillOutcome } from "./skill-registry";
+import { getSkillTree } from "./skill-registry";
 import { getComponent, entityHasComponent } from "../ecs/component-registry";
 import { getCurrentPeriod, getActiveWorldEvents } from "../systems/world-clock";
 
@@ -585,12 +585,12 @@ function evalCondition(world: World, agentEid: number, op: ConditionOp): boolean
       return val2 <= op.threshold;
     }
     case "last_n_actions_include": {
-      const actions = getRecentActions(agentEid);
+      const actions = getRecentActions(agentEid, world);
       const lastN = actions.slice(-op.n);
       return lastN.some(a => a === op.actionType);
     }
     case "last_n_actions_exclude": {
-      const actions2 = getRecentActions(agentEid);
+      const actions2 = getRecentActions(agentEid, world);
       const lastN2 = actions2.slice(-op.n);
       return !lastN2.some(a => a === op.actionType);
     }
@@ -622,8 +622,26 @@ function evalCondition(world: World, agentEid: number, op: ConditionOp): boolean
   }
 }
 
-function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: string[]): PolicyEvalResult {
-  const evalChild = (child: BehaviorNode): PolicyEvalResult => evalNode(world, agentEid, child, trace);
+interface PolicyEvalContext {
+  firedCompiledBranch: boolean;
+}
+
+function isSelectedResult(result: PolicyEvalResult): boolean {
+  return result.kind === "action" || result.kind === "start_procedure" || result.kind === "llm_fallback";
+}
+
+function markCompiledBranchFired(node: BehaviorNode, result: PolicyEvalResult, trace: string[], context: PolicyEvalContext): PolicyEvalResult {
+  if (result.kind !== "action" && result.kind !== "start_procedure") return result;
+  const signature = String((node as any)._compiled || "").trim();
+  if (!signature) return result;
+  (node as any)._lastFiredAt = Date.now();
+  context.firedCompiledBranch = true;
+  trace.push(`compiled_branch:${signature}`);
+  return result;
+}
+
+function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: string[], context: PolicyEvalContext): PolicyEvalResult {
+  const evalChild = (child: BehaviorNode): PolicyEvalResult => evalNode(world, agentEid, child, trace, context);
 
   switch (node.type) {
     case "noop":
@@ -657,10 +675,7 @@ function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: str
         trace.push(`skill-not-found:${skillName}`);
         return { kind: "none", trace };
       }
-      const skillResult = evalNode(world, agentEid, skillTree, trace);
-      if (skillResult.kind === "action") {
-        recordSkillOutcome(skillName, true);
-      }
+      const skillResult = evalNode(world, agentEid, skillTree, trace, context);
       return skillResult;
     }
     case "llm_skill": {
@@ -779,7 +794,7 @@ function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: str
       const order = [firstPick, ...indices.filter(i => i !== firstPick)];
       for (const idx of order) {
         const r = evalChild(choices[idx].child);
-        if (r.kind === "action" || r.kind === "llm_fallback") return r;
+        if (isSelectedResult(r)) return r;
       }
       return { kind: "none", trace };
     }
@@ -848,7 +863,7 @@ function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: str
         }
 
         const r = evalChild(child);
-        if (r.kind === "action" || r.kind === "llm_fallback") return r;
+        if (isSelectedResult(r)) return markCompiledBranchFired(node, r, trace, context);
       }
       return { kind: "none", trace };
     }
@@ -856,7 +871,7 @@ function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: str
       trace.push("selector");
       for (const child of node.children || []) {
         const r = evalChild(child);
-        if (r.kind === "action" || r.kind === "llm_fallback") return r;
+        if (isSelectedResult(r)) return markCompiledBranchFired(node, r, trace, context);
       }
       return { kind: "none", trace };
     }
@@ -878,7 +893,12 @@ export function evaluateBehaviorPolicy(world: World, agentEid: number): PolicyEv
   const tree = getBehaviorPolicyTree(world, agentEid);
   if (!tree) return { kind: "none", trace: ["no_policy"] };
 
-  return evalNode(world, agentEid, tree, trace);
+  const context: PolicyEvalContext = { firedCompiledBranch: false };
+  const result = evalNode(world, agentEid, tree, trace, context);
+  // The firing watermark lives inside the policy tree itself, so save/restore
+  // and a fresh process preserve pruning evidence without a side registry.
+  if (context.firedCompiledBranch) BehaviorPolicy.treeJson[agentEid] = JSON.stringify(tree);
+  return result;
 }
 
 /** Clear evaluator anti-repetition history for an agent (e.g., after policy change). */

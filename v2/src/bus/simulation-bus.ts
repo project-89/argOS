@@ -168,7 +168,14 @@ export interface SystemErrorEvent extends BusEvent {
   disabled?: boolean;
 }
 
-export type SystemEvent = SystemCreatedEvent | SystemExecutedEvent | SystemErrorEvent;
+export interface SystemBuildEvent extends BusEvent {
+  type: "system:build";
+  jobId: string;
+  status: string;
+  source: string;
+  message: string;
+}
+export type SystemEvent = SystemCreatedEvent | SystemExecutedEvent | SystemErrorEvent | SystemBuildEvent;
 
 // --- World Events ---
 
@@ -226,6 +233,52 @@ export interface RoomStateEvent extends BusEvent {
 
 export type RoomEvent = RoomActivityEvent | RoomStateEvent;
 
+// --- Simulation Lifecycle & Persistence Events ---
+
+export interface SimulationStatusEvent extends BusEvent {
+  type: "simulation:status";
+  status: "running" | "paused" | "stopped";
+  tick?: number;
+}
+
+export interface SimulationErrorEvent extends BusEvent {
+  type: "simulation:error";
+  error: string;
+}
+
+export interface SimulationSavedEvent extends BusEvent {
+  type: "simulation:saved";
+  simulationId: string;
+  simulationName: string;
+  tick: number;
+}
+
+export interface SimulationLoadedEvent extends BusEvent {
+  type: "simulation:loaded";
+  simulationId: string;
+  simulationName: string;
+  tick: number;
+}
+
+export interface SimulationSavesListEvent extends BusEvent {
+  type: "simulation:saves_list";
+  saves: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    createdAt: number;
+    lastSavedAt: number;
+    currentTick: number;
+  }>;
+}
+
+export type SimulationLifecycleEvent =
+  | SimulationStatusEvent
+  | SimulationErrorEvent
+  | SimulationSavedEvent
+  | SimulationLoadedEvent
+  | SimulationSavesListEvent;
+
 // --- All Events Union ---
 
 export type SimulationEvent =
@@ -234,7 +287,8 @@ export type SimulationEvent =
   | AgentEvent
   | SystemEvent
   | WorldEvent
-  | RoomEvent;
+  | RoomEvent
+  | SimulationLifecycleEvent;
 
 // ============================================================================
 // Channel Types
@@ -385,6 +439,30 @@ export type InjectionMessage =
 // ============================================================================
 
 export class SimulationBus extends EventEmitter {
+  private observerFailures = 0;
+  private lastObserverFailure?: { channel: string; eventType: string };
+
+  /** Observation failures are not simulation-system failures. No payload or
+   * exception prose is retained here, since either may contain private data. */
+  getObserverHealth(): { failures: number; lastFailure?: { channel: string; eventType: string } } {
+    return { failures: this.observerFailures, lastFailure: this.lastObserverFailure ? { ...this.lastObserverFailure } : undefined };
+  }
+
+  private emitObserved(channel: string, event: SimulationEvent): void {
+    const eventType = String(event.type).slice(0, 128);
+    const failed = () => {
+      this.observerFailures++;
+      this.lastObserverFailure = { channel: channel.slice(0, 128), eventType };
+      if (this.observerFailures === 1) console.warn("[EventBus] Observation subscriber failed; inspect getObserverHealth()");
+    };
+    // rawListeners preserves EventEmitter's once wrappers and registration order.
+    for (const listener of this.rawListeners(channel)) {
+      try {
+        const result = listener.call(this, event);
+        if (result && typeof result.then === "function") void Promise.resolve(result).catch(failed);
+      } catch { failed(); }
+    }
+  }
   private subscriptions: Map<string, ChannelSubscription[]> = new Map();
   private injectionHandlers: Map<string, (msg: InjectionMessage) => Promise<void>> = new Map();
   private eventBuffer: RingBuffer<SimulationEvent>;
@@ -426,10 +504,10 @@ export class SimulationBus extends EventEmitter {
     }
 
     // Emit to channel-specific listeners
-    super.emit(channel, event);
+    this.emitObserved(channel, event);
 
     // Emit to wildcard listeners
-    super.emit("*", event);
+    this.emitObserved("*", event);
 
     return true;
   }
@@ -444,7 +522,7 @@ export class SimulationBus extends EventEmitter {
   ): () => void {
     const wrappedCallback = (event: SimulationEvent) => {
       if (!filter || filter(event)) {
-        callback(event);
+        return callback(event);
       }
     };
 
@@ -533,14 +611,14 @@ export class SimulationBus extends EventEmitter {
     if (type.startsWith("agent:")) {
       const agentEvent = event as AgentEvent;
       // Emit to both global agents channel and specific agent channel
-      super.emit(`agent:${agentEvent.agentName}`, event);
+      this.emitObserved(`agent:${agentEvent.agentName}`, event);
       return "agents";
     }
 
     if (type.startsWith("room:")) {
       const roomEvent = event as RoomEvent;
       // Emit to both global rooms channel and specific room channel
-      super.emit(`room:${roomEvent.roomName}`, event);
+      this.emitObserved(`room:${roomEvent.roomName}`, event);
       return "world"; // Room events also go to world
     }
 

@@ -7,7 +7,6 @@
 import "dotenv/config";
 import { createArgosWorld } from "./ecs/world";
 import { initializePrefabs } from "./ecs/prefabs";
-import { initializeRegistry } from "./ecs/component-registry";
 import {
   createGodAgent,
   godThink,
@@ -60,7 +59,7 @@ import { Agent, Room, Name, Description, Mind, StimulusSource, Memory, Thought, 
 import { HasMemory, HasThought } from "./ecs/relations";
 import { getRoomForEntity } from "./ecs/location";
 import { runCognitionCycle, executeActions } from "./cognition/cognition-system";
-import { getAgentThoughts } from "./cognition/agent-mind";
+import { captureThoughtPublication, takeNewAuthoredThoughtEvents } from "./cognition/thought-publication";
 import { compileMapIntoWorld } from "./world/map-compiler";
 import {
   createDaemonRegistry,
@@ -75,6 +74,11 @@ import {
   consumeSystemErrors,
   getSystemTelemetrySnapshot,
 } from "./ecs/dynamic-systems";
+import { registerBuiltinOfficeTools } from "./office-tools/builtin-tools";
+import { generateStoryScaffold, getStoryScaffold } from "./nle/story-scaffold";
+import { startBeatDetection, stopBeatDetection } from "./nle/beat-detector";
+import { runNarrativeDirectorCycle, setDirectorGodAgent } from "./nle/narrative-director";
+import { setNudgeDaemonRegistry } from "./nle/npc-nudge";
 
 async function main() {
   console.log("╔══════════════════════════════════════════════════════════════╗");
@@ -91,8 +95,8 @@ async function main() {
 
   // Create empty world
   const world = createArgosWorld("Empty World");
-  initializeRegistry(world);
   initializePrefabs(world);
+  registerBuiltinOfficeTools();
 
   // Create god agent with minimal config (no preset simulation)
   const god = createGodAgent(world, {
@@ -124,6 +128,8 @@ async function main() {
   );
   setDaemonSuperior(daemonRegistry, god.eid);
   setSimulationTension(daemonRegistry, 0.1);
+  setDirectorGodAgent(god);
+  setNudgeDaemonRegistry(world, daemonRegistry);
   const initialDaemons = createDaemonsForAllAgents(daemonRegistry, world);
   console.log(`[DaemonSystem] Initialized ${initialDaemons} daemons`);
 
@@ -539,12 +545,13 @@ async function main() {
           const key = `goal_completed:${agentId}:${goal}:${Math.floor(ts / 1000)}`;
           if (!shouldEmitEcsEvent(key, 2000)) break;
           busEmit({
-            type: "agent:think",
+            type: "agent:action",
             timestamp: ts,
             agentId,
             agentName,
-            thoughtType: "reflection",
-            thought: `Completed goal: ${goal}`,
+            action: "goal_completed",
+            target: goal,
+            result: "completed",
           });
           break;
         }
@@ -564,29 +571,14 @@ async function main() {
     try {
       console.log(`[Cognition] Running cognitive cycle for ${agentEids.length} agents...`);
 
+      // A turn may choose an action without expressing another thought.
+      const thoughtCursors = Array.from(agentEids, eid => captureThoughtPublication(world, eid));
       // Run the cognition cycle
       const actions = await runCognitionCycle(world, god.systemRegistry, { tick });
 
       // Emit events for each agent's action and thought
       for (const { eid, action } of actions) {
         const name = Name.value[eid] || `Agent ${eid}`;
-
-        // Get the agent's most recent thought
-        const thoughtEids = getAgentThoughts(world, eid);
-        const latestThoughtEid = thoughtEids[thoughtEids.length - 1];
-        const latestThought = latestThoughtEid ? Thought.content[latestThoughtEid] : null;
-
-        // Emit thought event if there's a new thought
-        if (latestThought) {
-          busEmit({
-            type: "agent:think",
-            timestamp: Date.now(),
-            agentId: eid,
-            agentName: name,
-            thoughtType: "decision",
-            thought: latestThought,
-          });
-        }
 
         // Emit action event
         busEmit({
@@ -619,6 +611,9 @@ async function main() {
       if (actions.length > 0) {
         executeActions(world, actions, god.systemRegistry);
       }
+      // Mental updates may commit at dispatch. Never redate the previous
+      // thought merely because another action/decision happened.
+      for (const cursor of thoughtCursors) for (const event of takeNewAuthoredThoughtEvents(cursor)) busEmit(event);
     } catch (error) {
       console.error("[Cognition] Error:", error);
     } finally {
@@ -810,6 +805,8 @@ async function main() {
     if (runningSpiritTick) return;
     runningSpiritTick = true;
     try {
+      await runNarrativeDirectorCycle(world);
+
       // Use god.registry which is a proper EntityRegistry with byName and byId maps
       const result = await tickSpiritSystem(world, god.registry);
 
@@ -891,12 +888,12 @@ async function main() {
       // Also runs proactive evolution checks to grow the world autonomously
       const state = getSpiritSystemState();
       if (state) {
-        const pendingInteractions = getPendingInteractions();
+        const pendingInteractions = getPendingInteractions(world);
         if (pendingInteractions.length > 0) {
-          console.log(`[WorldCrafter] Processing ${pendingInteractions.length} pending failed interactions...`);
+          console.log(`[WorldCrafter] Observing ${pendingInteractions.length} unresolved interactions for the authors...`);
         }
 
-        // Always run - the Crafter handles its own cadence for evolution checks
+        // Observation only; the architect owns fresh design and build decisions.
         const crafterResult = await runWorldCrafterCycle(world, state.registry, god);
 
         if (crafterResult.entitiesCreated > 0) {
@@ -1190,6 +1187,7 @@ async function main() {
       console.log("[SpiritSystem] Started on simulation resume");
     }
 
+    startBeatDetection(world);
     paused = false;
     busEmit({
       type: "simulation:status",
@@ -1203,6 +1201,7 @@ async function main() {
   server.bus.registerInjectionHandler("inject:simulation_stop", async () => {
     console.log("[Simulation] Stopping...");
     paused = true;
+    stopBeatDetection(world);
     tick = 0;
     busEmit({
       type: "simulation:status",
@@ -1266,6 +1265,7 @@ async function main() {
       // Load world state into current world
       await currentSim.loadWorld(world, god.systemRegistry);
       tick = currentSim.currentTick;
+      startBeatDetection(world);
 
       // Start spirit system if not started
       if (!spiritSystemStarted) {
@@ -1355,6 +1355,17 @@ async function main() {
       console.log(
         `[Simulation] Map compiled: rooms=${compiled.roomByZoneId.size + 1}, agents=${compiled.spawnedAgentEids.length}, objects=${compiled.spawnedObjectEids.length}, newTypes=${compiled.definedObjectTypes.length}`
       );
+
+      if (!getStoryScaffold(world)) {
+        const narrativeSeed = String(
+          mapData.narrative
+          || mapData.description
+          || `A living world called ${mapData.name || "Untitled Simulation"}`
+        );
+        console.log(`[NLE] Building story scaffold for UI simulation...`);
+        await generateStoryScaffold(world, narrativeSeed);
+      }
+      startBeatDetection(world);
 
 
       // Queue room population requests for each zone so The Steward can furnish the map quickly.
@@ -1453,6 +1464,7 @@ async function main() {
       // 1. Stop simulation loop so no new ticks fire
       console.log("[Shutdown] Stopping simulation...");
       paused = true;
+      stopBeatDetection(world);
 
       // 2. Wait briefly for any in-flight AI tasks (cognition, spirits, daemons)
       console.log("[Shutdown] Waiting for in-flight tasks (10s timeout)...");

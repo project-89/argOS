@@ -42,10 +42,10 @@ describe("Plan advancement (execution)", () => {
 
     executeActions(world, [{ eid: agent, action: { type: "interact", target: "Workstation", content: "run_command: echo hello" } }], registry as any);
 
-    // Since the target does not exist as an entity, the interact action should fail and should NOT advance the plan step.
-    expect(Plan.status[planEid]).toBe("active");
+    // Since the target does not exist, dispatch revalidation retires the stale
+    // plan before execution. It must not advance or fabricate goal completion.
+    expect(Plan.status[planEid]).toBe("failed");
     expect(Plan.currentStep[planEid]).toBe(0);
     expect(Goal.status[goalEid]).toBe("active");
   });
 });
-

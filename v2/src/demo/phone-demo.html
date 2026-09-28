@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Argos — Someone on the other side</title><link rel="stylesheet" href="/demo.css"></head>
+<body>
+<header class="app-header"><a href="/" aria-label="Argos home">ARGOS <span>/ LIVING WORLDS</span></a><span class="episode">Someone on the other side</span><span id="mode">CONNECTING</span></header>
+<main id="experience" class="experience">
+  <section class="watch-pane" aria-label="Live world and video">
+    <div class="film">
+      <div class="viewport">
+        <canvas id="stage" width="1080" height="608" aria-label="Simulation-only location diagram"></canvas>
+        <video id="source" playsinline autoplay muted hidden aria-label="Raw H3 video"></video>
+        <div id="phone-overlay" class="phone-overlay" hidden aria-live="polite"><small id="phone-text-label">HER PHONE</small><p id="phone-text"></p></div>
+      </div>
+      <div class="film-toolbar">
+        <span id="connection" class="connection" role="status">One house. One mind.</span>
+        <div class="transport">
+          <button id="start">Go live ↗</button><button id="text-start" class="quiet">Text only</button><button id="stop" class="quiet" hidden disabled>Stop & save</button>
+          <button id="sound" class="quiet">Sound off</button>
+          <button id="fullscreen" class="quiet" aria-label="Fullscreen experience">⛶</button>
+          <button id="drawer-toggle" class="quiet" aria-controls="drawer" aria-expanded="true">Hide chat ›</button>
+          <details class="player-settings"><summary aria-label="Player options">•••</summary><div>
+            <label class="overlay-toggle"><input id="show-phone-text" type="checkbox" checked> Readable phone text</label>
+            <small>Raw downloads never include UI.</small><a id="download" hidden>Download raw video ↓</a>
+            <label id="replay-jump-label" for="replay-jump" hidden>Jump to a scene</label><select id="replay-jump" hidden aria-label="Jump to a scene"></select>
+            <p id="limit" class="hint">120-second cap. Text only uses no video credits.</p>
+          </div></details>
+        </div>
+      </div>
+      <p id="video-timing" class="video-timing">Video timing</p>
+    </div>
+    <section class="current-thought" aria-label="Mara's current thought">
+      <div class="section-title"><h1>MARA <span id="thought-kind">/ CURRENT THOUGHT</span></h1><span id="thinking" class="pill">WITH THE SCENE</span><time id="thought-time"></time></div>
+      <p id="current-thought" aria-live="polite">No thought yet.</p>
+    </section>
+    <section class="world-strip" aria-label="World state in this scene">
+      <div class="section-title"><h2>WORLD STATE</h2><span id="world-clock">0s</span></div>
+      <div id="facts" class="facts" aria-live="polite"></div>
+    </section>
+    <details class="underhood"><summary>Under the hood <span>Live ECS · interventions · camera</span></summary><div class="debug-content">
+      <details><summary>Living runtime <span>Cognition · narrative · god · evolution</span></summary><p id="runtime-status" class="hint"></p><pre id="runtime-detail"></pre></details>
+      <details id="advanced"><summary>Inspect the live ECS <span>Entities · components · changing values</span></summary>
+        <p id="live-clock" class="hint">LIVE ECS · may be ahead of film</p>
+        <p class="hint">Live, omniscient debugger — not synchronized to the film. Mara does not see this. Scalar component fields and physical containment; changed fields glow. Other relation edges are not shown.</p>
+        <div class="inspector"><div><label for="filter">Find an entity or component</label><input id="filter" type="search" placeholder="Mara, DemoPhone, Message…"><div id="entity-list"></div></div><div><h3 id="selected-title">Mara</h3><div id="components"></div></div></div>
+      </details>
+      <details><summary>Interfere with the phone <span>Real ECS edits</span></summary>
+        <div class="interventions"><button id="battery" class="secondary" disabled>Kill battery</button><button id="network" class="secondary" disabled>Disconnect network</button><button id="silent" class="secondary" disabled>Silence phone</button><label for="phone-location">Move phone to</label><select id="phone-location"><option>Bedroom</option><option>Landing</option><option>Basement</option></select><button id="move" class="secondary" disabled>Move entity</button></div>
+      </details>
+      <details><summary>Camera & causal receipts</summary><p id="camera-status" class="hint"></p><ol id="shots" class="receipts"></ol><h3>Simulation receipts</h3><ol id="receipts" class="receipts"></ol></details>
+      <p class="hint">Argos owns the facts. Mara chooses. H3 depicts. Source alignment is approximate; imagery may still drift.</p>
+    </div></details>
+  </section>
+  <aside id="drawer" class="drawer" aria-label="Messages and thought planting">
+    <section class="chat-section">
+      <div class="drawer-heading"><span class="avatar" aria-hidden="true">M</span><div><h2>Mara</h2><p>Her phone. Your world.</p></div><span id="chat-mode" class="pill">MESSAGES</span></div>
+      <p id="chat-hint" class="hint">Text her. Watch her choose to answer.</p>
+      <div id="chat" class="chat" aria-live="polite"><p class="placeholder">Her phone is on the upstairs desk.<br>What would you tell her?</p></div>
+      <form id="message-form"><label class="sr-only" for="message">Text Mara</label><textarea id="message" maxlength="300" rows="2" placeholder="Send a message to her phone…">Don't open the basement door.</textarea><button id="send" disabled>Text Mara →</button></form>
+      <small id="chat-clock-note">Your texts enter the world now. Replies follow the film.</small>
+    </section>
+    <section class="thought-planting">
+      <div class="section-title"><h2>Plant a thought</h2><span class="whisper-mark" aria-hidden="true">↝</span></div>
+      <p class="hint">An impulse, not a command. She may resist.</p>
+      <form id="thought-form"><label class="sr-only" for="thought">An impulse, not remote control</label><textarea id="thought" maxlength="300" rows="2" placeholder="Maybe I should ask who sent that…"></textarea><button id="inject" class="secondary" disabled>Whisper a thought ↝</button></form>
+      <details id="thought-history"><summary>Thought history <span>With the film</span></summary><ol id="thoughts" class="thoughts"></ol></details>
+    </section>
+  </aside>
+  <p id="error" role="alert" hidden></p>
+</main>
+<script type="module" src="/client.js"></script></body></html>

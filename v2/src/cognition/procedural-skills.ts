@@ -1,12 +1,16 @@
 import type { World } from "../ecs/world";
+import { isDocumentOperation } from "../world/productive-work";
+import { requiresFreshAffordanceDecision } from "../world/affordance-availability";
+import { recordGoalAttemptActivity, exhaustGoalMacro, isGoalMacroExhausted } from "./goal-attempt";
 import { addComponent, addEntity, getRelationTargets, hasComponent, removeComponent } from "bitecs";
-import { Agent, Goal, Memory, Name, Perception, ProcedureState } from "../ecs/components";
+import { Agent, Goal, Memory, Name, Perception, Plan, PlanningDecision, ProcedureState } from "../ecs/components";
 import { HasMemory } from "../ecs/relations";
 import { HasPerception } from "../ecs/relations";
 import { HasGoal } from "../ecs/relations";
-import { getNextPlannedAction } from "./planning-system";
+import { getNextPlannedAction, getPlanForGoal } from "./planning-system";
 import { getRoomForEntity } from "../ecs/location";
 import { ensureGoalSignature, goalSignatureId } from "./goal-contract";
+import { getAgentVisibleEntities } from "./world-capabilities";
 
 export type AgentActionLike = {
   type: string;
@@ -62,7 +66,14 @@ export function parseProceduralSkillV1(content: string): ProceduralSkillV1 | nul
     if (!obj || obj.kind !== "procedure_v1") return null;
     if (typeof obj.signature !== "string" || typeof obj.name !== "string") return null;
     if (!obj.trigger || typeof obj.trigger.affordance !== "string") return null;
-    if (!Array.isArray(obj.steps)) return null;
+    if (!Array.isArray(obj.steps) || obj.steps.length === 0 || obj.steps.length > 100) return null;
+    for (const step of obj.steps) {
+      if (!step || !["interact", "move", "observe", "think", "speak", "wait", "await"].includes(step.type)) return null;
+      for (const key of ["onMatchNext", "onMismatchNext", "onSuccessNext", "onFailureNext"]) {
+        if (step[key] !== undefined && (!Number.isInteger(step[key]) || step[key] < 0 || step[key] > obj.steps.length)) return null;
+      }
+      if (step.type === "await" && (!step.waitFor || typeof step.waitFor.perceptionType !== "string")) return null;
+    }
     if (!obj.stats || typeof obj.stats.successes !== "number") return null;
     return obj as ProceduralSkillV1;
   } catch {
@@ -118,16 +129,16 @@ function clearProcedureExecution(world: World, agentEid: number): void {
   removeComponent(world as any, agentEid, ProcedureState as any);
 }
 
-function tryCompleteGoalFromMacro(world: World, agentEid: number, signature: string): void {
+function findActiveGoalForMacro(world: World, agentEid: number, signature: string): number | undefined {
   const sig = String(signature || "");
-  if (!sig.startsWith("goal:") && !sig.startsWith("goalid:")) return;
+  if (!sig.startsWith("goal:") && !sig.startsWith("goalid:")) return undefined;
 
   const bar = sig.indexOf("|");
-  if (bar <= 0) return;
+  if (bar <= 0) return undefined;
   const prefix = sig.startsWith("goalid:") ? "goalid:" : "goal:";
-  if (bar <= prefix.length) return;
+  if (bar <= prefix.length) return undefined;
   const token = sig.slice(prefix.length, bar).trim().toLowerCase();
-  if (!token) return;
+  if (!token) return undefined;
 
   const goalEids = getRelationTargets(world as any, agentEid, HasGoal as any)
     .filter((eid: number) => hasComponent(world as any, eid, Goal as any))
@@ -145,26 +156,24 @@ function tryCompleteGoalFromMacro(world: World, agentEid: number, signature: str
       if (!desc) continue;
       if (normalizeGoalKey(desc) !== token) continue;
     }
-    // If the goal has a deterministically-evaluable success contract, do NOT mark it complete here.
-    // Completion should be driven by GoalEvaluationSystem based on world state evidence.
-    const rawSuccess = String(Goal.successJson?.[gid] || "").trim();
-    if (rawSuccess) {
-      try {
-        const parsed = JSON.parse(rawSuccess);
-        const t = String(parsed?.type || "");
-        if (t && t !== "custom") {
-          Goal.progress[gid] = Math.max(Goal.progress[gid] || 0, 95);
-          return;
-        }
-      } catch {
-        // Ignore and fall through.
-      }
-    }
-
-    Goal.status[gid] = "completed";
-    Goal.progress[gid] = 100;
-    return;
+    return gid;
   }
+  return undefined;
+}
+
+/** Only a matched action result renews activity; cursor reconciliation is not work. */
+function markGoalMacroActivity(world: World, agentEid: number, signature: string): void {
+  const goal = findActiveGoalForMacro(world, agentEid, signature);
+  if (goal === undefined) return;
+  recordGoalAttemptActivity(world, agentEid, goal);
+}
+
+function recordExhaustedGoalMacro(world: World, agentEid: number, signature: string): void {
+  const goal = findActiveGoalForMacro(world, agentEid, signature);
+  if (goal === undefined) return;
+  // A successful sequence is not proof that its objective was achieved. This
+  // applies to custom goals too: they need an external verifier or a typed contract.
+  exhaustGoalMacro(world, agentEid, goal, signature);
 }
 
 function finishProcedureExecution(world: World, agentEid: number, signature: string, status: "completed" | "failed"): void {
@@ -172,7 +181,7 @@ function finishProcedureExecution(world: World, agentEid: number, signature: str
   ProcedureState.status[agentEid] = status;
   ProcedureState.lastUpdatedAt[agentEid] = Date.now();
   if (status === "completed") {
-    tryCompleteGoalFromMacro(world, agentEid, signature);
+    recordExhaustedGoalMacro(world, agentEid, signature);
   }
   clearProcedureExecution(world, agentEid);
 }
@@ -184,6 +193,9 @@ export function tryStartProcedureExecution(
   opts?: { minSuccesses?: number }
 ): boolean {
   if (!hasComponent(world as any, agentEid, Agent as any)) return false;
+  // A policy's explicit start must fail admission too; returning true and then
+  // yielding no action would turn reconsideration into a deterministic wait.
+  if (currentPlanRequiresEvidence(world, agentEid)) return false;
   const sig = String(signature || "").trim();
   if (!sig) return false;
 
@@ -191,8 +203,27 @@ export function tryStartProcedureExecution(
   const found = getProceduralSkillBySignature(world, agentEid, sig);
   if (!found) return false;
   if ((found.skill.stats?.successes || 0) < minSuccesses) return false;
+  const goal = findActiveGoalForMacro(world, agentEid, sig);
+  if (goal !== undefined && isGoalMacroExhausted(world, agentEid, goal, sig)) return false;
 
   startProcedureExecution(world, agentEid, sig);
+  return true;
+}
+
+/** True only when an action is the current step of the active procedure.
+ * World packages use this to distinguish routine procedure completion from a
+ * detour that should force foreground reconsideration. */
+export function isExpectedProcedureAction(world: World, agentEid: number, action: AgentActionLike): boolean {
+  if (!hasComponent(world as any, agentEid, ProcedureState as any)) return false;
+  if (String(ProcedureState.status[agentEid] || "") !== "active") return false;
+  const signature = String(ProcedureState.signature[agentEid] || "");
+  const found = signature ? getProceduralSkillBySignature(world, agentEid, signature) : undefined;
+  const step = found?.skill.steps[ProcedureState.stepIndex[agentEid] || 0];
+  if (!step) return false;
+  const expectedType = step.type === "await" ? "wait" : step.type;
+  if (String(action.type || "").trim().toLowerCase() !== expectedType) return false;
+  if (step.target && String(action.target || "").trim().toLowerCase() !== step.target.trim().toLowerCase()) return false;
+  if (step.content && String(action.content || "").trim().toLowerCase() !== step.content.trim().toLowerCase()) return false;
   return true;
 }
 
@@ -204,6 +235,7 @@ export function onProcedureActionResult(
 ): void {
   if (!hasComponent(world as any, agentEid, ProcedureState as any)) return;
   if (String(ProcedureState.status[agentEid] || "") !== "active") {
+    if (ProcedureState.status[agentEid] === "needs_revision") return;
     clearProcedureExecution(world, agentEid);
     return;
   }
@@ -248,6 +280,7 @@ export function onProcedureActionResult(
     if (typeof step.onFailureNext === "number") {
       ProcedureState.stepIndex[agentEid] = step.onFailureNext;
       ProcedureState.lastUpdatedAt[agentEid] = Date.now();
+      if (!["wait", "rest"].includes(action.type)) markGoalMacroActivity(world, agentEid, signature);
       return;
     }
     ProcedureState.status[agentEid] = "failed";
@@ -259,6 +292,7 @@ export function onProcedureActionResult(
   const nextIndex = typeof step.onSuccessNext === "number" ? step.onSuccessNext : (stepIndex + 1);
   ProcedureState.stepIndex[agentEid] = nextIndex;
   ProcedureState.lastUpdatedAt[agentEid] = Date.now();
+  if (!["wait", "rest"].includes(action.type)) markGoalMacroActivity(world, agentEid, signature);
   if (nextIndex >= found.skill.steps.length) {
     finishProcedureExecution(world, agentEid, signature, "completed");
   }
@@ -280,6 +314,9 @@ export function upsertProceduralSkillFromInteraction(
 
   const affordance = data.affordance.trim();
   if (!affordance) return;
+  // Keep normal action/memory receipts, but do not learn content or revision
+  // literals as an automatically repeatable document-writing habit.
+  if (isDocumentOperation({ type: "interact", content: affordance })) return;
 
   const signature = proceduralSignature({ affordance, args: data.args, toolId: data.toolId });
   const now = Date.now();
@@ -375,22 +412,13 @@ function hasRecentCriticalFailure(world: World, agentEid: number): boolean {
   return false;
 }
 
-function findEntityByName(world: World, name: string): number | undefined {
-  const wanted = name.trim().toLowerCase();
-  if (!wanted) return undefined;
-  for (let eid = 0; eid < (Name.value as any).length; eid++) {
-    const n = Name.value[eid];
-    if (typeof n === "string" && n.trim().toLowerCase() === wanted) return eid;
-  }
-  return undefined;
-}
-
-function getLatestPerception(world: World, agentEid: number, type: string): string | undefined {
+function getLatestPerception(world: World, agentEid: number, type: string, after: number): string | undefined {
   const wanted = type.trim();
   if (!wanted) return undefined;
   const perceptionEids = getRelationTargets(world as any, agentEid, HasPerception as any)
     .filter((eid: number) => hasComponent(world as any, eid, Perception as any))
     .filter((eid: number) => String(Perception.type[eid] || "") === wanted)
+    .filter((eid: number) => Number(Perception.timestamp[eid] || 0) >= after)
     .sort((a: number, b: number) => (Perception.timestamp[b] || 0) - (Perception.timestamp[a] || 0))
     .slice(0, 1);
   const peid = perceptionEids[0];
@@ -433,12 +461,35 @@ function getTopActiveGoalMacroPrefix(world: World, agentEid: number): string | n
   return `goal:${goalKey}|`;
 }
 
+/** Flat remembered procedures cannot stand in for a conditional plan. This is
+ * a pure admission check: selecting a habit must not sense/consume a barrier or
+ * treat its null action as permission to jump straight to a goal macro. Keep
+ * the guard after reconsideration too, until a new selected plan replaces the
+ * conditional episode. A future wait matters as much as the current one. */
+function currentPlanRequiresEvidence(world: World, agentEid: number): boolean {
+  const goal = getRelationTargets(world, agentEid, HasGoal)
+    .filter(id => hasComponent(world, id, Goal) && Goal.status[id] === "active")
+    .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0))[0];
+  if (goal === undefined) return false;
+  const plan = getPlanForGoal(world, agentEid, goal);
+  if (plan === undefined) return false;
+  if (hasComponent(world, plan, PlanningDecision)) return true;
+  try {
+    const steps: unknown = JSON.parse(Plan.steps[plan] || "[]");
+    if (!Array.isArray(steps)) return true;
+    return steps.some(step => !step || typeof step !== "object"
+      || step.actionType === "wait" || step.waitUntil !== undefined);
+  } catch { return true; }
+}
+
 export function selectProceduralAction(world: World, agentEid: number): AgentActionLike | null {
   if (!hasComponent(world as any, agentEid, Agent as any)) return null;
   if (hasRecentCriticalFailure(world, agentEid)) return null;
+  if (currentPlanRequiresEvidence(world, agentEid)) return null;
 
   // Continue an active procedure, if any.
   if (hasComponent(world as any, agentEid, ProcedureState as any)) {
+    if (ProcedureState.status[agentEid] !== "active") return null;
     const signature = String(ProcedureState.signature[agentEid] || "");
     if (!signature) {
       finishProcedureExecution(world, agentEid, signature, "failed");
@@ -450,7 +501,15 @@ export function selectProceduralAction(world: World, agentEid: number): AgentAct
       return null;
     }
 
+    // Habit is subordinate to current intention. Keep the interrupted cursor so
+    // it resumes after the urgent goal, but never let a macro veto that goal.
+    if (signature.startsWith("goal:") || signature.startsWith("goalid:")) {
+      const prefix = getTopActiveGoalMacroPrefix(world, agentEid);
+      if (!prefix || !signature.startsWith(prefix)) return null;
+    }
+
     // Move step auto-advancement: if a move step's target room is already reached, advance without emitting an action.
+    let transitions = 0;
     while (true) {
       const idx = ProcedureState.stepIndex[agentEid] || 0;
       const step = found.skill.steps[idx];
@@ -481,6 +540,10 @@ export function selectProceduralAction(world: World, agentEid: number): AgentAct
 
     // Await step: wait for a perception, then branch/advance.
     while (true) {
+      if (++transitions > found.skill.steps.length + 1) {
+        finishProcedureExecution(world, agentEid, signature, "failed");
+        return null;
+      }
       const idx = ProcedureState.stepIndex[agentEid] || 0;
       const step = found.skill.steps[idx];
       if (!step) {
@@ -495,7 +558,7 @@ export function selectProceduralAction(world: World, agentEid: number): AgentAct
         return null;
       }
 
-      const latest = getLatestPerception(world, agentEid, waitFor.perceptionType);
+      const latest = getLatestPerception(world, agentEid, waitFor.perceptionType, ProcedureState.lastUpdatedAt[agentEid] || ProcedureState.startedAt[agentEid] || 0);
       if (!latest) return { type: "wait" };
 
       const includes = (waitFor.includes || "").trim();
@@ -530,20 +593,14 @@ export function selectProceduralAction(world: World, agentEid: number): AgentAct
       return null;
     }
 
-    // Interact precondition: if the step target exists and is in another room, move there first.
+    // A remembered target is not omniscient tracking. Let deliberation handle
+    // searching when it is no longer perceived; do not read its hidden current room.
     if (step.type === "interact" && step.target) {
-      const targetEid = findEntityByName(world, step.target);
-      const agentRoomEid = getRoomForEntity(world, agentEid);
-      const targetRoomEid = targetEid !== undefined ? getRoomForEntity(world, targetEid) : undefined;
-      if (
-        agentRoomEid !== undefined &&
-        targetRoomEid !== undefined &&
-        agentRoomEid !== targetRoomEid
-      ) {
-        const destName = Name.value[targetRoomEid];
-        if (destName) return { type: "move", target: destName };
-      }
+      const visible = getAgentVisibleEntities(world, agentEid).some(eid =>
+        String(Name.value[eid] || "").trim().toLowerCase() === step.target!.trim().toLowerCase());
+      if (!visible) return null;
     }
+    if (requiresFreshAffordanceDecision(world, agentEid, step)) return null;
     return { type: step.type, target: step.target, content: step.content };
   }
 
@@ -552,11 +609,16 @@ export function selectProceduralAction(world: World, agentEid: number): AgentAct
   const next = getNextPlannedAction(world, agentEid);
   if (!next) {
     const prefix = getTopActiveGoalMacroPrefix(world, agentEid);
+    const topGoal = getRelationTargets(world, agentEid, HasGoal)
+      .filter(id => hasComponent(world, id, Goal) && Goal.status[id] === "active")
+      .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0))[0];
+    // Do not replay an exhausted macro forever while waiting for success evidence.
     if (prefix) {
       const skills = getAgentProceduralSkills(world, agentEid)
         .map((s) => s.skill)
         .filter((s) => String(s.trigger?.affordance || "") === "__goal_macro__")
         .filter((s) => String(s.signature || "").startsWith(prefix))
+        .filter(s => !isGoalMacroExhausted(world, agentEid, topGoal, s.signature))
         .sort((a, b) => (b.stats.successes - a.stats.successes) || (b.stats.lastUsedAt - a.stats.lastUsedAt));
 
       const macro = skills[0];

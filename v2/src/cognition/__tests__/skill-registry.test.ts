@@ -229,6 +229,17 @@ describe("Skill Composition", () => {
 });
 
 describe("Sequence-to-Skill Compilation", () => {
+  test.each(["read_document", "write_document", "review_document", "finish_document"])("does not cache a literal %s sequence as a reusable goal skill", verb => {
+    const name = `document_literal_${verb}`;
+    expect(compileSequenceToSkill(name, "A completed document task", [
+      { type: "move", target: "Office" },
+      { type: "interact", target: "Report", content: `${verb} {"revision":0}` },
+    ])).toBe(false);
+    expect(getSkill(name)).toBeUndefined();
+    expect(compileSequenceToSkill(name, "Trait form is also document-bound", [
+      { type: "interact", affordance: verb, trait: "document" },
+    ])).toBe(false);
+  });
   test("compileSequenceToSkill creates a valid skill", () => {
     const compiled = compileSequenceToSkill(
       "forge_and_quench",

@@ -1,4 +1,5 @@
 import type { World } from "../../ecs/world";
+import { integrateLegacyRateSteps } from "../legacy-rate-time";
 import type { SystemContext } from "../system-loader";
 
 export const name = "SanityDecaySystem";
@@ -6,7 +7,11 @@ export const description = "Decays an entity's Sanity over time if their OccultK
 export const frequency = 1;
 export const active = true;
 
+export const temporalStepMs = 1000; // Explicit in-world duration for one historical law step.
 export function run(world: World, ctx: SystemContext): void {
+  integrateLegacyRateSteps(world, ctx, "sanity-decay-system", temporalStepMs, runLaw);
+}
+function runLaw(world: World, ctx: SystemContext): void {
   const Sanity = ctx.getDynamic("Sanity");
   const OccultKnowledge = ctx.getDynamic("OccultKnowledge");
   if (!Sanity || !OccultKnowledge) return;

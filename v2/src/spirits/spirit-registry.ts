@@ -5,9 +5,14 @@
  * and provides utilities for spirit coordination.
  */
 
-import { addEntity, addComponent, query, hasComponent } from "bitecs";
+import { addEntity, addComponent, query, hasComponent, entityExists } from "bitecs";
 import type { World } from "../ecs/world";
-import { Name, Description, Mind } from "../ecs/components";
+import { bindSpiritMessageDelivery, isCurrentSpiritMessage } from "./spirit-message-delivery";
+import { Name, Description, Mind, Removed } from "../ecs/components";
+import { hasSimulationClock, readSimulationTime } from "../ecs/simulation-time";
+import { getCommittedEvents } from "../runtime/committed-events";
+import { assertSimulationTaskActive } from "../runtime/task-scope";
+import { captureSpiritRegistryLifetime } from "./spirit-cycle-scope";
 import {
   createDynamicComponent,
   getDynamicComponent,
@@ -271,12 +276,56 @@ export function getActiveSpirits(registry: SpiritRegistry): SpiritState[] {
 /**
  * Get spirits that need to run their observation cycle
  */
+type ObservationCompletion = { atSimMs: number; current(): boolean };
+const observationCompletions = new WeakMap<SpiritRegistry, WeakMap<SpiritState, ObservationCompletion>>();
+
+/** Native completion only, after the caller validates its current inference
+ * cycle. Keep the serialized legacy wall timestamp as telemetry; it is never
+ * reinterpreted as in-world elapsed time. Restores get one fresh observation. */
+export function markSpiritObservationCompleted(registry: SpiritRegistry, spirit: SpiritState): boolean {
+  assertSimulationTaskActive();
+  const world = registry.world, eid = spirit.eid, source = getCommittedEvents(world), now = readSimulationTime(world);
+  const lifetimeCurrent = captureSpiritRegistryLifetime(registry);
+  if (!lifetimeCurrent() || source.stopped || registry.spirits.get(eid) !== spirit || !entityExists(world, eid)
+    || hasComponent(world, eid, Removed) || !Number.isFinite(now) || now < 0) return false;
+  spirit.lastObservationTime = Date.now();
+  if (!hasSimulationClock(world)) return true;
+  let bySpirit = observationCompletions.get(registry);
+  if (!bySpirit) { bySpirit = new WeakMap(); observationCompletions.set(registry, bySpirit); }
+  const definition = spirit.definition, configuration = JSON.stringify(definition);
+  bySpirit.set(spirit, { atSimMs: now, current: () => {
+    const currentSource = getCommittedEvents(world), time = readSimulationTime(world);
+    return registry.world === world && lifetimeCurrent() && registry.spirits.get(eid) === spirit && spirit.eid === eid
+      && entityExists(world, eid) && !hasComponent(world, eid, Removed) && spirit.definition === definition
+      && JSON.stringify(spirit.definition) === configuration && !currentSource.stopped && currentSource.sourceId === source.sourceId
+      && Number.isFinite(time) && time >= now;
+  } });
+  return true;
+}
+
+/** Scheduling/debug projection only, not execution authority. The generic
+ * system's wall-time polling throttle remains a separate compute budget. */
+export function getSpiritObservationTiming(registry: SpiritRegistry, spirit: SpiritState) {
+  const world = registry.world, managed = hasSimulationClock(world), interval = spirit.definition.observationInterval;
+  const clock = managed ? "simulation" as const : "legacy_wall" as const;
+  const base = { clock, intervalMs: interval, lastObservationWallMs: spirit.lastObservationTime };
+  // Specialists deliberately opt out of generic cognition with this sentinel.
+  if (!Number.isFinite(interval) || interval < 0 || interval >= Number.MAX_SAFE_INTEGER
+    || !captureSpiritRegistryLifetime(registry)() || getCommittedEvents(world).stopped || registry.spirits.get(spirit.eid) !== spirit
+    || !entityExists(world, spirit.eid) || hasComponent(world, spirit.eid, Removed)) return { ...base, due: false };
+  if (!managed) return { ...base, due: Date.now() - spirit.lastObservationTime >= interval };
+  const now = readSimulationTime(world);
+  if (!Number.isFinite(now) || now < 0) return { ...base, due: false };
+  const completion = observationCompletions.get(registry)?.get(spirit);
+  // No current completion (first observation, source/registry restart, restored
+  // state, replacement or rewind) means fresh review at the next host poll.
+  if (!completion?.current()) return { ...base, due: true, firstObservation: true };
+  const nextDueAtSimMs = completion.atSimMs + interval;
+  return { ...base, lastObservationSimMs: completion.atSimMs, nextDueAtSimMs, due: now >= nextDueAtSimMs, firstObservation: false };
+}
+
 export function getSpiritsNeedingObservation(registry: SpiritRegistry): SpiritState[] {
-  const now = Date.now();
-  return getActiveSpirits(registry).filter(spirit => {
-    const interval = spirit.definition.observationInterval;
-    return now - spirit.lastObservationTime >= interval;
-  });
+  return getActiveSpirits(registry).filter(spirit => getSpiritObservationTiming(registry, spirit).due);
 }
 
 // =============================================================================
@@ -313,6 +362,7 @@ export function sendMessage(
     id: generateMessageId(),
     timestamp: Date.now(),
     from,
+    senderLabel: fromSpirit?.definition.name ?? Name.value[from] ?? `spirit:${from}`,
     to,
     type,
     domain: fromSpirit?.definition.domain || "narrative",
@@ -324,6 +374,14 @@ export function sendMessage(
     responseTo: options.responseTo,
   };
 
+  enqueueMessage(registry, message);
+  return message;
+}
+
+function enqueueMessage(registry: SpiritRegistry, message: DivineMessage): void {
+  const { from, to, subject } = message;
+  const fromSpirit = registry.spirits.get(from), toSpirit = registry.spirits.get(to);
+  bindSpiritMessageDelivery(registry, message);
   // Add to recipient's inbox
   if (toSpirit) {
     toSpirit.inbox.push(message);
@@ -345,7 +403,19 @@ export function sendMessage(
 
   console.log(`[Spirit] Message: ${Name.value[from] || from} -> ${Name.value[to] || to}: ${subject}`);
 
-  return message;
+}
+
+/** Explicit host routing, not a late name lookup or copying an old receipt
+ * into a different inbox. Preserve the original attribution and reply chain. */
+export function forwardSpiritMessage(registry: SpiritRegistry, message: DivineMessage, recipient: number): DivineMessage | undefined {
+  if (!isCurrentSpiritMessage(registry, message, message.to)) return;
+  const forwarded = { ...message, to: recipient, timestamp: Date.now(), responseTo: message.id };
+  enqueueMessage(registry, forwarded);
+  return forwarded;
+}
+
+export function pruneSpiritInbox(registry: SpiritRegistry, spirit: SpiritState): void {
+  spirit.inbox = spirit.inbox.filter(message => isCurrentSpiritMessage(registry, message, spirit.eid));
 }
 
 /**
@@ -424,9 +494,16 @@ export function broadcastToDomain(
  * Get pending messages for GodAI
  */
 export function getMessagesForGodAI(registry: SpiritRegistry): DivineMessage[] {
-  const messages = [...registry.messageQueue];
+  const messages = [...new Set(registry.messageQueue)].filter(message => isCurrentSpiritMessage(registry, message, registry.godAgentEid));
   registry.messageQueue = [];
   return messages;
+}
+
+/** Retry only still-valid receipts on the normal next delivery cycle. A failed
+ * consumer must not erase reports that arrived while it was awaiting work. */
+export function restoreMessagesForGodAI(registry: SpiritRegistry, messages: readonly DivineMessage[]): void {
+  registry.messageQueue = [...new Set([...messages, ...registry.messageQueue])]
+    .filter(message => isCurrentSpiritMessage(registry, message, registry.godAgentEid));
 }
 
 // =============================================================================

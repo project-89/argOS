@@ -81,7 +81,7 @@ async function main() {
 
   for (const eid of agents) {
     if (Name.value[eid] === "Old Tom") {
-      queueStimulus({
+      queueStimulus(world, {
         targetEid: eid,
         type: "observation",
         content: "Shadowmere's hood shifts slightly, revealing a glint of something metallic beneath - perhaps a pendant or a weapon.",
@@ -89,7 +89,7 @@ async function main() {
       });
     }
     if (Name.value[eid] === "Shadowmere") {
-      queueStimulus({
+      queueStimulus(world, {
         targetEid: eid,
         type: "observation",
         content: "Old Tom keeps glancing your way while polishing that same mug for the third time. He seems curious.",

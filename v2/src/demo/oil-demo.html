@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Argos · Change her world</title><link rel="stylesheet" href="/demo.css"></head>
+<body>
+  <header class="masthead"><a class="wordmark" href="/">ARGOS<span> / LIVE WORLDS</span></a><span class="local">LOCAL CONTROL ROOM</span></header>
+  <main>
+    <section class="screen" aria-label="Live world and video">
+      <canvas id="stage" width="1080" height="1350" role="img" aria-label="Live video alongside the world's facts and Mara's remembered facts"></canvas>
+      <video id="source" autoplay muted playsinline hidden></video>
+      <div class="under-screen"><span id="connection">Ready to connect</span><a id="download" hidden>Download this run</a><button id="sound" type="button">Enable sound</button></div>
+    </section>
+    <aside>
+      <div class="intro"><p class="eyebrow">A WORLD THAT DOESN’T WAIT FOR YOU</p><h1>Change her world.<br>Let her find out.</h1><p>She remembers oil on the kitchen shelf. Send her to fetch it. Change what’s there before she arrives.</p></div>
+      <div class="session"><button id="start" class="primary">Start live video</button><button id="text-start" class="quiet">Simulation only</button><button id="stop" class="quiet" disabled>Stop &amp; save</button></div>
+      <section class="control-block"><div class="step-label"><span>01</span><h2>Plant a thought</h2></div><textarea id="thought" rows="2" maxlength="300" aria-label="Thought to inject">The beacon needs oil. I should fetch the red can from the kitchen shelf.</textarea><button id="inject" disabled>Inject thought →</button><button id="remove" class="danger" disabled>Remove the oil can</button><p class="hint" id="remove-hint">Available while she’s walking to the kitchen.</p></section>
+      <section class="control-block"><div class="step-label"><span>02</span><h2>Change anything physical</h2></div><form id="edit-form"><textarea id="edit" rows="2" maxlength="800" placeholder="Move the oil into the beacon room. Leave a note on the shelf saying: Look behind you." aria-label="Instruction for the world-editing agent"></textarea><button id="edit-submit" disabled>Send to world agent →</button></form><p class="hint">Creates, moves, removes and edits actual ECS entities. Offscreen changes stay unknown to Mara.</p><div id="edit-result" class="result" aria-live="polite"></div></section>
+      <section class="control-block"><div class="step-label"><span>03</span><h2>Talk over the radio</h2></div><form id="talk-form"><input id="message" maxlength="300" placeholder="Mara, did you find it?" aria-label="Message to Mara"><button id="talk-submit" disabled>Talk to Mara →</button></form><p id="reply" class="reply" aria-live="polite">Her reply will appear here.</p></section>
+      <div id="error" role="alert"></div>
+      <details><summary>Inspect the actual world</summary><div id="entities"></div><pre id="receipts"></pre></details>
+      <p class="footnote">Authored scenario · live NPC decisions · real ECS mutations<br>AI video is a delayed interpretation, not the source of truth.<br>4:5 recording includes the video, facts, knowledge and transcript.</p>
+    </aside>
+  </main>
+  <script type="module" src="/client.js"></script>
+</body></html>

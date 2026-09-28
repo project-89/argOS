@@ -61,7 +61,7 @@ async function main() {
 
   if (elenaEid !== undefined) {
     Mind.arousal[elenaEid] = 0.8;
-    queueStimulus({
+    queueStimulus(world, {
       targetEid: elenaEid,
       type: "observation",
       content: "A weathered soldier sits alone, his scarred hands wrapped around a mug. His eyes hold stories of distant battles.",
@@ -71,7 +71,7 @@ async function main() {
 
   if (marcusEid !== undefined) {
     Mind.arousal[marcusEid] = 0.7;
-    queueStimulus({
+    queueStimulus(world, {
       targetEid: marcusEid,
       type: "observation", 
       content: "A merchant woman enters with colorful wares. She has the look of someone who's traveled far and seen much.",

@@ -1,4 +1,5 @@
 import type { World } from "../../ecs/world";
+import { integrateLegacyRateSteps } from "../legacy-rate-time";
 import type { SystemContext } from "../system-loader";
 
 export const name = "AtmosphericTensionSystemV2";
@@ -6,7 +7,11 @@ export const description = "Calculates ambient and internal tension levels for a
 export const frequency = 10;
 export const active = true;
 
+export const temporalStepMs = 10000; // Explicit in-world duration for one historical law step.
 export function run(world: World, ctx: SystemContext): void {
+  integrateLegacyRateSteps(world, ctx, "atmospheric-tension-system-v2", temporalStepMs, runLaw);
+}
+function runLaw(world: World, ctx: SystemContext): void {
   const { Agent, Mind, Needs, Health, Room, StatusEffect, Position, Name, Thought } = ctx.components;
   const agents = Array.from(ctx.query(world, [Agent, Mind, Position]));
   

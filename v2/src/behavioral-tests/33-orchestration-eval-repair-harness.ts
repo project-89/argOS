@@ -652,7 +652,7 @@ async function main(): Promise<void> {
     requestRule(
       "Food spoilage: food transitions fresh→stale→rotten over time (deterministic).",
       { desiredBehavior: "Without AI, food decays and is perceivable." },
-      "harness"
+      "harness", sim.world
     );
 
     // Kick off a single directive to GodAI.

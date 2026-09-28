@@ -62,7 +62,7 @@ async function main() {
 
   if (miraEid !== undefined) {
     Mind.arousal[miraEid] = 0.8;
-    queueStimulus({
+    queueStimulus(world, {
       targetEid: miraEid,
       type: "observation",
       content: "A gruff-looking mercenary sits alone at a corner table, nursing an ale. He looks like he has interesting stories. You feel the urge to introduce yourself.",
@@ -72,7 +72,7 @@ async function main() {
 
   if (grimEid !== undefined) {
     Mind.arousal[grimEid] = 0.6;
-    queueStimulus({
+    queueStimulus(world, {
       targetEid: grimEid,
       type: "observation", 
       content: "A bard with a lute is looking your way with a friendly smile. She seems about to come over.",

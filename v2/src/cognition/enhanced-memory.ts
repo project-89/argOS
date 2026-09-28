@@ -16,6 +16,37 @@
  */
 
 import type { World } from "../ecs/world";
+import { readSimulationTime, validateSimulationDelta } from "../ecs/simulation-time";
+
+interface MemoryTimes { temporal?: Record<string, { sourceAt: number; simAt: number }> }
+const memoryWorlds = new WeakMap<AgentMemoryStore, World>();
+/** Standalone stores are explicitly stepped. Bound stores age with their world;
+ * source timestamps are never repurposed as simulation time. */
+export function bindMemoryStoreToWorld(store: AgentMemoryStore, world: World): void {
+  memoryWorlds.set(store, world);
+  store.temporal ??= { elapsedMs: readSimulationTime(world), wallAtMs: store.stats.lastConsolidation, simAtMs: readSimulationTime(world) };
+}
+export function memorySimulationTime(store: AgentMemoryStore): number {
+  const world = memoryWorlds.get(store);
+  const now = world ? readSimulationTime(world) : store.temporal?.elapsedMs ?? 0;
+  if (store.temporal) store.temporal.elapsedMs = now;
+  return now;
+}
+export function advanceMemoryStoreTime(store: AgentMemoryStore, deltaMs: number): void {
+  validateSimulationDelta(deltaMs);
+  if (memoryWorlds.has(store)) throw new Error("A bound memory store is advanced by its world, not by a second clock");
+  store.temporal ??= { elapsedMs: 0, wallAtMs: store.stats.lastConsolidation, simAtMs: 0 };
+  store.temporal.elapsedMs += deltaMs;
+}
+function stampMemoryTime(store: AgentMemoryStore, memory: MemoryTimes, key: string, sourceAt: number, simAt = memorySimulationTime(store)): void {
+  memory.temporal ??= {};
+  memory.temporal[key] = { sourceAt, simAt };
+}
+function memoryAge(store: AgentMemoryStore, memory: MemoryTimes, key: string, sourceAt: number): number {
+  const now = memorySimulationTime(store), mark = memory.temporal?.[key], baseline = store.temporal;
+  const at = mark?.sourceAt === sourceAt ? mark.simAt : (baseline?.simAtMs ?? 0) + sourceAt - (baseline?.wallAtMs ?? store.stats.lastConsolidation);
+  return Math.max(0, now - at);
+}
 
 // =============================================================================
 // MEMORY TYPES
@@ -25,7 +56,7 @@ import type { World } from "../ecs/world";
  * Working Memory - Active scratchpad for current reasoning
  * High capacity, no decay, cleared when task completes
  */
-export interface WorkingMemoryItem {
+export interface WorkingMemoryItem extends MemoryTimes {
   id: string;
   taskId: string; // Links to active task/goal
   type: "note" | "finding" | "question" | "hypothesis" | "conclusion";
@@ -38,7 +69,7 @@ export interface WorkingMemoryItem {
  * Episodic Memory - Autobiographical events
  * "What happened to me" - rich temporal and emotional context
  */
-export interface EpisodicMemory {
+export interface EpisodicMemory extends MemoryTimes {
   id: string;
   timestamp: number;
   location: string;
@@ -59,7 +90,7 @@ export interface EpisodicMemory {
  * Semantic Memory - Factual knowledge
  * "What I know" - decontextualized facts and relationships
  */
-export interface SemanticMemory {
+export interface SemanticMemory extends MemoryTimes {
   id: string;
   category: "fact" | "concept" | "relationship" | "rule" | "definition";
   subject: string;
@@ -78,7 +109,7 @@ export interface SemanticMemory {
  * Procedural Memory - Skills and how-to knowledge
  * "How to do things" - action sequences and conditional behaviors
  */
-export interface ProceduralMemory {
+export interface ProceduralMemory extends MemoryTimes {
   id: string;
   skill: string; // Name of the skill/procedure
   context: string; // When to use this
@@ -94,7 +125,7 @@ export interface ProceduralMemory {
  * Autobiographical Memory - Identity-forming narrative
  * "Who I am" - core experiences that define self
  */
-export interface AutobiographicalMemory {
+export interface AutobiographicalMemory extends MemoryTimes {
   id: string;
   theme: "origin" | "turning_point" | "relationship" | "achievement" | "failure" | "belief";
   narrative: string; // Story form
@@ -114,6 +145,7 @@ export interface AutobiographicalMemory {
  * Stored as component data (JSON serializable)
  */
 export interface AgentMemoryStore {
+  temporal?: { elapsedMs: number; wallAtMs: number; simAtMs: number };
   // Working memory - active task context
   workingMemory: WorkingMemoryItem[];
   workingMemoryCapacity: number; // Default 50 items
@@ -148,6 +180,7 @@ export interface AgentMemoryStore {
     totalMemoriesFormed: number;
     totalMemoriesForgotten: number;
     lastConsolidation: number;
+    lastConsolidationSimMs?: number;
     consolidationCycles: number;
   };
 }
@@ -164,8 +197,9 @@ function generateMemoryId(type: string): string {
 /**
  * Create a new memory store with defaults
  */
-export function createMemoryStore(): AgentMemoryStore {
-  return {
+export function createMemoryStore(world?: World): AgentMemoryStore {
+  const store: AgentMemoryStore = {
+    temporal: { elapsedMs: world ? readSimulationTime(world) : 0, wallAtMs: Date.now(), simAtMs: world ? readSimulationTime(world) : 0 },
     workingMemory: [],
     workingMemoryCapacity: 50,
     episodicMemories: [],
@@ -187,9 +221,12 @@ export function createMemoryStore(): AgentMemoryStore {
       totalMemoriesFormed: 0,
       totalMemoriesForgotten: 0,
       lastConsolidation: Date.now(),
+      lastConsolidationSimMs: world ? readSimulationTime(world) : 0,
       consolidationCycles: 0,
     },
   };
+  if (world) bindMemoryStoreToWorld(store, world);
+  return store;
 }
 
 // =============================================================================
@@ -216,6 +253,7 @@ export function addToWorkingMemory(
   };
 
   store.workingMemory.push(item);
+  stampMemoryTime(store, item, "timestamp", item.timestamp);
 
   // Enforce capacity (FIFO for same task)
   if (store.workingMemory.length > store.workingMemoryCapacity) {
@@ -286,31 +324,32 @@ export function formatWorkingMemoryForPrompt(
     conclusions: items.filter(i => i.type === "conclusion"),
   };
 
-  const lines: string[] = ["## Working Memory (Scratchpad)"];
+  const lines: string[] = ["## Working Memory (Scratchpad)", "These are stored notes and interpretations; their labels do not establish verification."];
+  const formatItem = (item: WorkingMemoryItem) => `- ${item.content}${item.references?.length ? ` [sources: ${item.references.join(", ")}]` : " [source unspecified]"}`;
 
   if (grouped.conclusions.length > 0) {
-    lines.push("\n### Conclusions:");
-    grouped.conclusions.forEach(c => lines.push(`- ${c.content}`));
+    lines.push("\n### Working conclusions:");
+    grouped.conclusions.forEach(c => lines.push(formatItem(c)));
   }
 
   if (grouped.findings.length > 0) {
     lines.push("\n### Findings:");
-    grouped.findings.forEach(f => lines.push(`- ${f.content}`));
+    grouped.findings.forEach(f => lines.push(formatItem(f)));
   }
 
   if (grouped.hypotheses.length > 0) {
     lines.push("\n### Working Hypotheses:");
-    grouped.hypotheses.forEach(h => lines.push(`- ${h.content}`));
+    grouped.hypotheses.forEach(h => lines.push(formatItem(h)));
   }
 
   if (grouped.questions.length > 0) {
     lines.push("\n### Open Questions:");
-    grouped.questions.forEach(q => lines.push(`- ${q.content}`));
+    grouped.questions.forEach(q => lines.push(formatItem(q)));
   }
 
   if (grouped.notes.length > 0) {
     lines.push("\n### Notes:");
-    grouped.notes.slice(-10).forEach(n => lines.push(`- ${n.content}`));
+    grouped.notes.slice(-10).forEach(n => lines.push(formatItem(n)));
   }
 
   return lines.join("\n");
@@ -336,6 +375,8 @@ export function addEpisodicMemory(
   };
 
   store.episodicMemories.push(episodic);
+  stampMemoryTime(store, episodic, "timestamp", episodic.timestamp, memorySimulationTime(store) - Math.max(0, Date.now() - episodic.timestamp));
+  stampMemoryTime(store, episodic, "lastRecalled", episodic.lastRecalled);
   store.stats.totalMemoriesFormed++;
 
   // Index by participants
@@ -417,8 +458,8 @@ export function recallEpisodicMemories(
   // Sort by relevance (strength + recency)
   const now = Date.now();
   candidates.sort((a, b) => {
-    const aRecency = 1 / (1 + (now - a.lastRecalled) / (1000 * 60 * 60 * 24)); // 24h half-life
-    const bRecency = 1 / (1 + (now - b.lastRecalled) / (1000 * 60 * 60 * 24));
+    const aRecency = 1 / (1 + memoryAge(store, a, "lastRecalled", a.lastRecalled) / (1000 * 60 * 60 * 24)); // 24h half-life
+    const bRecency = 1 / (1 + memoryAge(store, b, "lastRecalled", b.lastRecalled) / (1000 * 60 * 60 * 24));
     const aScore = a.strength * 0.6 + aRecency * 0.4;
     const bScore = b.strength * 0.6 + bRecency * 0.4;
     return bScore - aScore;
@@ -428,6 +469,8 @@ export function recallEpisodicMemories(
   const results = candidates.slice(0, limit);
   for (const memory of results) {
     memory.lastRecalled = now;
+    stampMemoryTime(store, memory, "lastRecalled", memory.lastRecalled);
+    stampMemoryTime(store, memory, "lastDecay", memory.lastRecalled);
     memory.recallCount++;
     // Strengthen memory through recall
     memory.strength = Math.min(1, memory.strength + 0.05);
@@ -458,6 +501,7 @@ export function addSemanticMemory(
     // Update confidence based on new evidence
     existing.confidence = Math.min(1, existing.confidence + 0.1);
     existing.lastValidated = Date.now();
+    stampMemoryTime(store, existing, "lastValidated", existing.lastValidated);
     existing.validationCount++;
     existing.sources = [...new Set([...existing.sources, ...memory.sources])];
     return existing;
@@ -472,6 +516,8 @@ export function addSemanticMemory(
   };
 
   store.semanticMemories.push(semantic);
+  stampMemoryTime(store, semantic, "timestamp", semantic.timestamp);
+  stampMemoryTime(store, semantic, "lastValidated", semantic.lastValidated);
   store.stats.totalMemoriesFormed++;
 
   // Index by subject (topic)
@@ -553,6 +599,7 @@ export function addProceduralMemory(
       existing.refinements.push(`Alternative: ${memory.steps.join(" → ")}`);
     }
     existing.lastUsed = Date.now();
+    stampMemoryTime(store, existing, "lastUsed", existing.lastUsed);
     existing.useCount++;
     return existing;
   }
@@ -566,6 +613,7 @@ export function addProceduralMemory(
   };
 
   store.proceduralMemories.push(procedural);
+  stampMemoryTime(store, procedural, "lastUsed", procedural.lastUsed);
   store.stats.totalMemoriesFormed++;
 
   return procedural;
@@ -587,6 +635,7 @@ export function recordSkillOutcome(
   const alpha = 0.2; // Learning rate
   skill.successRate = skill.successRate * (1 - alpha) + (success ? 1 : 0) * alpha;
   skill.lastUsed = Date.now();
+  stampMemoryTime(store, skill, "lastUsed", skill.lastUsed);
   skill.useCount++;
 
   if (refinement) {
@@ -643,6 +692,7 @@ export function addAutobiographicalMemory(
   };
 
   store.autobiographicalMemories.push(auto);
+  stampMemoryTime(store, auto, "timestamp", auto.timestamp);
   store.stats.totalMemoriesFormed++;
 
   // Autobiographical memories rarely exceed capacity (they're identity-core)
@@ -683,16 +733,22 @@ export function consolidateMemories(store: AgentMemoryStore): {
   patternsFound: number;
 } {
   const now = Date.now();
+  const simNow = memorySimulationTime(store);
+  const cyclesElapsed = Math.max(0, simNow - (store.stats.lastConsolidationSimMs ?? store.temporal?.simAtMs ?? simNow)) / 60_000;
   let decayed = 0;
   let strengthened = 0;
   let patternsFound = 0;
 
   // Episodic memory decay
   for (const memory of store.episodicMemories) {
-    const hoursSinceRecall = (now - memory.lastRecalled) / (1000 * 60 * 60);
+    const hoursSinceRecall = Math.min(memoryAge(store, memory, "lastRecalled", memory.lastRecalled),
+      memoryAge(store, memory, "lastDecay", memory.lastRecalled)) / (1000 * 60 * 60);
     const decayRate = 0.01 * (1 - memory.importance); // Important memories decay slower
 
-    memory.strength = Math.max(0, memory.strength - decayRate * hoursSinceRecall);
+    const reinforcement = memory.recallCount > 5 ? 0.02 * cyclesElapsed : 0;
+    memory.strength = Math.min(1, Math.max(0, memory.strength - decayRate * hoursSinceRecall + reinforcement));
+    if (reinforcement > 0) strengthened++;
+    stampMemoryTime(store, memory, "lastDecay", memory.lastRecalled);
 
     if (memory.strength < 0.1) {
       decayed++;
@@ -706,10 +762,12 @@ export function consolidateMemories(store: AgentMemoryStore): {
 
   // Semantic memory confidence decay for unvalidated facts
   for (const memory of store.semanticMemories) {
-    const daysSinceValidation = (now - memory.lastValidated) / (1000 * 60 * 60 * 24);
+    const daysSinceValidation = memoryAge(store, memory, "lastValidated", memory.lastValidated) / (1000 * 60 * 60 * 24);
     if (daysSinceValidation > 7) {
-      memory.confidence = Math.max(0.1, memory.confidence - 0.01 * daysSinceValidation);
+      const newDecayDays = Math.min(daysSinceValidation - 7, memoryAge(store, memory, "lastDecay", memory.lastValidated) / 86_400_000);
+      memory.confidence = Math.max(0.1, memory.confidence - 0.01 * newDecayDays);
     }
+    stampMemoryTime(store, memory, "lastDecay", memory.lastValidated);
   }
 
   // Remove very low confidence semantic memories
@@ -742,20 +800,13 @@ export function consolidateMemories(store: AgentMemoryStore): {
     }
   }
 
-  // Strengthen frequently recalled memories
-  for (const memory of store.episodicMemories) {
-    if (memory.recallCount > 5) {
-      memory.strength = Math.min(1, memory.strength + 0.02);
-      strengthened++;
-    }
-  }
-
   // Strengthen autobiographical memories over time
   for (const memory of store.autobiographicalMemories) {
-    memory.permanence = Math.min(1, memory.permanence + 0.01);
+    memory.permanence = Math.min(1, memory.permanence + 0.01 * cyclesElapsed);
   }
 
   store.stats.lastConsolidation = now;
+  store.stats.lastConsolidationSimMs = simNow;
   store.stats.consolidationCycles++;
 
   return { decayed, strengthened, patternsFound };
@@ -808,9 +859,9 @@ export function generateMemoryContext(
   if (cues.topic) {
     const facts = querySemanticMemory(store, { subject: cues.topic, minConfidence: 0.5 }, 10);
     if (facts.length > 0) {
-      sections.push("\n## What I Know:");
+      sections.push("\n## Stored knowledge:");
       for (const fact of facts) {
-        sections.push(`- ${fact.content} (confidence: ${(fact.confidence * 100).toFixed(0)}%)`);
+        sections.push(`- ${fact.content} (stored ${fact.category}; confidence: ${(fact.confidence * 100).toFixed(0)}%; sources: ${fact.sources.join(", ") || "unspecified"})`);
       }
     }
   }
@@ -839,9 +890,9 @@ export function generateMemoryContext(
     for (const person of cues.peoplePresent) {
       const personFacts = querySemanticMemory(store, { subject: person }, 3);
       if (personFacts.length > 0) {
-        sections.push(`\n## What I Know About ${person}:`);
+        sections.push(`\n## Notes about ${person}:`);
         for (const fact of personFacts) {
-          sections.push(`- ${fact.content}`);
+          sections.push(`- ${fact.content} (confidence: ${(fact.confidence * 100).toFixed(0)}%; sources: ${fact.sources.join(", ") || "unspecified"})`);
         }
       }
     }

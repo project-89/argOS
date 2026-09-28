@@ -11,7 +11,7 @@
  * raw tool-calling research agents.
  */
 
-import { google } from "@ai-sdk/google";
+import { createArgosModel as google, MODEL_IDS } from "../llm/config";
 import { generateText, generateObject } from "ai";
 import { z } from "zod";
 import type { World } from "../ecs/world";
@@ -163,7 +163,7 @@ export async function createResearchProject(
   config: Partial<ResearchConfig> = {}
 ): Promise<ResearchProject> {
   const cfg = { ...DEFAULT_CONFIG, ...config };
-  const model = google("gemini-2.0-flash");
+  const model = google(MODEL_IDS.flash);
 
   // Generate research questions from objective
   const response = await generateObject({
@@ -176,7 +176,7 @@ export async function createResearchProject(
         rationale: z.string(),
       })).max(cfg.maxQuestions),
     }),
-    prompt: `You are a research assistant helping an agent conduct research.
+    prompt: `Identify what this agent still needs to learn to meet the research objective.
 
 Agent Context:
 ${agentContext}
@@ -184,14 +184,7 @@ ${agentContext}
 Research Objective:
 ${objective}
 
-Generate a research plan with:
-1. A concise title
-2. Key questions to answer (${cfg.maxQuestions} max)
-   - Critical: Must answer to achieve objective
-   - Important: Should answer for thorough understanding
-   - Nice to have: Would be good to know
-
-Prioritize questions that can be answered with available information and tools.`,
+Return a concise title and up to ${cfg.maxQuestions} useful unanswered questions. Mark each critical, important or nice_to_have according to its effect on the objective. Do not repeat questions already answered in the supplied context unless new evidence makes the answer uncertain. Keep reported claims attributed; do not invent available sources or tools. An empty questions array is appropriate when the objective needs no further research.`,
   });
 
   const project: ResearchProject = {
@@ -278,7 +271,7 @@ export async function executeResearchCycle(
   const workingMemory = formatWorkingMemoryForPrompt(memoryStore, project.id);
   const previousFindings = project.findings
     .filter(f => f.relatedQuestions.includes(currentQuestion.id))
-    .map(f => `- ${f.content} (${f.type}, confidence: ${(f.confidence * 100).toFixed(0)}%)`)
+    .map(f => `- ${f.content} (${f.type}; confidence: ${(f.confidence * 100).toFixed(0)}%; source: ${f.source || "unspecified"})`)
     .join("\n");
 
   const toolsContext = formatToolsForPrompt(availableTools);
@@ -294,7 +287,6 @@ export async function executeResearchCycle(
 Project: ${project.title}
 Objective: ${project.objective}
 
-## Working Memory
 ${workingMemory}
 
 ## Previous Findings for This Question
@@ -429,20 +421,20 @@ export async function analyzeAndConclude(
   project: ResearchProject,
   agentContext: string
 ): Promise<{ report: string; confidence: number }> {
-  const model = google("gemini-2.0-flash");
+  const model = google(MODEL_IDS.flash);
   const memoryStore = getAgentMemoryStore(project.agentEid);
 
   // Gather all answered questions
   const answeredQuestions = project.questions
     .filter(q => q.status === "answered")
-    .map(q => `Q: ${q.question}\nA: ${q.answer} (confidence: ${((q.confidence || 0) * 100).toFixed(0)}%)`)
+    .map(q => `Q: ${q.question}\nA: ${q.answer} (confidence: ${((q.confidence || 0) * 100).toFixed(0)}%; sources: ${q.sources?.join(", ") || "unspecified"})`)
     .join("\n\n");
 
   // Gather key findings
   const keyFindings = project.findings
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 20)
-    .map(f => `- ${f.content} (${f.type})`)
+    .map(f => `- ${f.content} (${f.type}; source: ${f.source || "unspecified"})`)
     .join("\n");
 
   // Generate final report
@@ -470,13 +462,7 @@ ${keyFindings}
 ## Uncertainties
 ${project.uncertainties.join("\n") || "None noted"}
 
-Create a comprehensive report with:
-1. Executive summary (2-3 sentences)
-2. Key findings (bullet points)
-3. Conclusions (what we now know)
-4. Recommendations (what to do with this knowledge)
-5. Limitations (what we couldn't determine)
-6. Overall confidence score (0-1)`,
+Write a concise report using the required fields. Preserve each finding's source and distinguish observations, reported claims and hypotheses. Include only supported conclusions and useful recommendations; either array may be empty. When the research did not resolve the objective, state that in the summary and limitations. A confidence score describes the support in this record, not independent verification.`,
   });
 
   // Build report
@@ -598,7 +584,7 @@ export async function quickResearch(
   agentContext: string
 ): Promise<{ answer: string; confidence: number; sources: string[] }> {
   const memoryStore = getAgentMemoryStore(agentEid);
-  const model = google("gemini-2.0-flash");
+  const model = google(MODEL_IDS.flash);
 
   // First check existing knowledge
   const existingKnowledge = querySemanticMemory(memoryStore, {
@@ -631,11 +617,11 @@ export async function quickResearch(
 Context:
 ${agentContext}
 
-${existingKnowledge.length > 0 ? `Relevant prior knowledge:\n${existingKnowledge.map(k => `- ${k.content}`).join("\n")}` : ""}
+${existingKnowledge.length > 0 ? `Stored prior knowledge:\n${existingKnowledge.map(k => `- ${k.content} (sources: ${k.sources.join(", ") || "unspecified"}; confidence: ${k.confidence})`).join("\n")}` : ""}
 
 Question: ${question}
 
-Provide a clear answer with your confidence level (0-1).`,
+Answer from this context, with a brief explanation and confidence level (0-1). Attribute reported claims, distinguish general knowledge from local evidence, and say when the answer is unknown. Do not imply that research or tool execution occurred unless a result is supplied.`,
   });
 
   // Store the answer

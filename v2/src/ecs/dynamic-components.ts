@@ -42,6 +42,7 @@ export interface ComponentDefinition {
   name: string;
   description: string;
   properties: Record<string, "number" | "string" | "boolean">;
+  defaults?: Record<string, string | number | boolean>;
 }
 
 export interface DynamicComponent {
@@ -142,7 +143,7 @@ export function setDynamicComponentValue(
   const world = getRegistryWorld();
   if (world && entry) {
     // addComponent is idempotent — safe to call every time
-    attachToEntity(world, eid, componentName);
+    attachToEntity(world, eid, componentName, { [property]: value });
   }
 
   component[property][eid] = value;

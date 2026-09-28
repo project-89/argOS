@@ -1,8 +1,8 @@
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext, SystemRegistry } from "../ecs/dynamic-systems";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
-import { query, getRelationTargets, addComponent, removeComponent, hasComponent, entityExists, removeEntity } from "bitecs";
-import { Name, Agent, Mind, Room, Description, Portal, GridPosition, WorldMap, Health, CombatStats, InCombat, Inventory, Item, StimulusSource, PhysicalObject, Appearance, Traits, ObjectState, ObjectType, Memory } from "../ecs/components";
+import { query, getRelationTargets, addEntity, addComponent, removeComponent, hasComponent, entityExists, removeEntity } from "bitecs";
+import { Name, Agent, Mind, Room, Description, Portal, GridPosition, WorldMap, Health, CombatStats, InCombat, Inventory, Item, StimulusSource, PhysicalObject, Appearance, Traits, ObjectState, ObjectType, Memory, WorkingMemoryIdentity } from "../ecs/components";
 import { LocatedIn } from "../ecs/relations";
 import { getDirectContainer, getRoomForEntity, listDirectContents, setLocatedIn } from "../ecs/location";
 import {
@@ -15,14 +15,36 @@ import {
   removeFromInventory,
   syncInventoryCache,
 } from "../ecs/inventory";
+import { tryHoldCarriedItem, syncHeldAppearance } from "../rendering/character-appearance";
 import {
   processAgentCognition,
+  agentThink,
+  selectFastAgentAction,
+  hasUnintegratedAttention,
   addPerception,
   getAgentMemory,
   type AgentAction
 } from "./agent-mind";
 import { addMemory, extractKnowledgeFromInteraction, getAgentMemories } from "./knowledge-graph";
+import { hasDueAttentionSignal } from "./unresolved-attention";
+import { recordCommittedSpeech, recordHeardSpeechFragment, flushHeardSpeechFragments } from "./social-memory";
+import { beginTimedSpeech, estimateSpeechDurationMs, isSpeaking, getSpeakingActivity, readLocalSpeechOpportunity, interruptTimedSpeech, type SpeechInterval } from "./timed-speech";
+import { captureWorkingMemoryAction, captureWorkingMemoryObservation, recordWorkingMemoryAction, type WorkingMemoryActionSnapshot } from "./working-memory-observation";
+import { getCurrentInspection, recordInspectionResult } from "./inspection-memory";
+import { workingMemoryEntityRef } from "./working-memory";
+import { randomUUID } from "node:crypto";
+import { stampGoalTiming } from "../ecs/temporal-age";
+import { readSimulationTime } from "../ecs/simulation-time";
+import { scheduleSimulationEvent, reserveSimulationResources, releaseSimulationResources, isSimulationResourceBusy } from "../runtime/simulation-timeline";
+import { publicPhysicalOperation } from "./physical-activity";
+import { publishCommittedEvent, getCommittedSource, startCommittedEvents } from "../runtime/committed-events";
+import { captureRoomTraversal, getRoomRouteTopologyGeneration, isRoomTraversalCurrent, resolveRoomRouteTarget,
+  type RoomTraversal } from "../runtime/room-routes";
+import { captureCoordinationAction, recordCoordinationAction, reconcileCoordinationGoals,
+  type CoordinationActionIssuance } from "./coordination-memory";
 import { executeAffordance, type EffectContext } from "../world/effect-executor";
+import { isDocumentOperation, captureDocumentWork, commitDocumentWork, cancelDocumentWork, type DocumentWorkAdmission } from "../world/productive-work";
+import { recordGoalAttemptActivity } from "./goal-attempt";
 import { worldSchema } from "../world/schema";
 import { getAvailableAffordances } from "../world/affordance-availability";
 import {
@@ -30,8 +52,16 @@ import {
   queueStimulusForAgent,
   broadcastToRoom,
   drainPendingStimuli,
+  peekPendingStimuli,
   type PendingStimulus,
 } from "./stimulus-queue";
+import { filterPerceivableStimuli, getAgentSensoryCapabilities, normalizeSensoryEvent } from "./sensory-capabilities";
+import { isStimulusCurrent } from "./stimulus-guard";
+import { isForegroundCognitionReady, getForegroundCognitionReadiness, recordForegroundCognitionAdmission, type ForegroundCognitionReadiness, isForegroundActorAvailable, recordCognitionOutcome, wakeForegroundCognition, deferForegroundSpeech, isContinuingListeningProgress, getListeningActivities } from "./idle-cognition";
+import { isInvalidHeardSpeechNotice } from "./social-memory";
+import { isStandingIntention, maintainGoalLifecycles, intentionReviewRevision } from "./goal-lifecycle";
+import { resumeDeferredGoals } from "./goal-pursuit";
+import { beginRest, endRest } from "./rest-state";
 import {
   generateStimuliForAgent,
   formatStimuliForPrompt,
@@ -49,12 +79,15 @@ import {
 } from "../spirits/consistency-spirit";
 import { recordFailedInteraction } from "../spirits/world-crafter-spirit";
 import { recordOutcome } from "./policy-learning";
-import { resolveDecision } from "./bt-compiler";
+import { captureLLMDecision, resolveDecision } from "./bt-compiler";
+import { consumeForegroundAction, isDiscardedForegroundDecision, deferIntegratedForegroundSpeech, pollForegroundContinuation } from "./foreground-action-admission";
 import { chronicle } from "./simulation-chronicle";
 import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "./procedural-skills";
-import { compileCompletedPlanToProceduralMacro } from "./plan-compiler";
 import { advanceGoalTick, expireStaleGoals } from "./autonomous-goals";
 import { setGoalContract } from "./goal-contract";
+import { snapshotActorContinuation } from "./actor-continuation";
+import { situatedPlanGoal } from "./decision-policy";
+import { prepareActorWait, captureActorWaitOutcomeAuthority, type ActorWaitOutcomeAuthority } from "./actor-wait";
 import {
   runPlanningSystem,
   advancePlanStep,
@@ -62,10 +95,10 @@ import {
   getNextPlannedAction,
   getCurrentStep,
   failPlan,
+  reconcileCurrentPlan,
 } from "./planning-system";
 import {
   runReflectionSystem,
-  accumulateImportance,
   initializeReflectionState,
 } from "./reflection-system";
 import {
@@ -82,6 +115,12 @@ import {
 import { HasGoal, HasPlan } from "../ecs/relations";
 import { Goal, Plan, PendingToolJob } from "../ecs/components";
 import { LastAction } from "../ecs/components";
+import { getAgentWorldCapabilities, getAgentWorldCapabilityGeneration, getAgentVisibleEntities, getAgentVisualEntities, getObservedPublicActivity, isPublicContainerOpen as isOpenContainer } from "./world-capabilities";
+import { isAccessibleViaOpenContainer, isInteractTargetAccessible } from "../world/physical-access";
+import { isEntityPresent } from "../ecs/entity-presence";
+import { assertSimulationTaskActive, getSimulationTaskSignal, withSimulationTask } from "../runtime/task-scope";
+import { trackGoalAction } from "./goal-learning";
+import { registerAsyncAction } from "./async-action-evidence";
 import { addEntity as bitAddEntity } from "bitecs";
 
 export { getAvailableAffordances };
@@ -94,13 +133,14 @@ let agentProcessingIndex = 0;
 
 // Recent failure guard: prevent agents from hammering the same failing action loop.
 // This is deliberately local/deterministic (no LLM) and only blocks immediate repeats.
-const recentFailedActions = new Map<number, { signature: string; count: number; lastAtMs: number }>();
+type FailureRecord = { signature: string; count: number; lastAtMs: number };
+const failedActionsByWorld = new WeakMap<World, Map<string, FailureRecord>>();
 const REPEAT_FAILURE_WINDOW_MS = 5000;
 const MAX_REPEAT_FAILURES_BEFORE_BLOCK = 1;
 
 // Plan-step failure guard: when the *current plan step* fails repeatedly, fail the plan so
 // the planning system can regenerate a corrected plan.
-const recentPlanStepFailures = new Map<number, { signature: string; count: number; lastAtMs: number }>();
+const planStepFailuresByWorld = new WeakMap<World, Map<number, FailureRecord>>();
 function stripControlAndAnsi(input: string): string {
   const s = String(input ?? "");
   // Strip ANSI CSI sequences: ESC [ ... finalByte
@@ -115,7 +155,7 @@ const MAX_PLAN_STEP_FAILURES_BEFORE_REPLAN = 2;
 // Deterministic learning hook: persist certain high-signal stimuli as explicit long-term memories,
 // even when LLM-backed knowledge extraction is disabled.
 const MEMORY_CAPTURE_TYPES = new Set<string>(["tool_result", "action_failed"]);
-const recentStimulusMemoryCaptures = new Map<number, { signature: string; atMs: number }>();
+const stimulusMemoryCapturesByWorld = new WeakMap<World, Map<number, { signature: string; atMs: number }>>();
 const STIMULUS_MEMORY_DEDUP_WINDOW_MS = 60_000;
 
 // Tune these based on your API rate limits:
@@ -142,6 +182,18 @@ function shouldAgentThink(eid: number, tick: number): boolean {
   return tick % 3 === eid % 3;
 }
 
+const routineStimulusTypes = new Set(["perception", "action_result", "visual", "ambient", "awareness", "affordances", "cognitive"]);
+function deservesForegroundAttention(world: World, event: PendingStimulus): boolean {
+  if (isInvalidHeardSpeechNotice(world, event.targetEid, event)) return false;
+  if (event.type === "speech_fragment" && isContinuingListeningProgress(world, event.targetEid, event)) return false;
+  if (["observation", "examination"].includes(event.type) && ["observation", "examination", "senses"].includes(event.source)) return false;
+  return !routineStimulusTypes.has(event.type);
+}
+/** Non-draining and modality-aware: an unheard event cannot wake cognition. */
+export function hasPendingCognitionStimuli(world: World, eid: number): boolean {
+  return filterPerceivableStimuli(world, eid, peekPendingStimuli(eid, world)).some(event => deservesForegroundAttention(world, event));
+}
+
 function maybeCaptureStimulusAsMemory(world: World, stimulus: PendingStimulus): void {
   if (!MEMORY_CAPTURE_TYPES.has(stimulus.type)) return;
   if (!entityExists(world, stimulus.targetEid)) return;
@@ -160,6 +212,8 @@ function maybeCaptureStimulusAsMemory(world: World, stimulus: PendingStimulus): 
 
   const signature = `${stimulus.type}|${stimulus.source}|${clipped.slice(0, 240)}`;
   const now = Date.now();
+  let recentStimulusMemoryCaptures = stimulusMemoryCapturesByWorld.get(world);
+  if (!recentStimulusMemoryCaptures) { recentStimulusMemoryCaptures = new Map(); stimulusMemoryCapturesByWorld.set(world, recentStimulusMemoryCaptures); }
   const prev = recentStimulusMemoryCaptures.get(stimulus.targetEid);
   if (prev && prev.signature === signature && now - prev.atMs < STIMULUS_MEMORY_DEDUP_WINDOW_MS) return;
 
@@ -181,7 +235,7 @@ function maybeCaptureStimulusAsMemory(world: World, stimulus: PendingStimulus): 
       content: clipped,
       importance: 0.7,
       emotionalValence: 0,
-      timestamp: now,
+      timestamp: stimulus.timestamp ?? now,
     });
   } else if (stimulus.type === "action_failed") {
     addMemory(world, stimulus.targetEid, {
@@ -189,7 +243,7 @@ function maybeCaptureStimulusAsMemory(world: World, stimulus: PendingStimulus): 
       content: clipped,
       importance: 0.9,
       emotionalValence: -0.2,
-      timestamp: now,
+      timestamp: stimulus.timestamp ?? now,
     });
   }
 
@@ -298,6 +352,7 @@ export function createMovementGoal(
   Goal.progress[goalEid] = 0;
   Goal.deadline[goalEid] = Date.now() + 5 * 60 * 1000; // 5 minute deadline
   Goal.createdAt[goalEid] = Date.now();
+  stampGoalTiming(world, goalEid);
 
   // Typed contract: allows downstream systems (and learning) to key off a stable signature.
   setGoalContract(world, goalEid, {
@@ -329,6 +384,7 @@ export function createIntentGoal(
   description: string,
   priority: number = 5
 ): number {
+  assertSimulationTaskActive();
   const agentName = Name.value[agentEid] || `Agent ${agentEid}`;
 
   // Create goal entity
@@ -342,12 +398,13 @@ export function createIntentGoal(
   Goal.progress[goalEid] = 0;
   Goal.deadline[goalEid] = Date.now() + 10 * 60 * 1000; // 10 minute deadline
   Goal.createdAt[goalEid] = Date.now();
+  stampGoalTiming(world, goalEid);
 
   setGoalContract(world, goalEid, {
     version: 1,
     kind: "custom",
     params: { description },
-    success: { type: "custom", description: "complete when satisfied by deterministic systems or plan" },
+    success: { type: "custom", description: "requires world evidence or explicit verification; a completed plan alone is not proof" },
     description,
   });
 
@@ -455,7 +512,7 @@ export function dealDamage(
   console.log(`[Combat] ${targetName} takes ${actualDamage.toFixed(1)} damage from ${source} (${Health.current[targetEid]}/${Health.max[targetEid]} HP)`);
 
   // Notify target
-  queueStimulus({
+  queueStimulus(world, {
     targetEid: targetEid,
     type: "combat",
     modality: "tactile",
@@ -587,24 +644,10 @@ export function setVisiblyHolding(eid: number, itemName: string): void {
 }
 
 /**
- * Sync visiblyHolding with the first item in inventory (or clear it)
+ * Compatibility entry point: project actual hand equipment, not inventory.
  */
 export function syncVisiblyHoldingFromInventory(world: World, eid: number): void {
-  if (!hasInventory(world, eid)) {
-    Appearance.visiblyHolding[eid] = "";
-    return;
-  }
-
-  const items = getInventoryItems(world, eid);
-  if (items.length > 0) {
-    // Show the first/primary item as what they're holding
-    const firstItem = items[0];
-    const itemName = Name.value[firstItem] || "something";
-    Appearance.visiblyHolding[eid] = itemName;
-  } else {
-    Appearance.visiblyHolding[eid] = "";
-  }
-  Appearance.lastUpdate[eid] = Date.now();
+  syncHeldAppearance(world, eid);
 }
 
 /**
@@ -821,7 +864,6 @@ export function createPerceivableObject(
     gridY?: number;
   } = {}
 ): number {
-  const { addEntity } = require("bitecs");
   const eid = addEntity(world);
 
   // Set basic identity
@@ -982,19 +1024,6 @@ function scoreNameMatch(
 ): number {
   let score = 0;
 
-  // Prefer matches that are physically co-located when a room hint exists.
-  if (options?.preferRoomEid !== undefined) {
-    const room = getRoomForEntity(world, entityEid);
-    if (room === options.preferRoomEid) score += 20;
-  }
-
-  // Reward state matches when the search included a `[state]` annotation.
-  if (search.stateHints.length > 0 && hasComponent(world, entityEid, ObjectState)) {
-    const st = ObjectState.current[entityEid];
-    const stateLower = typeof st === "string" ? st.toLowerCase() : "";
-    if (stateLower && search.stateHints.includes(stateLower)) score += 15;
-  }
-
   for (const v of search.variants) {
     for (const cand of entityCandidates) {
       if (cand === v) score = Math.max(score, 100);
@@ -1003,7 +1032,12 @@ function scoreNameMatch(
       else if (v.includes(cand) && cand.length >= 3) score = Math.max(score, 55);
     }
   }
-
+  // Location/state are tie breakers, never evidence of a name match. Awarding
+  // location points to a non-match made unknown targets resolve to the actor.
+  if (score === 0) return 0;
+  if (options?.preferRoomEid !== undefined && getRoomForEntity(world, entityEid) === options.preferRoomEid) score += 20;
+  if (search.stateHints.length > 0 && hasComponent(world, entityEid, ObjectState) &&
+      search.stateHints.includes(String(ObjectState.current[entityEid] || "").toLowerCase())) score += 15;
   return score;
 }
 
@@ -1015,7 +1049,8 @@ export function findEntityByNameWithScope(
   // First check registry for exact hit (fast path).
   const registered = entityRegistry.byName.get(name);
   if (registered !== undefined) {
-    if (entityExists(world, registered)) return registered;
+    if (entityExists(world, registered) && String(Name.value[registered] || "").trim().toLowerCase() === name.trim().toLowerCase())
+      return isEntityPresent(world,registered)?registered:undefined;
     // Registry can become stale if entities are removed without unregistering.
     entityRegistry.byName.delete(name);
     const prevName = entityRegistry.byId.get(registered);
@@ -1025,6 +1060,14 @@ export function findEntityByNameWithScope(
 
   const search = normalizeEntitySearchText(name);
   if (search.variants.length === 0) return undefined;
+
+  // Exact names outrank fuzzy local matches, including held/surface objects.
+  // Otherwise "Mara's phone" can resolve to Mara while the real phone is on
+  // her desk or in her inventory. Accessibility is validated by the executor.
+  const exact = [...query(world, [Name])].filter(id => entityExists(world, id) &&
+    String(Name.value[id] || "").trim().toLowerCase() === name.trim().toLowerCase());
+  if (exact.length) {const present=exact.filter(id=>isEntityPresent(world,id));
+    return present.find(id => options?.preferRoomEid !== undefined && getRoomForEntity(world, id) === options.preferRoomEid) ?? present[0];}
 
   // Prefer searching local room contents + agents in room first (prevents matching remote entities).
   const scopedEids: number[] = [];
@@ -1044,7 +1087,7 @@ export function findEntityByNameWithScope(
     let bestEid: number | undefined;
     let bestScore = 0;
     for (const eid of pool) {
-      if (!entityExists(world, eid)) continue;
+      if (!isEntityPresent(world, eid)) continue;
       const entityCandidates = getEntityNameCandidates(world, eid);
       if (entityCandidates.length === 0) continue;
       const s = scoreNameMatch(search, entityCandidates, eid, world, options);
@@ -1128,7 +1171,7 @@ export function findItemWithTrait(
   const contents = listDirectContents(world, roomEid);
 
   for (const contentEid of contents) {
-    if (!entityExists(world, contentEid)) continue;
+    if (!isEntityPresent(world, contentEid)) continue;
     if (hasComponent(world, contentEid, Agent)) continue;
 
     // Check if this item has the trait
@@ -1271,8 +1314,8 @@ function doRandomWander(world: World, eid: number, name: string): void {
 }
 
 /**
- * Generate MUD-style room perception text for an agent
- * This is a simplified version - will be replaced with TextRenderer when WorldSchema integrates
+ * Legacy MUD-style view of this actor's current visual surface. Keep the
+ * compatibility format without granting it a second, omniscient scene query.
  */
 export function renderRoomPerception(
   world: World,
@@ -1282,9 +1325,13 @@ export function renderRoomPerception(
   const lines: string[] = [];
 
   // Validate entities exist
-  if (!entityExists(world, agentEid) || !entityExists(world, roomEid)) {
+  if (!isEntityPresent(world, agentEid) || !hasComponent(world, agentEid, Agent) || !Agent.active[agentEid]
+      || !isEntityPresent(world, roomEid) || getRoomForEntity(world, agentEid) !== roomEid) {
     return "You are nowhere.";
   }
+  if (getAgentSensoryCapabilities(world, agentEid).visual <= 0) return "No current visual perception.";
+  const visible = getAgentVisualEntities(world, agentEid);
+  if (getRoomForEntity(world, agentEid) !== roomEid || getAgentSensoryCapabilities(world, agentEid).visual <= 0) return "No current visual perception.";
 
   // Room header
   const roomName = Name.value[roomEid] || "Unknown Location";
@@ -1304,7 +1351,7 @@ export function renderRoomPerception(
   }
 
   // Find other agents in the room
-  const allAgents = Array.from(query(world, [Agent])).filter(eid => entityExists(world, eid));
+  const allAgents = visible.filter(eid => hasComponent(world, eid, Agent));
   const othersInRoom: Array<{ eid: number; appearance: string; affordances: string[] }> = [];
 
   for (const otherEid of allAgents) {
@@ -1317,25 +1364,10 @@ export function renderRoomPerception(
       const availableAffordances = getAvailableAffordances(world, agentEid, otherEid);
       const affordanceNames = availableAffordances.map(a => a.name);
 
-      // Use appearance system if available, otherwise fall back to basic description
-      let appearance: string;
-      if (hasAppearance(otherEid)) {
-        appearance = getAppearanceDescription(otherEid);
-      } else {
-        // Fallback: basic name + inventory
-        const otherName = Name.value[otherEid] || "someone";
-        const heldItems: string[] = [];
-        if (hasInventory(world, otherEid)) {
-          const items = getInventoryItems(world, otherEid);
-          for (const itemEid of items) {
-            const itemName = Name.value[itemEid];
-            if (itemName) heldItems.push(itemName);
-          }
-        }
-        appearance = heldItems.length > 0
-          ? `${otherName} (holding: ${heldItems.join(", ")})`
-          : otherName;
-      }
+      const otherName = Name.value[otherEid] || "someone";
+      const activity = getObservedPublicActivity(world, agentEid, otherEid);
+      const publicDescription = hasComponent(world, otherEid, Description) ? Description.value[otherEid] || "" : "";
+      const appearance = `${otherName}${activity ? ` (${activity})` : ""}${publicDescription ? `: ${publicDescription}` : ""}`;
 
       othersInRoom.push({
         eid: otherEid,
@@ -1357,8 +1389,8 @@ export function renderRoomPerception(
     }
   }
 
-  // Find objects/items in room (canonical: direct LocatedIn contents)
-  const contents = listDirectContents(world, roomEid);
+  // Include ordinary exposed tabletops/open containers, never sealed interiors.
+  const contents = visible;
   const objectEntries: Array<{ name: string; desc?: string; affordances: string[] }> = [];
 
   for (const contentEid of contents) {
@@ -1374,7 +1406,7 @@ export function renderRoomPerception(
       const affordanceNames = availableAffordances.map(a => a.name);
 
       // Get object state from ECS ObjectState component (not ObjectMeta)
-      const objState = ObjectState?.current?.[contentEid];
+      const objState = hasComponent(world, contentEid, ObjectState) ? ObjectState.current[contentEid] : undefined;
       const stateDesc = objState && objState !== "normal" ? ` (${objState})` : "";
 
       objectEntries.push({
@@ -1397,22 +1429,12 @@ export function renderRoomPerception(
     }
   }
 
-  // Find exits (rooms with portals to this room or other connected rooms)
-  const allRooms = Array.from(query(world, [Room]));
+  // A reverse portal in an unobserved room is not evidence of a visible exit.
+  // Packages may explicitly expose known adjacent movement destinations.
+  const knownDestinations = getAgentWorldCapabilities(world, agentEid)?.movementTargets?.() || [];
   const exits: string[] = [];
-
-  for (const otherRoomEid of allRooms) {
-    if (otherRoomEid === roomEid) continue;
-
-    // Check if there's a portal connection
-    if (hasComponent(world, otherRoomEid, Portal)) {
-      const destRoom = Portal.destinationRoom[otherRoomEid];
-      if (destRoom === roomEid) {
-        const exitName = Name.value[otherRoomEid];
-        if (exitName) exits.push(exitName);
-      }
-    }
-  }
+  for (const destination of knownDestinations) if (entityExists(world, destination) && destination !== roomEid
+      && hasComponent(world, destination, Room) && Name.value[destination]) exits.push(Name.value[destination]);
 
   // Also check for portals IN this room pointing elsewhere
   for (const contentEid of contents) {
@@ -1439,41 +1461,101 @@ export function renderRoomPerception(
   return lines.join("\n");
 }
 
+/** Perception intake and deterministic continuation must not consume model
+ * capacity. Called once per actor/world tick; an in-flight deliberation retains
+ * control of selection, but incoming experiences are still admitted immediately.
+ * true means the actor needs an asynchronous decision, not an executed wait. */
+export function runActorControlStep(world: World, eid: number, registry: SystemRegistry,
+  options: { deliberating?: boolean; appraisalPending?: boolean; onAction?: (action: AgentAction) => void } = {}): boolean {
+  assertSimulationTaskActive();
+  if (!isEntityPresent(world, eid) || !hasComponent(world, eid, Agent) || !Agent.active[eid] || getCommittedSource(world).stopped) return false;
+  const events = drainPendingStimuli(new Set([eid]), world).filter(event => !isInvalidHeardSpeechNotice(world, eid, event))
+    .flatMap(event => filterPerceivableStimuli(world, eid, [event]));
+  for (const event of events) {
+    if (deservesForegroundAttention(world, event)) wakeForegroundCognition(world, eid, { cause: "stimulus", stimulusType: event.type });
+    maybeCaptureStimulusAsMemory(world, event);
+    addPerception(world, eid, event);
+  }
+  if (resumeDeferredGoals(world, eid)) wakeForegroundCognition(world, eid, { cause: "goal_resumed" });
+  // Rich receipt appraisal is asynchronous interpretation, not ownership of
+  // the actor's body or immediate reaction. It admits against its own sources.
+  if (options.deliberating) return false;
+  const continuation = pollForegroundContinuation(world, eid);
+  if (continuation?.waiting) return false;
+  if (continuation?.needsRevision) { wakeForegroundCognition(world, eid, { cause: "continuation_revision" }); return true; }
+  if (continuation?.action) {
+    executeActions(world, [{ eid, action: continuation.action }], registry);
+    options.onAction?.(continuation.action);
+    return false;
+  }
+  if (!isForegroundActorAvailable(world, eid) || !isForegroundCognitionReady(world, eid,
+    { hasQueuedStimuli: events.some(event => deservesForegroundAttention(world, event)),
+      hasPendingStimuli: events.some(event => deservesForegroundAttention(world, event)) || hasUnintegratedAttention(world, eid, false),
+      hasDueAttention: hasDueAttentionSignal(world, eid) })) return false;
+  expireStaleGoals(world, eid); maintainGoalLifecycles(world, eid);
+  const observation = captureWorkingMemoryObservation(world, eid);
+  reconcileCoordinationGoals(world, eid, observation);
+  for (const plan of getRelationTargets(world, eid, HasPlan)) reconcileCurrentPlan(world, eid, plan);
+  const action = selectFastAgentAction(world, eid);
+  if (!action) return true;
+  executeActions(world, [{ eid, action }], registry);
+  options.onAction?.(action);
+  return false;
+}
+
 export async function runCognitionCycle(
   world: World,
   registry: SystemRegistry,
-  options: { tick?: number; maxAgents?: number; enablePlanning?: boolean } = {}
+  options: { tick?: number; maxAgents?: number; enablePlanning?: boolean; agentEids?: readonly number[] } = {}
 ): Promise<Array<{ eid: number; action: AgentAction }>> {
   const currentTick = options.tick ?? Date.now();
   const maxAgentsThisTick = options.maxAgents ?? AGENTS_PER_TICK;
-  const enablePlanning = options.enablePlanning ?? true; // Planning ON by default!
+  // Foreground cognition must not queue behind an entire cast's planning calls.
+  // The runtime schedules planning separately; batch callers may explicitly opt in.
+  const enablePlanning = options.enablePlanning ?? false;
+  const selectedAgents = options.agentEids ? new Set(options.agentEids) : undefined;
 
   // Advance autonomous goal cooldown counter
-  advanceGoalTick();
+  if (!selectedAgents) advanceGoalTick(world); // per-actor runtime advances once in its world tick
 
   // Expire stale goals so agents can generate new ones
   // Goals that have been active for 2+ minutes without completion are expired
   const allAgentsForGoalExpiry = Array.from(query(world, [Agent as any])).filter(
-    (eid: number) => Agent.active[eid]);
+    (eid: number) => Agent.active[eid] && (!selectedAgents || selectedAgents.has(eid)));
   for (const eid of allAgentsForGoalExpiry) {
+    if (resumeDeferredGoals(world, eid)) wakeForegroundCognition(world, eid, { cause: "goal_resumed" });
     expireStaleGoals(world, eid);
+    maintainGoalLifecycles(world, eid);
   }
 
   // === PLANNING PHASE ===
   // Generate plans for agents with goals but no active plan
   // This is crucial for multi-step reasoning!
   if (enablePlanning) {
-    await runPlanningSystem(world);
+    await runPlanningSystem(world, { agentEids: options.agentEids });
   }
 
   // Collect pending event-based stimuli by agent
   const eventsByAgent = new Map<number, PendingStimulus[]>();
 
-  const pendingStimuli = drainPendingStimuli();
+  const pendingStimuli = drainPendingStimuli(selectedAgents, world).filter(event => !isInvalidHeardSpeechNotice(world, event.targetEid, event)).flatMap(event =>
+    filterPerceivableStimuli(world, event.targetEid, [event]));
   for (const stimulus of pendingStimuli) {
+    if (deservesForegroundAttention(world, stimulus)) wakeForegroundCognition(world, stimulus.targetEid, { cause: "stimulus", stimulusType: stimulus.type });
     maybeCaptureStimulusAsMemory(world, stimulus);
   }
   for (const stimulus of pendingStimuli) {
+    // Intake still happens when this exact hearing progress belongs to a
+    // committed listen. Do not requeue it until a redundant model call occurs.
+    if (stimulus.type === "speech_fragment" && isContinuingListeningProgress(world, stimulus.targetEid, stimulus)) {
+      addPerception(world, stimulus.targetEid, stimulus);
+      continue;
+    }
+    // Preserve inputs for physically occupied agents; they will reconsider when free.
+    if (!isForegroundActorAvailable(world, stimulus.targetEid)) {
+      if (entityExists(world, stimulus.targetEid)) addPerception(world, stimulus.targetEid, stimulus);
+      continue;
+    }
     if (!eventsByAgent.has(stimulus.targetEid)) {
       eventsByAgent.set(stimulus.targetEid, []);
     }
@@ -1481,18 +1563,29 @@ export async function runCognitionCycle(
   }
 
   const allActiveAgents = Array.from(query(world, [Agent, Mind])).filter(
-    eid => Agent.active[eid]
+    eid => Agent.active[eid] && (!selectedAgents || selectedAgents.has(eid)) && isForegroundActorAvailable(world, eid)
   );
 
   // Filter agents based on arousal-based thinking schedule
   // Agents with pending stimuli always get to think
-  const agentsToProcess = allActiveAgents.filter(eid =>
-    eventsByAgent.has(eid) || shouldAgentThink(eid, currentTick)
-  );
+  const readinessByAgent = new Map<number, ForegroundCognitionReadiness>();
+  const agentsToProcess = allActiveAgents.filter(eid => {
+    const readiness = getForegroundCognitionReadiness(world, eid, {
+      hasQueuedStimuli: eventsByAgent.get(eid)?.some(event => deservesForegroundAttention(world, event)),
+      hasPendingStimuli: eventsByAgent.get(eid)?.some(event => deservesForegroundAttention(world, event)) || hasUnintegratedAttention(world, eid, false),
+      hasDueAttention: hasDueAttentionSignal(world, eid),
+    });
+    readinessByAgent.set(eid, readiness);
+    return readiness.ready && (getAgentWorldCapabilities(world, eid)?.ready() === true || eventsByAgent.has(eid) || shouldAgentThink(eid, currentTick));
+  });
 
   // Apply round-robin pagination to avoid processing all agents at once
   const startIdx = agentProcessingIndex % Math.max(1, agentsToProcess.length);
   const agentsThisTick = agentsToProcess.slice(startIdx, startIdx + maxAgentsThisTick);
+  const admitted = new Set(agentsThisTick);
+  for (const [eid, events] of eventsByAgent) {
+    if (!admitted.has(eid) && entityExists(world, eid)) for (const event of events) queueStimulus(event);
+  }
 
   // Update index for next cycle
   agentProcessingIndex = (startIdx + agentsThisTick.length) % Math.max(1, agentsToProcess.length);
@@ -1508,22 +1601,16 @@ export async function runCognitionCycle(
     const batch = agentsThisTick.slice(i, i + PARALLEL_BATCH_SIZE);
 
     const batchResults = await Promise.all(batch.map(async (eid) => {
+      recordForegroundCognitionAdmission(world, eid, readinessByAgent.get(eid)!);
       // Convert pending events to stimulus format with modalities
-      const pendingEvents = (eventsByAgent.get(eid) || []).map(s => {
-        // If modality was specified, use it; otherwise infer from type
-        if (s.modality) {
-          return {
-            modality: s.modality,
-            type: s.type,
-            content: s.content,
-            source: s.source,
-            intensity: 1,
-          };
-        }
-        return eventToStimulus({ type: s.type, content: s.content, source: s.source });
-      });
+      const pendingEvents = (eventsByAgent.get(eid) || []).filter(event => isStimulusCurrent(event, world)).map(normalizeSensoryEvent);
 
       // Generate all stimuli for this agent (visual, auditory, cognitive, etc.)
+      const currentObservation = captureWorkingMemoryObservation(world, eid);
+      reconcileCoordinationGoals(world, eid, currentObservation);
+      // A changed visible surface must invalidate the old inspection before
+      // deciding that a stored inspection step is already covered.
+      for (const plan of getRelationTargets(world, eid, HasPlan)) reconcileCurrentPlan(world, eid, plan);
       const allStimuli = generateStimuliForAgent(world, eid, pendingEvents);
 
 	      // Format stimuli for the agent prompt (include agentEid for self-awareness)
@@ -1535,19 +1622,31 @@ export async function runCognitionCycle(
 	        type: s.type,
 	        content: s.content,
 	        source: s.source,
+	        intensity: s.intensity,
+	        timestamp: s.timestamp,
+	        hearing: s.hearing,
 	      }));
-	      structuredPerceptions.push({ type: "perception", content: perceptionText, source: "senses" });
+	      structuredPerceptions.push({ type: "perception", content: perceptionText, source: "senses", intensity: 0, timestamp: Date.now(), hearing: undefined });
 
 	      // Pass perceptions to cognition
-	      const action = await processAgentCognition(
-	        world,
-	        eid,
-	        structuredPerceptions
-	      );
-	      return { eid, action };
+          const capabilities = getAgentWorldCapabilities(world, eid);
+          if (!capabilities) return { eid, action: await processAgentCognition(world, eid, structuredPerceptions) };
+          for (const perception of structuredPerceptions) addPerception(world, eid, perception);
+          const decision = capabilities.beginDecision?.();
+          try {
+            const parentSignal = getSimulationTaskSignal();
+            const action = decision ? await withSimulationTask(AbortSignal.any([decision.signal, ...(parentSignal ? [parentSignal] : [])]),
+              () => agentThink(world, eid, decision)) : await agentThink(world, eid);
+            if (decision?.isCurrent() === false) return null;
+            return { eid, action };
+          } catch (error) {
+            if (!decision?.signal.aborted && decision?.isCurrent() !== false) console.error(`[Cognition] ${Name.value[eid]}:`, error);
+            return null;
+          } finally { decision?.finish(); }
 	    }));
 
-    results.push(...batchResults);
+    results.push(...batchResults.filter((result): result is { eid: number; action: AgentAction } => result !== null
+      && !isDiscardedForegroundDecision(result.action)));
   }
 
   return results;
@@ -1558,6 +1657,7 @@ export async function runCognitionCycle(
  * Returns the normalized action type or null if completely invalid
  */
 function normalizeActionType(actionType: string): ValidAction | null {
+  if (typeof actionType !== "string" || !actionType.trim()) return null;
   const lower = actionType.toLowerCase().trim();
 
   // Direct match
@@ -1653,51 +1753,13 @@ function normalizeActionType(actionType: string): ValidAction | null {
 
 function getVisibleNamesInRoom(
   world: World,
-  roomEid: number,
-  options: { excludeEid?: number; limit?: number } = {}
+  actorEid: number,
+  limit: number = 8
 ): string[] {
-  const excludeEid = options.excludeEid;
-  const limit = options.limit ?? 8;
-  const names: string[] = [];
-
-  for (const contentEid of listDirectContents(world, roomEid)) {
-    if (!entityExists(world, contentEid)) continue;
-    if (excludeEid !== undefined && contentEid === excludeEid) continue;
-    const n = Name.value[contentEid];
-    if (n) names.push(n);
-  }
-
-  for (const agentEid of Array.from(query(world, [Agent]))) {
-    if (!entityExists(world, agentEid)) continue;
-    if (excludeEid !== undefined && agentEid === excludeEid) continue;
-    if (getRoomForEntity(world, agentEid) !== roomEid) continue;
-    const n = Name.value[agentEid];
-    if (n) names.push(n);
-  }
-
-  const unique = Array.from(new Set(names));
-  return unique.slice(0, limit);
-}
-
-function isDescendantContainedIn(world: World, containerEid: number, targetEid: number, maxNodes: number = 256): boolean {
-  if (containerEid === targetEid) return true;
-
-  const visited = new Set<number>();
-  const stack: number[] = [containerEid];
-
-  while (stack.length > 0 && visited.size < maxNodes) {
-    const current = stack.pop()!;
-    if (visited.has(current)) continue;
-    visited.add(current);
-
-    for (const child of listDirectContents(world, current)) {
-      if (!entityExists(world, child)) continue;
-      if (child === targetEid) return true;
-      stack.push(child);
-    }
-  }
-
-  return false;
+  // Failure recovery is a perception channel too. It must not reveal a hidden
+  // person, sealed inventory or an unseen name merely because an action failed.
+  return [...new Set(getAgentVisualEntities(world, actorEid)
+    .map(eid => Name.value[eid]).filter((name): name is string => !!name))].slice(0, limit);
 }
 
 function parseTraitsJson(raw: unknown): string[] {
@@ -1716,41 +1778,6 @@ function hasTrait(world: World, eid: number, trait: string): boolean {
   if (!wanted) return false;
   if (!hasComponent(world as any, eid, Traits as any)) return false;
   return parseTraitsJson(Traits.active[eid]).some((t) => t.toLowerCase() === wanted);
-}
-
-function isOpenContainer(world: World, eid: number): boolean {
-  const state = String(ObjectState?.current?.[eid] || "").toLowerCase();
-  if (state === "open") return true;
-  return hasTrait(world, eid, "open");
-}
-
-function isAccessibleViaOpenContainer(world: World, roomEid: number | undefined, targetEid: number, maxDepth: number = 32): boolean {
-  if (roomEid === undefined) return false;
-  let current = targetEid;
-  for (let depth = 0; depth < maxDepth; depth++) {
-    const container = getDirectContainer(world, current);
-    if (container === undefined) return false;
-    if (container === roomEid) return true;
-
-    // If the item is inside a container, that container must be open to access its contents.
-    // Walk up the chain; if we ever encounter a closed container, the target is not accessible.
-    if (!isOpenContainer(world, container)) return false;
-
-    current = container;
-  }
-  return false;
-}
-
-function isInteractTargetAccessible(world: World, actorEid: number, roomEid: number | undefined, targetEid: number): boolean {
-  // Interactions are grounded in physical accessibility:
-  // - direct room contents (on the ground / in the same room)
-  // - anything the actor contains (inventory tree: held items, bags, nested contents)
-  // - anything inside an OPEN container that is in the same room
-  // This prevents "interact" from silently targeting remote entities or whole rooms.
-  if (roomEid !== undefined && targetEid === roomEid) return false;
-  if (roomEid !== undefined && getDirectContainer(world, targetEid) === roomEid) return true;
-  if (isAccessibleViaOpenContainer(world, roomEid, targetEid)) return true;
-  return isDescendantContainedIn(world, actorEid, targetEid);
 }
 
 function getKnownRoomNames(world: World, limit: number = 12): string[] {
@@ -1784,27 +1811,34 @@ function actionSignature(action: { type: string; target?: string; content?: stri
   });
 }
 
+function failureGuards(world: World) {
+  let rows = failedActionsByWorld.get(world);
+  if (!rows) { rows = new Map(); failedActionsByWorld.set(world, rows); }
+  const recentFailedActions = rows;
+  const key = (eid: number) => workingMemoryEntityRef(world, eid)?.key || `missing:${eid}`;
 function recordFailedActionAttempt(agentEid: number, signature: string): void {
-  const now = Date.now();
-  const prev = recentFailedActions.get(agentEid);
+  const now = readSimulationTime(world);
+  const prev = recentFailedActions.get(key(agentEid));
   if (!prev || prev.signature !== signature || now - prev.lastAtMs > REPEAT_FAILURE_WINDOW_MS) {
-    recentFailedActions.set(agentEid, { signature, count: 1, lastAtMs: now });
+    recentFailedActions.set(key(agentEid), { signature, count: 1, lastAtMs: now });
     return;
   }
-  recentFailedActions.set(agentEid, { signature, count: prev.count + 1, lastAtMs: now });
+  recentFailedActions.set(key(agentEid), { signature, count: prev.count + 1, lastAtMs: now });
 }
 
 function clearFailedActionAttempt(agentEid: number): void {
-  recentFailedActions.delete(agentEid);
+  recentFailedActions.delete(key(agentEid));
 }
 
 function shouldBlockRepeatedFailedAction(agentEid: number, signature: string): boolean {
-  const now = Date.now();
-  const prev = recentFailedActions.get(agentEid);
+  const now = readSimulationTime(world);
+  const prev = recentFailedActions.get(key(agentEid));
   if (!prev) return false;
   if (prev.signature !== signature) return false;
   if (now - prev.lastAtMs > REPEAT_FAILURE_WINDOW_MS) return false;
   return prev.count >= MAX_REPEAT_FAILURES_BEFORE_BLOCK;
+}
+  return { recordFailedActionAttempt, clearFailedActionAttempt, shouldBlockRepeatedFailedAction };
 }
 
 function normalizeAffordanceToken(raw: string): string {
@@ -1822,8 +1856,7 @@ function normalizeAffordanceToken(raw: string): string {
 function normalizePlanContent(raw: string): string {
   return String(raw || "")
     .trim()
-    .replace(/^["'`]+|["'`]+$/g, "")
-    .replace(/\s+/g, " ");
+    .replace(/^["'`]+|["'`]+$/g, "");
 }
 
 function doesActionSatisfyPlanStep(
@@ -1851,15 +1884,248 @@ function doesActionSatisfyPlanStep(
     const actionAff = normalizeAffordanceToken(actionContent.split(/\s+/)[0] || "");
     if (stepAff && actionAff && stepAff !== actionAff) return false;
 
-    const stepArgs = normalizePlanContent(stepContent.split(/\s+/).slice(1).join(" "));
+    const stepArgs = stepContent.replace(/^\S+\s*/, "").trim();
     if (!stepArgs) return true;
-    const actionArgs = normalizePlanContent(actionContent.split(/\s+/).slice(1).join(" "));
+    const actionArgs = actionContent.replace(/^\S+\s*/, "").trim();
     if (!actionArgs) return false;
 
-    return actionArgs.includes(stepArgs) || stepArgs.includes(actionArgs);
+    return actionArgs === stepArgs;
   }
 
-  return actionContent.includes(stepContent) || stepContent.includes(actionContent);
+  return actionContent === stepContent;
+}
+
+type GoalExecution = Readonly<{ goalEid: number; actorKey: string; goalKey: string; signature: string }>;
+type PlanExecution = { planEid: number; goalEid: number; currentStep: number;
+  /** Optional only for legacy direct advanceAgentPlan callers. New receipts always capture this. */
+  episode?: Readonly<{ planKey: string; createdAt: number; steps: string; goal: GoalExecution }> };
+type DeferredExecution = { action: AgentAction; actorKey: string; plan?: PlanExecution; goalEid?: number; goal?: GoalExecution; workingMemory?: WorkingMemoryActionSnapshot;
+  inspectionTarget?: { eid: number; key: string }; coordination?: CoordinationActionIssuance; roomTraversal?: RoomTraversal; waitAuthority?: ActorWaitOutcomeAuthority };
+const deferredExecutions = new WeakMap<World, Map<number, Map<string, DeferredExecution>>>();
+// Only the scheduler possesses these exact action objects. A copied ID or model
+// output cannot bypass foreground admission or inherit a newer plan at delivery.
+type NativeResumption = DeferredExecution & { world: World; eid: number; startedAtSimMs: number; expectedEndSimMs: number;
+  documentWork?: DocumentWorkAdmission;
+  publicTarget?: { eid: number; key: string } };
+const nativeResumptions = new WeakMap<AgentAction, NativeResumption>();
+
+function publishNativeInterval(resume: NativeResumption, status: "pending" | "succeeded" | "failed") {
+  const { world, eid, action, startedAtSimMs, expectedEndSimMs } = resume;
+  const roomId = getRoomForEntity(world, eid);
+  if (roomId === undefined || !entityExists(world, roomId) || getCommittedSource(world).stopped) return;
+  publishCommittedEvent(world, { executionId: action.executionId!, kind: "action", actorId: eid, roomId,
+    action: action.type, operation: publicPhysicalOperation(action), status, startedAtSimMs, expectedEndSimMs,
+    ...(resume.publicTarget && entityExists(world, resume.publicTarget.eid)
+      && workingMemoryEntityRef(world, resume.publicTarget.eid)?.key === resume.publicTarget.key ? { targetId: resume.publicTarget.eid } : {}),
+    ...(status === "pending" ? {} : { completedAtSimMs: readSimulationTime(world) }) });
+}
+
+function nativeActionDuration(world: World, eid: number, action: AgentAction): number | undefined {
+  if (!world.meta.timedActions) return;
+  if (action.type === "move") {
+    const target = findEntityByName(world, action.target || "", { preferRoomEid: getRoomForEntity(world, eid) });
+    // Grid paths already integrate their own movement. Room edges lack geometry:
+    // use an explicit short traversal, never a fabricated distance.
+    return target !== undefined && hasComponent(world, target, Room) && getRoomForEntity(world, eid) !== target ? 3000 : undefined;
+  }
+  if (action.type === "interact") {
+    const definition = worldSchema.getAffordance(normalizeAffordanceToken(action.content?.split(/\s+/)[0] || ""));
+    // Tool jobs already have a real external completion boundary.
+    if (definition?.effects?.some(effect => effect.type === "run_tool")) return;
+    if (definition?.durationMs !== undefined) {
+      if (!Number.isFinite(definition.durationMs) || definition.durationMs < 0) throw new RangeError("Invalid affordance durationMs");
+      return definition.durationMs;
+    }
+    return 1000;
+  }
+  return ({ pickup: 800, drop: 600, give: 1000, use: 2000, observe: 1000, examine: 1500,
+    attack: 800, defend: 500 } as Partial<Record<AgentAction["type"], number>>)[action.type];
+}
+
+function scheduleNativeAction(world: World, eid: number, operation: DeferredExecution, registry: SystemRegistry): boolean {
+  // Explicit topology supplies its own world-time edge traversal even when a
+  // legacy world's general timedActions flag is absent. It cannot teleport.
+  const documentOperation = isDocumentOperation(operation.action);
+  const documentTarget = documentOperation ? findEntityByName(world, operation.action.target || "", { preferRoomEid: getRoomForEntity(world, eid) }) : undefined;
+  const documentWork = documentTarget === undefined ? undefined : captureDocumentWork(world, eid, documentTarget, operation.action);
+  if (documentOperation && !documentWork) return false;
+  const duration = documentWork?.durationMs ?? operation.roomTraversal?.travelMs ?? nativeActionDuration(world, eid, operation.action);
+  if (duration === undefined || duration === 0) return false;
+  const room = getRoomForEntity(world, eid), bindings: Array<{ label: string; eid: number; key: string }> = [];
+  const labels = [operation.action.target, operation.action.type === "give" ? operation.action.content : undefined].filter(Boolean) as string[];
+  for (const label of labels) {
+    const target = operation.roomTraversal ? operation.roomTraversal.to : findEntityByName(world, label, { preferRoomEid: room });
+    // Invalid targets fail through the ordinary executor immediately.
+    if (target === undefined) { cancelDocumentWork(documentWork); return false; }
+    bindings.push({ label, eid: target, key: workingMemoryEntityRef(world, target)!.key });
+  }
+  const action = Object.freeze({ ...operation.action, executionId: `execution:${randomUUID()}` });
+  if (!reserveSimulationResources(world, eid, action.executionId, ["body"], { activity: {
+    kind: action.type === "move" ? "moving" : "operating", operation: publicPhysicalOperation(action), targetEid: bindings[0]?.eid,
+  } })) { cancelDocumentWork(documentWork); return true; }
+  const resume: NativeResumption = { ...operation, action, world, eid, documentWork,
+    ...(bindings[0] ? { publicTarget: { eid: bindings[0].eid, key: bindings[0].key } } : {}),
+    startedAtSimMs: readSimulationTime(world), expectedEndSimMs: readSimulationTime(world) + duration };
+  const roomKey = room === undefined ? undefined : workingMemoryEntityRef(world, room)?.key;
+  const capabilityGeneration = getAgentWorldCapabilityGeneration(world, eid);
+  const sourceId = getCommittedSource(world).sourceId ?? startCommittedEvents(world);
+  let pending = deferredExecutions.get(world);
+  if (!pending) { pending = new Map(); deferredExecutions.set(world, pending); }
+  let operations = pending.get(eid);
+  if (!operations) { operations = new Map(); pending.set(eid, operations); }
+  operations.set(action.executionId, resume);
+  const rows = operations;
+  const cleanup = () => { cancelDocumentWork(documentWork); rows.delete(action.executionId); nativeResumptions.delete(action); releaseSimulationResources(world, eid, action.executionId); };
+  scheduleSimulationEvent(world, { atSimMs: resume.expectedEndSimMs, phase: "physical", cancel: () => {
+    // Cancellation closes the original public interval, never completes work or
+    // grants a plan receipt. Recycled actors/new event sources cannot inherit it.
+    if (rows.get(action.executionId) === resume && entityExists(world, eid)
+      && workingMemoryEntityRef(world, eid)?.key === operation.actorKey
+      && getCommittedSource(world).sourceId === sourceId && !getCommittedSource(world).stopped)
+      publishNativeInterval(resume, "failed");
+    cleanup();
+  }, run: () => {
+    releaseSimulationResources(world, eid, action.executionId);
+    if (!entityExists(world, eid) || !Agent.active[eid] || workingMemoryEntityRef(world, eid)?.key !== operation.actorKey
+      || getCommittedSource(world).stopped || getCommittedSource(world).sourceId !== sourceId) { cleanup(); return; }
+    if(!isEntityPresent(world,eid)){publishNativeInterval(resume,"failed");cleanup();return;}
+    const sameCapability = getAgentWorldCapabilityGeneration(world, eid) === capabilityGeneration;
+    // Legacy package replacement remains silent cancellation. An opted-in walk
+    // can report its failed crossing to the same source/actor, never teleport
+    // through a policy/package change or rebind the newer execution authority.
+    if (!sameCapability && !operation.roomTraversal) { cleanup(); return; }
+    const sameRoom = getRoomForEntity(world, eid) === room && (room === undefined || workingMemoryEntityRef(world, room)?.key === roomKey);
+    const sameTargets = bindings.every(binding => isEntityPresent(world, binding.eid)
+      && workingMemoryEntityRef(world, binding.eid)?.key === binding.key
+      && (operation.roomTraversal ? resolveRoomRouteTarget(world, eid, binding.label) : findEntityByName(world, binding.label, { preferRoomEid: room })) === binding.eid);
+    const sameRoute = !operation.roomTraversal || isRoomTraversalCurrent(world, eid, operation.roomTraversal);
+    if (!sameRoom || !sameTargets || !sameRoute || !sameCapability) {
+      completeDeferredAction(world, eid, action, false, "The action was interrupted: its original location or target is no longer available.");
+      publishNativeInterval(resume, "failed");
+      cleanup(); wakeForegroundCognition(world, eid); return;
+    }
+    rows.delete(action.executionId);
+    nativeResumptions.set(action, resume);
+    try { executeActions(world, [{ eid, action }], registry); }
+    catch (error) { wakeForegroundCognition(world, eid, { cause: "execution_outcome" }); throw error; }
+    // The executor already recorded success/failure and its quiet backoff.
+    // Cleanup is resource bookkeeping, not new evidence or another decision.
+    // In particular a completed observe must not erase its own idle outcome.
+    finally { cleanup(); }
+  } });
+  endRest(world, eid);
+  publishNativeInterval(resume, "pending");
+  return true;
+}
+
+function isVisualInspectionAction(action: { type: string; content?: string }): boolean {
+  return ["observe", "examine"].includes(action.type)
+    || action.type === "interact" && /^(examine|inspect|observe)$/i.test(action.content?.trim() || "");
+}
+
+/** Bind a pending look to an accessible entity at issuance, not a later name match. */
+function captureInspectionTarget(world: World, eid: number, action: AgentAction, before?: WorkingMemoryActionSnapshot) {
+  if (!isVisualInspectionAction(action) || !before) return;
+  const target = findEntityByName(world, action.target || "", { preferRoomEid: before.room });
+  if (target === undefined) return;
+  const ref = before.entities.find(item => item.eid === target)?.ref
+    || (target === before.room ? workingMemoryEntityRef(world, target) : undefined);
+  return ref ? { eid: target, key: ref.key } : undefined;
+}
+
+/** Semantic episode identity excludes mutable progress/priority/deadline fields.
+ * A real result may progress its original goal, but cannot inherit an in-place
+ * replacement simply because the entity slot and action words stayed equal. */
+function goalExecutionSignature(world: World, goalEid: number): string {
+  return JSON.stringify([Goal.createdAt[goalEid], Goal.description[goalEid], Goal.kind[goalEid],
+    Goal.paramsJson[goalEid], Goal.successJson[goalEid], Goal.signature[goalEid], intentionReviewRevision(world, goalEid)]);
+}
+function ensureExecutionIdentity(world: World, eid: number, prefix: string): string {
+  if (!hasComponent(world, eid, WorkingMemoryIdentity)) {
+    addComponent(world, eid, WorkingMemoryIdentity); WorkingMemoryIdentity.id[eid] = `${prefix}:${randomUUID()}`;
+  } else if (!WorkingMemoryIdentity.id[eid]) WorkingMemoryIdentity.id[eid] = `${prefix}:${randomUUID()}`;
+  return WorkingMemoryIdentity.id[eid];
+}
+function captureGoalExecution(world: World, eid: number, goalEid: number | undefined): GoalExecution | undefined {
+  if (goalEid === undefined || !entityExists(world, eid) || !entityExists(world, goalEid)
+    || !hasComponent(world, goalEid, Goal) || Goal.status[goalEid] !== "active"
+    || !getRelationTargets(world, eid, HasGoal).includes(goalEid)) return;
+  return Object.freeze({ goalEid, actorKey: ensureExecutionIdentity(world, eid, "entity"),
+    goalKey: ensureExecutionIdentity(world, goalEid, "goal"), signature: goalExecutionSignature(world, goalEid) });
+}
+function isGoalExecutionCurrent(world: World, eid: number, execution: GoalExecution): boolean {
+  return entityExists(world, eid) && hasComponent(world, eid, WorkingMemoryIdentity)
+    && WorkingMemoryIdentity.id[eid] === execution.actorKey && entityExists(world, execution.goalEid)
+    && hasComponent(world, execution.goalEid, Goal) && hasComponent(world, execution.goalEid, WorkingMemoryIdentity)
+    && WorkingMemoryIdentity.id[execution.goalEid] === execution.goalKey && Goal.status[execution.goalEid] === "active"
+    && getRelationTargets(world, eid, HasGoal).includes(execution.goalEid)
+    && goalExecutionSignature(world, execution.goalEid) === execution.signature;
+}
+function isPlanExecutionCurrent(world: World, eid: number, execution: PlanExecution): boolean {
+  const episode = execution.episode;
+  return !!episode && isGoalExecutionCurrent(world, eid, episode.goal)
+    && entityExists(world, execution.planEid) && entityExists(world, execution.goalEid) &&
+    hasComponent(world, execution.planEid, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[execution.planEid] === episode.planKey &&
+    Plan.createdAt[execution.planEid] === episode.createdAt && Plan.steps[execution.planEid] === episode.steps &&
+    hasComponent(world, execution.planEid, Plan) && hasComponent(world, execution.goalEid, Goal) &&
+    Plan.status[execution.planEid] === "active" && Goal.status[execution.goalEid] === "active" &&
+    Plan.goalEid[execution.planEid] === execution.goalEid && Plan.currentStep[execution.planEid] === execution.currentStep &&
+    getRelationTargets(world, eid, HasPlan).includes(execution.planEid) && getRelationTargets(world, eid, HasGoal).includes(execution.goalEid);
+}
+
+export function capturePlanExecution(world: World, eid: number, action: AgentAction): PlanExecution | undefined {
+  const step = getNextPlannedAction(world, eid);
+  if (!step || !doesActionSatisfyPlanStep(action, step)) return undefined;
+  // Capture identity before starting the physical action: completion must not
+  // advance whichever unrelated/replacement plan happens to be current later.
+  if (step.planEid === undefined || step.goalEid === undefined || step.currentStep === undefined) return;
+  const goal = captureGoalExecution(world, eid, step.goalEid);
+  if (!goal || !entityExists(world, step.planEid) || !hasComponent(world, step.planEid, Plan)) return;
+  return Object.freeze({ planEid: step.planEid, goalEid: step.goalEid, currentStep: step.currentStep,
+    episode: Object.freeze({ planKey: ensureExecutionIdentity(world, step.planEid, "plan"),
+      createdAt: Plan.createdAt[step.planEid], steps: Plan.steps[step.planEid], goal }) });
+}
+
+export function recordCompletedGoalAction(world: World, eid: number, action: AgentAction, goalEid?: number | null) {
+  if (goalEid === null) return; // no known attribution at issuance
+  // Successful direct choices count as activity just as planned steps do.
+  // Unknown legacy attribution and idle waiting must not renew another goal.
+  if (typeof goalEid === "number" && !["wait", "rest"].includes(action.type))
+    recordGoalAttemptActivity(world, eid, goalEid);
+  trackGoalAction(world, eid, { ...action, affordance: action.type === "interact" ? action.content?.split(/\s+/)[0] : undefined }, goalEid);
+}
+
+/** Complete utterances become social evidence only at their delivery boundary. */
+function deliverSpeech(world: World, eid: number, action: AgentAction,
+  delivery?: { audience: ReadonlySet<number>; interval: SpeechInterval }, privatePurpose?: string): void {
+  const roomEid = getRoomForEntity(world, eid), name = Name.value[eid];
+  if (!action.content || roomEid === undefined) return;
+  const speech = recordCommittedSpeech(world, eid, action.content, action.target, Date.now(), delivery, privatePurpose);
+  // Timed words already reached listeners as coherent heard spans. Completion
+  // adds the full-turn receipt, not a duplicate utterance-sized stimulus.
+  if (!delivery) broadcastSound(world, roomEid, `${name} says: "${action.content}"`, name, eid);
+  console.log(`💬 ${name}: "${action.content}"`);
+  chronicle.record("conversation", { speaker: name, target: action.target || "room", content: action.content.slice(0, 100),
+    ...(delivery ? { simulation: delivery.interval } : {}) });
+  if (!delivery) {
+    resolveDecision(world, eid, true, action);
+    queueStimulus(world, { targetEid: eid, type: "action_result", modality: "cognitive", content: `You say: "${action.content}"`, source: "speech" });
+    onProcedureActionResult(world, eid, action, { success: true });
+  }
+  if (action.target && !delivery) {
+    const target = findEntityByName(world, action.target, { preferRoomEid: roomEid });
+    if (target !== undefined && hasComponent(world, target, Agent) && getRoomForEntity(world, target) === roomEid
+      && getAgentSensoryCapabilities(world, target).auditory > 0) {
+      queueStimulus(world, { targetEid: target, type: "speech", modality: "auditory", content: `${name} says to you: "${action.content}"`,
+        source: name, intensity: 1 });
+      Mind.arousal[target] = Math.min(1, (Mind.arousal[target] || 0.5) + 0.2);
+      Mind.focus[target] = `heard ${name}`;
+    }
+  }
+  extractKnowledgeFromInteraction(world, eid, { type: "speech", content: action.content,
+    speechId: speech?.id,
+    perspective: "own_speech", speaker: name, otherParty: action.target,
+    context: `Speaking in ${Name.value[roomEid] || "a room"}` }).catch(() => {});
 }
 
 export function executeActions(
@@ -1867,9 +2133,83 @@ export function executeActions(
   actions: Array<{ eid: number; action: AgentAction }>,
   registry: SystemRegistry
 ): void {
+  assertSimulationTaskActive();
+  const { recordFailedActionAttempt, clearFailedActionAttempt, shouldBlockRepeatedFailedAction } = failureGuards(world);
+  let recentPlanStepFailures = planStepFailuresByWorld.get(world);
+  if (!recentPlanStepFailures) { recentPlanStepFailures = new Map(); planStepFailuresByWorld.set(world, recentPlanStepFailures); }
   for (const { eid, action } of actions) {
+    const candidate = nativeResumptions.get(action);
+    const nativeResume = candidate?.world === world && candidate.eid === eid ? candidate : undefined;
+    if (nativeResume) nativeResumptions.delete(action);
     // Skip if entity no longer exists
-    if (!entityExists(world, eid)) continue;
+    if (!isEntityPresent(world, eid) || getCommittedSource(world).stopped) continue;
+    const requestedType = normalizeActionType(action.type);
+    const replacingSpeech = !!action.stopSpeechId;
+    const interruptionSource = replacingSpeech ? getCommittedSource(world).sourceId : undefined;
+    const interruptionActor = replacingSpeech ? workingMemoryEntityRef(world, eid)?.key : undefined;
+    const interruptionGeneration = replacingSpeech ? getAgentWorldCapabilityGeneration(world, eid) : undefined;
+    const interruptionRoom = replacingSpeech ? getRoomForEntity(world, eid) : undefined;
+    const interruptionRoomKey = interruptionRoom === undefined ? undefined : workingMemoryEntityRef(world, interruptionRoom)?.key;
+    const interruptionTargets = replacingSpeech ? [action.target, action.type === "give" ? action.content : undefined]
+      .filter((label): label is string => !!label).map(label => {
+        const target = findEntityByName(world, label, { preferRoomEid: interruptionRoom });
+        return { label, target, key: target === undefined ? undefined : workingMemoryEntityRef(world, target)?.key };
+      }) : [];
+    if (replacingSpeech && getSpeakingActivity(world, eid)?.executionId !== action.stopSpeechId) {
+      chronicle.record("decision_superseded", { agent: Name.value[eid], reason: "voice_changed", boundary: "dispatch" });
+      wakeForegroundCognition(world, eid); continue;
+    }
+    if (requestedType === "speak" && isSpeaking(world, eid) && !replacingSpeech) continue;
+    if (world.meta.timedSpeech && requestedType === "speak" && !replacingSpeech) {
+      const opportunity = readLocalSpeechOpportunity(world, eid, { mode: action.speechMode === "interrupt" ? "urgent" : "conversational" });
+      if (!opportunity.available) {
+        // New protocol retains a separately integrated purpose and a bounded,
+        // dependency-checked speech proposal. Legacy drafts remain unadmitted.
+        deferIntegratedForegroundSpeech(world, eid, action);
+        deferForegroundSpeech(world, eid, Math.min(readSimulationTime(world) + 1000, opportunity.nextCheckAtSimMs ?? readSimulationTime(world) + 500));
+        chronicle.record("speech_deferred", { agent: Name.value[eid], reason: opportunity.reason });
+        continue;
+      }
+    }
+    if (requestedType && ["move", "interact", "pickup", "drop", "give", "use", "attack", "observe", "examine", "rest"].includes(requestedType)
+      && isSimulationResourceBusy(world, eid, "body") && !getAgentWorldCapabilities(world, eid)?.canInterruptBusyAction?.(action)) continue;
+
+    // Recheck the exact actor-owned foreground issuance immediately before any
+    // physical admission, proof capture, learning or side effects. Parallel
+    // model returns can otherwise race one another after their first check.
+    const foreground = nativeResume ? { admitted: true, reason: undefined, reasoning: undefined, mentalUpdateOmitted: false }
+      : consumeForegroundAction(world, eid, action);
+    if (!foreground.admitted) {
+      if (foreground.reason) chronicle.record("decision_superseded", { agent: Name.value[eid], reason: foreground.reason,
+        boundary: "dispatch", actionType: action.type, target: action.target, requestId: action.foregroundDecisionId,
+        ...("localDependencyChange" in foreground && foreground.localDependencyChange ? { localDependencyChange: foreground.localDependencyChange } : {}) });
+      wakeForegroundCognition(world, eid);
+      continue;
+    }
+    if (foreground.mentalUpdateOmitted) wakeForegroundCognition(world, eid);
+    if (action.waitUntil && (action.type !== "wait" || action.listeningTo || !prepareActorWait(world, eid, action.waitUntil))) {
+      addCriticalActionFailure(world, eid, "FAILED: That waiting condition is not currently grounded in your available evidence.", "waiting");
+      wakeForegroundCognition(world, eid, { cause: "execution_outcome" }); continue;
+    }
+    if (action.listeningTo && (action.type !== "wait" || !getListeningActivities(world, eid).some(row => row.executionId === action.listeningTo))) {
+      addCriticalActionFailure(world, eid, "FAILED: That heard voice is no longer available to listen to.", "hearing");
+      wakeForegroundCognition(world, eid, { cause: "execution_outcome" });
+      continue;
+    }
+    const privateSpeechPurpose = "purpose" in foreground ? foreground.purpose : undefined;
+    if (replacingSpeech && !interruptTimedSpeech(world, eid, "self_correction", { executionId: action.stopSpeechId })) {
+      wakeForegroundCognition(world, eid); continue;
+    }
+    // Ending a voice calls synchronous observers. A stop, restart or world edit
+    // there cannot authorize a fresh action after its old admission boundary.
+    if (replacingSpeech && (getCommittedSource(world).stopped || getCommittedSource(world).sourceId !== interruptionSource
+      || !entityExists(world, eid) || !hasComponent(world, eid, Agent) || !Agent.active[eid]
+      || workingMemoryEntityRef(world, eid)?.key !== interruptionActor
+      || getAgentWorldCapabilityGeneration(world, eid) !== interruptionGeneration
+      || getRoomForEntity(world, eid) !== interruptionRoom
+      || interruptionRoom !== undefined && workingMemoryEntityRef(world, interruptionRoom)?.key !== interruptionRoomKey
+      || interruptionTargets.some(binding => findEntityByName(world, binding.label, { preferRoomEid: interruptionRoom }) !== binding.target
+        || binding.target !== undefined && workingMemoryEntityRef(world, binding.target)?.key !== binding.key))) continue;
 
     const name = Name.value[eid];
     const roomEid = getRoomForEntity(world, eid);
@@ -1898,7 +2238,9 @@ export function executeActions(
     // Use the normalized action type
     // IMPORTANT: If an affordance-type action was normalized to "interact",
     // preserve the original action name as the content (affordance to execute)
-    let validatedAction = { ...action, type: normalizedType };
+    // Self-stop is consumed once here, never replayed by a later body callback.
+    const { stopSpeechId: _consumedVoice, ...withoutVoiceControl } = action;
+    let validatedAction = { ...withoutVoiceControl, type: normalizedType };
     if (normalizedType === "interact" && originalType.toLowerCase() !== "interact") {
       // The original type was an affordance name (e.g., "sharpen", "cook", "oil")
       // Put it in the content field so the interact handler can use it
@@ -1910,14 +2252,95 @@ export function executeActions(
         validatedAction = { ...validatedAction, content: `${originalLower} ${validatedAction.content}` };
       }
     }
+    if (foreground.reasoning !== undefined) captureLLMDecision(world, eid, foreground.reasoning,
+      { type: validatedAction.type as any, target: validatedAction.target, content: validatedAction.content },
+      validatedAction.type === "interact" ? validatedAction.content?.split(/\s+/)[0] : undefined);
+
+    // Domain-specific actions can take physical time. The package must report
+    // completion later; accepting an intention must NOT advance the plan here.
+    const capabilities = getAgentWorldCapabilities(world, eid);
+    const visualInspection = ["observe", "examine"].includes(validatedAction.type) || validatedAction.type === "interact" &&
+      ["examine", "inspect", "observe"].includes(normalizeAffordanceToken(validatedAction.content?.split(/\s+/)[0] || ""));
+    const hasSight = getAgentSensoryCapabilities(world, eid).visual > 0;
+    const inspectionTarget = visualInspection
+      ? validatedAction.target ? findEntityByName(world, validatedAction.target, { preferRoomEid: roomEid }) : roomEid
+      : undefined;
+    // The package is a physical executor, not an alternate visual admission
+    // authority. Explicit visual aliases must pass sight before dispatch too;
+    // specialized commands such as read_message retain their authored rules.
+    const visualInspectionUnavailable = visualInspection && (!hasSight || inspectionTarget === undefined
+      || inspectionTarget !== roomEid && !getAgentVisualEntities(world, eid).includes(inspectionTarget));
+    const waitAuthority = nativeResume?.waitAuthority ?? captureActorWaitOutcomeAuthority(world, eid, validatedAction,
+      "selected" in foreground && foreground.selected === true);
+    const actionPlan = nativeResume ? nativeResume.plan : capturePlanExecution(world, eid, validatedAction as AgentAction);
+    const workingMemoryBefore = nativeResume ? nativeResume.workingMemory : captureWorkingMemoryAction(world, eid, validatedAction as AgentAction);
+    // A parent goal can support several different promises. Attribute only the
+    // explicitly selected undertaking, never every promise sharing that goal.
+    const coordination = nativeResume ? nativeResume.coordination : validatedAction.coordinationWork
+      ? captureCoordinationAction(world, eid, validatedAction.coordinationWork, validatedAction)
+      : undefined;
+    // Choosing an independent purpose is not evidence for an unrelated goal.
+    // Preserve the same ownership used to select a deterministic primitive;
+    // otherwise its successful receipt can train the wrong behavior tree.
+    const ownedPurpose = snapshotActorContinuation(world, eid);
+    const actionGoal = nativeResume ? nativeResume.goalEid : actionPlan?.goalEid ?? (ownedPurpose
+      ? situatedPlanGoal(world, eid)
+      : getRelationTargets(world, eid, HasGoal)
+        .filter(gid => hasComponent(world, gid, Goal) && Goal.status[gid] === "active"
+          && (world.meta.aiEnabled === false || Goal.kind[gid] !== "scheduled_activity"))
+        .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0))[0]);
+    const actionGoalEpisode = nativeResume ? nativeResume.goal : captureGoalExecution(world, eid, actionGoal);
+    // The same one-step topology that supplies the action menu owns admission
+    // and completion. Package execute hooks cannot bypass it with a global name.
+    const topologyMove = validatedAction.type === "move" && (!!nativeResume?.roomTraversal || !!getRoomRouteTopologyGeneration(world));
+    const roomTraversal = nativeResume?.roomTraversal ?? (topologyMove ? captureRoomTraversal(world, eid, validatedAction.target || "") : undefined);
+    const unavailableRoute = topologyMove && (!roomTraversal || !isRoomTraversalCurrent(world, eid, roomTraversal));
+    if (!nativeResume && capabilities && !visualInspectionUnavailable && !topologyMove && validatedAction.type !== "speak") {
+      // Every admission is a distinct physical operation, even if it repeats
+      // identical words. Packages must retain this ID with their pending work.
+      validatedAction = { ...validatedAction, executionId: `execution:${randomUUID()}` };
+      let pending = deferredExecutions.get(world);
+      if (!pending) { pending = new Map(); deferredExecutions.set(world, pending); }
+      const actorKey = workingMemoryEntityRef(world, eid)!.key;
+      let operations = pending.get(eid);
+      if (!operations || [...operations.values()].some(previous => previous.actorKey !== actorKey)) {
+        operations = new Map(); pending.set(eid, operations);
+      }
+      // A concurrent voice is not an ignored prior body operation. Its receipt
+      // must not cause a newly admitted walk/pickup receipt to be discarded.
+      const previousIds = [...operations].filter(([, previous]) => previous.action.type !== "speak").map(([id]) => id);
+      const executionId = validatedAction.executionId!;
+      operations.set(executionId, { action: { ...validatedAction } as AgentAction, actorKey, plan: actionPlan, goalEid: actionGoal, goal: actionGoalEpisode,
+        workingMemory: workingMemoryBefore, inspectionTarget: captureInspectionTarget(world, eid, validatedAction as AgentAction, workingMemoryBefore), coordination, waitAuthority });
+      let handled: boolean;
+      try { handled = capabilities.execute(validatedAction as AgentAction); }
+      catch (error) { operations.delete(executionId); throw error; }
+      if (handled) {
+        // A package may synchronously finish a held operation and acknowledge
+        // its release in the same call. Both need distinct receipts. If it only
+        // ignores a new command while busy, do not accumulate phantom work.
+        if (previousIds.some(id => operations.has(id))) operations.delete(executionId);
+        if (capabilities.busy?.()) { endRest(world, eid); wakeForegroundCognition(world, eid); }
+        // A synchronous package completion already recorded its actual outcome.
+        // Do not erase quiet pacing established by that completion callback.
+        continue;
+      }
+      operations.delete(executionId);
+    }
 
     // Used for plan advancement: do not advance a plan step if the action clearly failed,
     // or if we're waiting on an async tool job to complete.
-    let actionSucceededForPlan = true;
+    // Fail closed. Every implemented handler must explicitly report completion.
+    // Previously missing items, unknown moves and unimplemented actions advanced plans.
+    let actionSucceededForPlan = false;
     let actionPendingForPlan = false;
+    let executedTargetKey: string | undefined;
+    const targetResolved = (target: number | undefined) => {
+      if (coordination && target !== undefined) executedTargetKey = workingMemoryEntityRef(world, target)?.key;
+    };
 
     const sig = actionSignature(validatedAction, roomEid);
-    if (shouldBlockRepeatedFailedAction(eid, sig)) {
+    if (!nativeResume && shouldBlockRepeatedFailedAction(eid, sig)) {
       addCriticalActionFailure(
         world,
         eid,
@@ -1928,70 +2351,102 @@ export function executeActions(
       continue;
     }
 
+    if (!nativeResume && !visualInspectionUnavailable && !unavailableRoute && scheduleNativeAction(world, eid, {
+      action: validatedAction as AgentAction, actorKey: workingMemoryEntityRef(world, eid)!.key,
+      plan: actionPlan, goalEid: actionGoal, goal: actionGoalEpisode, workingMemory: workingMemoryBefore, coordination,
+      inspectionTarget: captureInspectionTarget(world, eid, validatedAction as AgentAction, workingMemoryBefore),
+      roomTraversal, waitAuthority,
+    }, registry)) continue;
+
     switch (validatedAction.type) {
       case "speak":
         if (validatedAction.content && roomEid !== undefined) {
-          // Speech is an auditory stimulus
-          broadcastSound(world, roomEid, `${name} says: "${action.content}"`, name, eid);
-          console.log(`💬 ${name}: "${action.content}"`);
-
-          // Chronicle: conversation
-          chronicle.record("conversation", {
-            speaker: name, target: validatedAction.target || "room",
-            content: (action.content || "").slice(0, 100),
-          });
-
-          // Compile LLM speak decision into BT branch
-          resolveDecision(world, eid, true);
-
-          // Success feedback for cognition/harness scoring.
-          queueStimulus({
-            targetEid: eid,
-            type: "action_result",
-            modality: "cognitive",
-            content: `You say: "${validatedAction.content}"`,
-            source: "speech",
-          });
-
-          // LastAction (ECS): used by deterministic goal evaluation.
-          if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
-          LastAction.type[eid] = "speak";
-          LastAction.target[eid] = validatedAction.target || "";
-          LastAction.content[eid] = validatedAction.content || "";
-          LastAction.success[eid] = true;
-          LastAction.timestamp[eid] = Date.now();
-
-          // If the speaker specified a target, send a direct "speech" stimulus to that agent.
-          // This acts as a high-priority interruption signal (distinct from generic room sound).
-          if (validatedAction.target) {
-            const targetEid = findEntityByName(world, validatedAction.target, { preferRoomEid: roomEid });
-            if (targetEid !== undefined && hasComponent(world, targetEid, Agent)) {
-              queueStimulus({
-                targetEid,
-                type: "speech",
-                modality: "auditory",
-                content: `${name} says to you: "${validatedAction.content}"`,
-                source: name,
-                intensity: 1.0,
-              });
-              // Nudge attention/arousal so the recipient is more likely to respond immediately.
-              Mind.arousal[targetEid] = Math.min(1, (Mind.arousal[targetEid] || 0.5) + 0.2);
-              Mind.focus[targetEid] = `respond to ${name}`;
+          if (world.meta.timedSpeech) {
+            const speechAction: AgentAction = Object.freeze({ ...validatedAction, type: "speak", executionId: `execution:${randomUUID()}` });
+            let pending = deferredExecutions.get(world);
+            if (!pending) { pending = new Map(); deferredExecutions.set(world, pending); }
+            let operations = pending.get(eid);
+            if (!operations) { operations = new Map(); pending.set(eid, operations); }
+            const executionId = speechAction.executionId!;
+            operations.set(executionId, { action: speechAction, actorKey: workingMemoryEntityRef(world, eid)!.key,
+              plan: actionPlan, goalEid: actionGoal, goal: actionGoalEpisode, workingMemory: workingMemoryBefore, coordination, waitAuthority });
+            const operationRows = operations;
+            const speechStart = readSimulationTime(world), speechEnd = speechStart + estimateSpeechDurationMs(speechAction.content!);
+            const speechActorKey = workingMemoryEntityRef(world, eid)!.key;
+            const speechActorName = Name.value[eid];
+            const speechSource = getCommittedSource(world).sourceId ?? startCommittedEvents(world);
+            const speechGeneration = getAgentWorldCapabilityGeneration(world, eid);
+            const speechContextCurrent = () => !getCommittedSource(world).stopped && getCommittedSource(world).sourceId === speechSource
+              && entityExists(world, eid) && hasComponent(world, eid, Agent) && Agent.active[eid]
+              && workingMemoryEntityRef(world, eid)?.key === speechActorKey
+              && getAgentWorldCapabilityGeneration(world, eid) === speechGeneration;
+            const flushInterruptedHearing = () => {
+              for (const heard of flushHeardSpeechFragments(world, executionId))
+                queueStimulus(world, { targetEid: heard.eid, type: "speech_fragment", modality: "auditory", content: heard.content, source: speechActorName, hearing: heard.hearing });
+            };
+            let speechPublished = false;
+            const publishSpeechTerminal = (success: boolean) => {
+              const currentRoom = getRoomForEntity(world, eid);
+              if (!speechPublished || getCommittedSource(world).stopped || !entityExists(world, eid)
+                || workingMemoryEntityRef(world, eid)?.key !== speechActorKey || currentRoom === undefined) return;
+              speechPublished = false;
+              publishCommittedEvent(world, { executionId, kind: "speech", actorId: eid, roomId: currentRoom,
+                action: "speak", status: success ? "succeeded" : "failed", startedAtSimMs: speechStart,
+                expectedEndSimMs: speechEnd, completedAtSimMs: readSimulationTime(world) });
+            };
+            actionPendingForPlan = beginTimedSpeech(world, eid, speechAction.content!, executionId, result => {
+              if (!speechContextCurrent()) { operationRows.delete(executionId); return; }
+              if (!result.success) flushInterruptedHearing();
+              if (result.success) deliverSpeech(world, eid, speechAction, result, privateSpeechPurpose);
+              if (!speechContextCurrent()) { operationRows.delete(executionId); return; }
+              completeDeferredAction(world, eid, speechAction, result.success,
+                result.success ? `You finished saying: "${speechAction.content}"`
+                  : `Your speech stopped${result.spokenText ? ` after saying: ${JSON.stringify(result.spokenText.trim())}` : " before any words were spoken"}. The remaining words were not delivered.`);
+              if (!speechContextCurrent()) return;
+              capabilities?.afterAction?.(result.success ? speechAction : { ...speechAction, content: result.spokenText }, result.success, false);
+              if (!speechContextCurrent()) return;
+              publishSpeechTerminal(result.success);
+              if (!speechContextCurrent()) return;
+              wakeForegroundCognition(world, eid);
+            }, () => { operationRows.delete(executionId); publishSpeechTerminal(false); }, {
+              floor: replacingSpeech || speechAction.speechMode === "interrupt" ? "urgent" : "conversational",
+              fragment: fragment => {
+              for (const heard of recordHeardSpeechFragment(world, eid, fragment, speechAction.target))
+                queueStimulus(world, { targetEid: heard.eid, type: "speech_fragment", modality: "auditory", content: heard.content, source: Name.value[eid], hearing: heard.hearing });
+              publishCommittedEvent(world, { executionId, kind: "speech", actorId: eid, roomId: fragment.roomId,
+                action: "speak", status: "succeeded", startedAtSimMs: fragment.startedAtSimMs, text: fragment.content });
+            } });
+            if (!actionPendingForPlan) operationRows.delete(executionId);
+            else {
+              speechPublished = true;
+              publishCommittedEvent(world, { executionId, kind: "speech", actorId: eid, roomId: roomEid,
+                action: "speak", status: "pending", startedAtSimMs: speechStart, expectedEndSimMs: speechEnd });
             }
+            // Admission observers can stop/restart the world, replace its actor
+            // or package, or finish/interrupt this voice synchronously. Never
+            // overwrite that settlement with stale pending bookkeeping below.
+            if (!speechContextCurrent() || actionPendingForPlan
+              && getSpeakingActivity(world, eid)?.executionId !== executionId) continue;
+            validatedAction = speechAction;
+          } else {
+            actionSucceededForPlan = true;
+            deliverSpeech(world, eid, { ...validatedAction, type: "speak" }, undefined, privateSpeechPurpose);
           }
-
-          extractKnowledgeFromInteraction(world, eid, {
-            type: "speech",
-            content: action.content || "",
-            context: `Speaking in ${Name.value[roomEid] || "a room"}`,
-          }).catch(() => {});
-
-          onProcedureActionResult(world, eid, validatedAction, { success: true });
         }
         clearFailedActionAttempt(eid);
         break;
 
       case "observe":
+        if (getAgentSensoryCapabilities(world, eid).visual <= 0) {
+          const failure = "FAILED: Visual inspection is unavailable without sight.";
+          addCriticalActionFailure(world, eid, failure, "observation");
+          if (!hasComponent(world, eid, LastAction)) addComponent(world, eid, LastAction);
+          LastAction.type[eid] = "observe"; LastAction.target[eid] = validatedAction.target || "";
+          LastAction.content[eid] = ""; LastAction.success[eid] = false; LastAction.timestamp[eid] = Date.now();
+          recordFailedActionAttempt(eid, sig);
+          onProcedureActionResult(world, eid, validatedAction, { success: false });
+          break;
+        }
         if (action.target) {
           Mind.focus[eid] = action.target;
           console.log(`👁️ ${name} observes ${action.target}`);
@@ -2000,12 +2455,12 @@ export function executeActions(
           const observeTargetEid = findEntityByName(world, action.target, { preferRoomEid: roomEid });
           if (observeTargetEid === undefined) {
             actionSucceededForPlan = false;
-            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const visible = getVisibleNamesInRoom(world, eid);
             const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
             addCriticalActionFailure(
               world,
               eid,
-              `FAILED: You tried to observe "${action.target}" but it doesn't exist as an entity here. ${hint}`,
+              `FAILED: You cannot currently see "${action.target}". ${hint}`,
               "observation"
             );
             if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
@@ -2020,16 +2475,17 @@ export function executeActions(
             break;
           }
 
-          // Grounding: you can only observe things that are actually accessible here (room/held/open containers).
-          if (!isInteractTargetAccessible(world, eid, roomEid, observeTargetEid)) {
+          // Physical reach is not sight. A known/touchable hidden possession or
+          // a remembered name cannot reveal its current description or state.
+          if (observeTargetEid !== roomEid && !getAgentVisualEntities(world, eid).includes(observeTargetEid)) {
             actionSucceededForPlan = false;
-            const targetName = Name.value[observeTargetEid] || action.target;
-            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const targetName = action.target;
+            const visible = getVisibleNamesInRoom(world, eid);
             const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
             addCriticalActionFailure(
               world,
               eid,
-              `FAILED: You tried to observe "${targetName}" but it is not accessible/visible from here. ${hint}`,
+              `FAILED: You cannot currently see "${targetName}". ${hint}`,
               "observation"
             );
             if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
@@ -2041,6 +2497,7 @@ export function executeActions(
             recordFailedActionAttempt(eid, sig);
             break;
           }
+          targetResolved(observeTargetEid);
 
           // Only set grid movement target if agent has no current room (grid-only mode).
           // In room-based simulation, agents are already co-located with observable objects.
@@ -2049,9 +2506,11 @@ export function executeActions(
             setMovementTarget(eid, observeTargetEid);
           }
           const targetName = Name.value[observeTargetEid] || action.target;
-          const targetDesc = Description.value[observeTargetEid] || "You see nothing special.";
+          const targetDesc = hasComponent(world, observeTargetEid, Description) ? Description.value[observeTargetEid] || "You see nothing special." : "You see nothing special.";
           // Read state from ECS ObjectState component (not ObjectMeta)
-          const targetState = ObjectState?.current?.[observeTargetEid];
+          const targetState = hasComponent(world, observeTargetEid, Agent)
+            ? getObservedPublicActivity(world, eid, observeTargetEid)
+            : hasComponent(world, observeTargetEid, ObjectState) ? ObjectState.current[observeTargetEid] : undefined;
 
           // Build detailed observation
           const observationParts: string[] = [];
@@ -2061,6 +2520,10 @@ export function executeActions(
           if (targetState && targetState !== "normal") {
             observationParts.push(`It appears to be ${targetState}.`);
           }
+          const observedKey = workingMemoryEntityRef(world, observeTargetEid)?.key;
+          const previousInspection = observedKey === undefined ? undefined : getCurrentInspection(world, eid, observedKey, validatedAction.content);
+          const inspection = recordInspectionResult(world, eid, observeTargetEid, { question: validatedAction.content });
+          if (inspection) observationParts.push(inspection.summary);
 
           // Get available affordances - examining reveals what you can do
           const affordances = getAvailableAffordances(world, eid, observeTargetEid);
@@ -2069,7 +2532,8 @@ export function executeActions(
           }
 
           // Send detailed observation as cognitive stimulus
-          queueStimulus({
+          actionSucceededForPlan = true;
+          queueStimulus(world, {
             targetEid: eid,
             type: "observation",
             modality: "cognitive",
@@ -2085,11 +2549,15 @@ export function executeActions(
           LastAction.success[eid] = true;
           LastAction.timestamp[eid] = Date.now();
 
-          extractKnowledgeFromInteraction(world, eid, {
+          // The explicit observation still commits its receipt and feedback.
+          // Only new native evidence merits another asynchronous interpretation;
+          // a new timestamp on the same inspected surface is not new knowledge.
+          if (inspection && inspection.evidenceBasis !== previousInspection?.evidenceBasis) extractKnowledgeFromInteraction(world, eid, {
             type: "observation",
-            content: `Observing ${action.target}`,
-            otherParty: action.target,
-            context: `In ${roomEid !== undefined ? Name.value[roomEid] || "a room" : "a room"}`,
+            perspective: "observation",
+            content: observationParts.join(" "),
+            otherParty: inspection.subjectLabel,
+            context: `Completed inspection ${inspection.sourceId} of ${inspection.subject} in ${roomEid !== undefined ? Name.value[roomEid] || "a room" : "a room"}; question: ${inspection.question}. Only the supplied visible result was observed.`,
           }).catch(() => {});
           clearFailedActionAttempt(eid);
 
@@ -2098,6 +2566,7 @@ export function executeActions(
         break;
 
       case "think":
+        actionSucceededForPlan = true;
         if (action.content) {
           console.log(`💭 ${name} thinks: "${action.content}"`);
         }
@@ -2106,12 +2575,25 @@ export function executeActions(
         break;
 
       case "interact":
+        if (visualInspectionUnavailable) {
+          const visible = getVisibleNamesInRoom(world, eid);
+          const hint = visible.length ? ` Visible here: ${visible.join(", ")}.` : "";
+          addCriticalActionFailure(world, eid, !hasSight ? "FAILED: Visual inspection is unavailable without sight."
+            : `FAILED: You cannot currently see "${validatedAction.target || "that target"}".${hint}`, "observation");
+          if (!hasComponent(world, eid, LastAction)) addComponent(world, eid, LastAction);
+          LastAction.type[eid] = "interact"; LastAction.target[eid] = validatedAction.target || "";
+          LastAction.content[eid] = validatedAction.content || ""; LastAction.success[eid] = false; LastAction.timestamp[eid] = Date.now();
+          recordFailedActionAttempt(eid, sig);
+          onProcedureActionResult(world, eid, validatedAction, { success: false });
+          break;
+        }
         if (validatedAction.target && validatedAction.content) {
           // Parse affordance name from content (e.g., "eat the apple" -> "eat")
           let affordanceName = normalizeAffordanceToken(validatedAction.content.split(/\s+/)[0] || "");
 
           // Find the target entity
             const targetEid = findEntityByName(world, validatedAction.target, { preferRoomEid: roomEid });
+            targetResolved(targetEid);
 
           if (targetEid === undefined) {
             actionSucceededForPlan = false;
@@ -2124,19 +2606,33 @@ export function executeActions(
               roomName,
               affordanceName,
               validatedAction.target,
-              validatedAction.content
+              validatedAction.content,
+              world
             );
-            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const visible = getVisibleNamesInRoom(world, eid);
             const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
             addCriticalActionFailure(
               world,
               eid,
-              `FAILED: You tried to ${affordanceName} "${validatedAction.target}" but it doesn't exist as an entity here. ${hint}`,
+              affordanceName === "examine" ? `FAILED: You cannot currently see "${validatedAction.target}". ${hint}`
+                : `FAILED: You tried to ${affordanceName} "${validatedAction.target}" but it doesn't exist as an entity here. ${hint}`,
               "interaction"
             );
             recordFailedActionAttempt(eid, sig);
             const issues = validateAgentAction(world, name, validatedAction.type, validatedAction.target, validatedAction.content);
             for (const issue of issues) recordIssue(issue);
+            break;
+          }
+
+          // The visual examine affordance must not use generic physical reach
+          // to inspect hidden possessions. Other physical actions retain their
+          // own accessibility rules; knowing something by touch is still useful.
+          if (affordanceName === "examine" && !getAgentVisualEntities(world, eid).includes(targetEid)) {
+            const visible = getVisibleNamesInRoom(world, eid);
+            const hint = visible.length ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
+            addCriticalActionFailure(world, eid, `FAILED: You cannot currently see "${validatedAction.target}". ${hint}`, "observation");
+            recordFailedActionAttempt(eid, sig);
+            onProcedureActionResult(world, eid, validatedAction, { success: false });
             break;
           }
 
@@ -2148,11 +2644,12 @@ export function executeActions(
           if (!isInteractTargetAccessible(world, eid, roomEid, targetEid)) {
             actionSucceededForPlan = false;
             const targetName = Name.value[targetEid] || validatedAction.target;
-            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const visible = getVisibleNamesInRoom(world, eid);
             const inv = hasInventory(world, eid) ? formatInventory(world, eid) : "";
             const hints: string[] = [];
             const containerEid = getDirectContainer(world, targetEid);
-            if (containerEid !== undefined && roomEid !== undefined && containerEid !== roomEid) {
+            if (containerEid !== undefined && roomEid !== undefined && containerEid !== roomEid &&
+                getRoomForEntity(world, containerEid) === roomEid && getAgentVisibleEntities(world, eid).includes(containerEid)) {
               const containerName = Name.value[containerEid];
               if (containerName) hints.push(`It appears to be inside "${containerName}".`);
             }
@@ -2190,8 +2687,9 @@ export function executeActions(
 		          }
 
 		          // Create effect context
-	            const rawAffordanceArgs = (validatedAction.content || "").split(" ").slice(1).join(" ").trim();
+	            const rawAffordanceArgs = (validatedAction.content || "").trim().replace(/^\S+\s*/, "");
 	            const affordanceArgs = stripControlAndAnsi(rawAffordanceArgs);
+                validatedAction = { ...validatedAction, content: `${affordanceName}${affordanceArgs ? ` ${affordanceArgs}` : ""}` };
 
 	            // Async tool jobs: if the agent already has an in-flight job for this exact tool+command, wait.
 	            const expectedToolId =
@@ -2223,7 +2721,7 @@ export function executeActions(
 	                if (lastJob !== String(PendingToolJob.jobId[eid] || "") || !lastAt || now - lastAt > 2000) {
 	                  PendingToolJob.lastNotifyAt[eid] = now;
 	                  PendingToolJob.lastNotifyJobId[eid] = String(PendingToolJob.jobId[eid] || "");
-	                  queueStimulus({
+	                  queueStimulus(world, {
 	                    targetEid: eid,
 	                    type: "action_result",
 	                    modality: "cognitive",
@@ -2245,7 +2743,9 @@ export function executeActions(
 	          };
 
 	          // Execute the affordance
-	          const result = executeAffordance(affordanceName, ctx);
+	          const result = isDocumentOperation(validatedAction)
+              ? commitDocumentWork(world, eid, targetEid, nativeResume?.documentWork)
+              : executeAffordance(affordanceName, ctx);
             const affordanceDef = worldSchema.getAffordance(affordanceName);
             const toolChange = result.changes.find((c) => c.startsWith("tool: "));
             const toolId = toolChange ? toolChange.slice("tool: ".length).trim() : undefined;
@@ -2253,9 +2753,11 @@ export function executeActions(
             const toolJobId = toolJobChange ? toolJobChange.slice("tool_job: ".length).trim() : "";
 
           if (result.success) {
+              actionSucceededForPlan = true;
               if (toolJobId && toolId) {
                 actionSucceededForPlan = false;
                 actionPendingForPlan = true;
+                registerAsyncAction(world, toolJobId, { actorEid: eid, action: validatedAction as AgentAction, goalEid: actionGoal, plan: actionPlan, coordination, targetKey: executedTargetKey });
                 if (!hasComponent(world as any, eid, PendingToolJob as any)) addComponent(world as any, eid, PendingToolJob as any);
                 PendingToolJob.jobId[eid] = toolJobId;
                 PendingToolJob.toolId[eid] = toolId;
@@ -2282,10 +2784,10 @@ export function executeActions(
               }
 
 	            // Record successful action for memory/self-awareness
-	            recordSuccessfulAction(eid, `${affordanceName} ${targetName}`);
+              if (learnNow) recordSuccessfulAction(world, eid, `${affordanceName} ${targetName}`);
 
               // Chronicle
-              chronicle.record("action_success", {
+              chronicle.record(learnNow ? "action_success" : "action_pending", {
                 agent: name, affordance: affordanceName, target: targetName,
                 changes: result.changes.slice(0, 3),
               });
@@ -2299,7 +2801,7 @@ export function executeActions(
               }
 
               // Reinforce behavior tree — successful affordance use increases weight
-              recordOutcome(world, {
+              if (learnNow) recordOutcome(world, {
                 agentEid: eid,
                 action: { type: "interact", target: targetName, content: affordanceName },
                 affordance: affordanceName,
@@ -2307,7 +2809,7 @@ export function executeActions(
                 success: true,
               });
               // Compile LLM decision into BT branch if this was an LLM-originated action
-              resolveDecision(world, eid, true);
+              if (learnNow) resolveDecision(world, eid, true, validatedAction);
 
             // Broadcast visual to others in room - they can see the interaction!
             if (roomEid !== undefined) {
@@ -2315,22 +2817,22 @@ export function executeActions(
             }
 
             // Give feedback to actor about what happened (cognitive stimulus)
-            if (result.changes.length > 0) {
-              queueStimulus({
+            if (result.changes.length > 0 || isDocumentOperation(validatedAction) && result.message) {
+              queueStimulus(world, {
                 targetEid: eid,
                 type: "action_result",
                 modality: "cognitive",
-                content: `You ${affordanceName} ${targetName}. ${result.changes.join(". ")}`,
+                content: `You ${affordanceName} ${targetName}. ${isDocumentOperation(validatedAction) ? result.message || "" : result.changes.join(". ")}`,
                 source: "self",
               });
             }
 
             // MEMORY FORMATION for successful actions - include the result!
-            extractKnowledgeFromInteraction(world, eid, {
+            if (learnNow) extractKnowledgeFromInteraction(world, eid, {
               type: "action_success",
-              content: `SUCCESS: I ${affordanceName}ed the ${targetName}. ${result.changes.join(". ")}`,
+              content: `SUCCESS: I completed ${affordanceName} on ${targetName}. ${isDocumentOperation(validatedAction) ? result.message : result.changes.join(". ")}`,
               otherParty: targetName,
-              context: `In ${roomEid !== undefined ? Name.value[roomEid] || "a room" : "a room"}. The action succeeded and changed the world state.`,
+              context: `In ${roomEid !== undefined ? Name.value[roomEid] || "a room" : "a room"}. The operation succeeded. Only its recorded result establishes what was read or changed; it does not prove a larger goal was completed.`,
             }).catch(() => {});
             clearFailedActionAttempt(eid);
 
@@ -2339,7 +2841,7 @@ export function executeActions(
             LastAction.type[eid] = "interact";
             LastAction.target[eid] = targetName || "";
             LastAction.content[eid] = `${affordanceName}${affordanceArgs ? ` ${affordanceArgs}` : ""}`;
-            LastAction.success[eid] = true;
+            LastAction.success[eid] = learnNow;
             LastAction.timestamp[eid] = Date.now();
 
             if (learnNow) onProcedureActionResult(world, eid, validatedAction, { success: true });
@@ -2358,7 +2860,7 @@ export function executeActions(
                 detail: result.message,
               });
               // Mark LLM decision as failed — don't compile this into BT
-              resolveDecision(world, eid, false);
+              resolveDecision(world, eid, false, validatedAction);
 
 	            // Build helpful error message with ACTIONABLE hints
 	            const targetName = Name.value[targetEid] || action.target;
@@ -2418,7 +2920,7 @@ export function executeActions(
             }
             helpfulMessage += "\n⛔ DO NOT proceed as if this action succeeded. Try a different approach.";
 
-            queueStimulus({
+            queueStimulus(world, {
               targetEid: eid,
               type: "action_failed",
               modality: "cognitive",
@@ -2449,6 +2951,11 @@ export function executeActions(
         break;
 
       case "move":
+        if (unavailableRoute) {
+          addCriticalActionFailure(world, eid, "FAILED: That destination is not reachable by an open one-step route from your current room.", "movement");
+          recordFailedActionAttempt(eid, sig);
+          break;
+        }
         // GOAL-BASED MOVEMENT SYSTEM
         // AI creates intent (Goals), deterministic GoalPursuitSystem executes movement
         // This separates cognition (what to do) from execution (how to do it)
@@ -2458,7 +2965,8 @@ export function executeActions(
 
         if (action.target) {
           // First try room-based movement via Goal system
-          const destRoom = findRoomByName(world, action.target);
+          const destRoom = roomTraversal?.to ?? findRoomByName(world, action.target);
+          targetResolved(destRoom);
           if (destRoom !== undefined && destRoom !== roomEid) {
             const destName = Name.value[destRoom] || action.target;
             const sourceName = roomEid !== undefined ? Name.value[roomEid] : "somewhere";
@@ -2480,6 +2988,7 @@ export function executeActions(
 
               // Actually move the agent
               setLocatedIn(world, eid, destRoom);
+              actionSucceededForPlan = true;
               clearMovementTarget(eid);
               // Snap GridPosition to destination room so grid-based systems stay in sync
               if (GridPosition.x[destRoom] !== undefined) {
@@ -2506,10 +3015,10 @@ export function executeActions(
               }
 
               // Compile LLM move decision into BT branch
-              resolveDecision(world, eid, true);
+              resolveDecision(world, eid, true, validatedAction);
 
               // Notify agent they arrived
-              queueStimulus({
+              queueStimulus(world, {
                 targetEid: eid,
                 type: "action_result",
                 modality: "cognitive",
@@ -2530,6 +3039,7 @@ export function executeActions(
                 context: `Now in ${destName}`,
               }).catch(() => {});
             } else if (hasGridPos && GridPosition.x[destRoom] !== undefined) {
+              actionPendingForPlan = true;
               // Agent has NO room but has GridPosition - use grid-based movement to room
               // This is the key fix: agents stuck "somewhere" can now physically move to rooms
               // Once they arrive at room's GridPosition, RoomArrival system will set LocatedIn(room)
@@ -2550,7 +3060,7 @@ export function executeActions(
               console.log(`🚶 ${name} starts moving towards ${destName} (grid-based, no current room)`);
 
               // Notify agent
-              queueStimulus({
+              queueStimulus(world, {
                 targetEid: eid,
                 type: "intent",
                 modality: "cognitive",
@@ -2562,9 +3072,11 @@ export function executeActions(
               const reason = action.content || undefined;
               const priority = Math.round(3 + (Mind.arousal[eid] || 0.5) * 7);
               createMovementGoal(world, eid, destName, reason, priority);
+              actionPendingForPlan = true;
               console.log(`🎯 ${name} intends to go to ${destName} (goal created, hoping GoalPursuit can help)`);
             }
           } else if (destRoom !== undefined && destRoom === roomEid) {
+            actionSucceededForPlan = true;
             addPerception(world, eid, {
               type: "action_result",
               content: `You are already in ${Name.value[destRoom] || action.target}.`,
@@ -2576,6 +3088,7 @@ export function executeActions(
             // This still uses direct movement for grid-based (pathfinding separate concern)
             const targetEid = findEntityByName(world, action.target);
             if (targetEid !== undefined && GridPosition.x[targetEid] !== undefined) {
+              actionPendingForPlan = true;
               if (getMovementTarget(eid) === targetEid) {
                 addPerception(world, eid, {
                   type: "action_result",
@@ -2619,11 +3132,13 @@ export function executeActions(
         } else if (hasGridPos) {
           // No specific target - random wander (for grid-based only)
           doRandomWander(world, eid, name);
+          actionPendingForPlan = true;
           clearFailedActionAttempt(eid);
         }
         break;
 
       case "wait":
+        actionSucceededForPlan = true;
         // Agent is intentionally doing nothing
         if (!hasComponent(world as any, eid, LastAction as any)) addComponent(world as any, eid, LastAction as any);
         LastAction.type[eid] = "wait";
@@ -2638,7 +3153,8 @@ export function executeActions(
         // Combat action - using Health component
         if (validatedAction.target) {
           const targetEid = findEntityByName(world, validatedAction.target, { preferRoomEid: roomEid });
-          if (targetEid !== undefined) {
+          targetResolved(targetEid);
+          if (targetEid !== undefined && isInteractTargetAccessible(world, eid, roomEid, targetEid)) {
             // Check if target has Health component
             const targetHealth = Health.current[targetEid];
             const targetMaxHealth = Health.max[targetEid];
@@ -2651,6 +3167,7 @@ export function executeActions(
 
               // Apply damage
               Health.current[targetEid] = Math.max(0, targetHealth - damage);
+              actionSucceededForPlan = true;
               Health.lastDamage[targetEid] = Date.now();
 
               // Mark attacker as in combat
@@ -2662,14 +3179,14 @@ export function executeActions(
               console.log(`⚔️ ${name} attacks ${targetName} for ${damage.toFixed(1)} damage! (${Health.current[targetEid]}/${targetMaxHealth} HP)`);
 
               // Notify both parties
-              queueStimulus({
+              queueStimulus(world, {
                 targetEid: eid,
                 type: "combat",
                 modality: "tactile",
                 content: `You attack ${targetName}, dealing ${damage.toFixed(1)} damage!`,
                 source: "combat",
               });
-              queueStimulus({
+              queueStimulus(world, {
                 targetEid: targetEid,
                 type: "combat",
                 modality: "tactile",
@@ -2715,7 +3232,7 @@ export function executeActions(
             }
           } else {
             console.log(`❓ ${name} tried to attack "${validatedAction.target}" but couldn't find it`);
-            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const visible = getVisibleNamesInRoom(world, eid);
             const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
             addCriticalActionFailure(
               world,
@@ -2752,10 +3269,11 @@ export function executeActions(
           }
 
 	          const itemEid = findEntityByName(world, validatedAction.target, { preferRoomEid: roomEid });
+            targetResolved(itemEid);
 	          if (itemEid !== undefined) {
 	            const itemName = Name.value[itemEid] || validatedAction.target;
 
-	            // Grounding: pickup only works for items directly in your current room (on the ground).
+	            // Grounding: reach the item through open enclosures/surfaces in this room.
 	            if (roomEid === undefined || !isAccessibleViaOpenContainer(world, roomEid, itemEid)) {
 	              console.log(`❌ ${name} cannot pick up ${itemName} - it's not directly accessible here`);
                 const containerEid = getDirectContainer(world, itemEid);
@@ -2767,11 +3285,9 @@ export function executeActions(
                     where = isOpenContainer(world, containerEid)
                       ? ` It is inside the OPEN "${containerName}".`
                       : ` It appears to be inside "${containerName}".`;
-                  } else if (containerName) {
-                    where = ` It appears to be located in "${containerName}".`;
                   }
                 }
-	              queueStimulus({
+	              queueStimulus(world, {
 	                targetEid: eid,
 	                type: "action_failed",
 	                modality: "cognitive",
@@ -2796,7 +3312,7 @@ export function executeActions(
 
             if (!hasTakeable) {
               console.log(`❌ ${name} cannot pick up ${itemName} - it's not takeable`);
-              queueStimulus({
+              queueStimulus(world, {
                 targetEid: eid,
                 type: "action_failed",
                 modality: "cognitive",
@@ -2809,24 +3325,25 @@ export function executeActions(
 
             const success = addToInventory(world, eid, itemEid);
 	            if (success) {
+                  actionSucceededForPlan = true;
 	              console.log(`📦 ${name} picked up ${itemName}`);
 
 	              // Record successful action for memory/self-awareness
-	              recordSuccessfulAction(eid, `picked up ${itemName}`);
+	              recordSuccessfulAction(world, eid, `picked up ${itemName}`);
 
-	              // Update appearance - they're now visibly holding this item
-	              if (hasAppearance(eid)) {
-	                setVisiblyHolding(eid, itemName);
-              }
+                  // Physical pickup, unlike arbitrary inventory insertion,
+                  // establishes an actual free-hand claim that survives idle
+                  // gaps and is revoked by drop/give/removal, not by a read ending.
+                  tryHoldCarriedItem(world, eid, itemEid);
 
-	              queueStimulus({
+	              queueStimulus(world, {
 	                targetEid: eid,
 	                type: "inventory",
 	                modality: "tactile",
 	                content: `You pick up the ${itemName}.`,
 	                source: "inventory",
 	              });
-	              queueStimulus({
+	              queueStimulus(world, {
 	                targetEid: eid,
 	                type: "action_result",
 	                modality: "cognitive",
@@ -2840,7 +3357,7 @@ export function executeActions(
               clearFailedActionAttempt(eid);
             } else {
               console.log(`❓ ${name} couldn't pick up ${itemName} (inventory full or too heavy)`);
-              queueStimulus({
+              queueStimulus(world, {
                 targetEid: eid,
                 type: "action_failed",
                 modality: "cognitive",
@@ -2859,9 +3376,10 @@ export function executeActions(
               roomName,
               "pickup",
               validatedAction.target,
-              validatedAction.content
+              validatedAction.content,
+              world
             );
-            queueStimulus({
+            queueStimulus(world, {
               targetEid: eid,
               type: "action_failed",
               modality: "cognitive",
@@ -2877,11 +3395,12 @@ export function executeActions(
 	        // Drop an item from inventory
 	        if (validatedAction.target) {
 	          const itemEid = findEntityByName(world, validatedAction.target);
+            targetResolved(itemEid);
 	          if (itemEid !== undefined && hasItem(world, eid, itemEid)) {
 	            const itemName = Name.value[itemEid] || validatedAction.target;
 	            const dropRoom = roomEid ?? getRoomForEntity(world, eid);
 	            if (dropRoom === undefined) {
-	              queueStimulus({
+	              queueStimulus(world, {
 	                targetEid: eid,
 	                type: "action_failed",
 	                modality: "cognitive",
@@ -2893,6 +3412,7 @@ export function executeActions(
 	            }
 	            const success = removeFromInventory(world, eid, itemEid, dropRoom);
 	            if (success) {
+                  actionSucceededForPlan = true;
 	              console.log(`📦 ${name} dropped ${itemName}`);
 
 	              // Update appearance - sync visiblyHolding with remaining inventory
@@ -2900,14 +3420,14 @@ export function executeActions(
 	                syncVisiblyHoldingFromInventory(world, eid);
 	              }
 
-	              queueStimulus({
+	              queueStimulus(world, {
 	                targetEid: eid,
 	                type: "inventory",
 	                modality: "tactile",
 	                content: `You drop the ${itemName}.`,
 	                source: "inventory",
 	              });
-	              queueStimulus({
+	              queueStimulus(world, {
 	                targetEid: eid,
 	                type: "action_result",
 	                modality: "cognitive",
@@ -2923,7 +3443,7 @@ export function executeActions(
             }
           } else {
             console.log(`❓ ${name} tried to drop "${validatedAction.target}" but doesn't have it`);
-            queueStimulus({
+            queueStimulus(world, {
               targetEid: eid,
               type: "inventory",
               modality: "cognitive",
@@ -2939,18 +3459,10 @@ export function executeActions(
 	        // Use an item from inventory
 	        if (validatedAction.target) {
 	          const itemEid = findEntityByName(world, validatedAction.target);
+            targetResolved(itemEid);
 	          if (itemEid !== undefined && hasItem(world, eid, itemEid)) {
 	            const itemName = Name.value[itemEid] || validatedAction.target;
 	            const itemCategory = Item.category[itemEid] || "misc";
-
-            console.log(`🔧 ${name} uses ${itemName}`);
-            queueStimulus({
-              targetEid: eid,
-              type: "inventory",
-              modality: "tactile",
-              content: `You use the ${itemName}.`,
-              source: "inventory",
-            });
 
 	            // Handle different item categories
 	            if (itemCategory === "food") {
@@ -2958,22 +3470,15 @@ export function executeActions(
 	              removeEntity(world, itemEid);
 	              syncInventoryCache(world, eid);
 	              if (hasAppearance(eid)) syncVisiblyHoldingFromInventory(world, eid);
+                  actionSucceededForPlan = true;
+                  queueStimulus(world, { targetEid: eid, type: "action_result", modality: "tactile", content: `You consumed ${itemName}.`, source: "inventory" });
 	              console.log(`🍖 ${name} ate ${itemName}`);
-	            }
+                } else addCriticalActionFailure(world, eid, `FAILED: "use" has no defined effect on ${itemName}. Choose an available interaction verb.`);
 	          } else if (itemEid !== undefined) {
-            // Item exists but not in inventory - can they use it directly?
-            const itemName = Name.value[itemEid] || validatedAction.target;
-            console.log(`🔧 ${name} uses ${itemName} (in environment)`);
-            queueStimulus({
-              targetEid: eid,
-              type: "interaction",
-              modality: "tactile",
-              content: `You use the ${itemName}.`,
-              source: itemName,
-            });
+            addCriticalActionFailure(world, eid, `FAILED: You do not hold "${validatedAction.target}". Use a currently visible object's actual affordance instead.`);
           } else {
             console.log(`❓ ${name} tried to use "${validatedAction.target}" but couldn't find it`);
-            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const visible = getVisibleNamesInRoom(world, eid);
             const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
             addCriticalActionFailure(
               world,
@@ -2992,6 +3497,7 @@ export function executeActions(
 	        if (validatedAction.target && validatedAction.content) {
 	          // Parse target as recipient, content as item
 	          const recipientEid = findEntityByName(world, validatedAction.target);
+            targetResolved(recipientEid);
 	          const itemEid = findEntityByName(world, validatedAction.content);
 
 	          if (recipientEid !== undefined && itemEid !== undefined && hasItem(world, eid, itemEid)) {
@@ -3001,7 +3507,7 @@ export function executeActions(
 	            // Grounding: you can only give items to someone in the same room.
 	            const recipientRoom = getRoomForEntity(world, recipientEid);
 	            if (roomEid === undefined || recipientRoom !== roomEid) {
-	              queueStimulus({
+	              queueStimulus(world, {
 	                targetEid: eid,
 	                type: "action_failed",
 	                modality: "cognitive",
@@ -3014,7 +3520,7 @@ export function executeActions(
 	            // Check if recipient has inventory
 	            if (!hasInventory(world, recipientEid)) {
 	              console.log(`❓ ${recipientName} can't receive items (no inventory)`);
-	              queueStimulus({
+	              queueStimulus(world, {
 	                targetEid: eid,
                 type: "inventory",
                 modality: "cognitive",
@@ -3026,16 +3532,18 @@ export function executeActions(
 
 	            // Transfer item (canonical: move containment)
 	            if (addToInventory(world, recipientEid, itemEid)) {
+                  actionSucceededForPlan = true;
+                  tryHoldCarriedItem(world, recipientEid, itemEid);
 	              console.log(`🎁 ${name} gave ${itemName} to ${recipientName}`);
 	              if (hasAppearance(eid)) syncVisiblyHoldingFromInventory(world, eid);
-	              queueStimulus({
+	              queueStimulus(world, {
 	                targetEid: eid,
 	                type: "inventory",
                 modality: "tactile",
                 content: `You give the ${itemName} to ${recipientName}.`,
                 source: "inventory",
               });
-              queueStimulus({
+              queueStimulus(world, {
                 targetEid: recipientEid,
                 type: "inventory",
                 modality: "tactile",
@@ -3046,7 +3554,7 @@ export function executeActions(
           } else {
             console.log(`❓ ${name} tried to give but something went wrong`);
             if (recipientEid === undefined && validatedAction.target) {
-              const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+              const visible = getVisibleNamesInRoom(world, eid);
               const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
               addCriticalActionFailure(
                 world,
@@ -3076,6 +3584,16 @@ export function executeActions(
         break;
 
       case "examine":
+        if (getAgentSensoryCapabilities(world, eid).visual <= 0) {
+          const failure = "FAILED: Visual inspection is unavailable without sight.";
+          addCriticalActionFailure(world, eid, failure, "examination");
+          if (!hasComponent(world, eid, LastAction)) addComponent(world, eid, LastAction);
+          LastAction.type[eid] = "examine"; LastAction.target[eid] = validatedAction.target || "";
+          LastAction.content[eid] = ""; LastAction.success[eid] = false; LastAction.timestamp[eid] = Date.now();
+          recordFailedActionAttempt(eid, sig);
+          onProcedureActionResult(world, eid, validatedAction, { success: false });
+          break;
+        }
         // Examine is like observe but more detailed
         if (validatedAction.target) {
           Mind.focus[eid] = validatedAction.target;
@@ -3083,12 +3601,12 @@ export function executeActions(
           // Use observe logic
           const examineTargetEid = findEntityByName(world, validatedAction.target);
           if (examineTargetEid === undefined) {
-            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+            const visible = getVisibleNamesInRoom(world, eid);
             const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
             addCriticalActionFailure(
               world,
               eid,
-              `FAILED: You tried to examine "${validatedAction.target}" but it doesn't exist as an entity here. ${hint}`,
+              `FAILED: You cannot currently see "${validatedAction.target}". ${hint}`,
               "examination"
             );
             const issues = validateAgentAction(world, name, validatedAction.type, validatedAction.target, validatedAction.content);
@@ -3096,35 +3614,42 @@ export function executeActions(
             break;
           }
 
-          // Grounding: you can only examine things that are actually accessible here (room/held/open containers).
-          if (!isInteractTargetAccessible(world, eid, roomEid, examineTargetEid)) {
-            const targetName = Name.value[examineTargetEid] || validatedAction.target;
-            const visible = roomEid !== undefined ? getVisibleNamesInRoom(world, roomEid, { excludeEid: eid }) : [];
+          // Explicit examination shares the same visual boundary as observation.
+          if (examineTargetEid !== roomEid && !getAgentVisualEntities(world, eid).includes(examineTargetEid)) {
+            const targetName = validatedAction.target;
+            const visible = getVisibleNamesInRoom(world, eid);
             const hint = visible.length > 0 ? `Visible here: ${visible.join(", ")}.` : "No matching named entity is visible here.";
             addCriticalActionFailure(
               world,
               eid,
-              `FAILED: You tried to examine "${targetName}" but it is not accessible/visible from here. ${hint}`,
+              `FAILED: You cannot currently see "${targetName}". ${hint}`,
               "examination"
             );
             recordFailedActionAttempt(eid, sig);
             break;
           }
+          targetResolved(examineTargetEid);
 
           const targetName = Name.value[examineTargetEid] || validatedAction.target;
-          const targetDesc = Description.value[examineTargetEid] || "You see nothing special.";
-          queueStimulus({
+          const targetDesc = hasComponent(world, examineTargetEid, Description) ? Description.value[examineTargetEid] || "You see nothing special." : "You see nothing special.";
+          const inspection = recordInspectionResult(world, eid, examineTargetEid, { question: validatedAction.content });
+          actionSucceededForPlan = true;
+          queueStimulus(world, {
             targetEid: eid,
             type: "examination",
             modality: "cognitive",
-            content: `You examine ${targetName} closely. ${targetDesc}`,
+            content: `You examine ${targetName} closely. ${targetDesc}${inspection ? ` ${inspection.summary}` : ""}`,
             source: "examination",
           });
         }
         break;
 
       case "rest":
-        // Rest action - could reduce fatigue if we had that component
+        actionSucceededForPlan = beginRest(world, eid);
+        if (!actionSucceededForPlan) {
+          addCriticalActionFailure(world, eid, "FAILED: You cannot begin resting in your current physical state.", "body");
+          break;
+        }
         console.log(`😴 ${name} rests`);
         // Lower arousal slightly
         Mind.arousal[eid] = Math.max(0.2, (Mind.arousal[eid] || 0.5) - 0.1);
@@ -3133,9 +3658,11 @@ export function executeActions(
       case "craft":
         // Crafting action - requires crafting system
         console.log(`🔨 ${name} tried to craft (crafting system pending)`);
+        addCriticalActionFailure(world, eid, "FAILED: No crafting system implements this action. Use an available object affordance.");
         break;
 
       case "reflect":
+        actionSucceededForPlan = Boolean(validatedAction.content);
         // Reflection action - internal processing
         if (validatedAction.content) {
           console.log(`💭 ${name} reflects: "${validatedAction.content}"`);
@@ -3149,45 +3676,62 @@ export function executeActions(
     }
 
     // === PLAN ADVANCEMENT ===
+    if (actionSucceededForPlan && !actionPendingForPlan && validatedAction.type === "interact"
+      && /^(examine|inspect|observe)$/i.test(validatedAction.content?.trim() || "")) {
+      const target = findEntityByName(world, validatedAction.target || "", { preferRoomEid: roomEid });
+      const inspection = target === undefined ? undefined : recordInspectionResult(world, eid, target);
+      if (inspection) queueStimulus(world, { targetEid: eid, type: "observation", modality: "cognitive", content: inspection.summary, source: "inspection" });
+    }
+    if (!actionPendingForPlan) recordWorkingMemoryAction(world, eid, validatedAction as AgentAction, actionSucceededForPlan, { before: workingMemoryBefore });
+    addComponent(world, eid, LastAction);
+    LastAction.type[eid] = validatedAction.type;
+    LastAction.target[eid] = validatedAction.target || "";
+    LastAction.content[eid] = validatedAction.content || "";
+    LastAction.success[eid] = actionSucceededForPlan && !actionPendingForPlan;
+    LastAction.timestamp[eid] = Date.now();
+    if (coordination) recordCoordinationAction(world, eid, coordination, {
+      succeeded: actionSucceededForPlan, pending: actionPendingForPlan,
+      targetKey: executedTargetKey,
+      summary: `${validatedAction.type}${validatedAction.target ? ` ${validatedAction.target}` : ""}: ${actionSucceededForPlan ? "completed" : actionPendingForPlan ? "pending" : "failed"}`,
+    });
+    if (actionSucceededForPlan && !actionPendingForPlan) recordCompletedGoalAction(world, eid, validatedAction as AgentAction,
+      actionGoalEpisode && isGoalExecutionCurrent(world, eid, actionGoalEpisode) ? actionGoalEpisode.goalEid : null);
+    if (!actionPendingForPlan && !["speak", "observe", "interact", "think", "wait"].includes(validatedAction.type)) {
+      onProcedureActionResult(world, eid, validatedAction, { success: actionSucceededForPlan });
+    }
+    if ((actionSucceededForPlan || actionPendingForPlan) && !["rest", "wait", "think", "reflect", "observe"].includes(validatedAction.type)) endRest(world, eid);
+    // A pending speech notification is public activity, not its future script.
+    capabilities?.afterAction?.(actionPendingForPlan && validatedAction.type === "speak"
+      ? { ...validatedAction, content: "" } as AgentAction : validatedAction as AgentAction,
+      actionSucceededForPlan, actionPendingForPlan);
+    // addMemory is the single salience feed; do not count the same action twice.
     // After each action, check if it advances the agent's active plan
     // This is crucial for multi-step goal execution!
-    const nextStep = getNextPlannedAction(world, eid);
+    const nextStep = actionPlan && isPlanExecutionCurrent(world, eid, actionPlan)
+      ? getCurrentStep(actionPlan.planEid) : null;
     if (nextStep) {
       if (actionPendingForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep)) {
         // Waiting on an async tool job to complete; do not advance or count as failure.
       } else if (actionSucceededForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep)) {
-        const advanced = advanceAgentPlan(world, eid);
+        const advanced = advanceAgentPlan(world, eid, actionPlan);
         if (advanced) {
           console.log(`📋 ${name} completed plan step: ${nextStep.description}`);
         }
       } else if (!actionSucceededForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep)) {
-        const now = Date.now();
-        const signature = `${nextStep.actionType}|${String(nextStep.target || "")}|${String(nextStep.content || "")}`;
+        const now = readSimulationTime(world);
+        const signature = `${workingMemoryEntityRef(world, eid)?.key}|${actionPlan!.planEid}|${actionPlan!.currentStep}|${nextStep.actionType}|${String(nextStep.target || "")}|${String(nextStep.content || "")}`;
         const prev = recentPlanStepFailures.get(eid);
         const within = prev && prev.signature === signature && now - prev.lastAtMs < PLAN_STEP_FAILURE_WINDOW_MS;
         const count = within ? prev!.count + 1 : 1;
         recentPlanStepFailures.set(eid, { signature, count, lastAtMs: now });
 
         if (count >= MAX_PLAN_STEP_FAILURES_BEFORE_REPLAN) {
-          // Identify the active plan backing this step (best-effort).
-          let planEid: number | undefined;
-          const goalTargets = getRelationTargets(world, eid, HasGoal)
-            .filter((gid) => hasComponent(world, gid, Goal) && Goal.status[gid] === "active")
-            .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0));
-          for (const goalEid of goalTargets) {
-            const pid = getPlanForGoal(world, eid, goalEid);
-            if (!pid || !hasComponent(world, pid, Plan) || Plan.status[pid] !== "active") continue;
-            const cur = getCurrentStep(pid);
-            if (!cur) continue;
-            if (String(cur.description || "") === String(nextStep.description || "") && String(cur.actionType || "") === String(nextStep.actionType || "")) {
-              planEid = pid;
-              break;
-            }
-          }
-
-          if (planEid !== undefined) {
+          // Hooks may have reprioritized or replaced a plan while this action
+          // executed. Repeated failure belongs only to the captured issuance.
+          const planEid = actionPlan!.planEid;
+          if (isPlanExecutionCurrent(world, eid, actionPlan!)) {
             failPlan(planEid, `Repeated plan-step failure: ${nextStep.description}`);
-            queueStimulus({
+            queueStimulus(world, {
               targetEid: eid,
               type: "planning",
               modality: "cognitive",
@@ -3199,7 +3743,74 @@ export function executeActions(
         }
       }
     }
+    recordCognitionOutcome(world, eid, validatedAction as AgentAction, { succeeded: actionSucceededForPlan, pending: actionPendingForPlan, waitAuthority });
+    if (nativeResume && !actionPendingForPlan) publishNativeInterval(nativeResume, actionSucceededForPlan ? "succeeded" : "failed");
   }
+}
+
+/** Commit physical evidence for a world-package action only when it finishes. */
+export function completeDeferredAction(world: World, eid: number, action: AgentAction, success: boolean, detail: string,
+  proof?: { targetKey?: string }): void {
+  assertSimulationTaskActive();
+  if (!entityExists(world, eid)) return;
+  const operations = deferredExecutions.get(world)?.get(eid);
+  const execution = operations?.get(action.executionId || "");
+  // Labels, timestamps and current plans cannot identify an asynchronous
+  // operation. A late result from attempt A must never settle identical retry B.
+  const actionMatches = execution && typeof action.executionId === "string"
+    && action.executionId === execution.action.executionId && action.type === execution.action.type
+    && action.target === execution.action.target && action.content === execution.action.content
+    && hasComponent(world, eid, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[eid] === execution.actorKey;
+  if (!actionMatches) return;
+  const expected = actionMatches ? execution.plan : undefined;
+  operations!.delete(action.executionId!);
+  const inspected = actionMatches ? execution.inspectionTarget : undefined;
+  if (success && inspected && isVisualInspectionAction(action)
+    && hasComponent(world, eid, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[eid] === execution?.workingMemory?.actor.key
+    && entityExists(world, inspected.eid) && hasComponent(world, inspected.eid, WorkingMemoryIdentity)
+    && WorkingMemoryIdentity.id[inspected.eid] === inspected.key) {
+    const inspection = recordInspectionResult(world, eid, inspected.eid, {
+      question: execution!.action.type === "interact" ? undefined : execution!.action.content,
+    });
+    if (inspection) detail += ` ${inspection.summary}`;
+  }
+  recordWorkingMemoryAction(world, eid, action, success, { before: actionMatches ? execution.workingMemory : undefined, summary: detail });
+  // Plan matching tolerates presentation differences. Terminal work proof does
+  // not: command arguments and paths may be case-sensitive executable data.
+  const coordinationMatches = actionMatches && action.type === execution.action.type
+    && action.target === execution.action.target && action.content === execution.action.content;
+  if (coordinationMatches && execution.coordination) recordCoordinationAction(world, eid, execution.coordination, {
+    succeeded: success, summary: detail, targetKey: proof?.targetKey,
+  });
+  const matchesPlan = expected !== undefined && isPlanExecutionCurrent(world, eid, expected);
+  addComponent(world, eid, LastAction);
+  LastAction.type[eid] = action.type;
+  LastAction.target[eid] = action.target || "";
+  LastAction.content[eid] = action.content || "";
+  LastAction.success[eid] = success;
+  LastAction.timestamp[eid] = Date.now();
+  if (success && !["rest", "wait", "think", "reflect", "observe"].includes(action.type)) endRest(world, eid);
+  addMemory(world, eid, { type: "episodic", content: detail, importance: success ? 0.6 : 0.9, emotionalValence: success ? 0.1 : -0.2, timestamp: Date.now() });
+  // Completion feedback is evidence, not an interrupt. Packages emit explicit
+  // attention/danger stimuli for genuine world changes; treating every ordinary
+  // off-plan success as urgent can starve a valid plan or learned procedure.
+  addPerception(world, eid, { type: success ? "action_result" : "attention", content: detail, source: "physical world" });
+  if (success) recordCompletedGoalAction(world, eid, action,
+    execution.goal && isGoalExecutionCurrent(world, eid, execution.goal) ? execution.goal.goalEid : null);
+  if (matchesPlan) {
+    if (success) advanceAgentPlan(world, eid, expected);
+    else failPlan(expected.planEid, detail);
+  }
+  onProcedureActionResult(world, eid, action, { success });
+  recordCognitionOutcome(world, eid, action, { succeeded: success, pending: false,
+    waitAuthority: execution.waitAuthority ?? captureActorWaitOutcomeAuthority(world, eid, action, false) });
+  resolveDecision(world, eid, success, action);
+  chronicle.record(success ? "action_success" : "action_failure", {
+    agent: Name.value[eid], action: action.type, target: action.target,
+    content: detail, location: Name.value[getRoomForEntity(world, eid)!],
+    ...(action.type === "move" && success ? { to: action.target } : {}),
+    source: "physical_completion",
+  });
 }
 
 export function createCognitionSystem(): SystemDefinition {
@@ -3275,8 +3886,8 @@ export async function initializeCognitiveEnhancements(
 }
 
 /**
- * Run a full cognitive cycle including all enhancement systems
- * This is a convenience function that runs everything in order
+ * Run a full, awaited batch cycle including enhancement systems.
+ * Real-time callers should schedule foreground cognition and background work separately.
  */
 export async function runFullCognitiveCycle(
   world: World,
@@ -3286,7 +3897,7 @@ export async function runFullCognitiveCycle(
   runSchedule(world);
 
   // 2. Run main cognition cycle
-  const results = await runCognitionCycle(world, registry);
+  const results = await runCognitionCycle(world, registry, { enablePlanning: true });
 
   // 3. Execute actions (this also accumulates importance for reflection)
   executeActions(world, results, registry);
@@ -3294,18 +3905,9 @@ export async function runFullCognitiveCycle(
   // 4. Run appearance emitter - broadcasts appearance changes to nearby NPCs
   runAppearanceEmitter(world);
 
-  // 5. Accumulate importance for agents based on stimuli received
-  for (const { eid, action } of results) {
-    // Significant actions increase importance
-    if (action.type === "speak" || action.type === "interact") {
-      accumulateImportance(world, eid, 5);
-    } else if (action.type !== "wait") {
-      accumulateImportance(world, eid, 2);
-    }
-  }
-
-  // 6. Check for reflection triggers (runs async, doesn't block)
-  runReflection(world).catch(console.error);
+  // 5. Action execution and episodic memory already contribute importance.
+  // This batch helper settles reflection instead of leaking detached cognition.
+  await runReflection(world);
 
   return results;
 }
@@ -3314,18 +3916,28 @@ export async function runFullCognitiveCycle(
  * Advance an agent's plan after completing a step
  * Call this when an action aligns with the current plan step
  */
-export function advanceAgentPlan(world: World, agentEid: number): boolean {
+export function advanceAgentPlan(world: World, agentEid: number, expected?: PlanExecution): boolean {
+  if (expected?.episode && !isPlanExecutionCurrent(world, agentEid, expected)) return false;
   const goalTargets = getRelationTargets(world, agentEid, HasGoal);
 
   const activeGoals = goalTargets
-    .filter((gid) => hasComponent(world, gid, Goal) && Goal.status[gid] === "active")
+    .filter((gid) => hasComponent(world, gid, Goal) && Goal.status[gid] === "active" && (!expected || gid === expected.goalEid))
     .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0));
 
   for (const goalEid of activeGoals) {
     const planEid = getPlanForGoal(world, agentEid, goalEid);
-    if (planEid && Plan.status[planEid] === "active") {
-      const advanced = advancePlanStep(planEid);
+    if (planEid !== undefined && Plan.status[planEid] === "active" && (!expected ||
+        (planEid === expected.planEid && Plan.currentStep[planEid] === expected.currentStep))) {
+      // A malformed/empty step list is not an exhausted, successfully executed
+      // plan. The low-level helper cannot establish action validity by itself.
+      const current = getCurrentStep(planEid);
+      if (!current || typeof current !== "object" || typeof current.actionType !== "string" ||
+          normalizeActionType(current.actionType) === null) return false;
+      const advanced = advancePlanStep(planEid, { world, agentEid });
+      if (current.actionType !== "wait" && (advanced || String(Plan.status[planEid]) === "completed"))
+        recordGoalAttemptActivity(world, agentEid, goalEid);
       if (!advanced) {
+        if (String(Plan.status[planEid]) !== "completed") return false;
         const agentName = Name.value[agentEid];
 
         // If the goal has a *deterministically evaluable* success contract, do not auto-complete it
@@ -3343,19 +3955,20 @@ export function advanceAgentPlan(world: World, agentEid: number): boolean {
         }
 
         if (isEvaluable) {
-          Goal.progress[goalEid] = Math.max(Goal.progress[goalEid] || 0, 90);
           console.log(`[Cognition] ${agentName} completed plan for goal (pending eval): ${Goal.description[goalEid]}`);
+        } else if (isStandingIntention(world, goalEid)) {
+          // A finite bout may end without exhausting an enduring motivation.
+          // Actual action receipts already describe what happened. Manufacturing
+          // a fresh verification demand here turns persistence into more work.
+          console.log(`[Cognition] ${agentName} finished plan; standing desire retained: ${Goal.description[goalEid]}`);
         } else {
-          // Legacy/custom goals: plan completion is treated as goal completion.
-          Goal.progress[goalEid] = 100;
-          Goal.status[goalEid] = "completed";
-          console.log(`[Cognition] ${agentName} completed goal: ${Goal.description[goalEid]}`);
-
-          // Learning: compile the successful plan into a reusable procedural macro.
-          const compiled = compileCompletedPlanToProceduralMacro(world, agentEid, goalEid, planEid);
-          if (compiled.ok) {
-            console.log(`[Learning] ${agentName} compiled plan into macro: ${compiled.signature}`);
-          }
+          // A plausible list of actions cannot verify an open-ended intention.
+          // Preserve the goal for world-specific evidence; do not learn a macro
+          // labelled successful merely because the model's list ran out.
+          const settled = maintainGoalLifecycles(world, agentEid);
+          if (!settled) queueStimulus(world, { targetEid: agentEid, type: "attention", modality: "cognitive", source: "planning",
+            content: `The plan for "${Goal.description[goalEid]}" finished, but the goal is not verified. Check actual outcomes before claiming success.` });
+          console.log(`[Cognition] ${agentName} finished plan; goal needs verification: ${Goal.description[goalEid]}`);
         }
       }
       return true;

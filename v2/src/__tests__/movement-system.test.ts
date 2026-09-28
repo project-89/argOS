@@ -16,6 +16,7 @@ import {
   type SystemRegistry,
 } from "../ecs/dynamic-systems";
 import { createArgosWorld, type WorldContext } from "../ecs/world";
+import { advanceSimulationTime } from "../ecs/simulation-time";
 import {
   initializePrefabs,
   createAgentEntity,
@@ -35,7 +36,7 @@ describe("Movement System", () => {
   let world: WorldContext;
   let registry: SystemRegistry;
   let tick: number;
-  const delta = 16; // ~60fps
+  const delta = 500; // One native grid step takes 500 in-world ms, independent of test wall time.
 
   beforeEach(() => {
     world = createArgosWorld("TestWorld");
@@ -44,9 +45,16 @@ describe("Movement System", () => {
     tick = 0;
   });
 
+  afterEach(() => {
+    // Movement targets are a legacy process-wide table. Even failed tests must
+    // release them before bitECS reuses the same entity IDs in the next world.
+    for (const eid of query(world, [Agent])) clearMovementTarget(eid);
+  });
+
   // Helper to run systems with proper tick/delta
   const runSystemsOnce = () => {
     tick++;
+    advanceSimulationTime(world, tick, delta);
     runSystems(world, registry, tick, delta);
   };
 

@@ -125,7 +125,7 @@ describe("Watcher Policy Evolution", () => {
   // =========================================================================
 
   describe("detectPolicyStuckAgents", () => {
-    it("detects stuck agent with 10 identical observe actions", () => {
+    it("does not call ten observations a failure without outcome evidence", () => {
       const roomEid = createRoomEntity(world, { name: "Test Room" });
       const agentEid = createTestAgent(world, "StuckBot", roomEid);
       setAgentBehaviorPolicy(world, agentEid, SIMPLE_POLICY, true);
@@ -141,12 +141,10 @@ describe("Watcher Policy Evolution", () => {
       const stuckGap = gaps.find(g =>
         g.title.includes("StuckBot") && g.title.includes("low action diversity")
       );
-      expect(stuckGap).toBeDefined();
-      expect(stuckGap!.detail).toContain(`eid:${agentEid}`);
-      expect(stuckGap!.detail).toContain("observe,observe,observe");
+      expect(stuckGap).toBeUndefined();
     });
 
-    it("detects alternating move,observe pattern", () => {
+    it("does not call alternating travel and observation a failure", () => {
       const roomEid = createRoomEntity(world, { name: "Test Room" });
       const agentEid = createTestAgent(world, "PingPong", roomEid);
       setAgentBehaviorPolicy(world, agentEid, SIMPLE_POLICY, true);
@@ -163,11 +161,10 @@ describe("Watcher Policy Evolution", () => {
       const stuckGap = gaps.find(g =>
         g.title.includes("PingPong") && g.title.includes("low action diversity")
       );
-      expect(stuckGap).toBeDefined();
-      expect(stuckGap!.detail).toContain(`eid:${agentEid}`);
+      expect(stuckGap).toBeUndefined();
     });
 
-    it("reports high severity when stuck for 20+ actions", () => {
+    it("does not escalate severity from twenty repeated action names", () => {
       const roomEid = createRoomEntity(world, { name: "Test Room" });
       const agentEid = createTestAgent(world, "VeryStuck", roomEid);
       setAgentBehaviorPolicy(world, agentEid, SIMPLE_POLICY, true);
@@ -183,8 +180,7 @@ describe("Watcher Policy Evolution", () => {
       const stuckGap = gaps.find(g =>
         g.title.includes("VeryStuck") && g.title.includes("low action diversity")
       );
-      expect(stuckGap).toBeDefined();
-      expect(stuckGap!.severity).toBe("high");
+      expect(stuckGap).toBeUndefined();
     });
 
     it("does not flag agents without behavior policy", () => {
@@ -257,7 +253,7 @@ describe("Watcher Policy Evolution", () => {
   // =========================================================================
 
   describe("behavioral: stuck agent with bad policy", () => {
-    it("reports behavioral_gap with high severity after 20 wait actions", () => {
+    it("does not classify twenty waits as a broken policy", () => {
       const roomEid = createRoomEntity(world, { name: "Dungeon" });
       const agentEid = createTestAgent(world, "LazyGuard", roomEid);
       setAgentBehaviorPolicy(world, agentEid, WAIT_POLICY, true);
@@ -273,15 +269,12 @@ describe("Watcher Policy Evolution", () => {
       const stuckGap = gaps.find(g =>
         g.title.includes("LazyGuard") && g.title.includes("low action diversity")
       );
-      expect(stuckGap).toBeDefined();
-      expect(stuckGap!.severity).toBe("high");
-      expect(stuckGap!.detail).toContain(`eid:${agentEid}`);
-      expect(stuckGap!.detail).toContain("wait,wait,wait");
+      expect(stuckGap).toBeUndefined();
     });
   });
 
   describe("behavioral: only stuck agent triggers detection", () => {
-    it("flags stuck agent but not healthy agent", () => {
+    it("neither repetitive nor diverse action names establish an execution failure", () => {
       const roomEid = createRoomEntity(world, { name: "Village Square" });
       const stuckEid = createTestAgent(world, "StuckVillager", roomEid);
       const healthyEid = createTestAgent(world, "HappyVillager", roomEid);
@@ -310,7 +303,7 @@ describe("Watcher Policy Evolution", () => {
       const stuckGap = gaps.find(g =>
         g.title.includes("StuckVillager") && g.title.includes("low action diversity")
       );
-      expect(stuckGap).toBeDefined();
+      expect(stuckGap).toBeUndefined();
 
       // Healthy agent should NOT be flagged
       const healthyGap = gaps.find(g =>

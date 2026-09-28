@@ -1,4 +1,5 @@
 import type { World } from "../../ecs/world";
+import { integrateLegacyRateSteps } from "../legacy-rate-time";
 import type { SystemContext } from "../system-loader";
 import { getRoomForEntity } from "../../ecs/location";
 
@@ -7,7 +8,11 @@ export const description = "Increases localized tension in rooms with multiple d
 export const frequency = 1;
 export const active = true;
 
+export const temporalStepMs = 1000; // Explicit in-world duration for one historical law step.
 export function run(world: World, ctx: SystemContext): void {
+  integrateLegacyRateSteps(world, ctx, "tension-buildup-system", temporalStepMs, runLaw);
+}
+function runLaw(world: World, ctx: SystemContext): void {
   const Tension = ctx.getDynamic("Tension");
   if (!Tension) return;
   

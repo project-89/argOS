@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import { createArgosWorld } from "../../ecs/world";
+import { advanceSimulationTime, formatSimulationHour } from "../../ecs/simulation-time";
 import { initializePrefabs, createAgentEntity, createRoomEntity } from "../../ecs/prefabs";
 import { Name, WorldClock, WorldEvent } from "../../ecs/components";
 import { query } from "bitecs";
@@ -33,6 +34,34 @@ function makeWorld() {
 }
 
 describe("World Clock", () => {
+  test("precise calendar context exposes appointments without prescribing an agenda", () => {
+    const world = makeWorld();
+    world.time.simulationHour = 16;
+    advanceSimulationTime(world, 1, 138_000);
+    const before = JSON.stringify(world.time), context = formatWorldTimeForContext(world);
+    expect(context).toContain("TIME OF DAY: AFTERNOON (Day 1)");
+    expect(context).toContain("CURRENT WORLD TIME: 16:02 (Day 1)");
+    expect(context).toContain("LIVED TIME: 138.0 seconds");
+    expect(context).not.toContain("time to eat");
+    expect(JSON.stringify(world.time)).toBe(before);
+  });
+  test("calendar display handles minute boundaries and midnight without advancing time", () => {
+    expect(formatSimulationHour(16 + 2 / 60)).toBe("16:02");
+    expect(formatSimulationHour(23 + 59 / 60 + 59.999 / 3600)).toBe("23:59");
+    expect(formatSimulationHour(NaN)).toBe("unknown");
+    const world = makeWorld(); world.time.simulationHour = 23.999;
+    advanceSimulationTime(world, 1, 3600);
+    expect(formatWorldTimeForContext(world)).toContain("CURRENT WORLD TIME: 00:00 (Day 2)");
+  });
+  test("lived-time context projects elapsed duration independently of tick size or polling", () => {
+    const fine = makeWorld(), coarse = makeWorld();
+    for (let tick = 1; tick <= 120; tick++) advanceSimulationTime(fine, tick, 500);
+    advanceSimulationTime(coarse, 1, 60_000);
+    const before = JSON.stringify(coarse.time);
+    expect(formatWorldTimeForContext(fine)).toEqual(formatWorldTimeForContext(coarse));
+    expect(formatWorldTimeForContext(coarse)).toContain("LIVED TIME: 60.0 seconds");
+    expect(JSON.stringify(coarse.time)).toBe(before);
+  });
   test("creates a clock entity with correct defaults", () => {
     const world = makeWorld();
     const clockEid = createWorldClock(world);
@@ -43,7 +72,7 @@ describe("World Clock", () => {
     expect(WorldClock.ticksPerPeriod[clockEid]).toBe(20);
   });
 
-  test("advances tick within a period", () => {
+  test("polling projects physical time without advancing it", () => {
     const world = makeWorld();
     createWorldClock(world, { ticksPerPeriod: 10 });
 
@@ -52,32 +81,36 @@ describe("World Clock", () => {
     expect(getCurrentPeriod(world)).toBe("morning");
 
     const state = getClockState(world);
-    expect(state.tickInPeriod).toBe(1);
-    expect(state.totalTicks).toBe(1);
+    expect(state.totalTicks).toBe(0);
+    expect(world.time.elapsed).toBe(0);
+    advanceSimulationTime(world, 1, 1000);
+    advanceWorldClock(world);
+    expect(getClockState(world).totalTicks).toBe(1);
+    expect(world.time.elapsed).toBe(1000);
   });
 
   test("transitions through all periods", () => {
     const world = makeWorld();
     createWorldClock(world, { ticksPerPeriod: 5 });
 
-    // Advance through morning (5 ticks)
-    for (let i = 0; i < 4; i++) advanceWorldClock(world);
+    // Polling, typing and model completions cannot cycle the calendar.
+    for (let i = 0; i < 40; i++) advanceWorldClock(world);
     expect(getCurrentPeriod(world)).toBe("morning");
-
-    const changed = advanceWorldClock(world); // Tick 5 → transition
+    advanceSimulationTime(world, 1, 4 * 3_600_000); // 08:00 → 12:00
+    const changed = advanceWorldClock(world);
     expect(changed).toBe("midday");
     expect(getCurrentPeriod(world)).toBe("midday");
 
-    // Advance through midday (5 ticks)
-    for (let i = 0; i < 5; i++) advanceWorldClock(world);
+    advanceSimulationTime(world, 2, 6 * 3_600_000);
+    advanceWorldClock(world);
     expect(getCurrentPeriod(world)).toBe("evening");
 
-    // Advance through evening (5 ticks)
-    for (let i = 0; i < 5; i++) advanceWorldClock(world);
+    advanceSimulationTime(world, 3, 3 * 3_600_000);
+    advanceWorldClock(world);
     expect(getCurrentPeriod(world)).toBe("night");
 
-    // Advance through night → new day
-    for (let i = 0; i < 5; i++) advanceWorldClock(world);
+    advanceSimulationTime(world, 4, 8 * 3_600_000);
+    advanceWorldClock(world);
     expect(getCurrentPeriod(world)).toBe("morning");
     expect(getCurrentDay(world)).toBe(2);
   });
@@ -140,8 +173,8 @@ describe("World Events", () => {
 
     expect(getActiveWorldEvents(world).length).toBe(1);
 
-    // Advance past duration
-    for (let i = 0; i < 4; i++) advanceWorldClock(world);
+    advanceSimulationTime(world, 1, 4000);
+    advanceWorldClock(world);
     const expired = expireWorldEvents(world);
 
     expect(expired).toBe(1);
@@ -154,7 +187,8 @@ describe("World Events", () => {
 
     createWorldEvent(world, { name: "Plague", eventType: "crisis", description: "Ongoing plague.", duration: 0 });
 
-    for (let i = 0; i < 20; i++) advanceWorldClock(world);
+    advanceSimulationTime(world, 1, 20_000);
+    advanceWorldClock(world);
     expireWorldEvents(world);
 
     expect(getActiveWorldEvents(world).length).toBe(1);
@@ -216,7 +250,8 @@ describe("Context Formatting", () => {
     const context = formatWorldTimeForContext(world);
     expect(context).toContain("EVENING");
     expect(context).toContain("Day 1");
-    expect(context).toContain("socialize");
+    expect(context).toContain("CURRENT WORLD TIME: 18:00");
+    expect(context).not.toContain("time to wind down");
     expect(context).toContain("Harvest Festival");
     expect(context).toContain("Tavern");
   });

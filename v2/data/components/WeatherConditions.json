@@ -1,0 +1,8 @@
+{
+  "name": "WeatherConditions",
+  "description": "Current weather conditions outside",
+  "properties": {
+    "rainIntensity": "number",
+    "windSpeed": "number"
+  }
+}

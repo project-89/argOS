@@ -13,7 +13,9 @@
  * while the Artificer handles the technical maintenance.
  */
 
-import { generateText } from "ai";
+import { generateText, stepCountIs } from "ai";
+import { getWorldAuthoringContext } from "../world/world-specification";
+import { formatWorldRuntimeHealth } from "../runtime/fast-system-health";
 import type { World } from "../ecs/world";
 import { spiritModel, daemonModel } from "../llm/config";
 import type { SystemRegistry, SystemDefinition } from "../ecs/dynamic-systems";
@@ -31,19 +33,14 @@ import {
   logSpiritExecution,
 } from "./spirit-factory";
 import { recordEvent, getRecentEvents } from "./consistency-spirit";
-import { modifySystem } from "../god/system-baker";
+import { reportGap, reportGapObservation } from "./observation-aggregator";
 import {
   detectCascades,
   computeSystemHealth,
-  getAverageEffectiveness,
-  getEffectivenessReport,
-  checkForRegression,
-  rollbackSystem,
   type SystemConflict,
   type SystemHealthScore,
   type CascadeResult,
 } from "./effectiveness-tracker";
-import { reportGap } from "./observation-aggregator";
 
 // =============================================================================
 // ARTIFICER TYPES
@@ -92,6 +89,8 @@ export interface RepairAction {
   success: boolean;
   error?: string;
   timestamp: number;
+  jobId?: string;
+  stage?: string;
 }
 
 export interface ArtificerReport {
@@ -183,7 +182,7 @@ export function inspectSystem(
   const system = getSystem(systemRegistry, systemName);
   if (!system) return null;
 
-  const telemetry = getSystemTelemetrySnapshot().find(t => t.systemName === systemName);
+  const telemetry = getSystemTelemetrySnapshot(systemRegistry).find(t => t.systemName === systemName);
   const errorCount = systemRegistry.errorCounts.get(systemName) || 0;
   const now = Date.now();
   const recentErrors = systemRegistry.errors
@@ -193,22 +192,23 @@ export function inspectSystem(
 
   const timeSinceLastRun = now - (system.lastRun || 0);
 
-  // Check for errors
-  if (errorCount > 0) {
-    if (recentErrors.length > 10) {
+  // Current native health is authoritative. A system disabled on its third
+  // failure must not miss a threshold that formerly required MORE than three.
+  if ((system.consecutiveErrors ?? 0) > 0 || !system.active && !!system.disabledReason) {
+    if (!system.active && system.disabledReason || (system.consecutiveErrors ?? 0) >= 3) {
       issues.push({
         type: "error",
         severity: "critical",
-        description: `System has ${recentErrors.length} errors in the last 5 minutes`,
+        description: system.disabledReason || `System has ${system.consecutiveErrors} consecutive errors: ${system.lastError ?? "unknown"}`,
         suggestedFix: "Review system code for logic errors",
         autoFixable: false,
       });
       status = "critical";
-    } else if (recentErrors.length > 3) {
+    } else {
       issues.push({
         type: "error",
         severity: "high",
-        description: `System has ${recentErrors.length} recent errors`,
+        description: `System has ${system.consecutiveErrors} consecutive errors: ${system.lastError ?? "unknown"}`,
         suggestedFix: "Check for edge cases in system logic",
         autoFixable: false,
       });
@@ -242,17 +242,7 @@ export function inspectSystem(
     });
   }
 
-  // Check for systems that appear to do nothing observable (no emits/logs) despite running repeatedly.
-  // This is a heuristic: some silent systems may still mutate state. Treat as low severity unless paired with other issues.
-  if (system.active && telemetry && telemetry.runs >= 10 && telemetry.totalEmits + telemetry.totalLogs === 0) {
-    issues.push({
-      type: "logic",
-      severity: "low",
-      description: `System has run ${telemetry.runs} times with no observable emits/logs`,
-      suggestedFix: "Consider adding ctx.emit() instrumentation or validate that the system actually mutates state",
-      autoFixable: false,
-    });
-  }
+  // Lack of emits/logs is not failure: useful deterministic work can be quiet.
 
   if (system.active && telemetry && telemetry.lastDurationMs > 50) {
     issues.push({
@@ -280,7 +270,7 @@ export function inspectSystem(
   // Determine recommendation
   let recommendation: SystemDiagnosis["recommendation"] = "none";
   if (status === "critical" || status === "dead") {
-    recommendation = "disable";
+    recommendation = !system.active && !!system.code ? "repair" : "disable";
   } else if (issues.some(i => i.severity === "high")) {
     recommendation = "repair";
   } else if (issues.length > 0) {
@@ -310,7 +300,8 @@ export function inspectSystem(
  */
 export function inspectAllSystems(
   systemRegistry: SystemRegistry,
-  ignoreSystems: string[] = []
+  ignoreSystems: string[] = [],
+  world?: World
 ): SystemDiagnosis[] {
   const systems = listSystems(systemRegistry);
   const diagnoses: SystemDiagnosis[] = [];
@@ -325,16 +316,14 @@ export function inspectAllSystems(
       // Report significant issues to observation aggregator
       if (diagnosis.status !== "healthy" && diagnosis.issues.length > 0) {
         try {
-          const { reportGap } = require("./observation-aggregator");
           const severity = diagnosis.status === "critical" || diagnosis.status === "dead"
             ? "critical" : diagnosis.issues.some(i => i.severity === "high") ? "high" : "medium";
-          reportGap(
-            "The Tinker",
-            "performance_issue",
-            `System ${diagnosis.systemName}: ${diagnosis.status}`,
-            diagnosis.issues.map(i => `[${i.severity}] ${i.description}`).join("; "),
-            severity as any
-          );
+          const issued = getSystem(systemRegistry, diagnosis.systemName);
+          const basis = JSON.stringify([issued?.code, issued?.lastErrorTimestamp, issued?.consecutiveErrors, issued?.active, issued?.disabledReason]);
+          reportGapObservation({ source: "The Tinker", category: "performance_issue", title: `System ${diagnosis.systemName}: ${diagnosis.status}`,
+            detail: diagnosis.issues.map(i => `[${i.severity}] ${i.description}`).join("; "), severity: severity as any }, world,
+            () => getSystem(systemRegistry, diagnosis.systemName) === issued
+              && JSON.stringify([issued?.code, issued?.lastErrorTimestamp, issued?.consecutiveErrors, issued?.active, issued?.disabledReason]) === basis);
         } catch {}
       }
     }
@@ -382,26 +371,19 @@ export async function repairSystem(
           // Try to modify the system to fix errors
           const fixDescription = `Fix the following issues: ${errorIssues.map(i => i.description).join("; ")}. Add better error handling and null checks.`;
 
-          const result = await modifySystem(
-            diagnosis.systemName,
-            fixDescription,
-            world,
-            systemRegistry
-          );
+          const tools = createArtificerTools(world, systemRegistry, config);
+          const result = await (tools.repairSystem.execute as any)({systemName:diagnosis.systemName,fixDescription});
 
           action.actionType = "fix_code";
           action.description = fixDescription;
           action.success = result.success;
           action.error = result.error;
-
-          if (result.success) {
-            clearSystemErrors(diagnosis.systemName);
-          }
+          action.jobId = result.jobId;
+          action.stage = result.stage;
         } else {
-          // Can't auto-fix, just clear errors and monitor
-          clearSystemErrors(diagnosis.systemName);
+          // Acknowledgement is not erasure or recovery.
           action.actionType = "clear_errors";
-          action.description = "Cleared error log for monitoring";
+          action.description = "Retained failure evidence for monitoring";
           action.success = true;
         }
         break;
@@ -471,7 +453,7 @@ export async function runArtificerCognition(
   };
 
   // 1. Inspect all systems
-  const diagnoses = inspectAllSystems(systemRegistry, config.ignoreSystems);
+  const diagnoses = inspectAllSystems(systemRegistry, config.ignoreSystems, world);
   report.systemsInspected = diagnoses.length;
 
   // 2. Categorize by health
@@ -504,16 +486,8 @@ export async function runArtificerCognition(
     }
   }
 
-  // 5a. Regression check — roll back systems that degraded after modification
-  for (const system of listSystems(systemRegistry)) {
-    if ((system as any).modificationTimestamp && checkForRegression(system.name, systemRegistry)) {
-      const rolled = rollbackSystem(system.name, systemRegistry);
-      if (rolled) {
-        report.rollbacks.push(system.name);
-        console.log(`[Artificer] ROLLBACK: ${system.name} regressed after modification`);
-      }
-    }
-  }
+  // Managed runtime validation owns rollback. Legacy global effectiveness
+  // snapshots are diagnostic only and cannot replace executable code here.
 
   // 5b. Cascade detection
   const cascades = detectCascades();
@@ -538,66 +512,8 @@ export async function runArtificerCognition(
     ).join(", ")}`);
   }
 
-  const toImprove = healthScores
-    .filter(h => h.improvementPriority > 40 && h.cascadeValue < 60)
-    .slice(0, 2);
-
-  if (toImprove.length > 0 && config.autoFixEnabled) {
-    console.log(`[Artificer] Improving ${toImprove.length} systems by health priority`);
-
-    for (const health of toImprove) {
-      const complexityAnalysis = analyzeSystemComplexity(systemRegistry, health.systemName);
-      if (!complexityAnalysis) continue;
-
-      console.log(`[Artificer] Improving ${health.systemName} (eff: ${health.effectiveness}, static: ${health.staticComplexity})`);
-
-      // 5e. Pre-modification snapshot
-      const system = systemRegistry.systems.get(health.systemName);
-      if (system) {
-        system.previousCode = system.code;
-        system.previousCompiledFn = system.compiledFn as Function | undefined;
-        (system as any).preModificationScore = getAverageEffectiveness(health.systemName);
-        (system as any).modificationTimestamp = Date.now();
-      }
-
-      // 5f. Enhanced improvement prompt with runtime data
-      const improvementPrompt = generateImprovementPrompt(complexityAnalysis) +
-        `\n\nRUNTIME DATA:\n${getEffectivenessReport(health.systemName)}`;
-
-      try {
-        const result = await modifySystem(
-          health.systemName,
-          improvementPrompt,
-          world,
-          systemRegistry
-        );
-
-        report.repairsAttempted.push({
-          systemName: health.systemName,
-          actionType: "fix_code",
-          description: `Improved (eff: ${health.effectiveness}, static: ${health.staticComplexity}, priority: ${health.improvementPriority})`,
-          success: result.success,
-          error: result.error,
-          timestamp: Date.now(),
-        });
-
-        if (result.success) {
-          console.log(`[Artificer] SUCCESS: Improved ${health.systemName}`);
-        } else {
-          console.log(`[Artificer] FAILED to improve ${health.systemName}: ${result.error}`);
-        }
-      } catch (error) {
-        console.error(`[Artificer] Error improving ${health.systemName}:`, error);
-      }
-    }
-
-    // Add recommendations for remaining systems
-    for (const health of healthScores.filter(h => h.improvementPriority > 40 && h.cascadeValue < 60).slice(2)) {
-      report.recommendations.push(
-        `System "${health.systemName}" needs improvement (eff: ${health.effectiveness}, priority: ${health.improvementPriority})`
-      );
-    }
-  }
+  // Complexity/novelty scores are not native fault evidence. They remain in
+  // the report, but no longer authorize unsolicited implementation rewrites.
 
   // 6. Generate recommendations using LLM for complex issues
   const complexIssues = diagnoses.filter(d =>
@@ -609,6 +525,8 @@ export async function runArtificerCognition(
       const result = await generateText({
         model: daemonModel, // Use fast model for quick analysis
         prompt: `You are the Artificer, a spirit that maintains simulation systems.
+
+${getWorldAuthoringContext(world)}
 
 Analyze these system issues and provide 1-3 brief recommendations:
 
@@ -1004,15 +922,15 @@ import { createArtificerTools } from "./spirit-tools";
 export async function runArtificerWithTools(
   world: World,
   systemRegistry: SystemRegistry,
-  _spiritRegistry: SpiritRegistry,
+  spiritRegistry: SpiritRegistry,
   artificer: DynamicSpiritState
 ): Promise<ArtificerReport> {
   const config = artificer.artificerConfig || createArtificerConfig();
-  const tools = createArtificerTools(world, systemRegistry);
+  const tools = createArtificerTools(world, systemRegistry, { ...config, reporting: { registry: spiritRegistry, spirit: artificer } });
 
   // Always do a deterministic inspection first to populate the report
   const allSystems = listSystems(systemRegistry);
-  const diagnoses = inspectAllSystems(systemRegistry, config.ignoreSystems);
+  const diagnoses = inspectAllSystems(systemRegistry, config.ignoreSystems, world);
 
   // Debug: log if registry appears empty or has few systems
   if (allSystems.length === 0) {
@@ -1045,28 +963,30 @@ export async function runArtificerWithTools(
 
   // Get current system state for context
   const systemHealth = getSystemHealthSummary(systemRegistry);
-  const telemetry = getSystemTelemetrySnapshot();
+  const telemetry = getSystemTelemetrySnapshot(systemRegistry);
   const slowest = [...telemetry]
     .sort((a, b) => (b.lastDurationMs || 0) - (a.lastDurationMs || 0))
     .slice(0, 5);
   const silent = telemetry
     .filter(t => t.runs >= 10 && t.totalEmits + t.totalLogs === 0)
     .slice(0, 8);
-  const recentEvents = getRecentEvents(10).filter(e =>
-    e.type.includes("system") || e.type.includes("error")
-  );
+  const recentEvents = systemRegistry.errors.slice(-10).map(error => ({ type: "system_error",
+    data: { systemName: error.systemName, error: error.error, timestamp: error.timestamp } }));
 
   const systemPrompt = `You are The Tinkerer, an Artificer spirit responsible for maintaining the simulation's systems.
+
+${getWorldAuthoringContext(world)}
 
 Your job is to:
 1. Inspect systems for problems
 2. Repair broken systems
 3. Adjust system frequencies if needed
 4. Disable critically broken systems
-5. Evaluate EFFECTIVENESS (not just errors): look for systems that run but don't seem to change anything meaningful
+5. Treat quiet successful repetition as healthy unless native evidence shows a fault
 6. Report issues you can't fix to GodAI
 
 Current System Health:
+${formatWorldRuntimeHealth(world)}
 ${systemHealth}
 
 Runtime Telemetry (heuristics, for effectiveness/performance):
@@ -1088,19 +1008,23 @@ If a system is critically broken and you can't fix it, disable it to prevent cas
       system: systemPrompt,
       prompt: `Perform your maintenance cycle. Inspect any systems that need attention and take appropriate action.`,
       tools,
+      stopWhen: stepCountIs(4),
+      maxRetries: 0,
     });
 
     // Parse the tool results to populate our report
     // The toolResults array contains all results from tool calls
-    if (result.toolResults) {
-      for (const toolResult of result.toolResults as any[]) {
-        const resultData = (toolResult as any).result;
+    const toolResults = result.steps?.length ? result.steps.flatMap(step=>step.toolResults) : result.toolResults;
+    if (toolResults) {
+      for (const toolResult of toolResults as any[]) {
+        const resultData = toolResult.output ?? toolResult.result;
 
         switch (toolResult.toolName) {
           case "listSystems":
             if (Array.isArray(resultData)) {
               report.systemsInspected = resultData.length;
-              report.healthySystems = resultData.filter((s: any) => s.active).length;
+              // Active is not the same as healthy. Native inspection below
+              // remains authoritative, regardless of the model/tool summary.
             }
             break;
           case "repairSystem":
@@ -1110,6 +1034,8 @@ If a system is critically broken and you can't fix it, disable it to prevent cas
               description: resultData?.message || "repair attempted",
               success: resultData?.success || false,
               error: resultData?.error,
+              jobId: resultData?.jobId,
+              stage: resultData?.stage,
               timestamp: Date.now(),
             });
             break;
@@ -1118,7 +1044,7 @@ If a system is critically broken and you can't fix it, disable it to prevent cas
               systemName: resultData?.systemName || "unknown",
               actionType: "restart", // Using valid action type
               description: resultData?.message || "enabled",
-              success: resultData?.success || true,
+              success: resultData?.success === true,
               timestamp: Date.now(),
             });
             break;
@@ -1127,12 +1053,14 @@ If a system is critically broken and you can't fix it, disable it to prevent cas
               systemName: resultData?.systemName || "unknown",
               actionType: "disable",
               description: resultData?.message || "disabled",
-              success: resultData?.success || true,
+              success: resultData?.success === true,
               timestamp: Date.now(),
             });
             break;
           case "reportToGodAI":
-            report.recommendations.push(resultData?.message || "Issue reported");
+            report.recommendations.push(resultData?.success === true
+              ? resultData.message || "Maintenance report queued; review is not confirmed."
+              : `Maintenance report not delivered: ${resultData?.error || "reporting unavailable"}`);
             break;
         }
       }
@@ -1146,13 +1074,19 @@ If a system is critically broken and you can't fix it, disable it to prevent cas
   } catch (error) {
     console.error("[Artificer] Tool-based cognition error:", error);
     // Fall back to deterministic inspection
-    const diagnoses = inspectAllSystems(systemRegistry, config.ignoreSystems);
+    const diagnoses = inspectAllSystems(systemRegistry, config.ignoreSystems, world);
     report.systemsInspected = diagnoses.length;
     report.healthySystems = diagnoses.filter(d => d.status === "healthy").length;
     report.warningSystems = diagnoses.filter(d => d.status === "warning").length;
     report.criticalSystems = diagnoses.filter(d => d.status === "critical" || d.status === "dead").length;
   }
 
+  // Report actual post-cycle health, not an optimistic tool acknowledgement.
+  const after = inspectAllSystems(systemRegistry, config.ignoreSystems, world);
+  report.systemsInspected = after.length;
+  report.healthySystems = after.filter(d => d.status === "healthy").length;
+  report.warningSystems = after.filter(d => d.status === "warning").length;
+  report.criticalSystems = after.filter(d => d.status === "critical" || d.status === "dead").length;
   // Record the inspection event
   recordEvent("artificer_inspection", {
     systemsInspected: report.systemsInspected,

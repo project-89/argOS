@@ -1,34 +1,20 @@
 /**
  * Grounded Cognition System
  *
- * A cognitive system designed to prevent hallucination and produce deep, grounded thinking.
- *
- * Key principles:
- * 1. EXPLICIT GROUNDING - Only reference things that actually exist in the world state
- * 2. PERCEPTION ACKNOWLEDGMENT - Force agents to acknowledge and respond to actual stimuli
- * 3. WORKING MEMORY - Track actual events that happened, not imagined ones
- * 4. DEEP REASONING - Multi-step thinking with self-reflection
- * 5. NO FABRICATION - If something isn't explicitly listed, it doesn't exist
+ * Chooses actions from local observations and recorded working memory.
+ * The snapshot bounds what is known, not what can exist elsewhere.
  */
 
 import { generateText } from "ai";
 import { flashModel } from "../llm/config";
 import type { World } from "../ecs/world";
 import { query, getRelationTargets, hasComponent } from "bitecs";
-import { Name, Description, Agent, Mind, Room, Perception } from "../ecs/components";
+import { Name, Description, Agent, Perception } from "../ecs/components";
 import { HasPerception } from "../ecs/relations";
 import { getRoomForEntity } from "../ecs/location";
 import { addThought } from "./agent-mind";
 import type { AgentAction, ValidActionType } from "./agent-mind";
-import {
-  getEnhancedAgentState,
-  initializeEnhancedAgent,
-} from "./enhanced-agent";
-import {
-  addEpisodicMemory,
-  recallEpisodicMemories,
-  generateMemoryContext,
-} from "./enhanced-memory";
+import { initializeEnhancedAgent } from "./enhanced-agent";
 
 const model = flashModel;
 
@@ -91,7 +77,7 @@ export function clearSessionMemory(agentEid: number): void {
  * Format events for the agent's context
  */
 function formatEventsForContext(events: WorkingMemoryEvent[]): string {
-  if (events.length === 0) return "Nothing has happened yet.";
+  if (events.length === 0) return "No recent events recorded.";
 
   return events.map(e => {
     switch (e.type) {
@@ -197,7 +183,7 @@ interface GroundedThinkingConfig {
 }
 
 /**
- * Build a grounded context that explicitly lists what exists
+ * Build the agent's current observations and recorded context.
  */
 function buildGroundedContext(state: GroundedWorldState, config: GroundedThinkingConfig): string {
   const peopleList = state.presentPeople.length > 0
@@ -222,47 +208,41 @@ function buildGroundedContext(state: GroundedWorldState, config: GroundedThinkin
 
   const eventsList = formatEventsForContext(state.recentEvents);
 
-  let context = `# IDENTITY
+  let context = `# Identity
 You are ${state.agentName}, ${state.agentRole}.
 ${state.agentDescription}
 
 ${config.systemPrompt || ""}
 
-# CURRENT REALITY (This is the ONLY truth - do NOT invent anything not listed here)
+# Current observations
 
-## Your Location
+## Location
 - Room: ${state.currentRoom}
 - Description: ${state.roomDescription}
 
-## People Present With You RIGHT NOW
+## People nearby
 ${peopleList}
 `;
 
   // Show external messages prominently if there are any
   if (externalMessagesList) {
     context += `
-## 📬 INCOMING MESSAGES (People are trying to reach you!)
+## Incoming messages
 ${externalMessagesList}
 
 `;
   }
 
   context += `
-## Your Recent Perceptions (ACTUAL things you saw/heard)
+## Recent perceptions
 ${perceptionsList}
 
-## Recent Events (What ACTUALLY happened)
+## Recent events and thoughts
 ${eventsList}
 
 ${config.additionalContext || ""}
 
-# CRITICAL RULES
-1. ONLY reference people listed in "People Present With You RIGHT NOW"
-2. ONLY respond to things in "Your Recent Perceptions" or "Recent Events"
-3. If someone messaged you or spoke to you, you MUST acknowledge and respond to them
-4. Do NOT invent messages, conversations, or events that are not listed above
-5. Do NOT assume things happened unless they appear in Recent Events
-6. If you don't have information about something, say "I don't know" - don't fabricate`;
+Ground your choice in these observations and recorded context. A thought, intention, or report is not proof that an action succeeded. Missing information is unknown.`;
 
   return context;
 }
@@ -281,21 +261,12 @@ export async function groundedThink(
   const state = extractWorldState(world, eid);
   const context = buildGroundedContext(state, config);
 
-  // Check if there's something requiring immediate response
-  const speechPerceptions = state.recentPerceptions.filter(p =>
-    p.type === "speech" || p.content.toLowerCase().includes("says:")
-  );
-
-  // Check for external Slack messages that need responses
-  const externalSlackMessages = state.recentPerceptions.filter(p =>
+  const hasExternalMessage = state.recentPerceptions.some(p =>
     p.type === "slack_message" || p.source === "slack_external"
   );
 
-  const hasDirectSpeech = speechPerceptions.length > 0;
-  const hasExternalMessage = externalSlackMessages.length > 0;
-
   // Build the thinking prompt
-  const prompt = buildThinkingPrompt(state, config, hasDirectSpeech, hasExternalMessage, externalSlackMessages);
+  const prompt = buildThinkingPrompt(config, hasExternalMessage);
 
   try {
     const { text } = await generateText({
@@ -343,75 +314,37 @@ export async function groundedThink(
  * Build the thinking prompt based on current state
  */
 function buildThinkingPrompt(
-  state: GroundedWorldState,
   config: GroundedThinkingConfig,
-  hasDirectSpeech: boolean,
-  hasExternalMessage: boolean,
-  externalSlackMessages: { type: string; content: string; source: string }[]
+  hasExternalMessage: boolean
 ): string {
   const actionsList = config.availableActions?.join(", ") ||
     "speak, observe, think, wait, move, use, reflect";
 
-  let prompt = `Think carefully about your current situation.
+  let prompt = `Choose one action that fits your situation and priorities.
 
 AVAILABLE ACTIONS: ${actionsList}
 
 `;
 
-  // External Slack messages from real users need PRIORITY attention
-  if (hasExternalMessage) {
+  // Describe the existing tool contract without making incoming messages mandatory tasks.
+  if (hasExternalMessage && actionsList.split(", ").includes("use")) {
     prompt += `
-## 🚨 PRIORITY: EXTERNAL MESSAGES REQUIRE YOUR RESPONSE!
-${externalSlackMessages.map(m => `${m.content}`).join("\n")}
-
-Someone from OUTSIDE your team is trying to communicate with you via Slack!
-YOU MUST respond to these messages. To reply via Slack, use:
-  action type: "use"
-  content: "Post to #general: Your reply message here"
-This takes precedence over internal team conversations.
-
-`;
-  }
-
-  // If someone spoke to us in person, emphasize responding
-  if (hasDirectSpeech) {
-    const speeches = state.recentPerceptions.filter(p =>
-      p.type === "speech" || p.content.toLowerCase().includes("says:")
-    );
-
-    prompt += `
-## IMPORTANT: Someone spoke to you!
-${speeches.map(s => `"${s.content}"`).join("\n")}
-
-You should respond to what was said to you.
-
+For a Slack reply, use action type "use" with content "Post to <channel>: <message>". Use the message's channel${config.slackChannels?.length ? ` from the available channels: ${config.slackChannels.join(", ")}` : " when known"}.
 `;
   }
 
   prompt += `
-## Your Task
-1. First, analyze what just happened based on Recent Events and Perceptions
-2. Consider: Is someone waiting for a response from you?
-3. Think about what would be the most natural, appropriate thing to do
-4. Choose ONE action from the available actions
-
-## Response Format
-Respond with this EXACT JSON structure:
+Return JSON:
 {
-  "situationAnalysis": "What is actually happening right now based on the facts above",
-  "relevantPerceptions": "What perceptions/events am I responding to",
-  "reasoning": "My thought process for deciding what to do",
+  "situationAnalysis": "Brief account of the current situation",
+  "relevantPerceptions": "Observations or events relevant to this choice",
+  "reasoning": "Brief reason for the choice",
   "action": {
     "type": "<one of: ${actionsList}>",
     "target": "<name of person/object if relevant>",
     "content": "<what I say/think/do>"
   }
-}
-
-Remember:
-- ONLY reference things that appear in the CURRENT REALITY section
-- If someone spoke to you or messaged you, respond to WHAT THEY ACTUALLY SAID
-- Be specific and grounded in your response`;
+}`;
 
   return prompt;
 }

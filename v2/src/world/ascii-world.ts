@@ -1,5 +1,6 @@
 import type { World } from "../ecs/world";
-import { query, addEntity, addComponent } from "bitecs";
+import { allocateWorldEntity } from "../runtime/world-construction-budget";
+import { query, addComponent } from "bitecs";
 import { Name, GridPosition, Sprite, WorldMap, Agent, Room } from "../ecs/components";
 
 export interface AsciiCell {
@@ -34,7 +35,7 @@ const DEFAULT_TILES: Record<string, { char: string; color: string; bgColor: stri
 };
 
 export function createWorldMap(world: World, name: string, width: number, height: number, fill: string = '.'): number {
-  const eid = addEntity(world);
+  const eid = allocateWorldEntity(world, "entity");
   addComponent(world, eid, WorldMap);
   addComponent(world, eid, Name);
   

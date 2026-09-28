@@ -1,20 +1,25 @@
-import { createArgosWorld } from "../ecs/world";
+import { createArgosWorld, type World } from "../ecs/world";
+import { advanceSimulationTime } from "../ecs/simulation-time";
 import { initializePrefabs, createAgentEntity, createRoomEntity } from "../ecs/prefabs";
 import { createSystemRegistry, runSystems } from "../ecs/dynamic-systems";
 import {
   createMovementSystem,
   createRoomArrivalSystem,
   createGoalPursuitSystem,
+  clearMovementTarget,
 } from "../systems/builtin-systems";
 import { getRoomForEntity } from "../ecs/location";
-import { GridPosition, Goal } from "../ecs/components";
+import { Agent, GridPosition, Goal } from "../ecs/components";
 import { executeActions, createMovementGoal } from "../cognition/cognition-system";
-import { getRelationTargets } from "bitecs";
+import { getRelationTargets, query } from "bitecs";
 import { HasGoal } from "../ecs/relations";
 
 describe("UI world demo: grounded movement", () => {
+  const worlds: World[] = [];
+  afterEach(() => { for (const world of worlds.splice(0)) for (const eid of query(world, [Agent])) clearMovementTarget(eid); });
   test("agents keep room assignment and walk toward target room", () => {
     const world = createArgosWorld("UIWorldDemoMovementTest");
+    worlds.push(world);
     initializePrefabs(world);
 
     const registry = createSystemRegistry();
@@ -44,6 +49,7 @@ describe("UI world demo: grounded movement", () => {
     const startY = GridPosition.y[agent];
 
     // First tick should not clear the room.
+    advanceSimulationTime(world, 1, 250);
     runSystems(world, registry, 1, 250);
     expect(getRoomForEntity(world, agent)).toBe(roomA);
 
@@ -52,6 +58,7 @@ describe("UI world demo: grounded movement", () => {
 
     // Run ticks until the agent arrives.
     for (let t = 2; t < 80; t++) {
+      advanceSimulationTime(world, t, 250);
       runSystems(world, registry, t, 250);
     }
 
@@ -74,6 +81,7 @@ describe("UI world demo: grounded movement", () => {
 
   test("GoalPursuit: does not thrash between equal-priority movement goals", () => {
     const world = createArgosWorld("UIWorldDemoGoalPursuitLockTest");
+    worlds.push(world);
     initializePrefabs(world);
 
     const registry = createSystemRegistry();
@@ -110,7 +118,10 @@ describe("UI world demo: grounded movement", () => {
     if (goalGamma !== undefined) Goal.createdAt[goalGamma] = 2;
 
     // Run multiple ticks; the movement target should remain stable (not flip-flop).
-    for (let t = 1; t < 20; t++) {
+    // At 2 grid units per simulated second this route needs roughly 9s,
+    // not the <5s allowed by the former one-step-per-invocation fixture.
+    for (let t = 1; t < 80 && getRoomForEntity(world, agent) !== beta; t++) {
+      advanceSimulationTime(world, t, 250);
       runSystems(world, registry, t, 250);
       // GoalPursuit should keep driving toward Beta.
       expect(getRoomForEntity(world, agent)).not.toBeUndefined();

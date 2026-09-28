@@ -10,6 +10,7 @@
 import "dotenv/config";
 import * as readline from "readline";
 import { createArgosWorld } from "./ecs/world";
+import { allocateWorldEntity } from "./runtime/world-construction-budget";
 import { initializePrefabs, resetRoomPositionCounter } from "./ecs/prefabs";
 import {
   createGodAgent,
@@ -32,7 +33,7 @@ import {
   Personality,
 } from "./ecs/components";
 import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { createArgosModel as google, MODEL_IDS } from "./llm/config";
 import { z } from "zod/v3";
 import { tool } from "ai";
 import {
@@ -49,7 +50,7 @@ const NPC_THINK_INTERVAL = 2; // NPCs think every N ticks
 const DISPLAY_REFRESH_LINES = 40;
 
 // Models
-const npcModel = google("gemini-2.0-flash");
+const npcModel = google(MODEL_IDS.flash);
 
 interface NPCState {
   eid: number;
@@ -154,7 +155,7 @@ async function createNPC(
   locationEid: number
 ): Promise<NPCState> {
   const world = sim.godState.world;
-  const eid = addEntity(world);
+  const eid = allocateWorldEntity(world, "agent");
 
   // Add cognitive components
   addComponent(world, eid, Name);

@@ -398,7 +398,7 @@ async function main() {
   // Wire NLE
   startBeatDetection(sim.world);
   setDirectorGodAgent(sim.god);
-  if (sim.daemons) setNudgeDaemonRegistry(sim.daemons);
+  if (sim.daemons) setNudgeDaemonRegistry(sim.world, sim.daemons);
 
   logPhase = "gameplay";
   simWorld = sim.world;

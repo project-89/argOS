@@ -16,6 +16,7 @@
  * - Tool use through physical objects
  */
 
+import { memorySimulationTime } from "./enhanced-memory";
 import type { World } from "../ecs/world";
 import { Name, Mind } from "../ecs/components";
 import {
@@ -97,7 +98,7 @@ export function initializeEnhancedAgent(eid: number): EnhancedAgentState {
     memoryStore: getAgentMemoryStore(eid), // Uses research-agent's store
     mode: "reactive",
     cognitiveLoad: 0,
-    lastConsolidation: Date.now(),
+    lastConsolidation: 0,
   };
 
   enhancedAgents.set(eid, state);
@@ -201,10 +202,10 @@ export async function runEnhancedCognition(
   let memoryUpdates = 0;
 
   // 1. Periodic memory consolidation
-  const timeSinceConsolidation = Date.now() - state.lastConsolidation;
+  const timeSinceConsolidation = memorySimulationTime(state.memoryStore) - state.lastConsolidation;
   if (timeSinceConsolidation > 60000) { // Every minute
     const result = consolidateMemories(state.memoryStore);
-    state.lastConsolidation = Date.now();
+    state.lastConsolidation = memorySimulationTime(state.memoryStore);
     memoryUpdates += result.patternsFound;
   }
 

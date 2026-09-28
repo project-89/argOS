@@ -37,6 +37,8 @@ import {
   createDynamicComponent,
 } from "../ecs/dynamic-components";
 import { executeEffect, executeAffordance, type EffectContext, type EffectResult } from "./effect-executor";
+import { canExecuteRule } from "./runtime-rule-scope";
+import { readObjectStateAge } from "./object-state-time";
 
 export interface RuleEvent {
   type: string;
@@ -107,7 +109,7 @@ export class RulesEngine {
       random: Math.random,
     };
 
-    const activeRules = worldSchema.getActiveRules();
+    const activeRules = worldSchema.getActiveRules().filter(rule => canExecuteRule(this.world, rule));
 
     for (const rule of activeRules) {
       if (rule.when.event === "tick") {
@@ -145,6 +147,8 @@ export class RulesEngine {
     context: RuleContext,
     specificEid?: number
   ): void {
+    // Recheck after earlier rules/observers: source stop is not delayed to next tick.
+    if (!canExecuteRule(this.world, rule)) return;
     // Get candidate entities
     let candidates: number[];
 
@@ -163,7 +167,8 @@ export class RulesEngine {
     // Execute effects on matching entities
     for (const eid of matching) {
       for (const effect of rule.then) {
-        this.executeEffect(effect, eid, context);
+        if (!canExecuteRule(this.world, rule)) return;
+        this.executeEffect(effect, eid, context, () => canExecuteRule(this.world, rule));
       }
     }
   }
@@ -207,6 +212,12 @@ export class RulesEngine {
       if (currentState !== condition.inState) {
         return false;
       }
+    }
+
+    if (condition.minStateAgeMs !== undefined) {
+      if (!condition.inState || !Number.isSafeInteger(condition.minStateAgeMs) || condition.minStateAgeMs < 0) return false;
+      const age = readObjectStateAge(this.world, eid);
+      if (age === undefined || age < condition.minStateAgeMs) return false;
     }
 
     // Evaluate expression
@@ -290,12 +301,14 @@ export class RulesEngine {
   private executeEffect(
     effect: RuleEffect,
     sourceEid: number,
-    context: RuleContext
+    context: RuleContext,
+    sourceCurrent: () => boolean = () => true
   ): void {
     // Determine target entities
     const targets = this.resolveTargets(effect, sourceEid, context);
 
     for (const targetEid of targets) {
+      if (!sourceCurrent()) return;
       // Check chance if specified
       if (effect.params?.chance !== undefined) {
         if (context.random() > effect.params.chance) {

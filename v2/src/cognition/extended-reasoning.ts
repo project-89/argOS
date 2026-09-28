@@ -13,10 +13,11 @@
  * - Result synthesis into actionable conclusions
  */
 
-import { google } from "@ai-sdk/google";
+import { agentModel, reasoningModel } from "../llm/config";
 import { generateText, generateObject, tool } from "ai";
 import { z } from "zod";
 import type { World } from "../ecs/world";
+import { getSimulationTaskSignal } from "../runtime/task-scope";
 import type { AgentMemoryStore } from "./enhanced-memory";
 import {
   addToWorkingMemory,
@@ -66,6 +67,8 @@ export interface ReasoningResult {
 
 export interface ReasoningConfig {
   maxSteps: number;
+  /** Hard cap across reasoning, tool, reflection, synthesis, and action calls. */
+  maxModelCalls: number;
   maxTimeMs: number;
   minConfidenceToStop: number;
   enableToolUse: boolean;
@@ -74,13 +77,57 @@ export interface ReasoningConfig {
 }
 
 const DEFAULT_CONFIG: ReasoningConfig = {
-  maxSteps: 10,
-  maxTimeMs: 60000, // 1 minute
+  // This faculty is intended for a reserved subconscious lane. Keep one job
+  // bounded so it yields capacity to planning, reflection, and other actors.
+  maxSteps: 4,
+  maxModelCalls: 6,
+  maxTimeMs: 15000,
   minConfidenceToStop: 0.8,
   enableToolUse: true,
   enableSelfReflection: true,
   model: "flash",
 };
+
+interface ReasoningRuntime {
+  signal: AbortSignal;
+  parentSignal?: AbortSignal;
+  deadlineSignal: AbortSignal;
+  model: typeof agentModel;
+  modelCalls: number;
+  maxModelCalls: number;
+  claimModelCall(): void;
+}
+
+function createReasoningRuntime(cfg: ReasoningConfig, maxTimeMs: number): ReasoningRuntime {
+  const parentSignal = getSimulationTaskSignal();
+  const deadlineSignal = AbortSignal.timeout(Math.max(1, maxTimeMs));
+  const signal = parentSignal ? AbortSignal.any([parentSignal, deadlineSignal]) : deadlineSignal;
+  const runtime: ReasoningRuntime = {
+    signal,
+    parentSignal,
+    deadlineSignal,
+    model: cfg.model === "pro" ? reasoningModel : agentModel,
+    modelCalls: 0,
+    maxModelCalls: Math.max(1, Math.min(20, Math.floor(cfg.maxModelCalls))),
+    claimModelCall() {
+      signal.throwIfAborted();
+      if (runtime.modelCalls >= runtime.maxModelCalls) throw new Error("extended reasoning model-call budget exhausted");
+      runtime.modelCalls++;
+    },
+  };
+  return runtime;
+}
+
+function modelCallOptions(runtime: ReasoningRuntime, maxOutputTokens: number) {
+  return {
+    abortSignal: runtime.signal,
+    maxRetries: 0,
+    maxOutputTokens,
+    providerOptions: {
+      google: { thinkingConfig: { thinkingLevel: "low" } },
+    },
+  } as const;
+}
 
 // =============================================================================
 // REASONING ENGINE
@@ -95,14 +142,17 @@ export async function executeExtendedReasoning(
   agentContext: string,
   config: Partial<ReasoningConfig> = {}
 ): Promise<ReasoningResult> {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
+  const cfg: ReasoningConfig = { ...DEFAULT_CONFIG, ...config };
+  cfg.maxSteps = Math.max(1, Math.min(12, Math.floor(task.maxSteps ?? cfg.maxSteps)));
+  cfg.maxTimeMs = Math.max(1, Math.min(120_000, Math.floor(task.deadline ?? cfg.maxTimeMs)));
   const startTime = Date.now();
   const steps: ReasoningStep[] = [];
   const findings: string[] = [];
   const uncertainties: string[] = [];
   let tokensUsed = 0;
 
-  const model = google(cfg.model === "pro" ? "gemini-2.0-flash" : "gemini-2.0-flash");
+  const runtime = createReasoningRuntime(cfg, cfg.maxTimeMs);
+  const model = runtime.model;
 
   // Initialize working memory for this task
   addToWorkingMemory(memoryStore, task.id, "note", `Starting: ${task.question}`);
@@ -112,12 +162,13 @@ export async function executeExtendedReasoning(
   let stepNumber = 0;
 
   // Build the reasoning tools
-  const reasoningTools = buildReasoningTools(task, memoryStore, agentContext);
+  const reasoningTools = buildReasoningTools(memoryStore, runtime);
 
   // Main reasoning loop
   while (
     stepNumber < cfg.maxSteps &&
-    Date.now() - startTime < cfg.maxTimeMs &&
+    !runtime.signal.aborted &&
+    runtime.modelCalls < runtime.maxModelCalls &&
     currentConfidence < cfg.minConfidenceToStop
   ) {
     stepNumber++;
@@ -132,8 +183,10 @@ export async function executeExtendedReasoning(
 
     try {
       // Generate next reasoning step
+      runtime.claimModelCall();
       const response = await generateObject({
         model,
+        ...modelCallOptions(runtime, 900),
         schema: z.object({
           stepType: z.enum(["think", "search", "calculate", "recall", "hypothesize", "evaluate", "conclude"]),
           content: z.string().describe("The reasoning content for this step"),
@@ -146,21 +199,10 @@ export async function executeExtendedReasoning(
           isConclusion: z.boolean().describe("Whether this is a final conclusion"),
         }),
         prompt,
-        system: `You are performing extended reasoning to answer: "${task.question}"
-
-Your goal is to think step-by-step, using tools when needed, until you reach a confident conclusion.
-
-Step types:
-- think: Pure reasoning/analysis
-- search: Look up information (from memory or tools)
-- calculate: Perform a calculation
-- recall: Retrieve from memory
-- hypothesize: Form a hypothesis to test
-- evaluate: Assess evidence for/against
-- conclude: State your final answer
-
-Be thorough but efficient. Stop when you have a confident answer.`,
+        system: `Investigate the question using the supplied context and available tools. Keep observations, attributed statements and hypotheses distinct; a repeated thought is not new evidence.
+Choose the next useful step, with a concise explanation and any source references. Tool requests are proposals until their results return. Conclude when the evidence supports an answer or when the question cannot be resolved with the information available. State the remaining uncertainty; confidence should reflect evidence, not effort.`,
       });
+      runtime.signal.throwIfAborted();
 
       const step: ReasoningStep = {
         stepNumber,
@@ -228,7 +270,8 @@ Be thorough but efficient. Stop when you have a confident answer.`,
           task,
           steps,
           findings,
-          uncertainties
+          uncertainties,
+          runtime,
         );
 
         if (reflectionResult.shouldContinue === false) {
@@ -246,6 +289,13 @@ Be thorough but efficient. Stop when you have a confident answer.`,
       tokensUsed += prompt.length / 4 + (response.object.content?.length || 0) / 4;
 
     } catch (error) {
+      // Simulation cancellation is authoritative: stale subconscious work must
+      // never fall through and write memories after its world has stopped.
+      if (runtime.parentSignal?.aborted) runtime.parentSignal.throwIfAborted();
+      if (runtime.deadlineSignal.aborted) {
+        uncertainties.push("Reasoning deadline reached");
+        break;
+      }
       console.error(`[ExtendedReasoning] Error at step ${stepNumber}:`, error);
       uncertainties.push(`Error during reasoning step ${stepNumber}`);
       break;
@@ -253,16 +303,33 @@ Be thorough but efficient. Stop when you have a confident answer.`,
   }
 
   // If no conclusion reached, synthesize one from findings
-  if (!conclusion && findings.length > 0) {
-    conclusion = await synthesizeConclusion(model, task, findings, uncertainties);
-    currentConfidence = Math.min(0.6, currentConfidence); // Lower confidence for synthesized
+  if (!conclusion && findings.length > 0 && !runtime.signal.aborted && runtime.modelCalls < runtime.maxModelCalls) {
+    try {
+      conclusion = await synthesizeConclusion(model, task, findings, uncertainties, runtime);
+      currentConfidence = Math.min(0.6, currentConfidence); // Lower confidence for synthesized
+    } catch (error) {
+      if (runtime.parentSignal?.aborted) runtime.parentSignal.throwIfAborted();
+      if (!runtime.deadlineSignal.aborted) uncertainties.push(`Conclusion synthesis failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
   }
 
-  // Generate suggested actions from conclusion
-  const suggestedActions = await generateSuggestedActions(model, task, conclusion, findings);
+  // Suggestions are candidates for the foreground loop, never direct world
+  // mutations. Skip this optional call when the job has spent its budget.
+  let suggestedActions: string[] = [];
+  if (conclusion && !runtime.signal.aborted && runtime.modelCalls < runtime.maxModelCalls) {
+    try {
+      suggestedActions = await generateSuggestedActions(model, task, conclusion, findings, runtime);
+    } catch (error) {
+      if (runtime.parentSignal?.aborted) runtime.parentSignal.throwIfAborted();
+      if (!runtime.deadlineSignal.aborted) uncertainties.push(`Action synthesis failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }
+
+  if (runtime.parentSignal?.aborted) runtime.parentSignal.throwIfAborted();
+  const mayCommitLearning = !runtime.deadlineSignal.aborted;
 
   // Store successful reasoning patterns as procedural memory
-  if (currentConfidence >= 0.7) {
+  if (mayCommitLearning && currentConfidence >= 0.7) {
     addProceduralMemory(memoryStore, {
       skill: `Reasoning about ${task.type}`,
       context: task.question.slice(0, 100),
@@ -273,7 +340,7 @@ Be thorough but efficient. Stop when you have a confident answer.`,
   }
 
   // Store key findings as semantic memory
-  for (const finding of findings.slice(0, 5)) {
+  for (const finding of mayCommitLearning ? findings.slice(0, 5) : []) {
     addSemanticMemory(memoryStore, {
       category: "fact",
       subject: task.question.slice(0, 50),
@@ -311,18 +378,20 @@ function buildReasoningPrompt(
   currentStep: number,
   maxSteps: number
 ): string {
+  const context = task.context && task.context !== agentContext
+    ? task.context.startsWith(agentContext) ? task.context : `${agentContext}\n${task.context}`
+    : agentContext;
   return `# Extended Reasoning Task
 
 ## Your Context
-${agentContext}
+${context}
 
 ## Task
 Type: ${task.type}
 Question: ${task.question}
 ${task.constraints?.length ? `Constraints: ${task.constraints.join(", ")}` : ""}
 
-## Working Memory (Your Scratchpad)
-${workingMemory || "(Empty - start fresh)"}
+${workingMemory || "Working memory: no notes yet."}
 
 ## Previous Reasoning Steps
 ${previousSteps || "(This is step 1)"}
@@ -330,14 +399,7 @@ ${previousSteps || "(This is step 1)"}
 ## Current Status
 Step ${currentStep} of ${maxSteps} maximum.
 
-## Instructions
-Think about what you need to do next to answer the question.
-- If you need information, specify a tool to use
-- If you're uncertain, form a hypothesis
-- If you have enough information, evaluate and conclude
-- Be specific and cite your reasoning
-
-What is your next reasoning step?`;
+Choose the next step that could resolve a remaining uncertainty, or conclude with the limits of the available evidence.`;
 }
 
 // =============================================================================
@@ -351,9 +413,8 @@ interface ReasoningTool {
 }
 
 function buildReasoningTools(
-  task: ReasoningTask,
   memoryStore: AgentMemoryStore,
-  agentContext: string
+  runtime: ReasoningRuntime,
 ): Map<string, ReasoningTool> {
   const tools = new Map<string, ReasoningTool>();
 
@@ -369,7 +430,7 @@ function buildReasoningTools(
 
       const results: string[] = [];
       for (const s of semanticResults) {
-        results.push(`[Fact] ${s.content} (confidence: ${(s.confidence * 100).toFixed(0)}%)`);
+        results.push(`[Stored ${s.category}] ${s.content} (confidence: ${(s.confidence * 100).toFixed(0)}%; sources: ${s.sources.join(", ") || "unspecified"})`);
       }
       for (const e of episodicResults) {
         results.push(`[Memory] ${e.event} - ${e.myRole}`);
@@ -384,11 +445,13 @@ function buildReasoningTools(
     name: "deduce",
     description: "Apply logical deduction to premises",
     execute: async (premises: string) => {
-      const model = google("gemini-2.0-flash");
+      runtime.claimModelCall();
       const response = await generateText({
-        model,
-        prompt: `Given these premises:\n${premises}\n\nWhat can be logically deduced? Be precise and show your reasoning.`,
+        model: runtime.model,
+        ...modelCallOptions(runtime, 600),
+        prompt: `Given these premises:\n${premises}\n\nState only conclusions that follow, with a brief justification. Preserve conditional or uncertain premises; deduction does not verify them against the world.`,
       });
+      runtime.signal.throwIfAborted();
       return response.text;
     },
   });
@@ -398,11 +461,13 @@ function buildReasoningTools(
     name: "find_analogy",
     description: "Find analogous situations or patterns",
     execute: async (situation: string) => {
-      const model = google("gemini-2.0-flash");
+      runtime.claimModelCall();
       const response = await generateText({
-        model,
-        prompt: `Find analogies for this situation that might help understand it:\n${situation}\n\nProvide 2-3 relevant analogies with explanations.`,
+        model: runtime.model,
+        ...modelCallOptions(runtime, 600),
+        prompt: `Consider useful analogies for this situation:\n${situation}\n\nOffer up to three if they clarify it, and state where each comparison breaks down. An analogy suggests possibilities; it does not supply evidence about this situation. If none helps, say so.`,
       });
+      runtime.signal.throwIfAborted();
       return response.text;
     },
   });
@@ -412,9 +477,10 @@ function buildReasoningTools(
     name: "decompose",
     description: "Break down a complex problem into sub-problems",
     execute: async (problem: string) => {
-      const model = google("gemini-2.0-flash");
+      runtime.claimModelCall();
       const response = await generateObject({
-        model,
+        model: runtime.model,
+        ...modelCallOptions(runtime, 700),
         schema: z.object({
           subproblems: z.array(z.object({
             description: z.string(),
@@ -422,8 +488,9 @@ function buildReasoningTools(
             dependencies: z.array(z.string()),
           })),
         }),
-        prompt: `Break this problem into smaller sub-problems:\n${problem}`,
+        prompt: `Identify useful sub-problems for:\n${problem}\n\nUse only the supplied constraints. Keep unknowns explicit, and return an empty subproblems array if no decomposition is needed.`,
       });
+      runtime.signal.throwIfAborted();
       return response.object.subproblems
         .map((sp, i) => `${i + 1}. ${sp.description} [${sp.difficulty}]`)
         .join("\n");
@@ -435,17 +502,19 @@ function buildReasoningTools(
     name: "evaluate_hypothesis",
     description: "Evaluate evidence for and against a hypothesis",
     execute: async (hypothesis: string) => {
-      const model = google("gemini-2.0-flash");
+      runtime.claimModelCall();
       const response = await generateObject({
-        model,
+        model: runtime.model,
+        ...modelCallOptions(runtime, 700),
         schema: z.object({
           supportingEvidence: z.array(z.string()),
           contradictingEvidence: z.array(z.string()),
           verdict: z.enum(["supported", "refuted", "insufficient_evidence"]),
           confidence: z.number(),
         }),
-        prompt: `Evaluate this hypothesis based on general knowledge:\n${hypothesis}\n\nList supporting and contradicting evidence.`,
+        prompt: `Assess this hypothesis using the evidence included with it:\n${hypothesis}\n\nKeep general plausibility separate from observed support. Cite supplied sources within the evidence strings; leave either evidence array empty when nothing supports it. Use insufficient_evidence when the hypothesis cannot be tested from this input. Do not invent observations or treat a proposed test as a result.`,
       });
+      runtime.signal.throwIfAborted();
 
       return `Verdict: ${response.object.verdict} (${(response.object.confidence * 100).toFixed(0)}% confidence)
 Supporting: ${response.object.supportingEvidence.join("; ")}
@@ -482,19 +551,22 @@ async function executeReasoningTool(
 // =============================================================================
 
 async function performSelfReflection(
-  model: ReturnType<typeof google>,
+  model: typeof agentModel,
   task: ReasoningTask,
   steps: ReasoningStep[],
   findings: string[],
-  uncertainties: string[]
+  uncertainties: string[],
+  runtime: ReasoningRuntime,
 ): Promise<{
   shouldContinue: boolean;
   confidence: number;
   redirect?: string;
   earlyConclusion?: string;
 }> {
+  runtime.claimModelCall();
   const response = await generateObject({
     model,
+    ...modelCallOptions(runtime, 600),
     schema: z.object({
       progressAssessment: z.string(),
       isOnTrack: z.boolean(),
@@ -516,12 +588,9 @@ ${findings.slice(0, 5).join("\n") || "None yet"}
 Uncertainties:
 ${uncertainties.slice(0, 3).join("\n") || "None"}
 
-Questions to answer:
-1. Are you making progress toward answering the question?
-2. Are you going in circles or being redundant?
-3. Do you have enough information to conclude?
-4. Should you redirect your approach?`,
+Assess whether the last steps added evidence or only restated the same idea. Continue only if another available step could help. Otherwise conclude, including an unresolved or low-confidence answer when appropriate.`,
   });
+  runtime.signal.throwIfAborted();
 
   return {
     shouldContinue: response.object.shouldContinue,
@@ -536,13 +605,16 @@ Questions to answer:
 // =============================================================================
 
 async function synthesizeConclusion(
-  model: ReturnType<typeof google>,
+  model: typeof agentModel,
   task: ReasoningTask,
   findings: string[],
-  uncertainties: string[]
+  uncertainties: string[],
+  runtime: ReasoningRuntime,
 ): Promise<string> {
+  runtime.claimModelCall();
   const response = await generateText({
     model,
+    ...modelCallOptions(runtime, 700),
     prompt: `Synthesize a conclusion from these findings:
 
 Question: ${task.question}
@@ -553,20 +625,24 @@ ${findings.map((f, i) => `${i + 1}. ${f}`).join("\n")}
 Remaining uncertainties:
 ${uncertainties.join("\n") || "None"}
 
-Provide a clear, actionable conclusion that acknowledges any limitations.`,
+State the answer supported by these findings, retaining source attribution and uncertainty. If they do not resolve the question, say what is still unknown. Do not turn a hypothesis or proposed action into an observed result.`,
   });
+  runtime.signal.throwIfAborted();
 
   return response.text;
 }
 
 async function generateSuggestedActions(
-  model: ReturnType<typeof google>,
+  model: typeof agentModel,
   task: ReasoningTask,
   conclusion: string,
-  findings: string[]
+  findings: string[],
+  runtime: ReasoningRuntime,
 ): Promise<string[]> {
+  runtime.claimModelCall();
   const response = await generateObject({
     model,
+    ...modelCallOptions(runtime, 500),
     schema: z.object({
       actions: z.array(z.string()).describe("Concrete actions the agent should take based on the conclusion"),
     }),
@@ -578,8 +654,9 @@ Conclusion: ${conclusion}
 Key findings:
 ${findings.slice(0, 5).join("\n")}
 
-Suggest 1-3 concrete, actionable next steps.`,
+Suggest up to three useful next steps supported by this context, using known capabilities. These are proposals, not completed actions. Return an empty actions array when nothing further is needed or no grounded action is available.`,
   });
+  runtime.signal.throwIfAborted();
 
   return response.object.actions;
 }
@@ -596,10 +673,14 @@ export async function executeQuickReasoning(
   context: string,
   memoryStore: AgentMemoryStore
 ): Promise<{ answer: string; confidence: number }> {
-  const model = google("gemini-2.0-flash");
+  const deadline = AbortSignal.timeout(8000);
 
   const response = await generateObject({
-    model,
+    model: agentModel,
+    abortSignal: deadline,
+    maxRetries: 0,
+    maxOutputTokens: 700,
+    providerOptions: { google: { thinkingConfig: { thinkingLevel: "low" } } },
     schema: z.object({
       reasoning: z.string(),
       answer: z.string(),
@@ -611,8 +692,9 @@ Context: ${context}
 
 Question: ${question}
 
-Think step-by-step briefly, then provide your answer.`,
+Give a brief explanation and answer grounded in this context. Attribute reported claims and preserve uncertainty; if the answer is not established, say so instead of inventing evidence.`,
   });
+  deadline.throwIfAborted();
 
   // Store as semantic memory if confident
   if (response.object.confidence >= 0.7) {

@@ -13,31 +13,46 @@
 
 export type TaskPriority = "critical" | "high" | "normal" | "low";
 export type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
+export type TaskLane = "foreground" | "subconscious" | "background";
 
 export interface AsyncTask<T = any> {
   id: string;
   name: string;
   priority: TaskPriority;
+  lane: TaskLane;
+  scope?: string;
+  abort: AbortController;
   status: TaskStatus;
   queuedAt: number;
+  /** Monotonic pending age and FIFO tie-break; wall timestamps remain diagnostic. */
+  queuedAtMonotonic: number;
+  queueOrder: number;
   startedAt?: number;
   completedAt?: number;
   result?: T;
   error?: string;
-  execute: () => Promise<T>;
+  execute: (signal: AbortSignal) => Promise<T>;
   onComplete?: (result: T) => void;
   onError?: (error: Error) => void;
 }
 
 export interface TaskQueueConfig {
-  maxConcurrent: number;        // Max concurrent AI tasks
+  maxConcurrent: number;        // Background world/building slots, NOT a global total
+  foregroundMaxConcurrent: number; // Reserved responsive work; builders cannot occupy these slots
+  subconsciousMaxConcurrent: number; // Reserved planning/goals/reflection; no borrowing between lanes
+  subconsciousAgingMs: number;  // After this pending age, FIFO wins over priority in this lane
+  monotonicNow: () => number;   // Injectable clock for pending-age fairness, independent of wall clock
   processInterval: number;      // How often to check for new tasks (ms)
   taskTimeout: number;          // Max time per task before timeout (ms)
 }
 
 export interface TaskQueueStats {
   pending: number;
+  /** Logically running tasks; cancellation/timeout ends this immediately. */
   running: number;
+  /** Actual executor reservations, including aborted work still settling. */
+  executing: number;
+  settling: number;
   completed: number;
   failed: number;
   avgExecutionTime: number;
@@ -45,6 +60,10 @@ export interface TaskQueueStats {
 
 const DEFAULT_CONFIG: TaskQueueConfig = {
   maxConcurrent: 3,
+  foregroundMaxConcurrent: 2,
+  subconsciousMaxConcurrent: 2, // Default aggregate ceiling: 3 background + 2 foreground + 2 subconscious
+  subconsciousAgingMs: 5_000,
+  monotonicNow: () => performance.now(),
   processInterval: 100,
   taskTimeout: 300000,  // 5 minutes (system baking can be slow)
 };
@@ -57,6 +76,7 @@ interface TaskQueueState {
   tasks: Map<string, AsyncTask>;
   pendingQueue: string[];       // Task IDs in priority order
   runningTasks: Set<string>;
+  executingTasks: Set<string>;
   completedTasks: string[];
   config: TaskQueueConfig;
   isRunning: boolean;
@@ -79,11 +99,13 @@ export function initializeTaskQueue(config: Partial<TaskQueueConfig> = {}): void
     console.warn("[TaskQueue] Queue already running, stopping first...");
     stopTaskQueue();
   }
+  if (globalQueue) for (const task of globalQueue.tasks.values()) cancelTask(task.id);
 
   globalQueue = {
     tasks: new Map(),
     pendingQueue: [],
     runningTasks: new Set(),
+    executingTasks: new Set(),
     completedTasks: [],
     config: { ...DEFAULT_CONFIG, ...config },
     isRunning: false,
@@ -143,9 +165,11 @@ function scheduleNextProcess(): void {
  */
 export function queueTask<T>(
   name: string,
-  execute: () => Promise<T>,
+  execute: (signal: AbortSignal) => Promise<T>,
   options: {
     priority?: TaskPriority;
+    lane?: TaskLane;
+    scope?: string;
     onComplete?: (result: T) => void;
     onError?: (error: Error) => void;
   } = {}
@@ -161,8 +185,13 @@ export function queueTask<T>(
     id,
     name,
     priority: options.priority || "normal",
+    lane: options.lane || "background",
+    scope: options.scope,
+    abort: new AbortController(),
     status: "pending",
     queuedAt: Date.now(),
+    queuedAtMonotonic: globalQueue!.config.monotonicNow(),
+    queueOrder: taskIdCounter,
     execute,
     onComplete: options.onComplete,
     onError: options.onError,
@@ -218,19 +247,23 @@ export function getTaskResult<T>(taskId: string): T | undefined {
 }
 
 /**
- * Cancel a pending task
+ * Cancel pending or running work. Cooperative executors receive its signal.
  */
 export function cancelTask(taskId: string): boolean {
   const task = globalQueue?.tasks.get(taskId);
-  if (!task || task.status !== "pending") {
+  if (!task || !["pending", "running"].includes(task.status)) {
     return false;
   }
 
+  const wasPending = task.status === "pending";
   task.status = "cancelled";
+  task.completedAt = Date.now();
+  task.abort.abort();
   const index = globalQueue!.pendingQueue.indexOf(taskId);
   if (index !== -1) {
     globalQueue!.pendingQueue.splice(index, 1);
   }
+  if (wasPending) retainCompletedTask(globalQueue!, task.id);
 
   console.log(`[TaskQueue] Cancelled: ${task.name} (${taskId})`);
   return true;
@@ -280,14 +313,48 @@ export async function waitForTask<T>(taskId: string, timeout: number = 60000): P
 async function processQueue(): Promise<void> {
   if (!globalQueue) return;
 
-  const { pendingQueue, runningTasks, config, tasks } = globalQueue;
+  const { pendingQueue, executingTasks, config, tasks } = globalQueue;
 
   // Start new tasks if we have capacity
-  while (
-    pendingQueue.length > 0 &&
-    runningTasks.size < config.maxConcurrent
-  ) {
-    const taskId = pendingQueue.shift()!;
+  while (pendingQueue.length > 0) {
+    // Aborting a promise is not executor settlement. Keep its lane and scoped
+    // operation identity reserved until the underlying work actually returns.
+    const active = [...executingTasks].map(id => tasks.get(id)!);
+    const laneCounts: Record<TaskLane, number> = { foreground: 0, subconscious: 0, background: 0 };
+    for (const task of active) laneCounts[task.lane]++;
+    const laneLimits: Record<TaskLane, number> = {
+      foreground: config.foregroundMaxConcurrent,
+      subconscious: config.subconsciousMaxConcurrent,
+      background: config.maxConcurrent,
+    };
+    const runnable = (task: AsyncTask) => task.status === "pending"
+      && laneCounts[task.lane] < laneLimits[task.lane]
+      && !active.some(other => other.name === task.name && other.scope === task.scope);
+    let next = pendingQueue.findIndex(id => {
+      const task = tasks.get(id);
+      return !task || task.status !== "pending" || runnable(task);
+    });
+    if (next < 0) break;
+    if (tasks.get(pendingQueue[next])?.lane === "subconscious") {
+      // Fresh work retains priority. Once aged, FIFO stops a stream of newer
+      // planners from repeatedly overtaking coordination/goals/reflection.
+      // This is a dispatch bound, not preemption: older aged runnable tasks,
+      // actual executor settlement, and scoped single-flight still come first.
+      // Foreground/background selection and all lane reservations are unchanged.
+      const now = config.monotonicNow();
+      let oldest: AsyncTask | undefined;
+      for (let i = 0; i < pendingQueue.length; i++) {
+        const task = tasks.get(pendingQueue[i]);
+        if (!task || task.lane !== "subconscious" || !runnable(task)
+          || now - task.queuedAtMonotonic < config.subconsciousAgingMs) continue;
+        if (!oldest || task.queuedAtMonotonic < oldest.queuedAtMonotonic
+          || task.queuedAtMonotonic === oldest.queuedAtMonotonic && task.queueOrder < oldest.queueOrder) {
+          oldest = task;
+          next = i;
+        }
+      }
+    }
+    const [taskId] = pendingQueue.splice(next, 1);
     const task = tasks.get(taskId);
 
     if (!task || task.status !== "pending") {
@@ -300,26 +367,50 @@ async function processQueue(): Promise<void> {
 
 async function runTask(task: AsyncTask): Promise<void> {
   if (!globalQueue) return;
+  const queue = globalQueue;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
 
   task.status = "running";
   task.startedAt = Date.now();
-  globalQueue.runningTasks.add(task.id);
+  queue.runningTasks.add(task.id);
+  queue.executingTasks.add(task.id);
 
   console.log(`[TaskQueue] Starting: ${task.name} (${task.id})`);
 
   try {
     // Create a timeout wrapper
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error(`Task timeout after ${globalQueue!.config.taskTimeout}ms`));
-      }, globalQueue!.config.taskTimeout);
+      timeout = setTimeout(() => {
+        const error = new Error(`Task timeout after ${queue.config.taskTimeout}ms`);
+        task.abort.abort(error);
+        reject(error);
+      }, queue.config.taskTimeout);
+    });
+    const cancelled = new Promise<never>((_, reject) => {
+      onAbort = () => reject(task.abort.signal.reason);
+      task.abort.signal.addEventListener("abort", onAbort, { once: true });
     });
 
-    // Race between task execution and timeout
+    // Normalize synchronous throws as executor settlement too. Both branches
+    // observe late rejection after cancellation without a second callback.
+    const execution = Promise.resolve().then(() => {
+      task.abort.signal.throwIfAborted();
+      return task.execute(task.abort.signal);
+    });
+    const releaseExecution = () => {
+      queue.executingTasks.delete(task.id);
+      if (!queue.runningTasks.has(task.id)) retainCompletedTask(queue, task.id);
+    };
+    void execution.then(releaseExecution, releaseExecution);
+
+    // Logical outcome may settle before execution. It must not free capacity.
     const result = await Promise.race([
-      task.execute(),
+      execution,
       timeoutPromise,
+      cancelled,
     ]);
+    task.abort.signal.throwIfAborted();
 
     task.status = "completed";
     task.result = result;
@@ -327,9 +418,9 @@ async function runTask(task: AsyncTask): Promise<void> {
 
     // Track execution time
     const execTime = task.completedAt - task.startedAt!;
-    globalQueue.executionTimes.push(execTime);
-    if (globalQueue.executionTimes.length > 100) {
-      globalQueue.executionTimes.shift();
+    queue.executionTimes.push(execTime);
+    if (queue.executionTimes.length > 100) {
+      queue.executionTimes.shift();
     }
 
     console.log(`[TaskQueue] Completed: ${task.name} (${task.id}) in ${execTime}ms`);
@@ -344,11 +435,15 @@ async function runTask(task: AsyncTask): Promise<void> {
     }
 
   } catch (error) {
-    task.status = "failed";
+    // cancelTask may have changed this object while execution was suspended.
+    const wasCancelled = (task.status as TaskStatus) === "cancelled";
+    if (!wasCancelled) task.status = "failed";
     task.error = error instanceof Error ? (error.stack || error.message) : String(error);
     task.completedAt = Date.now();
 
-    if (error instanceof Error) {
+    if (wasCancelled) {
+      console.log(`[TaskQueue] Cancelled running work: ${task.name} (${task.id})`);
+    } else if (error instanceof Error) {
       console.error(`[TaskQueue] Failed: ${task.name} (${task.id})`, error);
     } else {
       console.error(`[TaskQueue] Failed: ${task.name} (${task.id}):`, task.error);
@@ -363,15 +458,16 @@ async function runTask(task: AsyncTask): Promise<void> {
       }
     }
   } finally {
-    globalQueue!.runningTasks.delete(task.id);
-    globalQueue!.completedTasks.push(task.id);
-
-    // Cleanup old completed tasks (keep last 100)
-    while (globalQueue!.completedTasks.length > 100) {
-      const oldId = globalQueue!.completedTasks.shift()!;
-      globalQueue!.tasks.delete(oldId);
-    }
+    clearTimeout(timeout);
+    if (onAbort) task.abort.signal.removeEventListener("abort", onAbort);
+    queue.runningTasks.delete(task.id);
+    if (!queue.executingTasks.has(task.id)) retainCompletedTask(queue, task.id);
   }
+}
+
+function retainCompletedTask(queue: TaskQueueState, id: string): void {
+  queue.completedTasks.push(id);
+  while (queue.completedTasks.length > 100) queue.tasks.delete(queue.completedTasks.shift()!);
 }
 
 // =============================================================================
@@ -383,7 +479,7 @@ async function runTask(task: AsyncTask): Promise<void> {
  */
 export function getQueueStats(): TaskQueueStats {
   if (!globalQueue) {
-    return { pending: 0, running: 0, completed: 0, failed: 0, avgExecutionTime: 0 };
+    return { pending: 0, running: 0, executing: 0, settling: 0, completed: 0, failed: 0, avgExecutionTime: 0 };
   }
 
   const completed = Array.from(globalQueue.tasks.values())
@@ -398,6 +494,8 @@ export function getQueueStats(): TaskQueueStats {
   return {
     pending: globalQueue.pendingQueue.length,
     running: globalQueue.runningTasks.size,
+    executing: globalQueue.executingTasks.size,
+    settling: [...globalQueue.executingTasks].filter(id => !globalQueue!.runningTasks.has(id)).length,
     completed,
     failed,
     avgExecutionTime: Math.round(avgTime),
@@ -416,13 +514,14 @@ export function getPendingTaskNames(): string[] {
 }
 
 /**
- * Check if a task with given name is already queued or running
+ * Check if a task with given name is queued, running, or still settling.
  */
-export function isTaskInProgress(name: string): boolean {
+export function isTaskInProgress(name: string, scope?: string): boolean {
   if (!globalQueue) return false;
 
   for (const task of globalQueue.tasks.values()) {
-    if (task.name === name && (task.status === "pending" || task.status === "running")) {
+    if (task.name === name && (scope === undefined || task.scope === scope) &&
+        (task.status === "pending" || task.status === "running" || globalQueue.executingTasks.has(task.id))) {
       return true;
     }
   }
@@ -446,5 +545,5 @@ export function clearCompletedTasks(): void {
  */
 export function getQueueSummary(): string {
   const stats = getQueueStats();
-  return `[TaskQueue] Pending: ${stats.pending}, Running: ${stats.running}, Completed: ${stats.completed}, Failed: ${stats.failed}, Avg: ${stats.avgExecutionTime}ms`;
+  return `[TaskQueue] Pending: ${stats.pending}, Running: ${stats.running}, Settling: ${stats.settling}, Completed: ${stats.completed}, Failed: ${stats.failed}, Avg: ${stats.avgExecutionTime}ms`;
 }

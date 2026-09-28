@@ -17,11 +17,13 @@
  * - S = memory stability (importance * recallBoost)
  */
 
+import { simulationAge, stampSimulationTime } from "../ecs/temporal-age";
 import { generateText } from "ai";
 import { flashModel } from "../llm/config";
 import type { World } from "../ecs/world";
-import { addEntity, addComponent, removeEntity, query, getRelationTargets, entityExists } from "bitecs";
-import { Name, Agent, Mind, Memory } from "../ecs/components";
+import { addEntity, addComponent, removeEntity, query, getRelationTargets, entityExists, hasComponent } from "bitecs";
+import { Name, Agent, Mind, Memory, MemoryDecayState } from "../ecs/components";
+import { readSimulationTime } from "../ecs/simulation-time";
 import { HasMemory } from "../ecs/relations";
 
 const model = flashModel;
@@ -142,7 +144,7 @@ export function getAgentMemoriesWithData(
       eid: memEid,
       type: Memory.type[memEid] || "episodic",
       content: Memory.content[memEid] || "",
-      importance: Memory.importance[memEid] || 0.5,
+      importance: Memory.importance[memEid] ?? 0.5,
       emotionalValence: Memory.emotionalValence[memEid] || 0,
       timestamp: Memory.timestamp[memEid] || Date.now(),
       lastRecalled: Memory.lastRecalled[memEid] || Memory.timestamp[memEid] || Date.now(),
@@ -182,6 +184,8 @@ export function recallMemory(world: World, memoryEid: number): void {
   const currentCount = Memory.recallCount[memoryEid] || 0;
   Memory.recallCount[memoryEid] = currentCount + 1;
   Memory.lastRecalled[memoryEid] = Date.now();
+  stampSimulationTime(world, memoryEid, "Memory.lastRecalled", Memory.lastRecalled[memoryEid]);
+  stampSimulationTime(world, memoryEid, "Memory.lastDecay", Memory.lastRecalled[memoryEid]);
 
   // Boost importance slightly (spaced repetition effect)
   const currentImportance = Memory.importance[memoryEid] || 0.5;
@@ -204,7 +208,6 @@ export function consolidateAgentMemories(world: World, agentEid: number): {
   pruned: number;
   promoted: number;
 } {
-  const now = Date.now();
   const memories = getAgentMemoriesWithData(world, agentEid);
 
   let decayed = 0;
@@ -213,31 +216,49 @@ export function consolidateAgentMemories(world: World, agentEid: number): {
 
   // Process each memory
   for (const mem of memories) {
-    const timeSinceRecall = now - mem.lastRecalled;
-    const stability = calculateStability(mem.importance, mem.recallCount, mem.emotionalValence);
-
-    // Apply decay
-    const newImportance = applyMemoryDecay(mem.importance, timeSinceRecall, stability);
+    const now = readSimulationTime(world);
+    const recallAge = simulationAge(world, mem.eid, "Memory.lastRecalled", mem.lastRecalled);
+    type Curve = { recalledAt: number; recallCount: number; baseline: number; startedAtSimMs: number;
+      stability: number; lastPublished: number; promoted: boolean };
+    let curve: Curve | undefined;
+    if (hasComponent(world, mem.eid, MemoryDecayState)) {
+      try { curve = JSON.parse(MemoryDecayState.stateJson[mem.eid]); } catch { /* legacy/malformed: new origin */ }
+    }
+    const valid = curve && Number.isFinite(curve.baseline) && Number.isFinite(curve.startedAtSimMs)
+      && Number.isFinite(curve.stability) && Number.isFinite(curve.lastPublished);
+    const sameRecall = valid && curve!.recalledAt === mem.lastRecalled && curve!.recallCount === mem.recallCount;
+    const externallyChanged = sameRecall && curve!.lastPublished !== mem.importance;
+    if (!valid || curve!.recalledAt !== mem.lastRecalled || curve!.recallCount !== mem.recallCount || externallyChanged) {
+      curve = { recalledAt: mem.lastRecalled, recallCount: mem.recallCount, baseline: mem.importance,
+        startedAtSimMs: externallyChanged ? now : now - recallAge,
+        stability: calculateStability(mem.importance, mem.recallCount, mem.emotionalValence),
+        lastPublished: mem.importance, promoted: Boolean(valid && curve!.promoted) };
+    }
+    const timeSinceRecall = Math.max(0, now - curve!.startedAtSimMs);
+    // Promotion is an episode transition, not a bonus on each maintenance poll.
+    if (timeSinceRecall > 0 && !curve!.promoted && mem.type === "episodic"
+      && curve!.baseline >= LONG_TERM_THRESHOLD && mem.recallCount >= 3) {
+      curve!.baseline = Math.min(1, curve!.baseline + 0.1);
+      curve!.stability = calculateStability(curve!.baseline, mem.recallCount, mem.emotionalValence);
+      curve!.promoted = true;
+      promoted++;
+    }
+    // Evaluate the full curve from a stable origin. Multiplying a curve with a
+    // 30% floor into yesterday's value is not partition independent.
+    const newImportance = applyMemoryDecay(curve!.baseline, timeSinceRecall, curve!.stability);
+    curve!.lastPublished = newImportance;
+    if (!hasComponent(world, mem.eid, MemoryDecayState)) addComponent(world, mem.eid, MemoryDecayState);
+    MemoryDecayState.stateJson[mem.eid] = JSON.stringify(curve);
+    stampSimulationTime(world, mem.eid, "Memory.lastDecay", mem.lastRecalled);
 
     if (newImportance < mem.importance) {
       decayed++;
     }
 
-    // Check for promotion to "long-term" (high importance + multiple recalls)
-    if (newImportance >= LONG_TERM_THRESHOLD && mem.recallCount >= 3) {
-      // Long-term memories are marked by type change to "semantic" if episodic
-      if (mem.type === "episodic") {
-        // Keep episodic memories as-is but boost importance
-        Memory.importance[mem.eid] = Math.min(1.0, newImportance + 0.1);
-        promoted++;
-      }
-    } else {
-      // Update importance
-      Memory.importance[mem.eid] = newImportance;
-    }
+    Memory.importance[mem.eid] = newImportance;
 
     // Prune very low importance memories that are old
-    const age = now - mem.timestamp;
+    const age = simulationAge(world, mem.eid, "Memory.timestamp", mem.timestamp);
     if (newImportance < MIN_IMPORTANCE_THRESHOLD && age > OLD_MEMORY_THRESHOLD) {
       removeEntity(world, mem.eid);
       pruned++;
@@ -250,8 +271,8 @@ export function consolidateAgentMemories(world: World, agentEid: number): {
     // Sort by importance, then by age (keep important and recent)
     const sorted = remainingMemories.sort((a, b) => {
       // Combine importance and recency into a "keep score"
-      const scoreA = a.importance * 0.7 + (1 - (now - a.timestamp) / OLD_MEMORY_THRESHOLD) * 0.3;
-      const scoreB = b.importance * 0.7 + (1 - (now - b.timestamp) / OLD_MEMORY_THRESHOLD) * 0.3;
+      const scoreA = a.importance * 0.7 + (1 - simulationAge(world, a.eid, "Memory.timestamp", a.timestamp) / OLD_MEMORY_THRESHOLD) * 0.3;
+      const scoreB = b.importance * 0.7 + (1 - simulationAge(world, b.eid, "Memory.timestamp", b.timestamp) / OLD_MEMORY_THRESHOLD) * 0.3;
       return scoreB - scoreA; // Higher scores first
     });
 
@@ -337,22 +358,16 @@ export async function extractSemanticMemory(
     .map((m) => `- ${m.content}`)
     .join("\n");
 
-  const prompt = `You are extracting factual knowledge from an agent's experiences.
+  const prompt = `Summarize useful knowledge supported by this agent's remembered experiences.
 
 Agent: ${agentName}
 
 Recent important experiences:
 ${memoryList}
 
-Extract 2-5 factual statements that can be inferred from these experiences.
-Focus on:
-- Facts about people (who is friendly, who is dangerous, etc.)
-- Facts about places (what can be found where)
-- Facts about routines (what happens at certain times)
-- General knowledge (how things work)
+Return up to five concise statements. Preserve speakers, observation context and uncertainty: hearing a claim is not verifying it, and repeated retellings are not independent evidence. Do not turn a proposal into a completed event or a single social exchange into a fixed personality trait. If the memories support no useful new statement, return [].
 
-Output ONLY a JSON array of strings:
-["Fact 1", "Fact 2", "Fact 3"]`;
+Use a JSON array of strings, with attribution inside each statement where needed.`;
 
   try {
     const { text } = await generateText({
@@ -443,6 +458,8 @@ FOR EACH agent WITH many episodic memories:
           Memory.emotionalValence[memEid] = 0;
           Memory.timestamp[memEid] = Date.now();
           Memory.lastRecalled[memEid] = Date.now();
+          stampSimulationTime(world, memEid, "Memory.timestamp", Memory.timestamp[memEid]);
+          stampSimulationTime(world, memEid, "Memory.lastRecalled", Memory.lastRecalled[memEid]);
           Memory.recallCount[memEid] = 0;
 
           console.log(`[SemanticExtraction] ${agentName} learned: ${fact}`);

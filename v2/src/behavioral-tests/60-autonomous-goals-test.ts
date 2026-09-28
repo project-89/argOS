@@ -198,7 +198,7 @@ async function main() {
     agentActions.set(name, []);
 
     // Log aspirations
-    const aspirations = getAspirations(eid);
+    const aspirations = getAspirations(world, eid);
     info(`${name} (${role}) — Aspirations: ${aspirations.join("; ")}`);
   }
 
@@ -317,7 +317,7 @@ async function main() {
 
   sub("AGENT ASPIRATIONS vs GOALS");
   for (const a of agents) {
-    const aspirations = getAspirations(a.eid);
+    const aspirations = getAspirations(world, a.eid);
     const agentGoals = goalsGenerated.filter(g => g.agent === a.name);
     log(`  ${a.name}:`);
     log(`    Aspirations: ${aspirations.join("; ")}`);
@@ -383,9 +383,9 @@ async function main() {
   check("BT branches compiled", compiledBranches >= 2, 5, `${compiledBranches} compiled branches`);
 
   // 5. Aspirations assigned (5 points)
-  const aspirationsAssigned = agents.every(a => getAspirations(a.eid).length > 0);
+  const aspirationsAssigned = agents.every(a => getAspirations(world, a.eid).length > 0);
   check("All agents have aspirations", aspirationsAssigned, 5,
-    agents.map(a => `${a.name}:${getAspirations(a.eid).length}`).join(", "));
+    agents.map(a => `${a.name}:${getAspirations(world, a.eid).length}`).join(", "));
 
   // Report
   log("");

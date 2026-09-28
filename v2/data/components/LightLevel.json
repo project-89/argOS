@@ -1,0 +1,7 @@
+{
+  "name": "LightLevel",
+  "description": "How much light an object emits",
+  "properties": {
+    "intensity": "number"
+  }
+}

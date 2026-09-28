@@ -31,8 +31,7 @@ describe("Speech interruption (directed speech stimuli)", () => {
     expect(direct[0].content).toContain("says to you");
     expect(direct[0].content).toContain("Good morning, Bob!");
 
-    expect(Mind.focus[bob]).toContain("respond to");
+    expect(Mind.focus[bob]).toBe("heard Alice");
     expect(Mind.arousal[bob]).toBeGreaterThanOrEqual(0.5);
   });
 });
-

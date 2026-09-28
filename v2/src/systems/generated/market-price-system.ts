@@ -1,4 +1,5 @@
 import type { World } from "../../ecs/world";
+import { integrateLegacyRateSteps } from "../legacy-rate-time";
 import type { SystemContext } from "../system-loader";
 
 export const name = "MarketPriceSystem";
@@ -6,7 +7,11 @@ export const description = "Updates prices for goods based on supply and demand.
 export const frequency = 10;
 export const active = true;
 
+export const temporalStepMs = 10000; // Explicit in-world duration for one historical law step.
 export function run(world: World, ctx: SystemContext): void {
+  integrateLegacyRateSteps(world, ctx, "market-price-system", temporalStepMs, runLaw);
+}
+function runLaw(world: World, ctx: SystemContext): void {
   const Price = ctx.getDynamic("Price");
   if (!Price) return;
   const { Name } = ctx.components;

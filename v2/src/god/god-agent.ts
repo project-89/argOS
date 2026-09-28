@@ -1,8 +1,28 @@
 import { generateText, tool, stepCountIs } from "ai";
+import { getCodingDaemon } from "../engineering/coding-daemon";
+import { getWorldGenesisContext, getWorldCharacterSeed } from "../world/world-specification";
+import { assertSimulationTaskActive } from "../runtime/task-scope";
+import { getWorldConstructionStatus } from "../runtime/world-construction-budget";
+import { observeRoomInventories } from "../spirits/room-inventory-observation";
+import { getRoomPopulationStatus } from "../spirits/steward-spirit";
+import { getEvolutionWorkStatus } from "../spirits/world-crafter-spirit";
+import { getInteractionObservations } from "../spirits/interaction-observations";
+import { observeOngoingActivity } from "../cognition/ongoing-activity";
+import { getExternalParticipants, assertParticipantMutationAllowed } from "../runtime/participant-identities";
+import { roomBlueprintSchema, validateAuthoredEntityBlueprint, materializePlaceBlueprint, getPlaceBuildStatus } from "../engineering/place-materialization";
+import { syncEntityRegistryFromWorld } from "../ecs/entity-lookup";
+import { formatNativeRuntimeServices, getNativeRuntimeServices } from "../runtime/native-services";
+import { formatWorldRuntimeHealth, getWorldRuntimeHealth } from "../runtime/fast-system-health";
+import { buildNarrativeGrowthTools, NARRATIVE_GROWTH_SYSTEM_PROMPT } from "./narrative-authority";
+import { buildSpiritGrowthTools, SPIRIT_GROWTH_SYSTEM_PROMPT } from "./spirit-authority";
 import { google } from "@ai-sdk/google";
 import { z } from "zod/v3";
-import { query } from "bitecs";
+import { characterPastSchema } from "../cognition/character-past-schema";
+import { query, entityExists, hasComponent } from "bitecs";
 import { createArgosWorld, type World } from "../ecs/world";
+import { advanceSimulationTime, hasSimulationClock } from "../ecs/simulation-time";
+import { advanceTimedSpeech } from "../cognition/timed-speech";
+import { advanceSimulationTimeline, registerSimulationDeadlineProvider } from "../runtime/simulation-timeline";
 import {
   createEcsTools,
   createEntityRegistry,
@@ -11,7 +31,7 @@ import {
   type ToolResult,
 } from "../ecs/tools";
 import { createGodAgentEntity } from "../ecs/prefabs";
-import { GodAgent, Name, Description, Agent, Mind, ObjectType, ObjectState, Traits, Room } from "../ecs/components";
+import { GodAgent, Name, Description, Agent, Mind, ObjectType, ObjectState, Traits, Room, WorkingMemoryIdentity } from "../ecs/components";
 import { AllComponents } from "../ecs/components";
 import { AllRelations } from "../ecs/relations";
 import { setAgentBehaviorPolicy, validateBehaviorNode } from "../cognition/behavior-policy";
@@ -430,6 +450,7 @@ export function createGodAgent(
   if (config.timeScale !== undefined) {
     globalState.time.timeScale = config.timeScale;
   }
+  syncGlobalTime({ world, globalState });
 
   console.log(
     `[GodAgent] Initialized with preset: ${preset.name} (time scale: ${globalState.time.timeScale}x)`
@@ -583,7 +604,22 @@ export function searchMemory(
  * Update the global simulation time (call every tick)
  */
 export function updateGlobalTime(state: GodAgentState, deltaMs: number): void {
-  updateSimulationTime(state.globalState, deltaMs);
+  // Legacy standalone callers may still own their global clock. Managed worlds
+  // project their committed clock instead; a second caller cannot advance it twice.
+  if (hasSimulationClock(state.world)) syncGlobalTime(state);
+  else updateSimulationTime(state.globalState, deltaMs);
+}
+
+function syncGlobalTime(state: Pick<GodAgentState, "world" | "globalState">): void {
+  const clock = state.world.time;
+  const date = new Date(state.globalState.time.realTimeStart);
+  date.setUTCHours(0, 0, 0, 0);
+  state.globalState.time.simTime = new Date(date.getTime()
+    + (clock.simulationDay - 1) * 86_400_000 + clock.simulationHour * 3_600_000);
+  state.globalState.time.hour = clock.simulationHour;
+  state.globalState.time.dayNumber = clock.simulationDay;
+  state.globalState.time.dayPhase = clock.timeOfDay as typeof state.globalState.time.dayPhase;
+  state.globalState.lastUpdate = Date.now();
 }
 
 /**
@@ -856,6 +892,17 @@ function formatMemoryForPrompt(state: GodAgentState): string {
 
 function buildCurrentWorldContext(state: GodAgentState): string {
   const lines: string[] = [];
+  const authoring = getWorldGenesisContext(state.world);
+  if (authoring) lines.push(authoring);
+  lines.push(formatWorldRuntimeHealth(state.world));
+  const construction = getWorldConstructionStatus(state.world);
+  lines.push(`Room inventory (observations, not construction requests; empty places can be useful): ${JSON.stringify(observeRoomInventories(state.world))}`);
+  lines.push(`Delegated room population: ${JSON.stringify(getRoomPopulationStatus(state.world))}`);
+  lines.push(`Place builds (assembly and current availability, not behavioral success): ${JSON.stringify(getPlaceBuildStatus(state.world,state.systemRegistry))}`);
+  lines.push(`Legacy evolution work (requested supply is unverified): ${JSON.stringify(getEvolutionWorkStatus(state.world))}`);
+  lines.push(`Unresolved local interactions (author-only observations, not creation orders): ${JSON.stringify(getInteractionObservations(state.world))}`);
+  lines.push(`Outside participants (identity only, not NPC knowledge or physical presence; autonomous embodiment requires explicit host authority): ${JSON.stringify(getExternalParticipants(state.world))}`);
+  if (construction.limit !== null) lines.push(`World construction admissions (including seed construction; deletion does not refund): ${JSON.stringify(construction)}`);
 
   // List existing entities
   const entities = state.tools.listEntities().result as Array<{
@@ -921,6 +968,7 @@ You are a COLLABORATIVE WORLD-BUILDER working with the user. Your role is to:
 4. EXECUTE only when you understand what the user wants
 
 COLLABORATION GUIDELINES:
+- Live ECS state overrides narrative setup and remembered locations. A moved, carried, consumed, depleted, locked or intentionally removed prop is not an engine fault. In autonomous maintenance, search the whole current world and possession state before accepting a spirit's "missing entity" report; adapt the story instead of restoring the starting scene. Explicit operator edits remain authorized.
 - If the user asks a question, ANSWER it conversationally - don't immediately create things
 - If the request is ambiguous, ASK what they prefer (e.g., "Should the room be cozy or spacious?")
 - PROPOSE ideas and wait for feedback before executing complex designs
@@ -1180,8 +1228,7 @@ The WorldSchema provides a trait-based object system for rich interactive worlds
 OBJECT TYPES (Prefabs):
 Pre-defined templates with traits and states. Use spawn() to create instances.
 Available types: ${state.worldSchema
-    .getAllObjectTypes()
-    .map((t) => t.name)
+    .getAllObjectTypeIds()
     .join(", ")}
 
 To spawn from a type:
@@ -1352,12 +1399,12 @@ You MUST use tool calls to implement the user's command.
 
 GROUNDING RULES:
 - Only refer to entities that exist (use listEntities/queryEntities to verify).
+- Live ECS state overrides a narrative's starting setup. A prop absent from its old room may have moved or been picked up; inspect current location/possession across the whole world. Autonomous spirit reports and narrative proposals are fallible observations, not operator authorization to restore, replace or duplicate an existing prop or undo a player intervention. Consumed/depleted/removed props and puzzle obstacles are not automatically engine bugs. Adapt the story; only an explicit operator command authorizes restoring an earlier setup.
 - Prefer deterministic changes (systems/rules) over one-off narration.
 - Keep outputs minimal; tool calls are the primary output.
 
 NOTE ON LONG TASKS:
-- bakeNewSystem queues async baking and returns a taskId (it does NOT wait for completion).
-- Use getTaskStatus to poll until status is "completed" (or "failed"), then activateSystem (or pass activateOnComplete: true).
+${getCodingDaemon(state.world) ? "- Use requestSystemBuild for new or repaired mechanics. It returns a job ID, not a completed system.\n- Inspect getCodingJobs: ready means validated, active means actually loaded. Results also arrive in your inbox.\n- Continue overseeing the world while the daemon works; do not busy-poll or create replacement jobs for an in-flight request." : "- bakeNewSystem queues async baking and returns a taskId (it does NOT wait for completion).\n- Use getTaskStatus to poll until completed or failed, then activateSystem (or pass activateOnComplete: true)."}
 
 DEFINITION OF DONE (do not stop early):
 - Verify your changes with tool calls (listSystems/listRules/listObjectTypes/queryEntities).
@@ -1374,12 +1421,41 @@ ${formatMemoryForPrompt(state)}`;
 function buildTools(state: GodAgentState) {
   const componentNames = Object.keys(AllComponents) as [string, ...string[]];
   const relationNames = Object.keys(AllRelations) as [string, ...string[]];
+  const systemBuildInput = z.object({proposalId:z.string().min(1).max(500).optional(),
+    instruction:z.string().min(1).max(12000).optional(),protectedConditions:z.array(z.string()).optional()}).strict()
+    .refine(request => request.proposalId !== undefined
+      ? request.instruction === undefined && request.protectedConditions === undefined
+      : request.instruction !== undefined, "Use an approved proposalId alone, or a new instruction with optional protectedConditions");
 
   return {
+    requestSystemBuild: tool({
+      description: "Delegate new or repaired mechanics to the local coding daemon. Use proposalId alone for an already-approved spirit system: its exact contract, causal evidence and pending job are preserved. Otherwise supply instruction and optional protectedConditions for new operator work. Returns a job, NOT a completed capability. Never request removal of an intentional puzzle obstacle as an engine repair.",
+      inputSchema: systemBuildInput,
+      execute: async (request) => {
+        const daemon=getCodingDaemon(state.world);
+        if(!daemon) return {success:false,error:"Coding daemons are disabled"};
+        if(!systemBuildInput.safeParse(request).success) return {success:false,error:"Use proposalId alone or supply a new build instruction"};
+        if(request.proposalId !== undefined) {
+          const { getFactoryState } = await import("../spirits/spirit-factory");
+          const { enqueueManagedSystemProposal } = await import("../spirits/architect-spirit");
+          const proposal=getFactoryState().pendingProposals.find(p=>p.id===request.proposalId);
+          if(!proposal) return {success:false,error:"Spirit proposal not found"};
+          try {return {success:true,result:enqueueManagedSystemProposal(state.world,proposal)};}
+          catch(error) {return {success:false,error:String(error)};}
+        }
+        return {success:true,result:daemon.enqueue({instruction:request.instruction!,protectedConditions:request.protectedConditions,source:"God"})};
+      },
+    }),
+    getCodingJobs: tool({
+      description:"Inspect coding job progress, validation failures, and hot-loaded releases. A queued job is not yet an active system.",
+      inputSchema:z.object({}),
+      execute:async()=>({success:true,result:getCodingDaemon(state.world)?.getStatus() ?? null}),
+    }),
     createAgent: tool({
       description:
         "Create a new cognitive agent entity with a name, role, system prompt, and optional room placement",
       inputSchema: z.object({
+        past: characterPastSchema.optional().describe("Creation-only private background, drives and formative memories. Not a script or existing character rewrite. Historical people/places mentioned here are not automatically present entities."),
         name: z.string().describe("Unique name for the agent"),
         role: z.string().describe("The agent's role/personality description"),
         systemPrompt: z
@@ -1395,6 +1471,7 @@ function buildTools(state: GodAgentState) {
           .describe("Name of room to place agent in"),
       }),
       execute: async (params) => {
+        params = { ...params, past: params.past ?? getWorldCharacterSeed(state.world, params.name)?.past };
         const result = state.tools.createAgent(params);
         if (result.success && result.result?.entityId) {
           // Auto-assign behavior policy based on role, using actual room names
@@ -1421,9 +1498,11 @@ function buildTools(state: GodAgentState) {
           }
 
           // Generate LLM-based aspirations from role/description (fire and forget)
+          const aspirationOwner = WorkingMemoryIdentity.id[eid];
           generateAspirations(state.world, eid).then(aspirations => {
-            if (aspirations.length > 0) {
-              setAspirations(eid, aspirations);
+            if (aspirations.length > 0 && aspirationOwner && entityExists(state.world, eid)
+              && hasComponent(state.world, eid, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[eid] === aspirationOwner) {
+              setAspirations(state.world, eid, [...new Set([...(params.past?.drives ?? []), ...aspirations])]);
               console.log(`[Tool] createAgent: ${params.name} aspirations: ${aspirations.join("; ")}`);
             }
           }).catch(() => {});
@@ -1465,9 +1544,31 @@ function buildTools(state: GodAgentState) {
       },
     }),
 
+    createPlace: tool({
+      description: "Construct a bounded native room with actual autonomous inhabitants, props and stimulus sources. Contents must be explicit; [] means deliberately empty. Each object child requires ObjectType.typeId from listObjectTypes; native type construction supplies actual states, traits and declared components. Child entities go in the new room; optional connectToRoomEids are existing rooms with enabled routes. Declare missing systems/interactions separately: construction does not implement a mechanic, move an existing NPC, or complete their goal. Inspect place status before duplicating work.",
+      inputSchema: roomBlueprintSchema,
+      execute: async params => {
+        try {
+          validateAuthoredEntityBlueprint(params);
+          const result=materializePlaceBlueprint(state.world,params);
+          syncEntityRegistryFromWorld(state.world,state.registry);
+          return {success:true,result:getPlaceBuildStatus(state.world,state.systemRegistry).find(row=>row.id===result.receiptId)};
+        } catch(error) {
+          syncEntityRegistryFromWorld(state.world,state.registry);
+          return {success:false,error:String(error),result:getPlaceBuildStatus(state.world,state.systemRegistry)};
+        }
+      },
+    }),
+
+    getPlaceBuilds: tool({
+      description: "Inspect native place assemblies and current unmet availability requirements. support.status distinguishes unassessed, unavailable, awaiting_presence and available predeclared author support. Existing actors are references, not newly constructed members. Awaiting presence defers the native interaction check until participants arrive; it does not predict success or authorize moving/replacing them. Assembly readiness alone is not purpose support or proof of behavioral success.",
+      inputSchema: z.object({}),
+      execute: async () => ({success:true,result:getPlaceBuildStatus(state.world,state.systemRegistry)}),
+    }),
+
     createRoom: tool({
       description:
-        "Create an EMPTY room/location entity. Use createAndPopulateRoom instead for furnished rooms.",
+        "Create an EMPTY room/location entity. Use createPlace for explicit native inhabitants/props/routes, or createAndPopulateRoom to delegate furnishings only.",
       inputSchema: z.object({
         name: z.string().describe("Unique name for the room"),
         description: z.string().optional().describe("Description of the room"),
@@ -1486,7 +1587,7 @@ function buildTools(state: GodAgentState) {
 
     createAndPopulateRoom: tool({
       description:
-        "PREFERRED: Create a room AND delegate to The Steward to populate it with appropriate entities (furniture, tools, resources). This ensures the room description matches actual entities - agents will only perceive things that exist.",
+        "Create a room and queue furnishings (furniture, tools, resources) with The Steward. Queued work is not finished population. context.inhabitants guides furnishing; it does not create NPCs. Use createPlace for explicit native inhabitants, props and routes.",
       inputSchema: z.object({
         name: z.string().describe("Unique name for the room"),
         roomType: z
@@ -1537,6 +1638,16 @@ function buildTools(state: GodAgentState) {
         );
         return result;
       },
+    }),
+
+    populateRoom: tool({
+      description: "Delegate furnishing of an existing room to the Steward when its purpose requires it. This queues bounded construction work, not completed furnishing. Empty inventory alone does not require construction.",
+      inputSchema: z.object({ roomEid: z.number().int().nonnegative(), roomType: z.string().min(1).optional(),
+        context: z.object({ worldTheme: z.string().optional(), primaryFunction: z.string().optional() }).optional(),
+        constraints: z.object({ maxItems: z.number().int().nonnegative().optional(), requiredItems: z.array(z.string()).optional(),
+          budgetLevel: z.enum(["sparse", "normal", "abundant"]).optional() }).optional(),
+      }),
+      execute: async params => state.tools.populateRoom(params),
     }),
 
     createObject: tool({
@@ -1742,8 +1853,14 @@ function buildTools(state: GodAgentState) {
       },
     }),
 
+    getEntityLocation: tool({
+      description: "Read an existing entity's LIVE direct container, resolved room and possession. Use for phones, props and agents; location is a LocatedIn relation, NOT a Room component on the object. A moved or held prop is not missing.",
+      inputSchema: z.object({ entityName: z.string().min(1) }),
+      execute: async (params) => state.tools.getEntityLocation(params),
+    }),
+
     getComponentValues: tool({
-      description: "Get component values from an entity",
+      description: "Get component values from an entity. OngoingActivity returns an interpreted, read-only view: entryChoicePurpose is historical and currentGoal=false is not a current intention. For an object's location use getEntityLocation; Room describes room entities, not the location of a prop.",
       inputSchema: z.object({
         entityName: z.string().describe("Name of the entity"),
         componentName: z.enum(componentNames).describe("Component to read"),
@@ -1753,6 +1870,11 @@ function buildTools(state: GodAgentState) {
           .describe("Specific properties to get"),
       }),
       execute: async (params) => {
+        if (params.componentName === "OngoingActivity") {
+          const matches = [...query(state.world, [Agent, Name])].filter(eid => Name.value[eid] === params.entityName);
+          return matches.length === 1 ? { success: true, result: observeOngoingActivity(state.world, matches[0]) ?? null }
+            : { success: false, result: null, error: "Expected one current actor" };
+        }
         const result = state.tools.getComponentValues(params);
         console.log(
           `[Tool] getComponentValues: ${params.entityName}.${params.componentName}`
@@ -1763,7 +1885,7 @@ function buildTools(state: GodAgentState) {
 
     bakeNewSystem: tool({
       description:
-        "Design and create a new system that runs periodically in the world. This queues baking asynchronously (non-blocking). Use getTaskStatus to poll for completion, then activateSystem (or set activateOnComplete).",
+        "Queue system engineering asynchronously. When coding daemons are enabled, prefer requestSystemBuild: builds activate automatically after validation and status is in getCodingJobs. Explicit activateOnComplete:false is rejected in managed mode. Legacy mode uses getTaskStatus then activateSystem.",
       inputSchema: z.object({
         description: z
           .string()
@@ -1784,6 +1906,10 @@ function buildTools(state: GodAgentState) {
           `[Tool] bakeNewSystem: "${params.description.slice(0, 100)}..."`
         );
         const activateOnComplete = params.activateOnComplete ?? false;
+        const daemon=getCodingDaemon(state.world);
+        if(daemon && params.activateOnComplete===false) return {success:false,error:"Managed builds activate automatically after validation. For an active build use requestSystemBuild, or set activateOnComplete:true; no build was queued."};
+        if(daemon) return {success:true,result:daemon.enqueue({instruction:params.description,source:"God"}),
+          message:"Queued for validated automatic activation, not installed yet. Inspect getCodingJobs."};
         const priority: TaskPriority = params.priority ?? "high";
 
         const taskId = queueTask(
@@ -1860,8 +1986,20 @@ function buildTools(state: GodAgentState) {
       },
     }),
 
+    getRuntimeServices: tool({
+      description: "Inspect configured native library services (NPC cognition, dialogue, planning and physical execution) that do not appear in the generated-system registry. Configuration is not evidence of an actor's behavior.",
+      inputSchema: z.object({}),
+      execute: async () => ({ success: true, result: getNativeRuntimeServices(state.world) }),
+    }),
+
+    getRuntimeHealth: tool({
+      description: "Inspect native fast-loop execution failures, recovery counts and run/source freshness, separate from registered ECS system health. Read-only diagnostics, not permission to replace native runtime code.",
+      inputSchema: z.object({}),
+      execute: async () => ({ success: true, result: getWorldRuntimeHealth(state.world) }),
+    }),
+
     listSystems: tool({
-      description: "List all available systems and their status",
+      description: "List registered ECS systems and their status. Native library cognition and dialogue are separate; inspect getRuntimeServices before proposing a missing capability.",
       inputSchema: z.object({}),
       execute: async () => {
         const systems = listSystems(state.systemRegistry);
@@ -1930,65 +2068,7 @@ function buildTools(state: GodAgentState) {
     }),
 
     createSystem: tool({
-      description: `Create a new deterministic ECS system that runs every tick. The system will be written to a file and loaded dynamically.
-
-IMPORTANT: The code should be the BODY of the run function only (not the function declaration).
-
-Available in ctx:
-- ctx.tick, ctx.delta - timing info
-- ctx.query(world, [Component1, Component2]) - query entities (ONLY works with built-in components!)
-- ctx.addComponent(world, eid, Component) - add component to entity
-- ctx.removeEntity(world, eid) - remove entity
-- ctx.getRelationTargets(world, eid, Relation) - get relation targets
-- ctx.components.{Name, Agent, Needs, Interactable, CurrentAction, Room, GridPosition, etc.}
-- ctx.relations.{LocatedIn, StimulusInRoom, etc.}
-- ctx.dynamicComponents - Map of all dynamic components
-- ctx.getDynamic(name) - get a dynamic component by name (returns component or undefined)
-- ctx.hasDynamic(eid, name) - check if entity has dynamic component data
-- ctx.log(message) - log to system output
-- ctx.emit(type, data) - emit event
-
-⚠️ CRITICAL: Dynamic components CANNOT be used in ctx.query()!
-Dynamic components are NOT bitECS components - they're separate data stores.
-You MUST query by built-in components, then filter by dynamic data.
-
-EXAMPLE 1 - Using built-in components (decay system):
-const { Needs, Agent, Name } = ctx.components;
-const agents = Array.from(ctx.query(world, [Agent, Needs]));
-for (const eid of agents) {
-  Needs.hunger[eid] = Math.min(100, (Needs.hunger[eid] ?? 50) + 1);
-  if (Needs.hunger[eid] >= 80) {
-    ctx.log(\`\${Name.value[eid]} is hungry!\`);
-  }
-}
-
-EXAMPLE 2 - Using dynamic components (temperature system):
-⚠️ NOTE: Query by Name (built-in), then check for dynamic data!
-const Temperature = ctx.getDynamic("Temperature");
-if (!Temperature) return;
-const { Name } = ctx.components;
-// Query by built-in component Name, NOT by Temperature!
-const entities = Array.from(ctx.query(world, [Name]));
-for (const eid of entities) {
-  // Check if this entity has Temperature data
-  const current = Temperature.current[eid];
-  if (current === undefined) continue; // Skip entities without Temperature
-  const target = Temperature.target[eid] ?? current;
-  const rate = Temperature.rate[eid] ?? 1;
-  if (current !== target) {
-    const diff = target - current;
-    Temperature.current[eid] = current + Math.sign(diff) * Math.min(rate, Math.abs(diff));
-    if (Temperature.current[eid] > 50) {
-      ctx.emit("overheat", { entity: Name.value[eid], temp: Temperature.current[eid] });
-    }
-  }
-}
-
-WRONG - DO NOT DO THIS:
-// const entities = ctx.query(world, [Name, Temperature]); // BROKEN! Temperature is dynamic!
-
-RIGHT - DO THIS INSTEAD:
-// const entities = ctx.query(world, [Name]).filter(eid => ctx.hasDynamic(eid, "Temperature"));`,
+      description: `Create a deterministic ECS system. With coding daemons enabled, queues a tested managed release; inspect getCodingJobs before claiming it is active. The supplied code is a design reference and will be adapted to the managed API. Without coding daemons, uses the legacy system loader. Dynamic components are real registered BitECS components: query them through ctx.getComponent/ctx.components and actual membership, not stale sparse-array values.`,
       inputSchema: z.object({
         name: z
           .string()
@@ -2010,6 +2090,8 @@ RIGHT - DO THIS INSTEAD:
       }),
       execute: async (params) => {
         try {
+          const daemon=getCodingDaemon(state.world);
+          if(daemon) return {success:true,queued:true,result:daemon.enqueue({source:"God",instruction:`Implement managed system ${params.name}: ${params.description}. Legacy code reference (adapt to managed API and add tests):\n${params.code}`})};
           const filePath = await writeSystemFile({
             name: params.name,
             description: params.description,
@@ -2220,6 +2302,7 @@ Use getSystemCode first to see the current system implementation before modifyin
             error: `Dynamic component not found: ${params.componentName}`,
           };
         }
+        assertParticipantMutationAllowed(state.world,eid,params.componentName,params.values);
         // Bridge: attach via registry so entity is queryable by this component
         attachToEntity(state.world, eid, params.componentName, params.values);
         // Also write via legacy path for backward compat
@@ -3987,13 +4070,12 @@ defineRule({
         category: z.string().optional().describe("Filter by category"),
       }),
       execute: async (params) => {
-        const types = params.category
-          ? state.worldSchema.getObjectTypesByCategory(params.category)
-          : state.worldSchema.getAllObjectTypes();
+        const types = state.worldSchema.getAllObjectTypeIds().map(typeId=>({typeId,type:state.worldSchema.getObjectType(typeId)!}))
+          .filter(({type})=>!params.category||type.category===params.category);
         return {
           success: true,
-          result: types.map((t) => ({
-            name: t.name,
+          result: types.map(({typeId,type:t}) => ({
+            name: typeId, typeId, displayName:t.name,
             description: t.description,
             traits: t.traits,
             states: Object.keys(t.states),
@@ -4301,6 +4383,7 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
                   tension: summary.narrativeArc.tension,
                   stagnation: summary.stagnationScore,
                   conflictCount: summary.activeConflicts.length,
+                  runtimeHealth: summary.runtimeHealth,
                 }
               : {
                   ...summary,
@@ -4312,7 +4395,7 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
 
     getNarrativeTension: tool({
       description:
-        "Get the current narrative tension level (0-1). High tension = drama/conflict, low = calm/stagnant.",
+        "Get a heuristic narrative tension level (0-1). Low tension can mean useful quiet activity; it is not proof of stagnation or a reason to create conflict.",
       inputSchema: z.object({}),
       execute: async () => {
         const { getNarrativeTension: getTensionFn } = await import(
@@ -4373,6 +4456,7 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
               suggestedAction: r.suggestedAction,
               priority: r.priority,
             })),
+            runtimeHealth: summary.runtimeHealth,
           },
         };
       },
@@ -4920,7 +5004,7 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
           getSpiritSystemDebugInfo,
           getSystemSummary,
         } = await import("../spirits");
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
 
         if (!systemState) {
           return {
@@ -4931,8 +5015,8 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
           };
         }
 
-        const summary = getSystemSummary();
-        const debug = getSpiritSystemDebugInfo();
+        const summary = getSystemSummary(state.world);
+        const debug = getSpiritSystemDebugInfo(state.world);
 
         console.log("[Tool] getSpiritHierarchy");
         return {
@@ -4953,7 +5037,7 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
         const { getSpiritSystemState, getMessagesForGodAI } = await import(
           "../spirits"
         );
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
 
         if (!systemState) {
           return {
@@ -4999,7 +5083,7 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
       execute: async (params) => {
         const { getSpiritSystemState, getSpiritByName, sendDirective } =
           await import("../spirits");
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
 
         if (!systemState) {
           return {
@@ -5094,7 +5178,7 @@ describeEntity({ entityName: "Old Oak Tree", description: "A gnarled oak tree, i
         const { getSpiritSystemState, createNewSpirit } = await import(
           "../spirits"
         );
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
 
         if (!systemState) {
           return {
@@ -5129,7 +5213,7 @@ If you can intervene, do so when narratively appropriate.
 Always respond with valid JSON.`,
         };
 
-        const spirit = createNewSpirit(definition, state.eid);
+        const spirit = createNewSpirit(definition, state.eid, state.world);
 
         if (!spirit) {
           return {
@@ -5175,7 +5259,7 @@ Always respond with valid JSON.`,
         const { getSpiritSystemState, getSpiritByName } = await import(
           "../spirits"
         );
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
 
         if (!systemState) {
           return {
@@ -5225,7 +5309,7 @@ Always respond with valid JSON.`,
         const { getSpiritSystemState, getSpiritByName } = await import(
           "../spirits"
         );
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
 
         if (!systemState) {
           return {
@@ -5278,7 +5362,7 @@ Always respond with valid JSON.`,
         const { getSpiritSystemState, tickSpiritSystem } = await import(
           "../spirits"
         );
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
 
         if (!systemState) {
           return {
@@ -5394,7 +5478,7 @@ Templates: "classic_three_act", "mystery", "slice_of_life", "conflict"`,
         } = await import("../spirits");
 
         const template = getActiveTemplate();
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
 
         if (!template) {
           return {
@@ -5527,7 +5611,7 @@ Common beats include: "opening_image", "inciting_incident", "first_threshold", "
           getTemplateInterventions,
         } = await import("../spirits");
 
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
         if (!systemState) {
           return {
             success: false,
@@ -5729,7 +5813,7 @@ Example: Create a weather watcher to monitor a WeatherSystem you baked.`,
           "../spirits"
         );
 
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
         if (!systemState) {
           return {
             success: false,
@@ -5877,7 +5961,7 @@ Example: Create a QuestArchitect to design quests when agents need objectives.`,
           "../spirits"
         );
 
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
         if (!systemState) {
           return {
             success: false,
@@ -6130,7 +6214,7 @@ Example: Create a QuestArchitect to design quests when agents need objectives.`,
           "../spirits"
         );
 
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
         if (!systemState) {
           return {
             success: false,
@@ -6197,7 +6281,7 @@ Example: Create a QuestArchitect to design quests when agents need objectives.`,
         );
         const { getSpiritSystemState } = await import("../spirits");
 
-        const systemState = getSpiritSystemState();
+        const systemState = getSpiritSystemState(state.world);
         if (!systemState) {
           return {
             success: false,
@@ -7293,6 +7377,8 @@ function buildExecutionTools(state: GodAgentState) {
       }),
       execute: async (params) => {
         try {
+          const daemon=getCodingDaemon(state.world);
+          if(daemon) return {success:true,queued:true,result:daemon.enqueue({source:"God",instruction:`Implement managed system ${params.name}: ${params.description}. Legacy code reference (adapt to managed API and add tests):\n${params.code}`})};
           const filePath = await writeSystemFile({
             name: params.name,
             description: params.description,
@@ -7621,6 +7707,12 @@ export async function executeDesign(
   // Step 3: Create all systems (use AI to generate the code)
   for (const sys of design.systems || []) {
     try {
+      const daemon=getCodingDaemon(state.world);
+      if(daemon) {
+        const job=daemon.enqueue({source:"God",instruction:`Implement the designed system using the existing registry and managed-system API. Include tests and any required additive component schema files. System: ${JSON.stringify(sys)}`});
+        actions.push({success:true,result:{name:sys.name,jobId:job.id,status:job.status}});
+        continue;
+      }
       // Use AI to generate the actual system code from the design logic
       const systemCode = await generateSystemCode(sys, design);
       const filePath = await writeSystemFile({
@@ -8162,21 +8254,44 @@ export async function godDesignAndExecute(
   return { design, reasoning, actions };
 }
 
+/** An embedding host can supply a narrower tool surface without creating a
+ * second God/controller. This object is never deserialized from user input. */
+export interface GodCommandOptions {
+  authority?: "full" | "narrative-growth" | "spirit-growth";
+  current?: () => boolean;
+  surface?: { systemPrompt: string; tools: Record<string, any>; signal?: AbortSignal };
+}
+
 export async function godThink(
   state: GodAgentState,
   prompt: string,
-  options: { mode?: "collaborate" | "execute" } = {}
-): Promise<{ thinking: string; actions: ToolResult[] }> {
+  options: GodCommandOptions & { mode?: "collaborate" | "execute" } = {}
+): Promise<{ thinking: string; text: string; actions: ToolResult[] }> {
+  assertSimulationTaskActive();
+  const narrativeGrowth = options.authority === "narrative-growth";
+  const spiritGrowth=options.authority === "spirit-growth", restricted=narrativeGrowth||spiritGrowth||!!options.surface;
+  const assertCurrent=()=>{assertSimulationTaskActive();if(options.surface?.signal?.aborted || options.current && !options.current())throw new Error("God command source expired");};
+  assertCurrent();
   const systemPrompt =
-    options.mode === "execute"
+    options.surface?.systemPrompt ?? (spiritGrowth ? SPIRIT_GROWTH_SYSTEM_PROMPT : narrativeGrowth ? NARRATIVE_GROWTH_SYSTEM_PROMPT : options.mode === "execute"
       ? buildCommandSystemPrompt(state)
-      : buildSystemPrompt(state);
-  const tools = buildTools(state);
+      : buildSystemPrompt(state));
+  const fullTools = options.surface ? {} : buildTools(state);
+  const tools = options.surface ? Object.fromEntries(Object.entries(options.surface.tools).map(([name, definition]) => [name, {
+    ...definition, execute: async (args: unknown, context: unknown) => {
+      assertCurrent(); const result = await definition.execute(args, context); assertCurrent(); return result;
+    },
+  }])) : spiritGrowth ? buildSpiritGrowthTools(state.world,state.eid,fullTools,options.current ?? (()=>false))
+    : narrativeGrowth ? buildNarrativeGrowthTools(state.world, fullTools) : fullTools;
   const coreToolNames = [
     "listEntities",
+    "getEntityLocation",
     "queryEntities",
     "createRoom",
+    "createPlace",
+    "getPlaceBuilds",
     "createAndPopulateRoom",
+    "populateRoom",
     "createAgent",
     "createObject",
     "listSystems",
@@ -8209,35 +8324,41 @@ export async function godThink(
 
   const actions: ToolResult[] = [];
   let thinking = "";
+  let responseText = "";
 
   const baseMessages: Array<{ role: "user" | "assistant"; content: string }> = [
-    ...state.conversationHistory.slice(-10).map((h) => ({
+    ...(restricted ? [] : state.conversationHistory.slice(-10)).map((h) => ({
       role: h.role as "user" | "assistant",
       content: h.content,
     })),
     { role: "user" as const, content: prompt },
   ];
 
-  const maxAttempts = 3;
+  const maxAttempts = options.surface ? 1 : 3;
   let lastResponse: any = null;
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
+      assertCurrent();
       console.log(`[GodAgent] Calling Gemini... (attempt ${attempt}/${maxAttempts})`);
 
       const response = await generateText({
         model,
         system: systemPrompt,
         messages: baseMessages,
-        tools: attempt === 1 ? tools : coreTools,
+        // Retries must retain exactly the same authority boundary.
+        tools: restricted || attempt === 1 ? tools : coreTools,
         stopWhen: stepCountIs(15),
         temperature: attempt === 1 ? 0.6 : 0.2,
+        ...(options.surface?.signal ? { abortSignal: options.surface.signal } : {}),
       });
+      assertCurrent();
       lastResponse = response;
       console.log("[GodAgent] Gemini response received");
 
       thinking = "";
+      responseText = response.text ?? "";
       if (response.reasoningText) thinking = response.reasoningText;
       if (response.text) thinking += (thinking ? "\n\n" : "") + response.text;
 
@@ -8309,6 +8430,7 @@ export async function godThink(
       ].filter(Boolean).join("\n");
       (baseMessages[baseMessages.length - 1] as any).content = `${prompt}\n\n${retrySuffix}`;
     } catch (error) {
+      assertCurrent();
       lastError = error;
       console.error(`[GodAgent] Error (attempt ${attempt}/${maxAttempts}):`, error);
       thinking = `Error: ${error}`;
@@ -8322,30 +8444,36 @@ export async function godThink(
   }
 
   if (actions.length === 0 && lastError) {
+    if(spiritGrowth || options.surface)throw lastError;
     addMemory(state, "observation", `Error occurred: ${lastError}`, {
       importance: 8,
       tags: ["error"],
     });
   }
 
-  addMemory(state, "observation", `User request: ${prompt.slice(0, 200)}`, {
-    importance: 6,
-    tags: ["user-request"],
-  });
-
-  state.conversationHistory.push({ role: "user", content: prompt });
-  state.conversationHistory.push({ role: "assistant", content: thinking });
+  // A speculative beat is not an operator instruction. Do not let it bleed into
+  // the shared history consumed by later, unrestricted God commands.
+  assertCurrent();
+  if (!restricted) {
+    addMemory(state, "observation", `User request: ${prompt.slice(0, 200)}`, {
+      importance: 6,
+      tags: ["user-request"],
+    });
+    state.conversationHistory.push({ role: "user", content: prompt });
+    state.conversationHistory.push({ role: "assistant", content: thinking });
+  }
   state.thinkingLog.push(thinking);
 
   GodAgent.tick[state.eid]++;
 
-  return { thinking, actions };
+  return { thinking, text: responseText, actions };
 }
 
-export async function godCommand(
+export async function godCommandResult(
   state: GodAgentState,
-  command: string
-): Promise<ToolResult[]> {
+  command: string,
+  options: GodCommandOptions = {}
+): Promise<{ thinking: string; text: string; actions: ToolResult[] }> {
   const prev = (state._commandLock ?? Promise.resolve()).catch(() => {});
   let release: (() => void) = () => {};
   const current = new Promise<void>((resolve) => {
@@ -8353,21 +8481,31 @@ export async function godCommand(
   });
   state._commandLock = prev.then(() => current);
 
-  await prev;
   try {
-    const { actions } = await godThink(state, command, { mode: "execute" });
-    return actions;
+    const signal = options.surface?.signal;
+    if (signal) await new Promise<void>((resolve, reject) => {
+      const cancel = () => { signal.removeEventListener("abort", cancel); reject(new Error("God request cancelled while waiting")); };
+      if (signal.aborted) { cancel(); return; }
+      signal.addEventListener("abort", cancel, { once: true });
+      void prev.then(() => { signal.removeEventListener("abort", cancel); resolve(); });
+    });
+    else await prev;
+    assertSimulationTaskActive();
+    return await godThink(state, command, { mode: "execute", ...options });
   } finally {
     release();
   }
+}
+
+export async function godCommand(state: GodAgentState, command: string, options: GodCommandOptions = {}): Promise<ToolResult[]> {
+  return (await godCommandResult(state, command, options)).actions;
 }
 
 export function tickWorld(
   state: GodAgentState,
   delta: number = 1000
 ): Array<{ type: string; data: any; timestamp: number }> {
-  state.tick++;
-  return runWorldTickAt(state, state.tick, delta);
+  return runWorldTickAt(state, Math.max(state.tick, state.world.time.tick) + 1, delta);
 }
 
 /**
@@ -8379,22 +8517,23 @@ export function runWorldTickAt(
   tick: number,
   delta: number = 1000
 ): Array<{ type: string; data: any; timestamp: number }> {
-  state.tick = tick;
-  // Run baked systems from registry
-  runSystems(state.world, state.systemRegistry, tick, delta);
+  const removeDeadlines = registerSimulationDeadlineProvider(state.world, () => {
+    const due = [...state.systemRegistry.systems.values()].filter(system => system.active && !system.async && system.nextDeadline)
+      .map(system => system.nextDeadline!(state.world)).filter((deadline): deadline is number => deadline !== undefined && Number.isFinite(deadline));
+    return due.length ? Math.min(...due) : undefined;
+  });
+  try { advanceSimulationTimeline(state.world, delta, { tick, integrate: segment => {
+    state.tick = tick;
+    syncGlobalTime(state);
+    // Rate integrators and authored package deadlines see the exact committed
+    // sub-tick clock, not a future end-of-frame timestamp.
+    runSystems(state.world, state.systemRegistry, tick, segment);
+    if (state.fileSystems.length > 0) runLoadedSystems(state.world, state.fileSystems, state.systemRegistry, tick, segment);
+    runInterventions(state.world, state.interventionRegistry, tick);
+  } }); } finally { removeDeadlines(); }
+  state.tick = state.world.time.tick;
+  syncGlobalTime(state);
   runAsyncSystems(state.world, state.systemRegistry, tick, delta);
-  // Run file-based systems (NeedsDecay, SeekNeeds, RandomWander, etc.)
-  if (state.fileSystems.length > 0) {
-    runLoadedSystems(
-      state.world,
-      state.fileSystems,
-      state.systemRegistry,
-      tick,
-      delta
-    );
-  }
-  // Run interventions - event-driven precondition→effect rules
-  runInterventions(state.world, state.interventionRegistry, tick);
   // Post-tick effectiveness analysis (conflict detection + cleanup)
   runPostTickAnalysis(tick);
   return consumeEvents(state.systemRegistry);
@@ -8467,6 +8606,8 @@ export function getWorldState(state: GodAgentState): string {
   const systems = listSystems(state.systemRegistry);
 
   const lines = ["WORLD STATE:", ""];
+  lines.push(formatNativeRuntimeServices(state.world), "");
+  lines.push(formatWorldRuntimeHealth(state.world), "");
 
   lines.push("SYSTEMS:");
   for (const sys of systems) {

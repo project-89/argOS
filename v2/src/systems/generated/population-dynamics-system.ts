@@ -1,4 +1,5 @@
 import type { World } from "../../ecs/world";
+import { integrateLegacyRateSteps } from "../legacy-rate-time";
 import type { SystemContext } from "../system-loader";
 
 export const name = "PopulationDynamicsSystem";
@@ -6,7 +7,11 @@ export const description = "Updates consumer populations based on energy gained 
 export const frequency = 1;
 export const active = true;
 
+export const temporalStepMs = 1000; // Explicit in-world duration for one historical law step.
 export function run(world: World, ctx: SystemContext): void {
+  integrateLegacyRateSteps(world, ctx, "population-dynamics-system", temporalStepMs, runLaw);
+}
+function runLaw(world: World, ctx: SystemContext): void {
   const Population = ctx.getDynamic("Population");
   const Consumer = ctx.getDynamic("Consumer");
   const Metabolism = ctx.getDynamic("Metabolism");

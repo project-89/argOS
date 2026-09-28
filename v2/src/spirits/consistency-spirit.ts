@@ -7,9 +7,11 @@
  */
 
 import type { SpiritDefinition, Observation, EcsSnapshot, AgentSnapshot } from "./types";
-import { query, entityExists } from "bitecs";
+import { query, entityExists, hasComponent, Prefab } from "bitecs";
 import type { World } from "../ecs/world";
-import { Name, Agent, GridPosition, StimulusSource, Room } from "../ecs/components";
+import { Name, Agent, GridPosition, StimulusSource, Room, Removed } from "../ecs/components";
+import { getCommittedEvents } from "../runtime/committed-events";
+import { readSimulationTime } from "../ecs/simulation-time";
 import { getDynamicComponentValues } from "../ecs/dynamic-components";
 import {
   ACTION_REGISTRY,
@@ -27,6 +29,7 @@ import {
   type BufferedEvent,
 } from "../introspection/introspection";
 import type { SystemRegistry } from "../ecs/dynamic-systems";
+import { reportGapObservation } from "./observation-aggregator";
 
 // =============================================================================
 // CONSISTENCY ISSUE TYPES
@@ -119,62 +122,15 @@ export function getDetectedPatterns(): Array<{ pattern: string; count: number; s
 // CONSISTENCY SPIRIT SYSTEM PROMPT
 // =============================================================================
 
-const CONSISTENCY_SYSTEM_PROMPT = `You are THE ARBITER OF COHERENCE, a spirit who ensures the simulation remains internally consistent and grounded in actual ECS state.
+const CONSISTENCY_SYSTEM_PROMPT = `You are THE ARBITER OF COHERENCE. Compare claims with current ECS state and committed execution receipts.
 
-## YOUR PRIMARY ROLE: CONSISTENCY GUARDIAN
+Report concrete discrepancies, with evidence, uncertainty and a next inspection step. A reported action is not a completed action. A missing or ambiguous name is not proof an entity never existed: it may be removed, depleted, elsewhere, hidden or deliberately unavailable. Ordinary props count as entities. A matching name is not permission to interact through walls or closed containers.
 
-You watch for discrepancies between:
-1. **Narrative Events** - What the story says is happening
-2. **Agent Actions** - What agents try to do
-3. **ECS Reality** - What actually exists in the world
+Do not recommend recreating an absent item, replenishing a resource, changing a character\'s memory, or making invented narration true. Preserve puzzles and failed outcomes. When narrative asserts an unsupported arrival or attack, flag the unsupported claim; do not create its actor. Only an explicit, grounded authoring request can authorize construction.
 
-## WHAT YOU MONITOR
+Likewise, an unfamiliar action or failed attempt does not establish a missing system. Inspect registered capabilities, physical prerequisites and the native outcome. Distinguish a valid obstacle from an executor fault. Quiet, waiting and successful repetitive work are not faults.
 
-### Entity References
-- When agents try to interact with entities that don't exist
-- When narrative describes objects that aren't in the world
-- When actions target non-existent locations or characters
-
-### Agent Capabilities
-- Agents trying to use items they don't have in inventory
-- Agents performing actions that require missing systems (combat, crafting)
-- Invalid action types that the cognition system can't process
-
-### System Requirements
-- Combat scenarios without a combat system
-- Item interactions without an inventory system
-- Crafting without a crafting system
-
-### Narrative Grounding
-- Narrative prose describing entities/events not in ECS
-- Stimuli from sources that don't exist
-- Environmental descriptions that don't match room state
-
-## HOW TO REPORT
-
-For each issue found, provide:
-1. **Category**: What type of inconsistency
-2. **Severity**: How much it breaks immersion/mechanics
-3. **Evidence**: What specifically triggered the detection
-4. **Recommendation**: Concrete action GodAI should take
-
-## RECOMMENDATION EXAMPLES
-
-- "Agent Clara tried to play a lute, but no lute entity exists. RECOMMENDATION: Create a 'lute' object entity and add it to Clara's inventory using the Inventory component."
-
-- "Narrative describes a wolf attacking, but no wolf entity exists. RECOMMENDATION: Create a wolf agent entity with the Agent and Health components, position it on the grid, and register it with the combat system."
-
-- "Agent Ben used 'moveEntityOnGrid' which is not a valid action type. RECOMMENDATION: The cognition system should validate actions against VALID_AGENT_ACTIONS and reject invalid ones."
-
-## PRIORITY
-
-Focus on issues that:
-1. Break mechanical gameplay (critical)
-2. Cause confusion or immersion breaks (high)
-3. Indicate missing systems that would enhance the simulation (medium)
-4. Are minor narrative inconsistencies (low)
-
-Your reports go directly to GodAI for remediation.`;
+Return concise observations using the supplied schema. Keep observations separate from proposed remediation and never claim your report changed the world. Return no issues when the evidence supports none.`;
 
 // =============================================================================
 // CONSISTENCY SPIRIT DEFINITION
@@ -306,33 +262,11 @@ export function getActionRequirements(actionType: string): {
  * Check if an entity exists by name
  */
 export function entityExistsByName(world: World, name: string): number | null {
-  // Query all entities with names
-  const agents = Array.from(query(world, [Agent]));
-  for (const eid of agents) {
-    if (entityExists(world, eid) && Name.value[eid] === name) {
-      return eid;
-    }
-  }
-
-  // Check rooms
-  const rooms = Array.from(query(world, [Room]));
-  for (const eid of rooms) {
-    if (entityExists(world, eid) && Name.value[eid] === name) {
-      return eid;
-    }
-  }
-
-  // Check stimulus sources
-  const stimuli = Array.from(query(world, [StimulusSource]));
-  for (const eid of stimuli) {
-    if (entityExists(world, eid) && Name.value[eid] === name) {
-      return eid;
-    }
-  }
-
-  // Check for any named entity via dynamic components
-  // This is a broader search
-  return null;
+  if (typeof name !== "string" || !name.trim()) return null;
+  const matches = Array.from(query(world, [Name])).filter(eid => entityExists(world, eid)
+    && !hasComponent(world, eid, Removed) && !hasComponent(world, eid, Prefab)
+    && String(Name.value[eid] || "").trim().toLowerCase() === name.trim().toLowerCase());
+  return matches.length === 1 ? matches[0] : null;
 }
 
 /**
@@ -407,22 +341,8 @@ export function validateAgentAction(
         });
       }
 
-      // Check system requirements
-      if (actionDef.systemRequirements && actionDef.systemRequirements.length > 0) {
-        for (const sysReq of actionDef.systemRequirements) {
-          issues.push({
-            id: generateIssueId(),
-            timestamp: Date.now(),
-            severity: "medium",
-            category: "missing_system",
-            description: `Action "${actionType}" requires "${sysReq}" system - verify it exists`,
-            evidence: [`Action: ${actionType}`, `Required system: ${sysReq}`],
-            affectedEntities: [agentName],
-            recommendation: `Ensure ${sysReq} system is active. Add required components: ${actionDef.requiredComponents?.join(", ") || "none"}`,
-            autoFixable: false,
-          });
-        }
-      }
+      // A declared dependency isn't evidence that its implementation is absent.
+      // Runtime health/executor failures provide that evidence separately.
     }
   }
 
@@ -432,7 +352,7 @@ export function validateAgentAction(
     if (targetEid === null) {
       // Check if it's a conceptual target vs entity target
       const conceptualTargets = ["east", "west", "north", "south", "around", "area", "surroundings", "here", "there"];
-      const isConceptual = conceptualTargets.some(c => actionTarget.toLowerCase().includes(c));
+      const isConceptual = conceptualTargets.includes(actionTarget.trim().toLowerCase());
 
       if (!isConceptual) {
         issues.push({
@@ -440,17 +360,17 @@ export function validateAgentAction(
           timestamp: Date.now(),
           severity: "medium",
           category: "missing_entity",
-          description: `Agent "${agentName}" tried to interact with "${actionTarget}" which doesn't exist`,
+          description: `Agent "${agentName}" referenced "${actionTarget}" but no unique current entity resolved by that name`,
           evidence: [`Action: ${actionType}`, `Target: ${actionTarget}`],
           affectedEntities: [agentName],
-          recommendation: `Create entity "${actionTarget}" or update agent's perception to only reference existing entities.`,
-          autoFixable: true,
+          recommendation: `Inspect the failed attempt and current state. The target may be absent, removed, renamed, ambiguous or misremembered. Absence alone does not authorize creation, restoration or rewriting perception.`,
+          autoFixable: false,
         });
       }
     }
   }
 
-  return issues;
+  return bindIssues(world, issues);
 }
 
 /**
@@ -477,14 +397,14 @@ export function validateNarrativeEvent(
           description: `Narrative mentions "${entityName}" but no such entity exists in ECS`,
           evidence: [narrativeContent.substring(0, 100) + "..."],
           affectedEntities: [entityName],
-          recommendation: `Create "${entityName}" as an entity with appropriate components, or remove reference from narrative.`,
-          autoFixable: true,
+          recommendation: `Ground the narrative in verified entities and events. An unresolved name is not permission to create or restore it.`,
+          autoFixable: false,
         });
       }
     }
   }
 
-  return issues;
+  return bindIssues(world, issues);
 }
 
 /**
@@ -504,12 +424,12 @@ export function checkNarrativeMechanics(
     issues.push({
       id: generateIssueId(),
       timestamp: Date.now(),
-      severity: "critical",
-      category: "missing_system",
-      description: "Narrative describes combat but no combat system exists to resolve it",
+      severity: "low",
+      category: "state_inconsistency",
+      description: "Narrative mentions combat; this text-only check has not verified its native outcome",
       evidence: [narrativeContent.substring(0, 150) + "..."],
       affectedEntities: [],
-      recommendation: `Create a Combat system with: 1) Health component for living entities, 2) Attack action that deals damage, 3) Death/defeat handling when health reaches 0. Without this, combat is purely narrative with no mechanical consequences.`,
+      recommendation: `Inspect native combat receipts before treating this description as an event. Do not infer that a system is missing from prose.`,
       autoFixable: false,
     });
   }
@@ -522,12 +442,12 @@ export function checkNarrativeMechanics(
     issues.push({
       id: generateIssueId(),
       timestamp: Date.now(),
-      severity: "high",
-      category: "missing_system",
-      description: "Narrative describes item interaction but inventory system may not exist",
+      severity: "low",
+      category: "state_inconsistency",
+      description: "Narrative mentions an item interaction; this text-only check has not verified containment changes",
       evidence: [narrativeContent.substring(0, 150) + "..."],
       affectedEntities: [],
-      recommendation: `Create an Inventory system with: 1) Inventory component (array of item entity IDs), 2) Pickup/drop actions, 3) Item entities that can be owned. Without this, items are purely narrative.`,
+      recommendation: `Inspect native interaction and containment receipts. Do not infer missing inventory mechanics from prose.`,
       autoFixable: false,
     });
   }
@@ -609,7 +529,17 @@ export function getFullIntrospectionForSpirit(
   registry: SystemRegistry,
   tick?: number
 ): IntrospectionContext {
-  return getIntrospectionContext(world, registry, getGlobalEventBuffer(), tick);
+  // The legacy global buffer contains unscoped/debug inputs, sometimes including
+  // raw action content. Only this world's committed public history enters a
+  // live spirit view. Wall stamps below are diagnostic projections, not clocks.
+  const buffer = createRollingEventBuffer(1000), source = getCommittedEvents(world), now = readSimulationTime(world);
+  if (!source.stopped) for (const event of source.events.slice(-1000)) {
+    if (event.atSimMs > now) continue;
+    addToBuffer(buffer, { type: event.kind === "speech" ? "speech" : event.action,
+      data: { receiptId: event.id, actorKey: event.actorKey, roomKey: event.roomKey, status: event.status, ...(event.text ? { words: event.text } : {}) },
+      timestamp: Date.now() - (now - event.atSimMs), source: event.actorKey });
+  }
+  return getIntrospectionContext(world, registry, buffer, tick);
 }
 
 /**
@@ -673,11 +603,27 @@ export function generateIntrospectionSummary(context: IntrospectionContext): str
 
 const accumulatedIssues: ConsistencyIssue[] = [];
 const MAX_ACCUMULATED_ISSUES = 100;
+const issueOwners = new WeakMap<ConsistencyIssue, { world: World; current(): boolean }>();
+function bindIssues(world: World, issues: ConsistencyIssue[]): ConsistencyIssue[] {
+  const source = getCommittedEvents(world), at = readSimulationTime(world);
+  for (const issue of issues) {
+    let revoked = false;
+    issueOwners.set(issue, { world, current: () => {
+      const live = getCommittedEvents(world), now = readSimulationTime(world);
+      revoked ||= !source.sourceId || source.stopped || live.stopped || live.sourceId !== source.sourceId
+        || !Number.isFinite(now) || now < at || now - at > 600000;
+      return !revoked;
+    } });
+  }
+  return issues;
+}
 
 /**
  * Add an issue to the accumulator
  */
-export function recordIssue(issue: ConsistencyIssue): void {
+export function recordIssue(issue: ConsistencyIssue, world?: World): void {
+  if (world && !issueOwners.has(issue)) bindIssues(world, [issue]);
+  const owner = issueOwners.get(issue);
   accumulatedIssues.push(issue);
   if (accumulatedIssues.length > MAX_ACCUMULATED_ISSUES) {
     accumulatedIssues.shift();
@@ -685,7 +631,6 @@ export function recordIssue(issue: ConsistencyIssue): void {
 
   // Report to observation aggregator for synthesis
   try {
-    const { reportGapObservation } = require("./observation-aggregator");
     const severityMap: Record<string, "low" | "medium" | "high" | "critical"> = {
       low: "low", medium: "medium", high: "high", critical: "critical",
     };
@@ -702,24 +647,24 @@ export function recordIssue(issue: ConsistencyIssue): void {
       title: `Consistency: ${issue.category}`,
       detail: issue.description,
       evidence: issue.evidence?.length ? [issue.evidence.join("; ").slice(0, 200)] : undefined,
-    });
+    }, owner?.world, owner?.current);
   } catch {}
 }
 
 /**
  * Get and clear accumulated issues
  */
-export function getAndClearAccumulatedIssues(): ConsistencyIssue[] {
-  const issues = [...accumulatedIssues];
-  accumulatedIssues.length = 0;
+export function getAndClearAccumulatedIssues(world?: World): ConsistencyIssue[] {
+  const issues = getAccumulatedIssues(world);
+  for (let i = accumulatedIssues.length - 1; i >= 0; i--) if (!world || issueOwners.get(accumulatedIssues[i])?.world === world) accumulatedIssues.splice(i, 1);
   return issues;
 }
 
 /**
  * Get accumulated issues without clearing
  */
-export function getAccumulatedIssues(): ConsistencyIssue[] {
-  return [...accumulatedIssues];
+export function getAccumulatedIssues(world?: World): ConsistencyIssue[] {
+  return accumulatedIssues.filter(issue => !world || issueOwners.get(issue)?.world === world && issueOwners.get(issue)!.current());
 }
 
 /**
@@ -757,8 +702,9 @@ export function generateSpiritReportForGodAI(
   tick?: number
 ): SpiritReportForGodAI {
   const introspection = getFullIntrospectionForSpirit(world, registry, tick);
-  const issues = getAndClearAccumulatedIssues();
-  const patterns = getDetectedPatterns();
+  const issues = getAndClearAccumulatedIssues(world);
+  // Legacy global event patterns are diagnostic, not world-owned evidence.
+  const patterns: ReturnType<typeof getDetectedPatterns> = [];
 
   // Generate recommendations based on issues
   const recommendations: string[] = [];
@@ -783,8 +729,8 @@ export function generateSpiritReportForGodAI(
     const count = byCategory.get("missing_entity")!.length;
     const entities = byCategory.get("missing_entity")!.map(i => i.affectedEntities).flat();
     const unique = [...new Set(entities)];
-    recommendations.push(`${count} missing entity references - consider creating: ${unique.slice(0, 5).join(", ")}`);
-    suggestedActions.push("Create missing entities or update narrative to reference existing ones");
+    recommendations.push(`${count} unresolved entity references involving: ${unique.slice(0, 5).join(", ")}`);
+    suggestedActions.push("Inspect current state and failed receipts; do not replenish removed objects or rewrite memories");
   }
 
   if (byCategory.has("missing_system")) {
@@ -795,7 +741,7 @@ export function generateSpiritReportForGodAI(
 
   if (byCategory.has("narrative_drift")) {
     recommendations.push("Narrative is drifting from ECS reality - ground descriptions in actual entities");
-    suggestedActions.push("Update narrative to reference existing entities, or create entities mentioned in narrative");
+    suggestedActions.push("Ground narrative in verified entities and events; prose does not authorize construction");
   }
 
   // Pattern-based recommendations
@@ -896,8 +842,8 @@ export function generateRoutedReports(
   tick?: number
 ): RoutedReport[] {
   const introspection = getFullIntrospectionForSpirit(world, registry, tick);
-  const issues = getAccumulatedIssues(); // Don't clear yet - we'll clear after routing
-  const patterns = getDetectedPatterns();
+  const issues = getAccumulatedIssues(world); // Clear only this world's reports after routing.
+  const patterns: ReturnType<typeof getDetectedPatterns> = [];
 
   const reports: RoutedReport[] = [];
   const issuesByDomain = categorizeIssuesByDomain(issues);
@@ -961,7 +907,7 @@ export function generateRoutedReports(
     if (missingEntities.length > 0) {
       const entityNames = [...new Set(missingEntities.flatMap(i => i.affectedEntities))];
       mechRecs.push(`${missingEntities.length} missing entity references: ${entityNames.slice(0, 5).join(", ")}`);
-      mechActions.push("Create missing entities or update agent perceptions");
+      mechActions.push("Inspect unresolved references and native outcomes; absence does not authorize creation, restoration or perception changes");
     }
 
     // Pattern-based recommendations
@@ -987,7 +933,7 @@ export function generateRoutedReports(
   }
 
   // Clear accumulated issues after routing
-  getAndClearAccumulatedIssues();
+  getAndClearAccumulatedIssues(world);
 
   return reports;
 }

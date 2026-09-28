@@ -3,15 +3,17 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import type { World } from "../ecs/world";
+import { hasSimulationClock, readSimulationTime } from "../ecs/simulation-time";
 import { createSystemRegistry, reportSystemError, type SystemRegistry } from "../ecs/dynamic-systems";
-import { query, addEntity, addComponent, removeEntity, getRelationTargets } from "bitecs";
+import { query, addEntity, addComponent, removeEntity, hasComponent, getRelationTargets } from "bitecs";
 import * as AllComponents from "../ecs/components";
 import * as AllRelations from "../ecs/relations";
-import { getDirectContainer, getRoomForEntity, listDirectContents } from "../ecs/location";
-import { getAllDynamicComponents, getDynamicComponent, getComponentDefinition, listDynamicComponents, loadComponentDefinitions, type DynamicComponent, type ComponentDefinition } from "../ecs/dynamic-components";
+import { getDirectContainer, getRoomForEntity, listDirectContents, setLocatedIn } from "../ecs/location";
+import { getAllDynamicComponents, getDynamicComponent, getComponentDefinition, listDynamicComponents, type DynamicComponent, type ComponentDefinition } from "../ecs/dynamic-components";
 import { getMergedComponents, getComponent, registryCreateComponent, attachToEntity, getRegistryWorld } from "../ecs/component-registry";
-import { google } from "@ai-sdk/google";
+import { systemBakerModel } from "../llm/config";
 import { generateText } from "ai";
+import { assertSimulationTaskActive } from "../runtime/task-scope";
 
 // Default to a path under the project root. (Tests may load this module under CJS; avoid `import.meta`.)
 const DEFAULT_GENERATED_DIR = path.resolve(process.cwd(), "src/systems/generated");
@@ -85,7 +87,10 @@ export interface SystemFile {
 
 export interface SystemContext {
   tick: number;
+  /** In-world milliseconds since this system's previous execution. */
   delta: number;
+  /** Authoritative in-world elapsed milliseconds when a world is supplied. */
+  elapsed?: number;
   query: typeof query;
   addEntity: typeof addEntity;
   addComponent: typeof addComponent;
@@ -225,13 +230,18 @@ export async function loadAllSystems(): Promise<LoadedSystem[]> {
 export function createSystemContext(
   registry: SystemRegistry,
   tick: number,
-  delta: number
+  delta: number,
+  options: { world?: World; allowComponentCreation?: boolean; onEntityCreated?: (eid:number)=>void } = {},
 ): SystemContext {
+  const contextAddEntity=((world:World)=>{
+    const eid=addEntity(world);options.onEntityCreated?.(eid);return eid;
+  }) as typeof addEntity;
   return {
     tick,
     delta,
+    elapsed: options.world ? readSimulationTime(options.world) : undefined,
     query,
-    addEntity,
+    addEntity: contextAddEntity,
     addComponent,
     removeEntity,
     getRelationTargets,
@@ -248,13 +258,21 @@ export function createSystemContext(
       const component = getDynamicComponent(componentName);
       const def = getComponentDefinition(componentName);
       if (!component || !def) return false;
+      if(options.world)return hasComponent(options.world,eid,component);
       // Check if any property has a defined value for this entity
       return Object.keys(def.properties).some(prop => component[prop][eid] !== undefined);
     },
     getComponent: (name: string) => getComponent(name),
-    createComponent: (def: ComponentDefinition) => registryCreateComponent(def),
+    createComponent: (def: ComponentDefinition) => {
+      if(options.allowComponentCreation===false) {
+        const existing=getComponent(def.name);
+        if(existing)return existing;
+        throw new Error("Preflight systems cannot mutate the live component registry");
+      }
+      return registryCreateComponent(def);
+    },
     attachComponent: (eid: number, name: string, values?: Record<string, any>) => {
-      const world = getRegistryWorld();
+      const world = options.world ?? getRegistryWorld();
       if (!world) return false;
       return attachToEntity(world, eid, name, values);
     },
@@ -271,7 +289,8 @@ const MAX_CONSECUTIVE_ERRORS = 3;
 const MAX_FIX_ATTEMPTS = 2;
 
 // Track systems that need fixing (populated during sync run, fixed async later)
-const systemsNeedingFix: Array<{ system: LoadedSystem; error: string }> = [];
+const systemsNeedingFix: Array<{ world:World;system: LoadedSystem; error: string }> = [];
+const loadedSimulationRuns = new WeakMap<World, WeakMap<LoadedSystem, number>>();
 
 export function runLoadedSystems(
   world: World,
@@ -280,15 +299,21 @@ export function runLoadedSystems(
   tick: number,
   delta: number
 ): void {
-  const ctx = createSystemContext(registry, tick, delta);
+  const ctx = createSystemContext(registry, tick, delta, { world });
+  let runs = loadedSimulationRuns.get(world);
+  if (!runs) loadedSimulationRuns.set(world, runs = new WeakMap());
 
   for (const system of systems) {
     if (!system.active) continue;
+    if (hasSimulationClock(world) && !runs.has(system)) runs.set(system, readSimulationTime(world) - delta);
     if (tick - system.lastRun < system.frequency) continue;
 
     try {
-      system.run(world, ctx);
+      const lastElapsed = runs.get(system);
+      system.run(world, hasSimulationClock(world) && lastElapsed !== undefined
+        ? { ...ctx, delta: readSimulationTime(world) - lastElapsed } : ctx);
       system.lastRun = tick;
+      if (hasSimulationClock(world)) runs.set(system, readSimulationTime(world));
       // Reset error tracking on success
       system.consecutiveErrors = 0;
       system.lastError = null;
@@ -316,9 +341,9 @@ export function runLoadedSystems(
       // Queue for fixing if threshold reached and not already queued
       if (system.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS &&
           system.fixAttempts < MAX_FIX_ATTEMPTS &&
-          !systemsNeedingFix.some(s => s.system.name === system.name)) {
+          !systemsNeedingFix.some(s => s.world===world&&s.system===system)) {
         console.log(`[SystemLoader] Queuing ${system.name} for auto-fix (attempt ${system.fixAttempts + 1})`);
-        systemsNeedingFix.push({ system, error: errorStr });
+        systemsNeedingFix.push({ world,system,error: errorStr });
       } else if (system.fixAttempts >= MAX_FIX_ATTEMPTS) {
         console.error(`[SystemLoader] ${system.name} exceeded fix attempts, deactivating`);
         system.active = false;
@@ -328,12 +353,13 @@ export function runLoadedSystems(
   }
 }
 
-export function getSystemsNeedingFix(): Array<{ system: LoadedSystem; error: string }> {
-  return [...systemsNeedingFix];
+export function getSystemsNeedingFix(world?:World): Array<{world:World;system: LoadedSystem; error: string }> {
+  return systemsNeedingFix.filter(entry=>world===undefined||entry.world===world);
 }
 
-export function clearSystemsNeedingFix(): void {
-  systemsNeedingFix.length = 0;
+export function clearSystemsNeedingFix(world?:World): void {
+  if(world===undefined){systemsNeedingFix.length=0;return;}
+  for(let index=systemsNeedingFix.length-1;index>=0;index--)if(systemsNeedingFix[index].world===world)systemsNeedingFix.splice(index,1);
 }
 
 export async function listSystemFiles(): Promise<string[]> {
@@ -400,7 +426,7 @@ export async function updateSystemFile(
 }
 
 // Runtime error fixer using AI
-const runtimeFixerModel = google("gemini-2.0-flash");
+const runtimeFixerModel = systemBakerModel;
 
 export async function fixRuntimeError(
   system: LoadedSystem,
@@ -538,61 +564,112 @@ export async function preflightValidateSystem(
   opts: { ticks?: number } = {}
 ): Promise<{ ok: boolean; error?: string }> {
   const ticks = Number.isFinite(Number(opts.ticks)) ? Math.max(1, Math.min(10, Number(opts.ticks))) : 2;
-  try {
-    await loadComponentDefinitions();
-  } catch {
-    // best-effort
-  }
-
   const { createArgosWorld } = await import("../ecs/world");
-  const { initializePrefabs, createRoomEntity, createAgentEntity } = await import("../ecs/prefabs");
-  const { ObjectManager } = await import("../world/object-manager");
 
+  // Argos' component SoAs and prefab handles are module-global. Calling
+  // initializePrefabs() for a throwaway world therefore resets the live
+  // registry, replaces prefab IDs, and can overwrite live values at colliding
+  // entity IDs. Build the small fixture directly and restore every shared SoA
+  // slot touched by the validation world instead.
   const world = createArgosWorld(`SystemPreflight:${system.name}`) as any;
-  initializePrefabs(world);
-  const objectManager = new ObjectManager(world);
-
-  const room = createRoomEntity(world, { name: "Validation Room", description: "A room used for preflight validation." });
-  createAgentEntity(world, { name: "Validator", role: "npc", systemPrompt: "x", roomId: room });
-  objectManager.spawn("torch", { name: "Validation Torch", containedIn: room, state: "lit" });
-
   const registry = createSystemRegistry();
+  const sharedArrays=[...new Set([
+    ...Object.values(AllComponents).flatMap(component=>Object.values(component as Record<string,unknown>)),
+    ...[...getAllDynamicComponents().values()].flatMap(component=>Object.values(component)),
+  ].filter(Array.isArray))] as any[][];
+  const snapshots=new Map<number,Array<{array:any[];had:boolean;value:any}>>();
+  const validationIds=new Set<number>();
+  const remember=(eid:number)=>{
+    if(snapshots.has(eid))return;
+    snapshots.set(eid,sharedArrays.map(array=>({array,had:Object.hasOwn(array,eid),value:array[eid]})));
+    validationIds.add(eid);
+  };
+  const create=()=>{const eid=addEntity(world);remember(eid);return eid;};
+  const attach=(eid:number,component:any,values:Record<string,unknown>)=>{
+    addComponent(world,eid,component);
+    for(const [field,value] of Object.entries(values))component[field][eid]=value;
+  };
 
-  for (let t = 1; t <= ticks; t++) {
-    const ctx = createSystemContext(registry, t, 16);
-    try {
-      system.run(world, ctx);
-    } catch (e) {
-      const errorStr = e instanceof Error ? (e.stack || e.message) : String(e);
-      return { ok: false, error: errorStr };
+  const room=create();
+  attach(room,AllComponents.Name,{value:"Validation Room"});
+  attach(room,AllComponents.Description,{value:"A room used for preflight validation."});
+  attach(room,AllComponents.Room,{capacity:4,ambience:"neutral"});
+  attach(room,AllComponents.Position,{x:0,y:0,z:0});
+  attach(room,AllComponents.GridPosition,{x:0,y:0,facing:"south"});
+  const agent=create();
+  attach(agent,AllComponents.Name,{value:"Validator"});
+  attach(agent,AllComponents.Description,{value:"A preflight-only NPC."});
+  attach(agent,AllComponents.Agent,{role:"npc",systemPrompt:"x",active:true});
+  attach(agent,AllComponents.Mind,{mode:"reactive",arousal:0.5,focus:"",lastUpdate:Date.now()});
+  attach(agent,AllComponents.Position,{x:1,y:1,z:0});
+  attach(agent,AllComponents.GridPosition,{x:1,y:1,facing:"south"});
+  setLocatedIn(world,agent,room);
+  const object=create();
+  attach(object,AllComponents.Name,{value:"Validation Torch"});
+  attach(object,AllComponents.Description,{value:"A lit validation torch."});
+  attach(object,AllComponents.PhysicalObject,{material:"wood",weight:1,portable:true});
+  attach(object,AllComponents.ObjectType,{typeId:"torch",instanceName:"Validation Torch"});
+  attach(object,AllComponents.ObjectState,{current:"lit",previous:"unlit",lockedUntil:0});
+  attach(object,AllComponents.GridPosition,{x:2,y:1,facing:"south"});
+  setLocatedIn(world,object,room);
+
+  try {
+    for (let t = 1; t <= ticks; t++) {
+      const ctx = createSystemContext(registry, t, 16, {
+        world,allowComponentCreation:false,onEntityCreated:remember,
+      });
+      try {
+        system.run(world, ctx);
+      } catch (e) {
+        const errorStr = e instanceof Error ? (e.stack || e.message) : String(e);
+        return { ok: false, error: errorStr };
+      }
+    }
+    return { ok: true };
+  } finally {
+    for(const eid of validationIds) {
+      try { removeEntity(world,eid); } catch { /* already removed by candidate */ }
+      for(const slot of snapshots.get(eid)??[]) {
+        if(slot.had)slot.array[eid]=slot.value;else delete slot.array[eid];
+      }
     }
   }
-
-  return { ok: true };
 }
 
 export async function fixAllQueuedSystems(
-  systems: LoadedSystem[]
+  systems: LoadedSystem[],
+  options: {world?:World;repair?:(system:LoadedSystem,error:string)=>Promise<LoadedSystem|null>} = {},
 ): Promise<{ fixed: string[]; failed: string[] }> {
-  const queued = getSystemsNeedingFix();
+  const queued = getSystemsNeedingFix(options.world);
   const fixed: string[] = [];
   const failed: string[] = [];
+  const repair=options.repair??fixRuntimeError;
 
-  for (const { system, error } of queued) {
-    const fixedSystem = await fixRuntimeError(system, error);
+  for (const entry of queued) {
+    assertSimulationTaskActive();
+    const {system,error}=entry;
+    const fixedSystem = await repair(system, error);
+    // Provider cancellation may be normalized to null by a legacy repairer.
+    // Check the task boundary before replacing code, consuming retry budget,
+    // or acknowledging anything from the durable in-memory queue.
+    assertSimulationTaskActive();
     if (fixedSystem) {
       // Replace the system in the array
-      const idx = systems.findIndex(s => s.name === system.name);
+      let idx=systems.indexOf(system);if(idx<0)idx=systems.findIndex(s => s.name === system.name);
       if (idx >= 0) {
         systems[idx] = fixedSystem;
       }
       fixed.push(system.name);
+      const queuedIndex=systemsNeedingFix.indexOf(entry);if(queuedIndex>=0)systemsNeedingFix.splice(queuedIndex,1);
     } else {
       failed.push(system.name);
+      system.fixAttempts++;
+      if(system.fixAttempts>=MAX_FIX_ATTEMPTS) {
+        const queuedIndex=systemsNeedingFix.indexOf(entry);if(queuedIndex>=0)systemsNeedingFix.splice(queuedIndex,1);
+        console.error(`[RuntimeFixer] ${system.name} exhausted ${MAX_FIX_ATTEMPTS} repair attempts; remaining quarantined`);
+      }
     }
   }
-
-  clearSystemsNeedingFix();
   return { fixed, failed };
 }
 

@@ -426,7 +426,7 @@ async function runAgentCycle(
 
   // Add Slack notifications as perceptions
   for (const notif of notifications.slice(0, 3)) {
-    queueStimulus({
+    queueStimulus(ow.world, {
       targetEid: agent.eid,
       type: "notification",
       content: `[Slack ${notif.type}] ${notif.from}: "${notif.preview.slice(0, 60)}..."`,
@@ -545,7 +545,7 @@ function propagateSpeech(ow: OfficeWorld, speakerEid: number, speakerName: strin
   const listeners = getAgentsInSameRoom(ow, speakerEid);
 
   for (const listener of listeners) {
-    queueStimulus({
+    queueStimulus(ow.world, {
       targetEid: listener.eid,
       type: "speech",
       content: `${speakerName} says: "${speech}"`,

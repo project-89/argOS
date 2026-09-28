@@ -67,6 +67,7 @@ export const Targets = createRelation(makeExclusive);
 export const BelongsTo = createRelation(withAutoRemoveSubject);
 
 export const HasMemory = createRelation();
+export const HasNarrative = createRelation();
 
 export const HasBelief = createRelation();
 

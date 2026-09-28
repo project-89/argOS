@@ -4,7 +4,10 @@
  * This bridges the WorldSchema (prefabs/definitions) with the ECS (runtime entities).
  */
 
-import { addEntity, removeEntity, addComponent, removeComponent, hasComponent, query } from "bitecs";
+import { removeEntity, addComponent, removeComponent, hasComponent, query } from "bitecs";
+import { computeObjectTypeTraits } from "./object-type-traits";
+import { stampObjectStateTime } from "./object-state-time";
+import { setObjectDescription } from "./object-state";
 import {
   Name,
   Description,
@@ -27,6 +30,11 @@ import {
 } from "../ecs/components";
 import { LocatedIn } from "../ecs/relations";
 import { setLocatedIn } from "../ecs/location";
+import { allocateWorldEntity, assertWorldConstructionAvailable } from "../runtime/world-construction-budget";
+import { getRegistryEntry, registryCreateComponent, validateComponentInitialValues } from "../ecs/component-registry";
+import type { ComponentDefinition } from "../ecs/dynamic-components";
+import { PRIVATE_MANAGED_COMPONENTS } from "../engineering/contracts";
+import { isWorldOfficeToolAllowed } from "../office-tools/tool-registry";
 import { worldSchema, OnTopOf, OccupiedBy, type ObjectTypeDefinition, type StimulusDefinition } from "./schema";
 
 const invalidStateTransitionWarned = new Set<string>();
@@ -67,6 +75,13 @@ export interface ObjectInfo {
   containedIn?: number;
 }
 
+export interface ObjectComponentPlan {
+  definition: ComponentDefinition;
+  values: Record<string, unknown>;
+  initial: Record<string, string | number | boolean>;
+  register: boolean;
+}
+
 export class ObjectManager {
   private world: any; // bitECS world
   private entityTypeMap: Map<number, string> = new Map();
@@ -85,7 +100,19 @@ export class ObjectManager {
       return null;
     }
 
-    const eid = addEntity(this.world);
+    let components: ObjectComponentPlan[];
+    try {
+      // Validate the entire request before registering schemas or allocating an
+      // entity. A later invalid component cannot leave a half-created prop.
+      components = ObjectManager.prepareComponentSpecs(typeDef, options.components);
+      assertWorldConstructionAvailable(this.world);
+      for (const component of components) if (component.register) registryCreateComponent(component.definition);
+    } catch (error) {
+      console.error(`[ObjectManager] Cannot spawn ${typeId}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+
+    const eid = allocateWorldEntity(this.world, "object");
     this.entityTypeMap.set(eid, typeId);
 
     // Set ObjectType
@@ -101,7 +128,7 @@ export class ObjectManager {
     ObjectState.lockedUntil[eid] = 0;
 
     // Compute initial traits from type + state
-    const traits = this.computeTraits(typeDef, initialState);
+    const traits = computeObjectTypeTraits(typeDef, initialState);
     addComponent(this.world, eid, Traits);
     Traits.active[eid] = JSON.stringify(traits);
 
@@ -113,6 +140,7 @@ export class ObjectManager {
     const description = options.description || this.generateDescription(typeDef, initialState, options);
     addComponent(this.world, eid, Description);
     Description.value[eid] = description;
+    if (options.description) setObjectDescription(this.world, eid, options.description, "author");
 
     // Mark as a physical object so it participates in grounded queries/actions.
     addComponent(this.world, eid, PhysicalObject);
@@ -174,6 +202,13 @@ export class ObjectManager {
       Container.allowedTypes[eid] = "";
     }
 
+    // Surface is a physical capability, not just a word in a description.
+    if (traits.includes("surface")) {
+      addComponent(this.world, eid, Surface);
+      Surface.capacity[eid] = typeDef.containerCapacity || 10;
+      Surface.currentCount[eid] = 0;
+    }
+
     // Handle type-specific components
     if (typeDef.category === "lighting") {
       addComponent(this.world, eid, LightSource);
@@ -191,21 +226,14 @@ export class ObjectManager {
     // Set up StimulusSource based on state's stimuli (DYNAMIC PERCEPTION)
     this.setupStimuliForState(eid, typeDef, initialState, options.properties);
 
-    // Apply defaultComponents from type definition
-    if (typeDef.defaultComponents) {
-      for (const compSpec of typeDef.defaultComponents) {
-        this.applyComponentSpec(eid, compSpec);
-      }
+    for (const plan of components) {
+      const component = getRegistryEntry(plan.definition.name)!.soa;
+      const values = hasComponent(this.world, eid, component) ? plan.values : plan.initial;
+      addComponent(this.world, eid, component);
+      for (const [field, value] of Object.entries(values)) component[field][eid] = value;
     }
 
-    // Apply any additional component data
-    if (options.components) {
-      for (const [compName, data] of Object.entries(options.components)) {
-        // This would need to be expanded based on actual component needs
-        console.log(`Would apply component ${compName}:`, data);
-      }
-    }
-
+    stampObjectStateTime(this.world, eid);
     return eid;
   }
 
@@ -222,7 +250,7 @@ export class ObjectManager {
     if (!stateDef) return;
 
     // Get stimuli from state definition (prefer new stimuli array over legacy emitsStimulus)
-    const stimuli = stateDef.stimuli || [];
+    const stimuli = [...(stateDef.stimuli || [])];
 
     // Also check legacy emitsStimulus and convert if no new stimuli
     if (stimuli.length === 0 && stateDef.emitsStimulus) {
@@ -308,18 +336,63 @@ export class ObjectManager {
   }
 
   /**
-   * Apply a component specification from the type definition
+   * Resolve declared component schemas and explicit overrides without mutation.
    */
-  private applyComponentSpec(eid: number, spec: { name: string; values: Record<string, any>; dynamic?: boolean; schema?: Record<string, string> }): void {
-    // For now, log what we would do - actual implementation depends on component registry
-    console.log(`[ObjectManager] Would apply component ${spec.name} to ${eid}:`, spec.values);
-
-    // Handle known dynamic components
-    if (spec.dynamic && spec.schema) {
-      // TODO: Create dynamic component using createComponent from bitecs or our wrapper
-      // For now, we just log
-      console.log(`[ObjectManager] Dynamic component ${spec.name} would be created with schema:`, spec.schema);
+  static prepareComponentSpecs(typeDef: ObjectTypeDefinition, additional: SpawnOptions["components"]): ObjectComponentPlan[] {
+    const plans = new Map<string, ObjectComponentPlan>();
+    const identifier = (name: unknown): name is string => typeof name === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name)
+      && !["constructor", "prototype", "__proto__"].includes(name);
+    const assertPhysicalComponent = (name: string) => {
+      if (PRIVATE_MANAGED_COMPONENTS.has(name) || ["WorkingMemoryIdentity", "WorldClock", "EquipSlot", "Room"].includes(name))
+        throw new Error(`Object component ${name} requires a separate host capability`);
+    };
+    const valueRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value)
+      && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+    if (typeDef.defaultComponents !== undefined && (!Array.isArray(typeDef.defaultComponents) || typeDef.defaultComponents.length > 32))
+      throw new Error("Expected at most 32 default component specs");
+    for (const spec of typeDef.defaultComponents ?? []) {
+      if (!spec || !identifier(spec.name) || !valueRecord(spec.values)) throw new Error("Invalid component spec");
+      assertPhysicalComponent(spec.name);
+      if (plans.has(spec.name)) throw new Error(`Duplicate component ${spec.name}`);
+      const entry = getRegistryEntry(spec.name);
+      let declared: ComponentDefinition | undefined;
+      if (spec.schema !== undefined) {
+        if (!valueRecord(spec.schema) || Object.keys(spec.schema).length < 1 || Object.keys(spec.schema).length > 32
+          || Object.entries(spec.schema).some(([field, kind]) => !identifier(field) || !["number", "string", "boolean"].includes(String(kind))))
+          throw new Error(`Invalid declared schema ${spec.name}`);
+        declared = { name: spec.name, description: `Declared by object type ${typeDef.name}`,
+          properties: { ...spec.schema } as ComponentDefinition["properties"] };
+      }
+      if (entry) {
+        if (!entry.definition) throw new Error(`Missing canonical schema ${spec.name}`);
+        if (spec.dynamic && entry.isStatic) throw new Error(`Cannot redefine built-in component ${spec.name}`);
+        if (declared) {
+          const canonical = entry.definition.properties;
+          if (Object.keys(canonical).length !== Object.keys(declared.properties).length
+            || Object.entries(declared.properties).some(([field, kind]) => {
+              const fieldSchema: any = Object.hasOwn(canonical, field) ? canonical[field] : undefined;
+              return kind !== (typeof fieldSchema === "string" ? fieldSchema : fieldSchema?.type);
+            })) throw new Error(`Schema conflict for component ${spec.name}`);
+        }
+      } else if (!spec.dynamic || !declared) throw new Error(`Unknown component ${spec.name}: an explicit dynamic schema is required`);
+      const definition = entry?.definition ?? declared!;
+      const initial = validateComponentInitialValues(definition, spec.values);
+      plans.set(spec.name, { definition, values: { ...spec.values }, initial, register: !entry });
     }
+    if (additional !== undefined) {
+      if (!valueRecord(additional)) throw new Error("Invalid additional components");
+      for (const [name, values] of Object.entries(additional)) {
+        if (!identifier(name) || !valueRecord(values)) throw new Error(`Invalid component values: ${name}`);
+        assertPhysicalComponent(name);
+        const existing = plans.get(name), entry = getRegistryEntry(name);
+        const definition = existing?.definition ?? entry?.definition;
+        if (!definition) throw new Error(`Unknown component ${name}: additional values cannot declare a schema`);
+        const merged = { ...existing?.values, ...values };
+        plans.set(name, { definition, values: merged, initial: validateComponentInitialValues(definition, merged), register: existing?.register ?? false });
+      }
+    }
+    if (plans.size > 32) throw new Error("Expected at most 32 components per object");
+    return [...plans.values()];
   }
 
   /**
@@ -333,7 +406,7 @@ export class ObjectManager {
     position?: { x: number; y: number };
     containedIn?: number;
   }): number {
-    const eid = addEntity(this.world);
+    const eid = allocateWorldEntity(this.world, "object");
     this.entityTypeMap.set(eid, "_custom");
 
     addComponent(this.world, eid, ObjectType);
@@ -344,7 +417,7 @@ export class ObjectManager {
     Name.value[eid] = config.name;
 
     addComponent(this.world, eid, Description);
-    Description.value[eid] = config.description;
+    setObjectDescription(this.world, eid, config.description, "author");
 
     addComponent(this.world, eid, PhysicalObject);
     PhysicalObject.material[eid] = "unknown";
@@ -358,6 +431,7 @@ export class ObjectManager {
     ObjectState.current[eid] = config.state || "normal";
     ObjectState.previous[eid] = "";
     ObjectState.lockedUntil[eid] = 0;
+    stampObjectStateTime(this.world, eid);
 
     if (config.position) {
       addComponent(this.world, eid, GridPosition);
@@ -409,10 +483,11 @@ export class ObjectManager {
     const currentState = ObjectState.current[eid];
     ObjectState.previous[eid] = currentState;
     ObjectState.current[eid] = newState;
+    stampObjectStateTime(this.world, eid, currentState);
 
     // Update traits based on new state
     if (typeDef) {
-      const newTraits = this.computeTraits(typeDef, newState);
+      const newTraits = computeObjectTypeTraits(typeDef, newState);
       Traits.active[eid] = JSON.stringify(newTraits);
 
       // Update description if no dynamic override
@@ -435,15 +510,7 @@ export class ObjectManager {
    * Set a dynamic description (overrides type-based description)
    */
   setDescription(eid: number, description: string, updatedBy: string = "system"): void {
-    if (!hasComponent(this.world, eid, DynamicDescription)) {
-      addComponent(this.world, eid, DynamicDescription);
-    }
-    DynamicDescription.text[eid] = description;
-    DynamicDescription.lastUpdated[eid] = Date.now();
-    DynamicDescription.updatedBy[eid] = updatedBy;
-
-    // Also update the main description component
-    Description.value[eid] = description;
+    setObjectDescription(this.world, eid, description, updatedBy);
   }
 
   /**
@@ -499,6 +566,7 @@ export class ObjectManager {
     const affordances: string[] = [];
 
     for (const aff of worldSchema.getAllAffordances()) {
+      if ((aff.effects ?? []).some(effect => effect.type === "run_tool" && (!effect.toolId || !isWorldOfficeToolAllowed(this.world, effect.toolId)))) continue;
       // Check required traits
       const hasRequired = aff.requires.every(t => traits.includes(t));
       // Check blocked traits
@@ -617,33 +685,6 @@ export class ObjectManager {
     }
 
     return desc;
-  }
-
-  private computeTraits(typeDef: ObjectTypeDefinition, state: string): string[] {
-    const baseTraits = [...typeDef.traits];
-    const stateDef = typeDef.states[state];
-
-    if (stateDef) {
-      // Add state-specific traits
-      if (stateDef.traits) {
-        for (const t of stateDef.traits) {
-          if (!baseTraits.includes(t)) {
-            baseTraits.push(t);
-          }
-        }
-      }
-      // Remove blocked traits
-      if (stateDef.blockedTraits) {
-        for (const t of stateDef.blockedTraits) {
-          const idx = baseTraits.indexOf(t);
-          if (idx !== -1) {
-            baseTraits.splice(idx, 1);
-          }
-        }
-      }
-    }
-
-    return baseTraits;
   }
 
   private getProperties(eid: number): SpawnOptions["properties"] {

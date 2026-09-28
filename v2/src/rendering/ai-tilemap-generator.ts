@@ -8,14 +8,14 @@
  */
 
 import { generateObject, generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { createArgosModel as google, MODEL_IDS } from "../llm/config";
 import { z } from "zod/v3";
 import * as fs from "fs";
 import * as path from "path";
 
 // Use Gemini with vision capabilities
-const visionModel = google("gemini-2.0-flash");
-const designModel = google("gemini-2.0-flash");  // Use same model for text generation
+const visionModel = google(MODEL_IDS.flash);
+const designModel = google(MODEL_IDS.flash);  // Use same model for text generation
 
 // ============================================================================
 // TILE METADATA SCHEMAS

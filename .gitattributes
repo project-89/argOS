@@ -1,0 +1,3 @@
+# Keep original third-party license bytes (including CRLF/spacing) for provenance.
+v2/src/demo/spatial-client/assets/characters/LICENSE.txt -text -whitespace
+v2/src/demo/spatial-client/assets/furniture/LICENSE.txt -text -whitespace

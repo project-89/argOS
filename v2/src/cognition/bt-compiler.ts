@@ -22,9 +22,11 @@
  */
 
 import { hasComponent } from "bitecs";
-import { Agent, BehaviorPolicy, Name, Needs, Room } from "../ecs/components";
+import { Agent, BehaviorPolicy, Name, Needs, Room, Traits } from "../ecs/components";
 import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import type { World } from "../ecs/world";
+import { isDocumentOperation } from "../world/productive-work";
+import { requiresFreshAffordanceDecision } from "../world/affordance-availability";
 import {
   type BehaviorNode,
   type PolicyAction,
@@ -34,6 +36,7 @@ import {
 import { growMemoryBranch } from "./policy-learning";
 // skill compilation happens in goal-learning.ts, not here
 import { chronicle } from "./simulation-chronicle";
+import { worldSchema } from "../world/schema";
 
 // =============================================================================
 // TYPES
@@ -68,14 +71,28 @@ interface PendingDecision extends DecisionContext {
 // STATE
 // =============================================================================
 
-/** Pending decisions awaiting outcomes, keyed by agent EID */
-const pendingDecisions: Map<number, PendingDecision> = new Map();
+interface CompilerWorldState {
+  /** Pending decisions awaiting outcomes, keyed by agent EID in this world. */
+  pendingDecisions: Map<number, PendingDecision>;
+}
 
-/** Track which compiled branches exist per agent to avoid duplicates */
-const compiledSignatures: Map<number, Set<string>> = new Map();
+let compilerStateByWorld = new WeakMap<World, CompilerWorldState>();
+// Compatibility for the historical getCompilationStats(agentEid) API. The
+// actual mutable state remains world-scoped; weak references do not retain dead worlds.
+const latestWorldByAgent = new Map<number, WeakRef<World>>();
 
-/** Track when each compiled branch last fired (for pruning) */
-const branchLastFired: Map<number, Map<string, number>> = new Map();
+function stateFor(world: World): CompilerWorldState {
+  let state = compilerStateByWorld.get(world);
+  if (!state) {
+    state = { pendingDecisions: new Map() };
+    compilerStateByWorld.set(world, state);
+  }
+  return state;
+}
+
+function rememberWorld(world: World, agentEid: number): void {
+  latestWorldByAgent.set(agentEid, new WeakRef(world));
+}
 
 /** Counter for unique decision IDs */
 let decisionCounter = 0;
@@ -83,7 +100,6 @@ let decisionCounter = 0;
 
 // Tuning
 const MAX_COMPILED_BRANCHES = 15;       // Max compiled branches per agent
-const COMPILE_CHANCE_THRESHOLD = 0.8;   // Only compile if action type is underrepresented
 const MIN_NEED_THRESHOLD = 30;          // Only add need conditions if need > this
 const PRUNE_AGE_MS = 10 * 60 * 1000;   // Prune branches not fired in 10 min
 const MAX_PENDING_AGE_MS = 30 * 1000;   // Discard pending decisions older than 30s
@@ -103,6 +119,14 @@ export function captureLLMDecision(
   action: PolicyAction,
   affordance?: string,
 ): void {
+  const state = stateFor(world);
+  rememberWorld(world, agentEid);
+  if (requiresFreshAffordanceDecision(world, agentEid, action)) {
+    // Exact private wording is not a skill. Do not retain it even as a pending
+    // learning example; a later capability change cannot make it replayable.
+    state.pendingDecisions.delete(agentEid);
+    return;
+  }
   // Snapshot agent state
   const roomEid = getRoomForEntity(world, agentEid);
   const roomName = roomEid !== undefined ? String(Name.value[roomEid] || "") : "";
@@ -137,7 +161,7 @@ export function captureLLMDecision(
   };
 
   // Only keep the most recent pending decision per agent
-  pendingDecisions.set(agentEid, decision);
+  state.pendingDecisions.set(agentEid, decision);
 }
 
 // =============================================================================
@@ -154,17 +178,37 @@ export function resolveDecision(
   world: World,
   agentEid: number,
   success: boolean,
+  expectedAction?: { type: string; target?: string; content?: string },
 ): void {
-  const decision = pendingDecisions.get(agentEid);
+  const state = stateFor(world);
+  rememberWorld(world, agentEid);
+  const decision = state.pendingDecisions.get(agentEid);
   if (!decision) return;
 
   // Discard stale decisions
   if (Date.now() - decision.timestamp > MAX_PENDING_AGE_MS) {
-    pendingDecisions.delete(agentEid);
+    state.pendingDecisions.delete(agentEid);
     return;
   }
 
-  pendingDecisions.delete(agentEid);
+  // Async completion may arrive after a newer decision replaced this slot. A
+  // result for command A must not train command B (nor consume B's pending proof).
+  if (expectedAction) {
+    const type = (value: string) => value.trim().toLowerCase();
+    const target = (value?: string) => String(value || "").trim().toLowerCase();
+    const content = (action: { type: string; content?: string }) => {
+      const raw = String(action.content || "").trim();
+      if (type(action.type) !== "interact") return raw;
+      const match = raw.match(/^(\S+)([\s\S]*)$/);
+      if (!match) return "";
+      const verb = match[1].toLowerCase().replace(/^["'`]+|["'`]+$/g, "").replace(/[^\p{L}\p{N}_-]+$/gu, "");
+      return `${verb}\n${match[2].trim()}`;
+    };
+    if (type(decision.action.type) !== type(expectedAction.type) || target(decision.action.target) !== target(expectedAction.target) ||
+        content(decision.action) !== content(expectedAction)) return;
+  }
+
+  state.pendingDecisions.delete(agentEid);
 
   if (!success) return; // Don't compile failed actions
 
@@ -177,27 +221,26 @@ export function resolveDecision(
 // =============================================================================
 
 function compileToBranch(world: World, decision: DecisionContext): void {
+  // A successful utterance proves delivery, not that these exact words are a
+  // reusable response. Learning dialogue needs semantic slots and fresh listener
+  // context; broad room/need predicates cannot safely replay it.
+  if (decision.action.type === "speak" || isDocumentOperation(decision.action)
+    || requiresFreshAffordanceDecision(world, decision.agentEid, decision.action)) return;
+  // Document commands bind particular content/revisions. Reusing them requires
+  // parameterized skills, not a broad room/need-triggered literal replay.
+  rememberWorld(world, decision.agentEid);
   if (!hasComponent(world as any, decision.agentEid, BehaviorPolicy as any)) return;
   if (!BehaviorPolicy.enabled[decision.agentEid]) return;
 
-  // Check if we've already compiled too many branches
-  let sigs = compiledSignatures.get(decision.agentEid);
-  if (!sigs) {
-    sigs = new Set();
-    compiledSignatures.set(decision.agentEid, sigs);
-  }
-  if (sigs.size >= MAX_COMPILED_BRANCHES) return;
-
   // Generate a signature to avoid duplicate branches
   const sig = branchSignature(decision);
-  if (sigs.has(sig)) return;
 
   // Build conditions from the decision context
   const conditions = buildConditions(decision);
   if (conditions.length === 0) return; // No meaningful conditions to compile
 
   // Build the action node
-  const actionNode = buildActionNode(decision);
+  const actionNode = buildActionNode(world, decision);
   if (!actionNode) return;
 
   // Anti-repetition guard
@@ -218,6 +261,10 @@ function compileToBranch(world: World, decision: DecisionContext): void {
 
   try {
     const tree = JSON.parse(raw) as BehaviorNode;
+    // Reconstruct compiler book-keeping from the durable tree. This makes
+    // duplicate suppression work after restore and avoids cross-world EID leaks.
+    const compiled = collectCompiledBranches(tree);
+    if (compiled.size >= MAX_COMPILED_BRANCHES || compiled.has(sig)) return;
 
     // Count existing nodes
     const nodeCount = countNodes(tree);
@@ -230,6 +277,7 @@ function compileToBranch(world: World, decision: DecisionContext): void {
     const children = (tree as any).children as BehaviorNode[];
     // Tag the branch so pruner can identify it
     (branch as any)._compiled = sig;
+    (branch as any)._compiledAt = Date.now();
 
     // Insert before the last 2 children (typically social + weighted_random)
     const insertIdx = Math.max(1, children.length - 2);
@@ -243,8 +291,6 @@ function compileToBranch(world: World, decision: DecisionContext): void {
     BehaviorPolicy.treeJson[decision.agentEid] = JSON.stringify(tree);
     BehaviorPolicy.version[decision.agentEid] = (BehaviorPolicy.version[decision.agentEid] || 0) + 1;
     clearPolicyEvalHistory(decision.agentEid);
-
-    sigs.add(sig);
 
     const agentName = Name.value[decision.agentEid] || decision.agentEid;
     console.log(`[BT-Compiler] ${agentName} learned: ${sig} (${branchSize} nodes, tree now ${nodeCount + branchSize})`);
@@ -323,7 +369,35 @@ function buildConditions(decision: DecisionContext): BehaviorNode[] {
 /**
  * Build the action node from the decision.
  */
-function buildActionNode(decision: DecisionContext): BehaviorNode | null {
+function interactionTrait(world: World, decision: DecisionContext, affordance: string): string | undefined {
+  const definition = worldSchema.getAffordance(affordance);
+  if (!definition?.requires?.length || !decision.action.target) return undefined;
+  const roomEid = getRoomForEntity(world, decision.agentEid);
+  const candidates = [
+    ...(roomEid === undefined ? [] : listDirectContents(world, roomEid)),
+    ...listDirectContents(world, decision.agentEid),
+  ];
+  const wanted = decision.action.target.trim().toLowerCase();
+  const targetEid = candidates.find((eid) => String(Name.value[eid] || "").trim().toLowerCase() === wanted);
+  if (targetEid === undefined || !hasComponent(world as any, targetEid, Traits as any)) return undefined;
+  let activeTraits: string[] = [];
+  try {
+    const parsed = JSON.parse(String(Traits.active[targetEid] || "[]"));
+    if (Array.isArray(parsed)) activeTraits = parsed.map(String);
+  } catch { return undefined; }
+  const normalized = new Map(activeTraits.map((trait) => [trait.trim().toLowerCase(), trait]));
+  return definition.requires.map(String).map((trait) => normalized.get(trait.trim().toLowerCase())).find(Boolean);
+}
+
+function affordanceArgs(action: PolicyAction, affordance: string): string | undefined {
+  const raw = String(action.content || "").trim();
+  if (!raw) return undefined;
+  const match = raw.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+  if (!match || match[1].toLowerCase() !== affordance.trim().toLowerCase()) return undefined;
+  return String(match[2] || "").trim() || undefined;
+}
+
+function buildActionNode(world: World, decision: DecisionContext): BehaviorNode | null {
   const { action, affordance } = decision;
 
   switch (action.type) {
@@ -333,11 +407,14 @@ function buildActionNode(decision: DecisionContext): BehaviorNode | null {
 
     case "interact":
       if (affordance && action.target) {
-        // Try to build an interact_with_trait if we know the affordance
-        return {
+        // Generalize only through an actual schema requirement proven on the
+        // successful target. Affordance names are verbs and are not reliable traits.
+        const trait = interactionTrait(world, decision, affordance);
+        if (trait) return {
           type: "interact_with_trait",
-          trait: affordance, // Best guess — the affordance name often matches the trait
+          trait,
           affordance,
+          args: affordanceArgs(action, affordance),
           scope: "room" as const,
         };
       }
@@ -391,17 +468,40 @@ function extractAndGrowMemoryBranches(world: World, decision: DecisionContext): 
 // PRUNING: remove stale branches
 // =============================================================================
 
-/**
- * Record that a compiled branch fired (for pruning tracking).
- * Called from evaluateBehaviorPolicy when a branch matches.
- */
-export function recordBranchFired(agentEid: number, branchSig: string): void {
-  let agentBranches = branchLastFired.get(agentEid);
-  if (!agentBranches) {
-    agentBranches = new Map();
-    branchLastFired.set(agentEid, agentBranches);
-  }
-  agentBranches.set(branchSig, Date.now());
+type CompiledBranchRecord = { node: any; compiledAt: number; lastFiredAt: number };
+
+function collectCompiledBranches(node: any, out = new Map<string, CompiledBranchRecord>()): Map<string, CompiledBranchRecord> {
+  if (!node || typeof node !== "object") return out;
+  const signature = String(node._compiled || "").trim();
+  if (signature) out.set(signature, {
+    node,
+    compiledAt: Number(node._compiledAt || 0),
+    lastFiredAt: Number(node._lastFiredAt || 0),
+  });
+  if (Array.isArray(node.children)) for (const child of node.children) collectCompiledBranches(child, out);
+  if (Array.isArray(node.choices)) for (const choice of node.choices) collectCompiledBranches(choice?.child, out);
+  return out;
+}
+
+function worldForStats(agentEid: number, explicit?: World): World | undefined {
+  return explicit ?? latestWorldByAgent.get(agentEid)?.deref();
+}
+
+/** Persist a branch firing watermark. Normal evaluation does this inline; this
+ * compatibility API is useful to external policy executors. */
+export function recordBranchFired(agentEid: number, branchSig: string, world?: World): void {
+  const scopedWorld = worldForStats(agentEid, world);
+  if (!scopedWorld || !hasComponent(scopedWorld as any, agentEid, BehaviorPolicy as any)) return;
+  const raw = String(BehaviorPolicy.treeJson[agentEid] || "").trim();
+  if (!raw) return;
+  try {
+    const tree = JSON.parse(raw) as BehaviorNode;
+    const branch = collectCompiledBranches(tree).get(branchSig);
+    if (!branch) return;
+    branch.node._lastFiredAt = Date.now();
+    BehaviorPolicy.treeJson[agentEid] = JSON.stringify(tree);
+    rememberWorld(scopedWorld, agentEid);
+  } catch { /* invalid policy stays untouched */ }
 }
 
 /**
@@ -409,44 +509,42 @@ export function recordBranchFired(agentEid: number, branchSig: string): void {
  * Call periodically (e.g., every Watcher cycle).
  */
 export function pruneStaleBranches(world: World, agentEid: number): number {
+  rememberWorld(world, agentEid);
   if (!hasComponent(world as any, agentEid, BehaviorPolicy as any)) return 0;
-
-  const sigs = compiledSignatures.get(agentEid);
-  const fired = branchLastFired.get(agentEid);
-  if (!sigs || sigs.size === 0) return 0;
-
-  const now = Date.now();
-  const toRemove: string[] = [];
-
-  for (const sig of sigs) {
-    const lastFiredAt = fired?.get(sig) ?? 0;
-    if (lastFiredAt === 0 || now - lastFiredAt > PRUNE_AGE_MS) {
-      toRemove.push(sig);
-    }
-  }
-
-  if (toRemove.length === 0) return 0;
 
   const raw = String(BehaviorPolicy.treeJson[agentEid] || "").trim();
   if (!raw) return 0;
 
   try {
     const tree = JSON.parse(raw) as BehaviorNode;
-    let removed = 0;
+    const compiled = collectCompiledBranches(tree);
+    if (compiled.size === 0) return 0;
+    const now = Date.now();
+    const toRemove = new Set([...compiled.entries()]
+      .filter(([, record]) => now - Math.max(record.lastFiredAt, record.compiledAt) > PRUNE_AGE_MS)
+      .map(([signature]) => signature));
+    if (toRemove.size === 0) return 0;
 
-    // Remove compiled branches whose signature matches a stale one
-    if (tree.type === "selector" && Array.isArray((tree as any).children)) {
-      const children = (tree as any).children as any[];
-      for (let i = children.length - 1; i >= 0; i--) {
-        const tag = children[i]?._compiled;
-        if (tag && toRemove.includes(tag)) {
-          children.splice(i, 1);
-          sigs.delete(tag);
-          fired?.delete(tag);
-          removed++;
+    const removeFrom = (node: any): number => {
+      if (!node || typeof node !== "object") return 0;
+      let removed = 0;
+      if (Array.isArray(node.children)) {
+        for (let i = node.children.length - 1; i >= 0; i--) {
+          const tag = String(node.children[i]?._compiled || "").trim();
+          if (tag && toRemove.has(tag)) { node.children.splice(i, 1); removed++; }
+          else removed += removeFrom(node.children[i]);
         }
       }
-    }
+      if (Array.isArray(node.choices)) {
+        for (let i = node.choices.length - 1; i >= 0; i--) {
+          const tag = String(node.choices[i]?.child?._compiled || "").trim();
+          if (tag && toRemove.has(tag)) { node.choices.splice(i, 1); removed++; }
+          else removed += removeFrom(node.choices[i]?.child);
+        }
+      }
+      return removed;
+    };
+    const removed = removeFrom(tree);
 
     if (removed > 0) {
       const v = validateBehaviorNode(tree);
@@ -521,15 +619,22 @@ function countNodes(node: any): number {
 // =============================================================================
 
 /** Get compilation stats for an agent */
-export function getCompilationStats(agentEid: number): {
+export function getCompilationStats(agentEid: number, explicitWorld?: World): {
   compiledBranches: number;
   pendingDecision: boolean;
   activeBranches: string[];
 } {
+  const world = worldForStats(agentEid, explicitWorld);
+  const state = world ? compilerStateByWorld.get(world) : undefined;
+  let activeBranches: string[] = [];
+  if (world && hasComponent(world as any, agentEid, BehaviorPolicy as any)) {
+    try { activeBranches = [...collectCompiledBranches(JSON.parse(String(BehaviorPolicy.treeJson[agentEid] || "{}"))).keys()]; }
+    catch { activeBranches = []; }
+  }
   return {
-    compiledBranches: compiledSignatures.get(agentEid)?.size ?? 0,
-    pendingDecision: pendingDecisions.has(agentEid),
-    activeBranches: [...(compiledSignatures.get(agentEid) ?? [])],
+    compiledBranches: activeBranches.length,
+    pendingDecision: state?.pendingDecisions.has(agentEid) ?? false,
+    activeBranches,
   };
 }
 
@@ -539,8 +644,7 @@ export function getCompilationStats(agentEid: number): {
 
 /** Reset all compiler state (for tests) */
 export function resetCompilerState(): void {
-  pendingDecisions.clear();
-  compiledSignatures.clear();
-  branchLastFired.clear();
+  compilerStateByWorld = new WeakMap<World, CompilerWorldState>();
+  latestWorldByAgent.clear();
   decisionCounter = 0;
 }

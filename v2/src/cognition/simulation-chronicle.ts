@@ -19,12 +19,17 @@
  */
 
 import * as fs from "node:fs";
+import { OperationalEvidenceTail, estimateEvidenceBytes, type EvidenceLimits, type EvidenceCoverage } from "../runtime/operational-evidence";
 
 // =============================================================================
 // TYPES
 // =============================================================================
 
 export type ChronicleEventType =
+  | "foreground_attempt_started" // Numeric full-attempt boundary, not actor memory
+  | "foreground_attempt_finished"
+  | "foreground_provider_result" // Operator timing/counts only; not an admitted decision
+  | "mental_update_discarded" // stale mental envelope omitted while its independent body command proceeds
   // World creation
   | "world_seed"
   | "room_created"
@@ -38,6 +43,7 @@ export type ChronicleEventType =
   | "system_baked"
   | "system_failed"
   | "spirit_proposal"
+  | "narrative_nudge_lifecycle" // Private transport metadata only, not public evidence or causal attribution
   | "gap_detected"
   | "affordance_evolved"     // spirit created a new affordance
   // Agent learning
@@ -50,10 +56,29 @@ export type ChronicleEventType =
   | "policy_evolved"         // Watcher triggered policy evolution
   | "goal_skill_compiled"    // goal completion → skill
   | "autonomous_goal"        // agent set own goal autonomously
+  | "personal_review_result" // Structural outcome only; no private review text
+  | "intention_review_requested" // Maintenance pause, not abandonment; structural owner/source evidence only
+  | "goal_completed"        // objective proof or explicitly subjective social review
   // Agent behavior
   | "llm_decision"           // LLM made a decision (with reasoning)
+  | "cognition_integrated"   // Historical interpretation/intent, not an execution
+  | "motor_plan_admitted"    // Short chosen physical prefix, not completion
+  | "heard_appraisal_selected" // Actor-selected, actually heard evidence
+  | "activity_review" // Actor reviews completed contributions and its next intended effect
+  | "plan_decision_review" // Private selection/defer/decline; never proof of execution
+  | "plan_decision_detached" // Independent chosen goal; mismatched optional plan unchanged
+  | "next_purpose_review" // Explicit future-purpose choice/take/cancel, never action execution
+  | "goal_handoff_review" // Metadata-only queued review/coalesced relinquishment, never action or success proof
+  | "continuation_waiting"   // Integrated purpose awaiting its speaking turn
+  | "continuation_revised"   // Pending wording retired; purpose retained
+  | "continuation_resumed"   // Exact pending proposal sent back to execution checks
+  | "decision_superseded"    // stale reply reconsidered; not an executed action
+  | "speech_deferred"        // conversational floor unavailable; no script queued
+  | "decision_rejected"      // invalid/cancelled/failed model proposal; never an executed wait
   | "policy_decision"        // BT handled a decision (no LLM)
+  | "contract_decision"      // A chosen goal supplied a deterministic primitive, not an execution
   | "action_success"         // affordance executed successfully
+  | "action_pending"         // accepted asynchronous work, not completed evidence
   | "action_failure"         // affordance failed
   | "world_mutation"         // entity spawned/destroyed by agent action
   // Social
@@ -111,12 +136,57 @@ export interface ChronicleSnapshot {
 
 export type ChronicleListener = (entry: ChronicleEntry) => void;
 
-class SimulationChronicle {
-  private entries: ChronicleEntry[] = [];
-  private snapshots: ChronicleSnapshot[] = [];
+export interface ChronicleRetentionOptions {
+  entries?: EvidenceLimits;
+  snapshots?: EvidenceLimits;
+}
+export interface ChronicleCoverage {
+  /** Existing producers share this singleton. This is NOT per-world isolation. */
+  scope: "process-global";
+  epoch: number;
+  events: EvidenceCoverage;
+  snapshots: EvidenceCoverage;
+  listenerFailures: number;
+  archiveListenerFailures: number;
+  /** Counts cover the epoch; detailed report curves/moments cover retained tails. */
+  countsScope: "epoch-total";
+  detailsScope: "retained-tail";
+}
+export type ChronicleArchiveRecord =
+  | { kind: "entry"; epoch: number; entry: ChronicleEntry }
+  | { kind: "snapshot"; epoch: number; snapshot: ChronicleSnapshot }
+  | { kind: "reset"; epoch: number; previousCoverage: ChronicleCoverage };
+
+/** Process-global eval evidence by default, not an authoritative event journal.
+ * Durable journals should subscribe before recording; callbacks do not prove
+ * persistence. Independent instances are useful for owned eval sessions/tests. */
+export class SimulationChronicle {
+  private entryTail: OperationalEvidenceTail<ChronicleEntry>;
+  private snapshotTail: OperationalEvidenceTail<ChronicleSnapshot>;
+  private get entries(): ChronicleEntry[] { return this.entryTail.values; }
+  private get snapshots(): ChronicleSnapshot[] { return this.snapshotTail.values; }
   private nextId = 1;
   private currentTick = 0;
   private startTime = Date.now();
+  private epoch = 0;
+  private eventCounts: Partial<Record<ChronicleEventType, number>> = {};
+  private listenerFailures = 0;
+  private archiveListenerFailures = 0;
+  private latestSnapshotRetained = false;
+  private archiveListeners = new Set<(record: ChronicleArchiveRecord) => void>();
+
+  constructor(private readonly retention: ChronicleRetentionOptions = {}) {
+    this.entryTail = this.createEntryTail();
+    this.snapshotTail = this.createSnapshotTail();
+  }
+
+  private createEntryTail(): OperationalEvidenceTail<ChronicleEntry> {
+    return new OperationalEvidenceTail(this.retention.entries ?? { maxEntries: 4096, maxBytes: 8 * 1024 * 1024 });
+  }
+
+  private createSnapshotTail(): OperationalEvidenceTail<ChronicleSnapshot> {
+    return new OperationalEvidenceTail(this.retention.snapshots ?? { maxEntries: 128, maxBytes: 4 * 1024 * 1024 });
+  }
 
   // Per-agent counters
   private agentLLMCalls: Map<string, number> = new Map();
@@ -140,11 +210,13 @@ class SimulationChronicle {
       summary: summary || this.autoSummary(type, data),
       data,
     };
+    this.eventCounts[type] = (this.eventCounts[type] ?? 0) + 1;
+    this.notifyArchive({ kind: "entry", epoch: this.epoch, entry });
     this.entries.push(entry);
 
     // Notify listeners
     for (const listener of this.listeners) {
-      try { listener(entry); } catch {}
+      try { listener(entry); } catch { this.listenerFailures++; }
     }
 
     // Track LLM vs policy calls
@@ -158,7 +230,9 @@ class SimulationChronicle {
 
   /** Take a periodic snapshot of simulation state */
   addSnapshot(snap: ChronicleSnapshot): void {
+    this.notifyArchive({ kind: "snapshot", epoch: this.epoch, snapshot: snap });
     this.snapshots.push(snap);
+    this.latestSnapshotRetained = this.snapshots[this.snapshots.length - 1] === snap;
   }
 
   /** Get all entries of a specific type */
@@ -176,7 +250,7 @@ class SimulationChronicle {
     return this.entries.filter(e => e.tick === tick);
   }
 
-  /** Get all entries */
+  /** Get the retained hot tail. Consult getCoverage() before claiming completeness. */
   getAll(): ChronicleEntry[] {
     return [...this.entries];
   }
@@ -187,6 +261,27 @@ class SimulationChronicle {
     return () => {
       const idx = this.listeners.indexOf(listener);
       if (idx >= 0) this.listeners.splice(idx, 1);
+    };
+  }
+
+  /** Receives complete new records before hot-tail eviction, plus reset epochs.
+   * Install before the run. Existing subscribe() file journals stay independent. */
+  subscribeArchive(listener: (record: ChronicleArchiveRecord) => void): () => void {
+    this.archiveListeners.add(listener);
+    return () => { this.archiveListeners.delete(listener); };
+  }
+
+  private notifyArchive(record: ChronicleArchiveRecord): void {
+    for (const listener of this.archiveListeners) {
+      try { listener(record); } catch { this.archiveListenerFailures++; }
+    }
+  }
+
+  getCoverage(): ChronicleCoverage {
+    return {
+      scope: "process-global", epoch: this.epoch, events: this.entryTail.coverage(), snapshots: this.snapshotTail.coverage(),
+      listenerFailures: this.listenerFailures, archiveListenerFailures: this.archiveListenerFailures,
+      countsScope: "epoch-total", detailsScope: "retained-tail",
     };
   }
 
@@ -206,10 +301,7 @@ class SimulationChronicle {
     const runtime = Date.now() - this.startTime;
 
     // Count events by type
-    const eventCounts: Record<string, number> = {};
-    for (const e of this.entries) {
-      eventCounts[e.type] = (eventCounts[e.type] || 0) + 1;
-    }
+    const eventCounts: Record<string, number> = { ...this.eventCounts };
 
     // Agent growth curves (from snapshots)
     const agentGrowth: Record<string, { tick: number; treeSize: number; compiled: number }[]> = {};
@@ -262,16 +354,17 @@ class SimulationChronicle {
       meta: {
         totalTicks,
         runtimeMs: runtime,
-        totalEvents: this.entries.length,
-        snapshotCount: this.snapshots.length,
+        totalEvents: this.entryTail.coverage().total,
+        snapshotCount: this.snapshotTail.coverage().total,
       },
+      coverage: this.getCoverage(),
       eventCounts,
       keyMoments,
       agentGrowth,
       llmReduction,
       evolvedAffordances,
       mutations,
-      finalSnapshot: this.snapshots[this.snapshots.length - 1] || null,
+      finalSnapshot: this.latestSnapshotRetained ? this.snapshots[this.snapshots.length - 1] ?? null : null,
     };
   }
 
@@ -285,6 +378,7 @@ class SimulationChronicle {
       chronicle: {
         entries: this.entries,
         snapshots: this.snapshots,
+        coverage: this.getCoverage(),
       },
       report,
     }, null, 2));
@@ -303,6 +397,9 @@ class SimulationChronicle {
     lines.push(`Generated: ${new Date().toISOString()}`);
     lines.push(`Duration: ${report.meta.totalTicks} ticks, ${(report.meta.runtimeMs / 1000).toFixed(0)}s`);
     lines.push(`Events: ${report.meta.totalEvents}`);
+    lines.push(`Evidence scope: process-global epoch ${report.coverage.epoch}; totals cover the epoch, details cover retained tails.`);
+    lines.push(`Retained events: ${report.coverage.events.retained}/${report.coverage.events.total}; snapshots: ${report.coverage.snapshots.retained}/${report.coverage.snapshots.total}.`);
+    lines.push(`Complete hot evidence: ${report.coverage.events.complete && report.coverage.snapshots.complete}; observer failures: ${report.coverage.listenerFailures + report.coverage.archiveListenerFailures}.`);
     lines.push("");
 
     lines.push("## Event Summary");
@@ -372,13 +469,20 @@ class SimulationChronicle {
 
   /** Reset for a new run */
   reset(): void {
-    this.entries = [];
-    this.snapshots = [];
+    const previousCoverage = this.getCoverage();
+    this.entryTail = this.createEntryTail();
+    this.snapshotTail = this.createSnapshotTail();
+    this.eventCounts = {};
+    this.epoch++;
+    this.listenerFailures = 0;
+    this.archiveListenerFailures = 0;
+    this.latestSnapshotRetained = false;
     this.nextId = 1;
     this.currentTick = 0;
     this.startTime = Date.now();
     this.agentLLMCalls.clear();
     this.agentPolicyCalls.clear();
+    this.notifyArchive({ kind: "reset", epoch: this.epoch, previousCoverage });
   }
 
   // =============================================================================
@@ -395,7 +499,9 @@ class SimulationChronicle {
       case "affordance_evolved": return `Spirit created affordance: ${data.name}`;
       case "system_baked": return `Spirit baked system: ${data.name}`;
       case "world_mutation": return `${data.agent} ${data.action}: ${data.result}`;
-      case "llm_decision": return `${data.agent}: ${data.action} ("${(data.reasoning || "").slice(0, 60)}")`;
+      case "llm_decision": return `${data.agent}: ${data.action}${data.reasoning ? ` ("${data.reasoning.slice(0, 60)}")` : ""}`;
+      case "contract_decision": return `${data.agent}: selected goal proposes ${data.actionType}${data.target ? ` -> ${data.target}` : ""}`;
+      case "decision_rejected": return `${data.agent}: decision rejected (${data.reason}); no action executed`;
       case "policy_decision": return `${data.agent}: ${data.action} (from BT)`;
       case "action_success": return `${data.agent} ${data.affordance} ${data.target}: success`;
       case "action_failure": return `${data.agent} ${data.affordance} ${data.target}: FAILED — ${data.reason}`;
@@ -404,7 +510,13 @@ class SimulationChronicle {
       case "room_created": return `Room: ${data.name}`;
       case "agent_created": return `Agent: ${data.name} (${data.role})`;
       case "affordance_created": return `Affordance: ${data.name} (${data.effectCount || 0} effects)`;
-      default: return `${type}: ${JSON.stringify(data).slice(0, 80)}`;
+      default: {
+        const size = estimateEvidenceBytes(data, 512);
+        if (size === undefined) return `${type}: [non-serializable evidence; consult archive]`;
+        if (size > 512) return `${type}: [large evidence; consult data/archive]`;
+        try { return `${type}: ${JSON.stringify(data).slice(0, 80)}`; }
+        catch { return `${type}: [non-serializable evidence; consult archive]`; }
+      }
     }
   }
 }
@@ -420,6 +532,7 @@ export interface ChronicleReport {
     totalEvents: number;
     snapshotCount: number;
   };
+  coverage: ChronicleCoverage;
   eventCounts: Record<string, number>;
   keyMoments: Array<{ tick: number; type: string; summary: string }>;
   agentGrowth: Record<string, Array<{ tick: number; treeSize: number; compiled: number }>>;

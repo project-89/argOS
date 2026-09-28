@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { jest } from "@jest/globals";
 
 import { createArgosWorld } from "../../ecs/world";
 import { initializePrefabs, createAgentEntity, createRoomEntity } from "../../ecs/prefabs";
@@ -15,6 +16,10 @@ import {
   resetCompilerState,
 } from "../bt-compiler";
 import { resetLearningState } from "../policy-learning";
+import { worldSchema } from "../../world/schema";
+import { clearActionHistory, recordAction } from "../agent-action-history";
+import { createSystemRegistry } from "../../ecs/dynamic-systems";
+import { deserializeWorld, serializeWorld } from "../../persistence/world-persistence";
 
 function makeWorld() {
   const world = createArgosWorld("BTCompilerTest") as any;
@@ -45,7 +50,10 @@ const BASE_TREE: BehaviorNode = {
 beforeEach(() => {
   resetCompilerState();
   resetLearningState();
+  clearActionHistory();
 });
+
+afterEach(() => jest.useRealTimers());
 
 describe("BT Compiler: Capture + Resolve", () => {
   test("successful LLM decision gets compiled into BT branch", () => {
@@ -56,17 +64,15 @@ describe("BT Compiler: Capture + Resolve", () => {
     registerEntity(agent, "Smith");
     setAgentBehaviorPolicy(world, agent, BASE_TREE, true);
 
-    // Simulate LLM deciding to speak
-    captureLLMDecision(world, agent, "I see someone new, I should greet them",
-      { type: "speak", content: "Welcome to the tavern!" });
+    captureLLMDecision(world, agent, "I should inspect my surroundings",
+      { type: "observe" });
 
     // Resolve as success
     resolveDecision(world, agent, true);
 
     // Tree should have grown
     const raw = BehaviorPolicy.treeJson[agent];
-    expect(raw).toContain("speak");
-    expect(raw).toContain("Welcome");
+    expect(raw).toContain("observe");
 
     const tree = JSON.parse(raw);
     expect(validateBehaviorNode(tree).ok).toBe(true);
@@ -105,10 +111,10 @@ describe("BT Compiler: Capture + Resolve", () => {
     setAgentBehaviorPolicy(world, agent, BASE_TREE, true);
 
     // Same decision twice
-    captureLLMDecision(world, agent, "greet", { type: "speak", content: "hi" });
+    captureLLMDecision(world, agent, "look", { type: "observe" });
     resolveDecision(world, agent, true);
 
-    captureLLMDecision(world, agent, "greet again", { type: "speak", content: "hi" });
+    captureLLMDecision(world, agent, "look again", { type: "observe" });
     resolveDecision(world, agent, true);
 
     expect(getCompilationStats(agent).compiledBranches).toBe(1); // Not 2
@@ -133,7 +139,33 @@ describe("BT Compiler: Capture + Resolve", () => {
     expect(raw).toContain("forge");
   });
 
-  test("compiled speak branch includes room condition", () => {
+  test("compiled interactions use a schema trait, not a guessed affordance name", () => {
+    const world = makeWorld();
+    const room = createRoomEntity(world, { name: "Forge", description: "A forge" });
+    const anvil = addEntity(world);
+    addComponent(world, anvil, Name); Name.value[anvil] = "Proof Anvil";
+    addComponent(world, anvil, Traits); Traits.active[anvil] = JSON.stringify(["proof_forgeable"]);
+    setLocatedIn(world, anvil, room);
+    worldSchema.defineAffordance({
+      name: "proof_forge",
+      requires: ["proof_forgeable"],
+      descriptionTemplate: "{actor.name} forges.",
+      effects: [],
+    });
+    const agent = createAgentEntity(world, { name: "Smith", role: "blacksmith", systemPrompt: "Blacksmith.", roomId: room });
+    setAgentBehaviorPolicy(world, agent, BASE_TREE, true);
+
+    captureLLMDecision(world, agent, "Forge the steel",
+      { type: "interact", target: "Proof Anvil", content: "proof_forge steel" }, "proof_forge");
+    resolveDecision(world, agent, true);
+
+    const raw = BehaviorPolicy.treeJson[agent];
+    expect(raw).toContain('"trait":"proof_forgeable"');
+    expect(raw).toContain('"args":"steel"');
+    expect(raw).not.toContain('"trait":"proof_forge"');
+  });
+
+  test("successful dialogue is not compiled into a context-free literal reply", () => {
     const world = makeWorld();
     const room = createRoomEntity(world, { name: "Tavern", description: "A tavern" });
     registerEntity(room, "Tavern");
@@ -142,15 +174,15 @@ describe("BT Compiler: Capture + Resolve", () => {
     const agent = createAgentEntity(world, { name: "Greta", role: "innkeeper", systemPrompt: "Innkeeper.", roomId: room });
     registerEntity(agent, "Greta");
     setAgentBehaviorPolicy(world, agent, BASE_TREE, true);
+    const before = BehaviorPolicy.treeJson[agent];
 
     captureLLMDecision(world, agent, "I should greet the newcomer",
-      { type: "speak", content: "Welcome!" });
+      { type: "speak", target: "Other", content: "Welcome!" });
     resolveDecision(world, agent, true);
 
     const raw = BehaviorPolicy.treeJson[agent];
-    // Speak branches ARE room-specific
-    expect(raw).toContain("in_room");
-    expect(raw).toContain("Tavern");
+    expect(raw).toBe(before);
+    expect(getCompilationStats(agent, world)).toMatchObject({ compiledBranches: 0, pendingDecision: false });
   });
 
   test("compiled branch includes need conditions when relevant", () => {
@@ -176,6 +208,8 @@ describe("BT Compiler: Capture + Resolve", () => {
 
 describe("BT Compiler: Pruning", () => {
   test("prunes branches that never fire", () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(1_000);
     const world = makeWorld();
     const room = createRoomEntity(world, { name: "Room", description: "A room" });
     registerEntity(room, "Room");
@@ -197,16 +231,143 @@ describe("BT Compiler: Pruning", () => {
     const branchCount = getCompilationStats(agent).compiledBranches;
     expect(branchCount).toBeGreaterThanOrEqual(2); // At least 2 distinct branches
 
-    // Prune with 0ms age (everything is stale)
+    // A fresh branch gets a durable grace period; it is stale only after the age window.
+    expect(pruneStaleBranches(world, agent)).toBe(0);
+    jest.setSystemTime(10 * 60 * 1000 + 1_001);
     const removed = pruneStaleBranches(world, agent);
     expect(removed).toBeGreaterThan(0);
 
     const tree = JSON.parse(BehaviorPolicy.treeJson[agent]);
     expect(validateBehaviorNode(tree).ok).toBe(true);
   });
+
+  test("rebuilds duplicate/pruning state from the persisted tree", () => {
+    const world = makeWorld();
+    const room = createRoomEntity(world, { name: "Room", description: "A room" });
+    const agent = createAgentEntity(world, { name: "Agent", role: "test", systemPrompt: "Test.", roomId: room });
+    setAgentBehaviorPolicy(world, agent, BASE_TREE, true);
+    captureLLMDecision(world, agent, "Look carefully", { type: "observe" });
+    resolveDecision(world, agent, true);
+    const before = BehaviorPolicy.treeJson[agent];
+
+    resetCompilerState(); // Simulate a fresh process around durable ECS state.
+    expect(getCompilationStats(agent, world).compiledBranches).toBe(1);
+    captureLLMDecision(world, agent, "Look carefully again", { type: "observe" });
+    resolveDecision(world, agent, true);
+    expect(BehaviorPolicy.treeJson[agent]).toBe(before);
+  });
+
+  test("compiled branch metadata survives world serialization", () => {
+    const source = makeWorld();
+    const room = createRoomEntity(source, { name: "Room" });
+    const agent = createAgentEntity(source, { name: "Agent", role: "test", systemPrompt: "Test.", roomId: room });
+    setAgentBehaviorPolicy(source, agent, BASE_TREE, true);
+    captureLLMDecision(source, agent, "Look carefully", { type: "observe" });
+    resolveDecision(source, agent, true);
+    const saved = serializeWorld(source, createSystemRegistry());
+
+    resetCompilerState();
+    const restored = makeWorld();
+    const ids = deserializeWorld(restored, createSystemRegistry(), saved).oldToNewId;
+    const restoredAgent = ids.get(agent)!;
+    expect(getCompilationStats(restoredAgent, restored)).toMatchObject({ compiledBranches: 1, pendingDecision: false });
+    expect(BehaviorPolicy.treeJson[restoredAgent]).toContain("_compiledAt");
+  });
+
+  test("pending decisions with the same EID stay isolated by world", () => {
+    const worldA = makeWorld(); const roomA = createRoomEntity(worldA, { name: "A" });
+    const actorA = createAgentEntity(worldA, { name: "A", role: "test", systemPrompt: "A", roomId: roomA });
+    setAgentBehaviorPolicy(worldA, actorA, BASE_TREE, true);
+    const worldB = makeWorld(); const roomB = createRoomEntity(worldB, { name: "B" });
+    const actorB = createAgentEntity(worldB, { name: "B", role: "test", systemPrompt: "B", roomId: roomB });
+    setAgentBehaviorPolicy(worldB, actorB, BASE_TREE, true);
+    expect(actorB).toBe(actorA);
+
+    captureLLMDecision(worldA, actorA, "Observe A", { type: "observe" });
+    captureLLMDecision(worldB, actorB, "Speak B", { type: "speak", content: "B" });
+    resolveDecision(worldA, actorA, true);
+    expect(getCompilationStats(actorA, worldA).pendingDecision).toBe(false);
+    expect(getCompilationStats(actorB, worldB).pendingDecision).toBe(true);
+    resolveDecision(worldB, actorB, false);
+    expect(getCompilationStats(actorB, worldB).pendingDecision).toBe(false);
+  });
+
+  test("anti-repetition history with the same EID stays isolated by world", () => {
+    const worldA = makeWorld(); const roomA = createRoomEntity(worldA, { name: "A" });
+    const actorA = createAgentEntity(worldA, { name: "A", role: "test", systemPrompt: "A", roomId: roomA });
+    const worldB = makeWorld(); const roomB = createRoomEntity(worldB, { name: "B" });
+    const actorB = createAgentEntity(worldB, { name: "B", role: "test", systemPrompt: "B", roomId: roomB });
+    expect(actorB).toBe(actorA);
+    const policy: BehaviorNode = { type: "sequence", children: [
+      { type: "condition", op: { type: "last_n_actions_exclude", n: 3, actionType: "observe" } },
+      { type: "action", action: { type: "think", content: "Fresh" } },
+    ] };
+    setAgentBehaviorPolicy(worldA, actorA, policy, true);
+    setAgentBehaviorPolicy(worldB, actorB, policy, true);
+    recordAction(actorA, "observe", worldA);
+
+    expect(evaluateBehaviorPolicy(worldA, actorA).kind).toBe("none");
+    expect(evaluateBehaviorPolicy(worldB, actorB)).toMatchObject({ kind: "action", action: { type: "think" } });
+  });
+
+  test("legacy unscoped history is adopted once rather than leaking across worlds", () => {
+    const worldA = makeWorld(); const roomA = createRoomEntity(worldA, { name: "A" });
+    const actorA = createAgentEntity(worldA, { name: "A", role: "test", systemPrompt: "A", roomId: roomA });
+    const worldB = makeWorld(); const roomB = createRoomEntity(worldB, { name: "B" });
+    const actorB = createAgentEntity(worldB, { name: "B", role: "test", systemPrompt: "B", roomId: roomB });
+    expect(actorB).toBe(actorA);
+    const policy: BehaviorNode = { type: "sequence", children: [
+      { type: "condition", op: { type: "last_n_actions_exclude", n: 3, actionType: "observe" } },
+      { type: "action", action: { type: "think", content: "Fresh" } },
+    ] };
+    setAgentBehaviorPolicy(worldA, actorA, policy, true);
+    setAgentBehaviorPolicy(worldB, actorB, policy, true);
+
+    // Original public API: no world argument. The first explicit consumer owns
+    // the staged history; a second world reusing the EID must remain clean.
+    recordAction(actorA, "observe");
+    expect(evaluateBehaviorPolicy(worldA, actorA).kind).toBe("none");
+    expect(evaluateBehaviorPolicy(worldB, actorB)).toMatchObject({ kind: "action", action: { type: "think" } });
+  });
 });
 
 describe("BT Compiler: Compiled branches are evaluable", () => {
+  test("selector and sequence propagate a procedure request", () => {
+    const world = makeWorld();
+    const room = createRoomEntity(world, { name: "Room" });
+    const agent = createAgentEntity(world, { name: "Agent", role: "test", systemPrompt: "Test.", roomId: room });
+    setAgentBehaviorPolicy(world, agent, {
+      type: "selector",
+      children: [{ type: "sequence", children: [
+        { type: "condition", op: { type: "always" } },
+        { type: "use_procedure", signature: "goalid:proof|123", minSuccesses: 1 },
+      ] }],
+    }, true);
+    expect(evaluateBehaviorPolicy(world, agent)).toMatchObject({
+      kind: "start_procedure", signature: "goalid:proof|123", minSuccesses: 1,
+    });
+  });
+
+  test("a compiled branch firing writes a durable watermark", () => {
+    jest.useFakeTimers(); jest.setSystemTime(10_000);
+    const world = makeWorld();
+    const tavern = createRoomEntity(world, { name: "Tavern" });
+    const forge = createRoomEntity(world, { name: "Forge" });
+    const agent = createAgentEntity(world, { name: "Smith", role: "test", systemPrompt: "Test.", roomId: tavern });
+    setAgentBehaviorPolicy(world, agent, BASE_TREE, true);
+    captureLLMDecision(world, agent, "Go forge", { type: "move", target: "Forge" });
+    resolveDecision(world, agent, true);
+    const tree = JSON.parse(BehaviorPolicy.treeJson[agent]);
+    const branch = tree.children.find((child: any) => child._compiled);
+    const chance = branch.children.find((child: any) => child.op?.type === "chance");
+    chance.op.p = 1;
+    BehaviorPolicy.treeJson[agent] = JSON.stringify(tree);
+
+    expect(evaluateBehaviorPolicy(world, agent)).toMatchObject({ kind: "action", action: { type: "move", target: "Forge" } });
+    const persisted = JSON.parse(BehaviorPolicy.treeJson[agent]).children.find((child: any) => child._compiled);
+    expect(persisted._lastFiredAt).toBe(10_000);
+  });
+
   test("compiled branch actually fires when conditions match", () => {
     const world = makeWorld();
     const tavern = createRoomEntity(world, { name: "Tavern", description: "A tavern" });

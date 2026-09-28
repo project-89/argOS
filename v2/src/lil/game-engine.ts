@@ -17,18 +17,21 @@
 
 import { query, hasComponent, getRelationTargets } from "bitecs";
 import {
-  Agent, Name, Description, Room, Needs, Traits, Perception, Thought,
+  Agent, Name, Description, Room, Needs, Traits, Perception,
   Inventory, Health,
 } from "../ecs/components";
-import { HasThought } from "../ecs/relations";
 import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import {
   registerEntity, executeActions, getActiveGoals, queueStimulus,
 } from "../cognition/cognition-system";
 import {
   agentThink, addPerception, getAgentPerceptions,
-  getAgentThoughts, addConversationTurn,
+  addConversationTurn,
 } from "../cognition/agent-mind";
+import { captureThoughtPublication, takeNewAuthoredThoughtEvents } from "../cognition/thought-publication";
+import { getSocialDialogue } from "../cognition/social-memory";
+import { getCommittedEvents } from "../runtime/committed-events";
+import { workingMemoryEntityRef } from "../cognition/working-memory";
 import { extractKnowledgeFromInteraction } from "../cognition/knowledge-graph";
 import { accumulateImportance } from "../cognition/reflection-system";
 import { worldSchema } from "../world/schema";
@@ -41,6 +44,7 @@ import { renderNarrative, renderRoomDescription, type NpcResponse } from "./worl
 import { buildWorldSnapshot, type WorldSnapshot } from "./world-snapshot";
 import { processSpeechImpact, propagateGossip } from "./speech-impact";
 import type { World } from "../ecs/world";
+import { getComponent, listNames } from "../ecs/component-registry";
 
 // =============================================================================
 // TYPES
@@ -150,10 +154,10 @@ export async function gameTurn(
     }
   }
 
-  // 5. Advance world
-  for (let i = 0; i < 3; i++) { advanceWorldClock(world as any); expireWorldEvents(world as any); }
-  Needs.hunger[playerEid] = Math.min(100, (Needs.hunger[playerEid] || 0) + 2);
-  Needs.energy[playerEid] = Math.max(0, (Needs.energy[playerEid] ?? 100) - 1);
+  // 5. Project the world owned by the simulation runtime. Completing a model
+  // narration or typing a command is not three physics ticks or extra hunger.
+  // Turn-based hosts must explicitly step their simulation between inputs.
+  advanceWorldClock(world); expireWorldEvents(world);
   propagateGossip(world as any);
   await runNarrativeDirectorCycle(world as any);
 
@@ -168,7 +172,7 @@ export async function gameTurn(
   const narration = await renderNarrative({
     snapshot: updatedSnapshot,
     playerIntent: intent,
-    npcResponses,
+    npcResponses: publicNpcResponses(npcResponses),
     conversationHistory,
     stateChanges,
     genre: config.genre,
@@ -273,7 +277,7 @@ async function handleSpeech(
   }
 }
 
-async function processNpcSpeechInteraction(
+export async function processNpcSpeechInteraction(
   world: any,
   playerEid: number,
   npcEid: number,
@@ -297,30 +301,30 @@ async function processNpcSpeechInteraction(
 
   try {
     // 3. Full cognition
+    const thoughtCursor = captureThoughtPublication(world, npcEid);
     const npcAction = await agentThink(world, npcEid);
 
-    // 4. Capture innerThought
-    const thoughtEids = getAgentThoughts(world, npcEid);
-    const latestThought = thoughtEids
-      .sort((a, b) => (Thought.timestamp[b] || 0) - (Thought.timestamp[a] || 0))[0];
-    const innerThought = latestThought ? (Thought.content[latestThought] || "") : "";
-
     // 5. Execute (filter hostile)
+    const speechBefore = new Set(getSocialDialogue(world, npcEid).map(turn => turn.id));
+    const ownerBefore = workingMemoryEntityRef(world, npcEid)?.key, sourceBefore = getCommittedEvents(world).sourceId;
     if (npcAction.type !== "attack" && npcAction.type !== "defend") {
       await executeActions(world, [{ eid: npcEid, action: npcAction }] as any, systemRegistry);
     }
 
-    // 6. Coerce to dialogue
-    let response: NpcResponse;
-    if (npcAction.type === "attack" || npcAction.type === "defend") {
-      response = { name: npcName, action: { type: "observe" }, innerThought: "tenses with suspicion" };
-    } else if (npcAction.type === "speak" && npcAction.content) {
-      response = { name: npcName, action: npcAction, innerThought };
-    } else if ((npcAction.type === "think" && npcAction.content) || innerThought) {
-      response = { name: npcName, action: { type: "speak", content: npcAction.content || innerThought }, innerThought };
-    } else {
-      response = { name: npcName, action: npcAction, innerThought };
-    }
+    // 6. Private diagnostic thought is only one newly admitted in this turn.
+    // The renderer receives a separate public projection; silence stays silence.
+    const innerThought = takeNewAuthoredThoughtEvents(thoughtCursor).at(-1)?.thought;
+    // A proposed line is not evidence that anyone heard it. Timed speech is
+    // still pending here; only a new completed executor-owned turn may answer.
+    const tape = getCommittedEvents(world);
+    const spoken = npcAction.type === "speak" && ownerBefore && workingMemoryEntityRef(world, npcEid)?.key === ownerBefore
+      && !tape.stopped && tape.sourceId === sourceBefore
+      ? getSocialDialogue(world, npcEid).find(turn => turn.own && !speechBefore.has(turn.id)
+        && turn.content === npcAction.content?.trim()) : undefined;
+    const response: NpcResponse = { name: npcName,
+      action: npcAction.type === "speak" ? spoken ? { ...npcAction, content: spoken.content } : { type: "wait" }
+        : npcAction.type === "attack" || npcAction.type === "defend" ? { type: "wait" } : npcAction,
+      ...(innerThought !== undefined ? { innerThought } : {}) };
     npcResponses.push(response);
 
     // 7. Record NPC turn
@@ -330,7 +334,7 @@ async function processNpcSpeechInteraction(
     // 8. Knowledge extraction
     extractKnowledgeFromInteraction(world, npcEid, {
       type: "conversation",
-      content: `${config.playerName} said: "${speechContent}". I responded: "${npcSpeech || innerThought}"`,
+      content: `${config.playerName} said: "${speechContent}".${npcSpeech ? ` I responded: "${npcSpeech}"` : " I made no spoken response in this turn."}`,
       otherParty: config.playerName,
       context: `Conversation in ${snapshot.roomName}`,
     }).catch(() => {});
@@ -342,6 +346,13 @@ async function processNpcSpeechInteraction(
     processSpeechImpact(world, npcEid, config.playerName, speechContent, npcSpeech).catch(() => {});
 
   } catch {}
+}
+
+/** Inner monologue is operator diagnostic data, not the narrator's dialogue
+ * source. Do not leak a private think/wait payload through the action either. */
+export function publicNpcResponses(responses: readonly NpcResponse[]): NpcResponse[] {
+  return responses.map(({ name, action }) => ({ name, action:
+    ["think", "reflect", "remember", "plan", "wait"].includes(action.type) ? { type: action.type } : { ...action } }));
 }
 
 // =============================================================================
@@ -360,7 +371,6 @@ function capturePlayerState(world: any, playerEid: number, snapshot: WorldSnapsh
   // Capture custom component values (Sanity, OccultKnowledge, etc.)
   const componentValues: Record<string, number> = {};
   try {
-    const { listNames, getComponent } = require("../ecs/component-registry");
     for (const name of listNames()) {
       const comp = getComponent(name);
       if (!comp) continue;

@@ -15,8 +15,12 @@ import {
   setGodAgent,
   getActiveSpirits,
   getSpiritsNeedingObservation,
+  markSpiritObservationCompleted,
+  getSpiritObservationTiming,
   getMessagesForGodAI,
   getSpiritSummary,
+  forwardSpiritMessage,
+  restoreMessagesForGodAI,
 } from "./spirit-registry";
 import { runSpiritCognition, getSpiritSummary as getCognitionSummary } from "./spirit-cognition";
 import { NarratorDefinition } from "./narrator-spirit";
@@ -32,6 +36,8 @@ import { createWorldCrafterSpirit } from "./world-crafter-spirit";
 import { createStewardSpirit } from "./steward-spirit";
 import { createLawgiverSpirit } from "./rules-spirit";
 import { createWatcherSpirit, runObservationSynthesis } from "./watcher-spirit";
+import { getCommittedEvents, subscribeCommittedSourceStop } from "../runtime/committed-events";
+import { setSpiritRegistryActive } from "./spirit-cycle-scope";
 
 // =============================================================================
 // SPIRIT SYSTEM STATE
@@ -48,7 +54,28 @@ export interface SpiritSystemState {
   globalContext?: string;
 }
 
-let systemState: SpiritSystemState | null = null;
+const systems = new WeakMap<World, SpiritSystemState>();
+// Legacy no-world inspection follows the most recently initialized state, but
+// cannot keep an abandoned world alive. Runtime callers always supply ownership.
+let latestSystem: WeakRef<SpiritSystemState> | undefined;
+const generations = new WeakMap<SpiritSystemState, number>();
+const retired = new WeakSet<SpiritSystemState>();
+const stopSubscriptions = new WeakMap<SpiritSystemState, () => void>();
+
+function stopOwnedState(state: SpiritSystemState): void {
+  setSpiritRegistryActive(state.registry, false);
+  state.running = false;
+  state.actionBuffer = [];
+  retired.add(state);
+  generations.set(state, (generations.get(state) ?? 0) + 1);
+  stopSubscriptions.get(state)?.();
+  stopSubscriptions.delete(state);
+}
+
+function observeSourceStop(state: SpiritSystemState): void {
+  stopSubscriptions.get(state)?.();
+  stopSubscriptions.set(state, subscribeCommittedSourceStop(state.registry.world, () => stopOwnedState(state)));
+}
 
 // =============================================================================
 // SYSTEM LIFECYCLE
@@ -65,20 +92,26 @@ export function initializeSpiritSystem(
     autoCreateNarrator?: boolean;
   } = {}
 ): SpiritSystemState {
+  const previous = systems.get(world);
+  if (previous) stopOwnedState(previous);
   const registry = createSpiritRegistry(world);
+  setSpiritRegistryActive(registry, true);
 
   // Register GodAI if provided
   if (options.godAgentEid !== undefined) {
     setGodAgent(registry, options.godAgentEid);
   }
 
-  systemState = {
+  const systemState: SpiritSystemState = {
     registry,
     running: false,
     tickInterval: options.tickInterval || 5000, // Check every 5 seconds
     lastTick: 0,
     actionBuffer: [],
   };
+  systems.set(world, systemState);
+  latestSystem = new WeakRef(systemState);
+  observeSourceStop(systemState);
 
   // Auto-create the Narrator spirit
   if (options.autoCreateNarrator !== false) {
@@ -94,18 +127,26 @@ export function initializeSpiritSystem(
 /**
  * Get the current spirit system state
  */
-export function getSpiritSystemState(): SpiritSystemState | null {
-  return systemState;
+export function getSpiritSystemState(world?: World): SpiritSystemState | null {
+  return (world ? systems.get(world) : latestSystem?.deref()) ?? null;
 }
 
 /**
  * Start the spirit system
  */
-export function startSpiritSystem(): void {
+export function startSpiritSystem(world?: World): void {
+  const systemState = getSpiritSystemState(world);
   if (!systemState) {
     throw new Error("Spirit system not initialized. Call initializeSpiritSystem first.");
   }
 
+  if (getCommittedEvents(systemState.registry.world).stopped)
+    throw new Error("Start the world's committed source before restarting its spirits.");
+  if (systemState.running) return;
+  setSpiritRegistryActive(systemState.registry, true);
+  generations.set(systemState, (generations.get(systemState) ?? 0) + 1);
+  retired.delete(systemState);
+  observeSourceStop(systemState);
   systemState.running = true;
   systemState.lastTick = Date.now();
 
@@ -115,9 +156,10 @@ export function startSpiritSystem(): void {
 /**
  * Stop the spirit system
  */
-export function stopSpiritSystem(): void {
+export function stopSpiritSystem(world?: World): void {
+  const systemState = getSpiritSystemState(world);
   if (systemState) {
-    systemState.running = false;
+    stopOwnedState(systemState);
     console.log("[SpiritSystem] Stopped");
   }
 }
@@ -127,18 +169,29 @@ export function stopSpiritSystem(): void {
  * Useful for external loops that run watcher/maintainer logic out-of-band.
  * When God isn't available, routes messages between spirits directly.
  */
-export async function deliverPendingMessagesToGod(): Promise<number> {
+export async function deliverPendingMessagesToGod(world?: World): Promise<number> {
+  const systemState = getSpiritSystemState(world);
   if (!systemState) return 0;
-  const messagesForGodAI = getMessagesForGodAI(systemState.registry);
-  if (messagesForGodAI.length === 0) return 0;
+  return (await deliverMessages(systemState)).length;
+}
 
-  if (systemState.godAgentCallback) {
-    await systemState.godAgentCallback(messagesForGodAI);
-  } else {
-    // No God available - route messages between spirits autonomously
-    routeMessagesWithoutGod(systemState.registry, messagesForGodAI);
-  }
-  return messagesForGodAI.length;
+const delivering = new WeakSet<SpiritRegistry>();
+async function deliverMessages(state: SpiritSystemState): Promise<DivineMessage[]> {
+  const registry = state.registry;
+  if (systems.get(registry.world) !== state || retired.has(state) || getCommittedEvents(registry.world).stopped) return [];
+  if (delivering.has(registry)) return [];
+  const messages = getMessagesForGodAI(registry);
+  if (!messages.length) return [];
+  const receipts = [...messages];
+  delivering.add(registry);
+  try {
+    if (state.godAgentCallback) await state.godAgentCallback(messages);
+    else routeMessagesWithoutGod(registry, messages);
+    return messages;
+  } catch (error) {
+    restoreMessagesForGodAI(registry, receipts);
+    throw error;
+  } finally { delivering.delete(registry); }
 }
 
 /**
@@ -152,7 +205,7 @@ function routeMessagesWithoutGod(registry: SpiritRegistry, messages: DivineMessa
     if (msg.to !== undefined && msg.to !== -1) {
       const targetSpirit = registry.spirits.get(msg.to);
       if (targetSpirit) {
-        targetSpirit.inbox.push(msg);
+        forwardSpiritMessage(registry, msg, targetSpirit.eid);
         console.log(`[SpiritRouter] Direct: ${msg.from} → ${targetSpirit.definition.name}`);
         continue;
       }
@@ -165,7 +218,7 @@ function routeMessagesWithoutGod(registry: SpiritRegistry, messages: DivineMessa
       if (handler) {
         const targetSpirit = registry.spirits.get(handler.spiritEid);
         if (targetSpirit) {
-          targetSpirit.inbox.push(msg);
+          forwardSpiritMessage(registry, msg, targetSpirit.eid);
           console.log(`[SpiritRouter] Capability "${capability}": "${msg.subject}" → ${targetSpirit.definition.name}`);
           continue;
         }
@@ -175,7 +228,7 @@ function routeMessagesWithoutGod(registry: SpiritRegistry, messages: DivineMessa
     // Fallback: content-based routing
     const targetSpirit = findBestSpiritForMessage(registry, msg);
     if (targetSpirit) {
-      targetSpirit.inbox.push(msg);
+      forwardSpiritMessage(registry, msg, targetSpirit.eid);
       console.log(`[SpiritRouter] Content-match: "${msg.subject}" → ${targetSpirit.definition.name}`);
     } else {
       console.log(`[SpiritRouter] No handler for: "${msg.subject}" (priority: ${msg.priority})`);
@@ -268,7 +321,8 @@ function findBestSpiritForMessage(registry: SpiritRegistry, msg: DivineMessage):
 /**
  * Register a callback for GodAI to receive messages
  */
-export function setGodAgentCallback(callback: (messages: DivineMessage[]) => Promise<void>): void {
+export function setGodAgentCallback(callback: (messages: DivineMessage[]) => Promise<void>, world?: World): void {
+  const systemState = getSpiritSystemState(world);
   if (systemState) {
     systemState.godAgentCallback = callback;
   }
@@ -278,7 +332,8 @@ export function setGodAgentCallback(callback: (messages: DivineMessage[]) => Pro
  * Set global context from GodAgent - this is injected into all spirit prompts
  * Should be called before each spirit tick with updated context
  */
-export function setGlobalContext(context: string): void {
+export function setGlobalContext(context: string, world?: World): void {
+  const systemState = getSpiritSystemState(world);
   if (systemState) {
     systemState.globalContext = context;
   }
@@ -287,7 +342,8 @@ export function setGlobalContext(context: string): void {
 /**
  * Get current global context
  */
-export function getGlobalContext(): string | undefined {
+export function getGlobalContext(world?: World): string | undefined {
+  const systemState = getSpiritSystemState(world);
   return systemState?.globalContext;
 }
 
@@ -298,8 +354,9 @@ export function getGlobalContext(): string | undefined {
 /**
  * Record an action for spirits to observe
  */
-export function recordAction(action: ActionSnapshot): void {
-  if (!systemState) return;
+export function recordAction(action: ActionSnapshot, world?: World): void {
+  const systemState = getSpiritSystemState(world);
+  if (!systemState || retired.has(systemState)) return;
 
   systemState.actionBuffer.push(action);
 
@@ -316,7 +373,8 @@ export function recordActionEvent(
   actor: string,
   type: string,
   content: string,
-  target?: string
+  target?: string,
+  world?: World
 ): void {
   recordAction({
     timestamp: Date.now(),
@@ -324,7 +382,7 @@ export function recordActionEvent(
     type,
     content,
     target,
-  });
+  }, world);
 }
 
 // =============================================================================
@@ -343,25 +401,23 @@ export async function tickSpiritSystem(
   messagesForGodAI: DivineMessage[];
   narrativeProse: string[];
 }> {
+  const systemState = getSpiritSystemState(world);
   if (!systemState || !systemState.running) {
     return { spiritsProcessed: 0, messagesForGodAI: [], narrativeProse: [] };
   }
+  const generation = generations.get(systemState), source = getCommittedEvents(world).sourceId;
+  const current = () => systems.get(world) === systemState && systemState.running
+    && generations.get(systemState) === generation && !getCommittedEvents(world).stopped
+    && getCommittedEvents(world).sourceId === source;
 
   const now = Date.now();
 
-  // Check if enough time has passed since last tick
+  // Wall-time compute throttle, separate from managed spirits' simulation-time
+  // observation cooldowns. A fast world does not launch unbounded model work.
   if (now - systemState.lastTick < systemState.tickInterval) {
     // Still deliver pending messages even if we aren't running a full spirit cognition tick.
-    const messagesForGodAI = getMessagesForGodAI(systemState.registry);
-    if (messagesForGodAI.length > 0) {
-      if (systemState.godAgentCallback) {
-        await systemState.godAgentCallback(messagesForGodAI);
-      } else {
-        // No God - route between spirits directly
-        routeMessagesWithoutGod(systemState.registry, messagesForGodAI);
-      }
-    }
-    return { spiritsProcessed: 0, messagesForGodAI, narrativeProse: [] };
+    const messagesForGodAI = await deliverMessages(systemState);
+    return { spiritsProcessed: 0, messagesForGodAI: current() ? messagesForGodAI : [], narrativeProse: [] };
   }
 
   systemState.lastTick = now;
@@ -371,17 +427,9 @@ export async function tickSpiritSystem(
 
   if (spiritsToRun.length === 0) {
     // Still collect messages for GodAI or route locally
-    const messagesForGodAI = getMessagesForGodAI(systemState.registry);
+    const messagesForGodAI = await deliverMessages(systemState);
 
-    if (messagesForGodAI.length > 0) {
-      if (systemState.godAgentCallback) {
-        await systemState.godAgentCallback(messagesForGodAI);
-      } else {
-        routeMessagesWithoutGod(systemState.registry, messagesForGodAI);
-      }
-    }
-
-    return { spiritsProcessed: 0, messagesForGodAI, narrativeProse: [] };
+    return { spiritsProcessed: 0, messagesForGodAI: current() ? messagesForGodAI : [], narrativeProse: [] };
   }
 
   console.log(`[SpiritSystem] Running ${spiritsToRun.length} spirits...`);
@@ -391,11 +439,12 @@ export async function tickSpiritSystem(
 
   // Run cognition for each spirit
   for (const spirit of spiritsToRun) {
+    if (!current()) break;
     try {
       // The Watcher uses deterministic synthesis, not LLM cognition
       if (spirit.definition.name === "The Watcher") {
         runObservationSynthesis(world, systemState.registry, spirit.eid);
-        spirit.lastObservationTime = Date.now();
+        markSpiritObservationCompleted(systemState.registry, spirit);
         continue;
       }
 
@@ -409,7 +458,7 @@ export async function tickSpiritSystem(
       );
 
       // Collect story prose from narrative spirits
-      if (output.storyProse) {
+      if (current() && output.storyProse) {
         narrativeProse.push(output.storyProse);
       }
     } catch (error) {
@@ -418,19 +467,12 @@ export async function tickSpiritSystem(
   }
 
   // Collect messages for GodAI or route locally
-  const messagesForGodAI = getMessagesForGodAI(systemState.registry);
-
-  // Deliver messages to GodAI, or route between spirits directly
-  if (messagesForGodAI.length > 0) {
-    if (systemState.godAgentCallback) {
-      await systemState.godAgentCallback(messagesForGodAI);
-    } else {
-      routeMessagesWithoutGod(systemState.registry, messagesForGodAI);
-    }
-  }
+  if (!current()) return { spiritsProcessed: 0, messagesForGodAI: [], narrativeProse: [] };
+  const messagesForGodAI = await deliverMessages(systemState);
+  if (!current()) return { spiritsProcessed: 0, messagesForGodAI: [], narrativeProse: [] };
 
   // Clear processed actions
-  systemState.actionBuffer = [];
+  if (current()) systemState.actionBuffer = [];
 
   return {
     spiritsProcessed: spiritsToRun.length,
@@ -448,8 +490,10 @@ export async function tickSpiritSystem(
  */
 export function createNewSpirit(
   definition: Parameters<typeof createSpirit>[1],
-  superiorEid?: number
+  superiorEid?: number,
+  world?: World
 ): SpiritState | null {
+  const systemState = getSpiritSystemState(world);
   if (!systemState) {
     console.error("[SpiritSystem] System not initialized");
     return null;
@@ -462,7 +506,8 @@ export function createNewSpirit(
 /**
  * Get all active spirits
  */
-export function getAllSpirits(): SpiritState[] {
+export function getAllSpirits(world?: World): SpiritState[] {
+  const systemState = getSpiritSystemState(world);
   if (!systemState) return [];
   return getActiveSpirits(systemState.registry);
 }
@@ -470,7 +515,8 @@ export function getAllSpirits(): SpiritState[] {
 /**
  * Get the spirit registry summary
  */
-export function getRegistrySummary(): string {
+export function getRegistrySummary(world?: World): string {
+  const systemState = getSpiritSystemState(world);
   if (!systemState) return "Spirit system not initialized";
   return getSpiritSummary(systemState.registry);
 }
@@ -478,7 +524,8 @@ export function getRegistrySummary(): string {
 /**
  * Get a detailed summary of a specific spirit
  */
-export function getSpiritDetails(spiritEid: number): string {
+export function getSpiritDetails(spiritEid: number, world?: World): string {
+  const systemState = getSpiritSystemState(world);
   if (!systemState) return "Spirit system not initialized";
 
   const spirit = systemState.registry.spirits.get(spiritEid);
@@ -523,7 +570,8 @@ function registerSpiritCapabilities(registry: SpiritRegistry): void {
 /**
  * Create the standard spirit hierarchy
  */
-export function createStandardHierarchy(godAgentEid: number): void {
+export function createStandardHierarchy(godAgentEid: number, world?: World): void {
+  const systemState = getSpiritSystemState(world);
   if (!systemState) {
     throw new Error("Spirit system not initialized");
   }
@@ -632,7 +680,7 @@ export function createStandardHierarchy(godAgentEid: number): void {
   registerSpiritCapabilities(systemState.registry);
 
   console.log("[SpiritSystem] Standard hierarchy created:");
-  console.log(getRegistrySummary());
+  console.log(getRegistrySummary(world));
 }
 
 // =============================================================================
@@ -642,7 +690,8 @@ export function createStandardHierarchy(godAgentEid: number): void {
 /**
  * Get debug info about the spirit system
  */
-export function getSpiritSystemDebugInfo(): object {
+export function getSpiritSystemDebugInfo(world?: World): object {
+  const systemState = getSpiritSystemState(world);
   if (!systemState) {
     return { status: "not_initialized" };
   }
@@ -661,6 +710,7 @@ export function getSpiritSystemDebugInfo(): object {
       domain: s.definition.domain,
       rank: s.definition.rank,
       lastObservation: s.lastObservationTime,
+      observationTiming: getSpiritObservationTiming(systemState.registry, s),
       observationsCount: s.observations.length,
       inboxSize: s.inbox.length,
       pendingDirectives: s.pendingDirectives.length,

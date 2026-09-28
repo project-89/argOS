@@ -729,7 +729,7 @@ async function runRealEnginePuzzleTest(): Promise<void> {
   log.info("  3. Get vegetables → chop → cook → eat\n");
 
   // Give agent initial perception
-  queueStimulus({
+  queueStimulus(tw.world, {
     targetEid: tw.agentEid,
     type: "observation",
     content: `You are in the Old Kitchen. You are STARVING.

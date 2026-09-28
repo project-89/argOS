@@ -1,30 +1,32 @@
 /**
- * World Crafter Spirit - The Materializer
- *
- * This spirit watches for agent actions that fail because items/entities
- * don't exist, and creates them dynamically. It also recommends new systems
- * to the Architect when entities need behaviors that don't exist yet.
- *
- * Key responsibilities:
- * 1. Monitor agent action events for failed interactions (pickup, examine, use)
- * 2. Parse what the agent was trying to interact with
- * 3. Create appropriate entities in the correct rooms
- * 4. Track what entity types have been created
- * 5. Recommend systems for new entity behaviors when needed
+ * World Crafter: observes unsuccessful interactions for fresh authoring.
+ * Native/managed builders implement explicit approved designs; an unsuccessful
+ * search alone never grants replenishment. Legacy host primitives below remain
+ * separate from the live cognitive failure loop.
  */
 
 import { generateText } from "ai";
 import { spiritModel } from "../llm/config";
 import type { World } from "../ecs/world";
-import { query } from "bitecs";
+import { entityExists, hasComponent, query } from "bitecs";
 import type { SpiritState, DivineMessage } from "./types";
 import type { SpiritRegistry } from "./spirit-registry";
 import { reportToSuperior, getSpiritByName } from "./spirit-registry";
 import { createDynamicSpirit, type CreateSpiritConfig } from "./spirit-factory";
 import type { GodAgentState } from "../god/god-agent";
-import { Name, Room, Traits } from "../ecs/components";
+import { Agent, Name, Removed, Room, Traits, WorkingMemoryIdentity } from "../ecs/components";
+import { getRoomForEntity } from "../ecs/location";
+import { materializeApprovedEntity, prepareMaterializedEntityDefinition, type MaterializedEntitySpec } from "../engineering/entity-materialization";
+import { captureEntityMaterializationScope } from "../engineering/entity-materialization-scope";
+import { assertSimulationTaskActive, getSimulationTaskSignal } from "../runtime/task-scope";
+import { getCommittedEvents, startCommittedEvents } from "../runtime/committed-events";
+import { readSimulationTime } from "../ecs/simulation-time";
+import { workingMemoryEntityRef } from "../cognition/working-memory";
+import { syncEntityRegistryFromWorld } from "../ecs/entity-lookup";
 import { worldSchema, type ObjectTypeDefinition } from "../world/schema";
 import { ObjectManager } from "../world/object-manager";
+import { reportGap } from "./observation-aggregator";
+import { recordUnavailableInteraction, getInteractionObservations } from "./interaction-observations";
 
 // =============================================================================
 // TYPES
@@ -86,7 +88,10 @@ export interface EvolutionProposal {
     resources?: string[];
     systemName?: string;
   };
-  status: "pending" | "sent_to_weaver" | "approved" | "rejected" | "created";
+  /** created is historical legacy data, never new proof of implementation. */
+  status: "pending" | "sent_to_weaver" | "approved" | "rejected" | "created" | "constructed" | "failed";
+  error?: string;
+  construction?: { sourceId:string; eid:number; key:string; name:string; resourcesVerified:false };
 }
 
 /** Simulation context that determines resource handling */
@@ -130,7 +135,7 @@ export interface WorldCrafterState {
 export const WorldCrafterDefinition: CreateSpiritConfig = {
   name: "The Crafter",
   title: "Master Materializer",
-  description: "Manifests objects and entities that agents need. Watches for failed interactions and brings the necessary items into existence.",
+  description: "Observes failed interactions and reports evidence for world authors. Distinguishes genuine missing capabilities from intentional absence, depletion and inaccessible existing objects.",
   type: "architect",
   domain: "ecology",
   rank: "archangel",
@@ -144,30 +149,7 @@ export const WorldCrafterDefinition: CreateSpiritConfig = {
     proposalApproval: "auto", // Auto-approve entity creation
     maxProposalsPerCycle: 5,
   },
-  customPrompt: `You are The Crafter, the spirit who materializes reality. When agents reach for things that don't exist, you bring them into being.
-
-Your special abilities:
-1. DETECT when agents try to interact with non-existent objects
-2. UNDERSTAND what type of object they need based on context (room, agent role, action)
-3. CREATE appropriate entities with the right components
-4. RECOMMEND systems when new entity types need special behaviors
-
-When you see a failed interaction like "pickup flour" in a Bakery:
-- Create a "Flour Sack" entity with Item, Container components
-- Place it in the Bakery room
-- The entity should have sensible properties (description, weight, etc.)
-
-For complex items that need behaviors (ovens that cook, forges that smelt):
-- Create the base entity
-- Note that a system is needed
-- Report to The Weaver with a system recommendation
-
-Be PRACTICAL and CONTEXTUAL:
-- A "flour" request in a bakery → "Bag of Fine Flour"
-- A "sword" request in a blacksmith → "Iron Longsword"
-- A "book" request in a library → "Leather-bound Tome"
-
-ALWAYS consider the ROOM CONTEXT when naming and describing items.`
+  customPrompt: `You are The Crafter, an observer for the world's authors. An unsuccessful interaction is evidence to investigate, not a construction order. The target may be elsewhere, hidden, depleted, deliberately removed, or part of an unsolved obstacle. Report what actually happened and what remains unknown. Consider current inventory and the actor's intentions before recommending growth. Useful new places, inhabitants and capabilities go through fresh architect proposals and validated native or managed builders. If no change is justified, abstain.`
 };
 
 // =============================================================================
@@ -212,7 +194,7 @@ let crafterState: WorldCrafterState = {
   roomFirstInteraction: new Map(),
   resourceGaps: [],
   evolutionProposals: [],
-  context: { ...defaultContext },
+  context: { ...defaultContext, resourceSources:new Map() },
   lastEvolutionCheck: 0,
 };
 
@@ -232,7 +214,7 @@ export function resetWorldCrafterState(): void {
     roomFirstInteraction: new Map(),
     resourceGaps: [],
     evolutionProposals: [],
-    context: { ...defaultContext },
+    context: { ...defaultContext, resourceSources:new Map() },
     lastEvolutionCheck: 0,
   };
 }
@@ -413,8 +395,7 @@ export function recordResourceGap(
 
   // Report to observation aggregator for synthesis
   try {
-    const { reportGap: reportObservation } = require("./observation-aggregator");
-    reportObservation(
+    reportGap(
       "The Crafter",
       "resource_gap",
       `Missing resource: ${resourceType}`,
@@ -858,67 +839,99 @@ export function getPendingEvolutionProposals(): EvolutionProposal[] {
 }
 
 /**
- * Mark a proposal as approved and ready for creation
+ * Explicit host approval of legacy descriptive work in one current world.
+ * This is not inferred from a failure, an inbox string, or a restored status.
+ * Prefer fresh architect proposals for populated places and managed mechanics.
  */
-export function approveEvolutionProposal(proposalId: string): EvolutionProposal | null {
+const evolutionAdmissions = new WeakMap<EvolutionProposal, {
+  world:World; sourceId:string; current:()=>boolean; entity?:MaterializedEntitySpec; consumed:boolean;
+}>();
+const evolutionOwners = new WeakMap<EvolutionProposal,World>();
+const evolutionPayload = (proposal:EvolutionProposal) => JSON.stringify({type:proposal.type,addressesGaps:proposal.addressesGaps,proposal:proposal.proposal});
+
+export function approveEvolutionProposal(proposalId: string, world?:World): EvolutionProposal | null {
+  assertSimulationTaskActive();
   const proposal = crafterState.evolutionProposals.find(p => p.id === proposalId);
-  if (proposal) {
+  if (!world || !proposal || !["pending","sent_to_weaver"].includes(proposal.status) || getCommittedEvents(world).stopped) return null;
+  if (evolutionOwners.has(proposal)) return null;
+  evolutionOwners.set(proposal,world);
+  try {
+    const sourceId=getCommittedEvents(world).sourceId ?? startCommittedEvents(world), state=crafterState;
+    const payload=evolutionPayload(proposal), signal=getSimulationTaskSignal(), at=readSimulationTime(world);
+    let entity:MaterializedEntitySpec|undefined, physicalCurrent:(()=>boolean)|undefined;
+    if (proposal.type === "merchant") {
+      const details=proposal.proposal;
+      if (!details.entityName?.trim() || !details.location?.trim()) throw new Error("Merchant construction requires an exact name and existing location");
+      const rooms=Array.from(query(world,[Room,Name])).filter(eid=>!hasComponent(world,eid,Removed)
+        && Name.value[eid]?.trim().toLowerCase() === details.location!.trim().toLowerCase());
+      if (rooms.length !== 1) throw new Error("Merchant construction requires one exact existing room; location suggestions are not room IDs");
+      entity={name:details.entityName.trim(),description:details.description,type:"agent",roomEid:rooms[0],
+        components:[{name:"Agent",values:{role:details.entityType?.trim() || "merchant"}}]};
+      prepareMaterializedEntityDefinition(entity);
+      physicalCurrent=captureEntityMaterializationScope(world,rooms).bind(entity);
+    }
+    const current=()=>{
+      try {
+      const live=getCommittedEvents(world);
+      return !signal?.aborted && crafterState === state && state.evolutionProposals.includes(proposal)
+        && !live.stopped && live.sourceId === sourceId && readSimulationTime(world) >= at
+        && evolutionPayload(proposal) === payload && (!physicalCurrent || physicalCurrent());
+      } catch { return false; }
+    };
+    if (!current()) return null;
+    evolutionAdmissions.set(proposal,{world,sourceId,current,entity,consumed:false});
     proposal.status = "approved";
-    console.log(`[WorldCrafter] Evolution proposal approved: ${proposal.proposal.entityName}`);
+    return proposal;
+  } catch(error) {
+    proposal.status="failed"; proposal.error=String(error).slice(0,500);
+    return null;
   }
-  return proposal || null;
 }
 
 /**
- * Execute an approved evolution proposal - create the entity/system
+ * Legacy execution returns true only for native entity construction, not stock
+ * or supply-chain success. Descriptive mechanics require validated author work.
  */
 export async function executeEvolutionProposal(
   proposal: EvolutionProposal,
   godState: GodAgentState
 ): Promise<boolean> {
-  if (proposal.status !== "approved") {
-    console.warn(`[WorldCrafter] Cannot execute proposal ${proposal.id} - not approved`);
-    return false;
-  }
-
-  console.log(`[WorldCrafter] Executing evolution: Creating ${proposal.proposal.entityName}`);
-
+  const admission=evolutionAdmissions.get(proposal);
+  if (proposal.status !== "approved" || !admission || admission.consumed || admission.world !== godState.world) return false;
+  admission.consumed=true;
   try {
-    // Create the entity based on proposal type
-    if (proposal.type === "merchant" || proposal.type === "resource_source") {
-      // Create as an NPC with inventory
-      const resources = proposal.proposal.resources?.join(", ") || "goods";
-      const result = godState.tools.createAgent({
-        name: proposal.proposal.entityName || "New Entity",
-        role: proposal.proposal.entityType || "Merchant",
-        description: proposal.proposal.description,
-        systemPrompt: `You are a ${proposal.proposal.entityType} who provides ${resources} to those in need. Be helpful and fair in your dealings. When someone asks for ${resources}, provide it if you have it available.`,
-        roomName: proposal.proposal.location || "Town Square",
-      });
-
-      if (!result.success) {
-        console.error(`[WorldCrafter] Failed to create evolution entity: ${result.error}`);
-        return false;
-      }
-
-      // Register this as a resource source for all the gaps it addresses
-      for (const resource of proposal.addressesGaps) {
-        registerResourceSource(resource, proposal.proposal.entityName || "New Source");
-        resolveResourceGap(resource);
-      }
-
-      proposal.status = "created";
-      console.log(`[WorldCrafter] ✨ Evolution complete: ${proposal.proposal.entityName} now provides ${proposal.addressesGaps.join(", ")}`);
-      return true;
-    }
-
-    // For other types, just mark as created (systems would need different handling)
-    proposal.status = "created";
+    assertSimulationTaskActive();
+    if (!admission.current()) throw new Error("Evolution approval source, definition or location is stale; obtain fresh authoring approval");
+    if (!admission.entity) throw new Error("Descriptive evolution cannot implement this capability; use a validated native entity/place proposal or a managed system with acceptance tests");
+    const entity=admission.entity;
+    if (query(godState.world,[Name]).some(eid=>!hasComponent(godState.world,eid,Removed)
+      && Name.value[eid]?.trim().toLowerCase() === entity.name.toLowerCase())) throw new Error("Evolution would duplicate an existing entity; inspect current work");
+    const eid=materializeApprovedEntity(godState.world,entity), ref=workingMemoryEntityRef(godState.world,eid)!;
+    proposal.construction={sourceId:admission.sourceId,eid,key:ref.key,name:ref.label,resourcesVerified:false};
+    syncEntityRegistryFromWorld(godState.world,godState.registry);
+    if (!admission.current()) throw new Error("Source or approval changed during construction; partial work retained, resources unverified");
+    proposal.status = "constructed";
     return true;
   } catch (error) {
-    console.error(`[WorldCrafter] Error executing evolution proposal:`, error);
+    proposal.status="failed"; proposal.error=String(error).slice(0,500);
     return false;
   }
+}
+
+/** Source-bound operator/author observations, not a resource availability API.
+ * Legacy process-global diagnostics from another world cannot enter this view. */
+export function getEvolutionWorkStatus(world:World) {
+  const owned=crafterState.evolutionProposals.filter(proposal=>evolutionOwners.get(proposal) === world);
+  return {omitted:Math.max(0,owned.length-32),work:owned.slice(-32).map(proposal=>{
+    const admission=evolutionAdmissions.get(proposal), built=proposal.construction;
+    const current=!!built && entityExists(world,built.eid) && hasComponent(world,built.eid,Agent)
+      && !hasComponent(world,built.eid,Removed) && hasComponent(world,built.eid,WorkingMemoryIdentity)
+      && WorkingMemoryIdentity.id[built.eid] === built.key && Name.value[built.eid] === built.name;
+    return {id:proposal.id,type:proposal.type,status:proposal.status,description:proposal.proposal.description.slice(0,1000),
+      resourcesRequested:proposal.addressesGaps.slice(0,16),resourcesVerified:false,
+      basisCurrent:!!admission?.current(),executionAvailable:proposal.status === "approved" && !admission?.consumed && !!admission?.current(),error:proposal.error,
+      ...(built ? {construction:{...built,current,roomEid:current ? getRoomForEntity(world,built.eid) : undefined}} : {})};
+  })};
 }
 
 /**
@@ -944,8 +957,15 @@ export function recordFailedInteraction(
   roomName: string,
   actionType: string,
   targetName: string,
-  originalContent?: string
+  originalContent?: string,
+  world?: World
 ): void {
+  if (world) {
+    recordUnavailableInteraction(world,agentEid,actionType,targetName);
+    return;
+  }
+  // Unscoped compatibility diagnostics are never consumed as live authoring
+  // requests. Do not promote this process-global history into another world.
   const key = `${Date.now()}-${agentName}-${targetName}`;
   if (crafterState.processedActions.has(key)) return;
 
@@ -972,7 +992,6 @@ export function recordFailedInteraction(
 
   // Report to observation aggregator for synthesis
   try {
-    const { reportGap } = require("./observation-aggregator");
     reportGap(
       "The Crafter",
       "interaction_failure",
@@ -986,7 +1005,9 @@ export function recordFailedInteraction(
 /**
  * Get pending failed interactions that haven't been resolved
  */
-export function getPendingInteractions(): FailedInteraction[] {
+export function getPendingInteractions(world?:World): FailedInteraction[] {
+  if (world) return getInteractionObservations(world).records.map(row=>({timestamp:row.atSimMs,agentName:row.actor,
+    agentEid:row.actorId,roomName:row.room,actionType:row.action,targetName:row.attemptedTarget}));
   const createdNames = new Set(crafterState.createdEntities.map(e => e.name.toLowerCase()));
 
   return crafterState.failedInteractions.filter(i => {
@@ -1247,7 +1268,9 @@ Please consider creating this system so these entities can participate in the si
 // =============================================================================
 
 /**
- * Run the World Crafter's observation and creation cycle
+ * Observe current world-bound failure evidence. The existing architect context
+ * reads the same channel; it chooses whether and what to build. This cycle does
+ * not invoke the old abundance/setup/refill policies or global gap proposals.
  */
 export async function runWorldCrafterCycle(
   world: World,
@@ -1257,111 +1280,14 @@ export async function runWorldCrafterCycle(
   entitiesCreated: number;
   recommendationsSent: number;
   evolutionProposalsSent: number;
+  observations?: number;
 }> {
+  assertSimulationTaskActive();
+  const empty={entitiesCreated:0,recommendationsSent:0,evolutionProposalsSent:0,observations:0};
+  if (registry.world!==world || godState.world!==world || getCommittedEvents(world).stopped) return empty;
   const crafter = getSpiritByName(registry, "The Crafter");
-  if (!crafter) {
-    return { entitiesCreated: 0, recommendationsSent: 0, evolutionProposalsSent: 0 };
-  }
-
-  let entitiesCreated = 0;
-  let recommendationsSent = 0;
-  let evolutionProposalsSent = 0;
-  let skippedCount = 0;
-
-  // Process pending failed interactions
-  const pending = getPendingInteractions();
-
-  for (const interaction of pending.slice(0, 5)) { // Process up to 5 per cycle
-    // Check if we should create this item (respects world constraints)
-    const skipReason = shouldCreateItem(interaction);
-    if (skipReason) {
-      console.log(`[WorldCrafter] Skipping "${interaction.targetName}": ${skipReason}`);
-      skippedCount++;
-
-      // TODO: Could send a message to the agent suggesting how to acquire the item
-      // e.g., "You'll need to buy flour from the miller" or "Try trading for it"
-      continue;
-    }
-
-    // Deterministic materialization for core needs/actions; otherwise use LLM spec as a hint.
-    const actionLower = (interaction.actionType || "").toLowerCase();
-    const entitySpec =
-      actionLower === "eat" || actionLower === "drink"
-        ? null
-        : await generateEntityForInteraction(interaction);
-
-    const created = materializeEntityForInteraction(world, interaction, entitySpec || undefined);
-    if (created) {
-      entitiesCreated++;
-
-      // Record that we created this item in this room (prevents duplicates)
-      recordItemCreated(interaction.roomName, interaction.targetName);
-
-      // Record creation for history
-      crafterState.createdEntities.push({
-        timestamp: Date.now(),
-        name: entitySpec?.name || interaction.targetName,
-        type: entitySpec?.type || created.typeId,
-        roomName: interaction.roomName,
-        createdFor: interaction.agentName,
-        components: entitySpec?.components || [],
-      });
-
-      // Check if a system is needed
-      if (entitySpec?.needsSystem) {
-        const existingSystems = crafterState.entityTypeToSystemMap.get(entitySpec.type);
-        if (!existingSystems?.includes(entitySpec.needsSystem)) {
-          createSystemRecommendation(
-            entitySpec.type,
-            entitySpec.needsSystem,
-            `System to handle ${entitySpec.type} entity behaviors`,
-            `Created ${entitySpec.name} which needs ${entitySpec.needsSystem} for proper functionality`
-          );
-        }
-      }
-    }
-  }
-
-  void godState; // Crafter materializes directly now; retained for future messaging/evolution tools.
-
-  if (skippedCount > 0) {
-    console.log(`[WorldCrafter] Skipped ${skippedCount} items due to world constraints`);
-  }
-
-  // Send any pending recommendations to The Weaver
-  const pendingRecs = crafterState.systemRecommendations.filter(r => r.status === "pending").length;
-  if (pendingRecs > 0) {
-    sendRecommendationsToWeaver(registry, crafter.eid);
-    recommendationsSent = pendingRecs;
-  }
-
-  // =========================================================================
-  // EVOLUTION CHECK - Analyze gaps and propose world evolution
-  // =========================================================================
-  const now = Date.now();
-  if (now - crafterState.lastEvolutionCheck >= EVOLUTION_CHECK_INTERVAL_MS) {
-    crafterState.lastEvolutionCheck = now;
-
-    // Analyze accumulated gaps and generate evolution proposals
-    const newProposals = await analyzeGapsAndProposeEvolution();
-    if (newProposals.length > 0) {
-      console.log(`[WorldCrafter] Generated ${newProposals.length} evolution proposal(s)`);
-
-      // Send proposals to The Weaver
-      evolutionProposalsSent = sendEvolutionProposalsToWeaver(registry, crafter.eid);
-    }
-
-    // Log gap summary if there are unresolved gaps
-    const unresolvedGaps = getUnresolvedResourceGaps();
-    if (unresolvedGaps.length > 0) {
-      const gapSummary = unresolvedGaps
-        .map(g => `${g.resourceType}(${g.occurrences}x)`)
-        .join(", ");
-      console.log(`[WorldCrafter] Unresolved gaps: ${gapSummary}`);
-    }
-  }
-
-  return { entitiesCreated, recommendationsSent, evolutionProposalsSent };
+  if (!crafter) return empty;
+  return {...empty,observations:getInteractionObservations(world).records.length};
 }
 
 // =============================================================================

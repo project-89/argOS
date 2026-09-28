@@ -1,233 +1,113 @@
-/**
- * Beat Detector — Event-Driven Narrative Advancement
- *
- * Subscribes to the chronicle event stream and detects when
- * dramatic beats are triggered by world events. No polling —
- * beats fire the moment the matching event occurs.
- *
- * Detection methods:
- *   - Keyword matching against beat trigger conditions
- *   - NPC involvement checking (did the right character act?)
- *   - Location awareness (did it happen in the right place?)
- *   - LLM semantic matching for ambiguous triggers
- *
- * When a beat triggers, the detector:
- *   1. Marks it in the scaffold
- *   2. Notifies the NarrativeDirector to advance the story
- *   3. Fires any registered callbacks (for DM narration, logging)
- */
-
-import { chronicle, type ChronicleEntry } from "../cognition/simulation-chronicle";
-import {
-  getStoryScaffold,
-  updateStoryScaffold,
-  type StoryScaffoldData,
-  type DramaticBeat,
-  type NarrativeTension,
-} from "./story-scaffold";
+/** Advisory beat candidates, never proof that a narrative condition occurred.
+ * Only this world's committed public executor receipts are inspected. A word
+ * match cannot verify free-form triggerCondition prose, so it cannot trigger a
+ * beat, resolve a tension, advance an act, or fire an occurrence callback.
+ * A verified-predicate engine is deliberately outside this compatibility layer. */
+import { entityExists, hasComponent } from "bitecs";
+import { Agent, Name, Room, WorkingMemoryIdentity } from "../ecs/components";
+import { getRoomForEntity } from "../ecs/location";
+import { readSimulationTime } from "../ecs/simulation-time";
 import type { World } from "../ecs/world";
+import type { ChronicleEntry } from "../cognition/simulation-chronicle";
+import { assertSimulationTaskActive } from "../runtime/task-scope";
+import { getCommittedEvents, subscribeCommittedEvents, subscribeCommittedSourceStop,
+  type PublicCommittedEvent } from "../runtime/committed-events";
+import { getStoryScaffold, type DramaticBeat, type NarrativeTension } from "./story-scaffold";
 
-// =============================================================================
-// TYPES
-// =============================================================================
-
+/** Legacy occurrence callback signature. No free-form prose matcher is allowed
+ * to invoke it; keep registrations source-compatible until verified predicates
+ * have an explicit, separately authorized occurrence boundary. */
 export type BeatCallback = (tension: NarrativeTension, beat: DramaticBeat, triggerEvent: ChronicleEntry) => void;
+export function onBeatTriggered(_callback: BeatCallback): void { /* Intentionally not registered or fired. */ }
 
-// =============================================================================
-// STATE
-// =============================================================================
+export type BeatCandidate = Readonly<{
+  kind: "keyword_candidate"; sourceId: string; atSimMs: number;
+  tensionId: string; beatId: string; matchedKeywords: readonly string[];
+  evidence: PublicCommittedEvent;
+}>;
+type Detection = { world: World; sourceId: string; candidates: BeatCandidate[]; seen: Set<string>;
+  unsubscribe: () => void; unsubscribeStop: () => void };
+const detections = new WeakMap<World, Detection>();
+// Stop-all retains only weak references. Source stop also removes subscriptions.
+const active = new Set<WeakRef<Detection>>();
+const MAX_CANDIDATES = 64, MAX_SEEN = 256;
 
-let world: World | null = null;
-let unsubscribe: (() => void) | null = null;
-const beatCallbacks: BeatCallback[] = [];
-
-// =============================================================================
-// INITIALIZATION
-// =============================================================================
-
-/**
- * Start listening for beat triggers on the chronicle event stream.
- * Call once after the story scaffold is created.
- */
-export function startBeatDetection(w: World): void {
-  world = w;
-
-  // Unsubscribe any previous listener
-  if (unsubscribe) unsubscribe();
-
-  unsubscribe = chronicle.subscribe((entry) => {
-    if (!world) return;
-    checkBeatTriggers(entry);
-  });
-
-  console.log(`[NLE] Beat detection started — listening for story triggers`);
+function release(state: Detection): void {
+  state.unsubscribe(); state.unsubscribeStop();
+  if (detections.get(state.world) === state) detections.delete(state.world);
+  for (const ref of active) if (!ref.deref() || ref.deref() === state) active.delete(ref);
 }
 
-/**
- * Register a callback for when a beat is triggered.
- * Used by the DM to narrate beat moments and by the NarrativeDirector to advance.
- */
-export function onBeatTriggered(callback: BeatCallback): void {
-  beatCallbacks.push(callback);
+/** Subscribe to this source's future public receipts. A stopped source is not
+ * restarted, and earlier receipts are not replayed as fresh cues. */
+export function startBeatDetection(world: World): void {
+  assertSimulationTaskActive();
+  stopBeatDetection(world);
+  if (getCommittedEvents(world).stopped) return;
+  for (const ref of active) if (!ref.deref()) active.delete(ref);
+  const state: Detection = { world, sourceId: "", candidates: [], seen: new Set(), unsubscribe: () => {}, unsubscribeStop: () => {} };
+  state.unsubscribe = subscribeCommittedEvents(world, event => inspect(state, event));
+  state.sourceId = getCommittedEvents(world).sourceId!;
+  state.unsubscribeStop = subscribeCommittedSourceStop(world, () => release(state));
+  detections.set(world, state); active.add(new WeakRef(state));
 }
 
-/**
- * Stop listening.
- */
-export function stopBeatDetection(): void {
-  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-  world = null;
+/** Native callers stop one World. Omission is the explicit legacy stop-all
+ * operation for tools/tests, not a simulation's ordinary shutdown. */
+export function stopBeatDetection(world?: World): void {
+  assertSimulationTaskActive();
+  if (world) { const state = detections.get(world); if (state) release(state); return; }
+  for (const ref of [...active]) { const state = ref.deref(); if (state) release(state); else active.delete(ref); }
 }
 
-// =============================================================================
-// BEAT TRIGGER CHECKING
-// =============================================================================
+/** Operator/debug telemetry only: historical lexical matches do not establish
+ * current beat status, NPC knowledge, or a completed narrative occurrence. */
+export function getBeatCandidates(world: World): readonly BeatCandidate[] {
+  const state = detections.get(world), source = getCommittedEvents(world), now = readSimulationTime(world);
+  return Object.freeze(state && !source.stopped && source.sourceId === state.sourceId && Number.isFinite(now) && now >= 0
+    ? state.candidates.filter(candidate => candidate.atSimMs <= now) : []);
+}
 
-/** Relevant event types that could trigger narrative beats */
-const TRIGGER_EVENT_TYPES = new Set([
-  "action_success",
-  "autonomous_goal",
-  "conversation",
-  "world_mutation",
-  "crisis_event",
-  "phase_change",
-  "llm_decision",
-  "policy_decision",
-]);
-
-function checkBeatTriggers(entry: ChronicleEntry): void {
-  if (!world) return;
-  if (!TRIGGER_EVENT_TYPES.has(entry.type)) return;
-
-  const scaffold = getStoryScaffold(world);
-  if (!scaffold) return;
-
+function receiptCurrent(state: Detection, event: PublicCommittedEvent): boolean {
+  const world = state.world, source = getCommittedEvents(world), now = readSimulationTime(world);
+  return detections.get(world) === state && !source.stopped && source.sourceId === state.sourceId && event.sourceId === state.sourceId
+    && source.events.some(actual => actual === event) && Number.isFinite(now) && now >= 0
+    && Number.isFinite(event.atSimMs) && event.atSimMs >= 0 && event.atSimMs <= now
+    && event.status === "succeeded" && entityExists(world, event.actorId) && hasComponent(world, event.actorId, Agent)
+    && hasComponent(world, event.actorId, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[event.actorId] === event.actorKey
+    && entityExists(world, event.roomId) && hasComponent(world, event.roomId, Room)
+    && hasComponent(world, event.roomId, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[event.roomId] === event.roomKey
+    && getRoomForEntity(world, event.actorId) === event.roomId
+    && (event.targetId === undefined || entityExists(world, event.targetId)
+      && hasComponent(world, event.targetId, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[event.targetId] === event.targetKey);
+}
+const words = (text: string) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+const STOP_WORDS = new Set(["the", "and", "that", "with", "from", "this", "have", "will", "been", "they", "their", "when", "what", "about", "into", "over", "after", "before"]);
+function inspect(state: Detection, event: PublicCommittedEvent): void {
+  assertSimulationTaskActive();
+  if (!receiptCurrent(state, event)) return;
+  const scaffold = getStoryScaffold(state.world); if (!scaffold) return;
+  const label = (eid: number | undefined) => eid !== undefined && hasComponent(state.world, eid, Name) ? Name.value[eid] || "" : "";
+  const actor = label(event.actorId), target = label(event.targetId), room = label(event.roomId);
+  const heard = new Set(words([actor, target, room, event.action, event.operation || "", event.text || ""].join(" ")));
   for (const tension of scaffold.tensions) {
     if (tension.status !== "active") continue;
-
-    for (const beat of tension.beats) {
-      if (beat.status !== "pending") continue;
-
-      if (matchesTrigger(entry, beat, tension)) {
-        triggerBeat(scaffold, tension, beat, entry);
-        return; // One beat per event
-      }
-    }
+    const beat = tension.beats.find(row => row.status === "pending");
+    // Reconciled proposals have their own evidence-bearing advisory lifecycle.
+    if (!beat || beat.reconciliation || typeof beat.triggerCondition !== "string") continue;
+    const keywords = [...new Set(words(beat.triggerCondition).filter(word => word.length > 3 && !STOP_WORDS.has(word)))];
+    if (!keywords.length) continue;
+    const matched = keywords.filter(word => heard.has(word));
+    const names = tension.involvedNpcs.map(name => name.trim().toLowerCase());
+    const involved = names.includes(actor.toLowerCase()) || !!target && names.includes(target.toLowerCase());
+    if (matched.length / keywords.length < (involved ? 0.5 : 0.7)) continue;
+    const key = JSON.stringify([tension.id, beat.id, event.executionId]);
+    if (state.seen.has(key)) continue;
+    state.seen.add(key);
+    if (state.seen.size > MAX_SEEN) state.seen.delete(state.seen.values().next().value!);
+    state.candidates.push(Object.freeze({ kind: "keyword_candidate", sourceId: state.sourceId, atSimMs: event.atSimMs,
+      tensionId: tension.id, beatId: beat.id, matchedKeywords: Object.freeze(matched), evidence: event }));
+    if (state.candidates.length > MAX_CANDIDATES) state.candidates.shift();
+    return; // One advisory match per public receipt; never scaffold mutation.
   }
-}
-
-/**
- * Check if a chronicle event matches a beat's trigger condition.
- * Uses keyword matching + NPC involvement + location awareness.
- */
-function matchesTrigger(
-  entry: ChronicleEntry,
-  beat: DramaticBeat,
-  tension: NarrativeTension,
-): boolean {
-  const trigger = beat.triggerCondition.toLowerCase();
-  const data = entry.data || {};
-  const summary = (entry.summary || "").toLowerCase();
-  const agent = String(data.agent || data.actor || "").toLowerCase();
-  const action = String(data.action || "").toLowerCase();
-  const target = String(data.target || "").toLowerCase();
-  const content = String(data.content || data.description || data.goal || "").toLowerCase();
-
-  // Extract keywords from trigger condition (words > 3 chars, not common words)
-  const stopWords = new Set(["the", "and", "that", "with", "from", "this", "have", "will", "been", "they", "their", "when", "what", "about", "into", "over", "after", "before"]);
-  const triggerKeywords = trigger
-    .split(/\W+/)
-    .filter(w => w.length > 3 && !stopWords.has(w));
-
-  if (triggerKeywords.length === 0) return false;
-
-  // Build a searchable string from the event
-  const eventText = `${summary} ${agent} ${action} ${target} ${content}`.toLowerCase();
-
-  // Check keyword overlap
-  const matchedKeywords = triggerKeywords.filter(kw => eventText.includes(kw));
-  const matchRatio = matchedKeywords.length / triggerKeywords.length;
-
-  // Check if involved NPCs participated
-  const involvedNpcs = tension.involvedNpcs.map(n => n.toLowerCase());
-  const npcInvolved = involvedNpcs.some(npc =>
-    agent.includes(npc) || target.includes(npc) || content.includes(npc));
-
-  // Trigger thresholds:
-  // - 50%+ keyword match AND an involved NPC acted → trigger
-  // - 70%+ keyword match even without NPC → trigger (environmental events)
-  // - Movement to a location mentioned in the trigger → possible trigger
-  if (matchRatio >= 0.5 && npcInvolved) return true;
-  if (matchRatio >= 0.7) return true;
-
-  // Special case: player enters a location mentioned in the trigger
-  if (entry.type === "action_success" && action.includes("move")) {
-    const location = String(data.to || data.target || "").toLowerCase();
-    if (trigger.includes(location) && location.length > 3) return true;
-  }
-
-  // Special case: conversation about a topic in the trigger
-  if (entry.type === "conversation" || action.includes("speak")) {
-    if (matchRatio >= 0.3 && npcInvolved) return true;
-  }
-
-  return false;
-}
-
-// =============================================================================
-// BEAT TRIGGERING
-// =============================================================================
-
-function triggerBeat(
-  scaffold: StoryScaffoldData,
-  tension: NarrativeTension,
-  beat: DramaticBeat,
-  event: ChronicleEntry,
-): void {
-  beat.status = "triggered";
-
-  console.log(`[NLE] ★ Beat triggered: "${beat.description.slice(0, 60)}..." (${beat.act})`);
-  console.log(`[NLE]   Triggered by: ${event.type} — ${event.summary || ""}`);
-
-  // Advance act based on beat progression
-  const triggeredCount = tension.beats.filter(b => b.status !== "pending").length;
-  const totalBeats = tension.beats.length;
-
-  if (beat.act === "setup" && scaffold.currentAct === "setup") {
-    // First beat triggered — story is underway
-  }
-  if (beat.act === "escalation" && scaffold.currentAct === "setup") {
-    scaffold.currentAct = "escalation";
-    console.log(`[NLE] Act advanced: setup → escalation`);
-  }
-  if (beat.act === "crisis" && scaffold.currentAct !== "crisis") {
-    scaffold.currentAct = "crisis";
-    console.log(`[NLE] Act advanced: → crisis`);
-  }
-  if (beat.act === "resolution") {
-    scaffold.currentAct = "resolution";
-    tension.status = "resolved";
-    console.log(`[NLE] Tension resolved: "${tension.description.slice(0, 50)}..."`);
-  }
-
-  // Record adaptation
-  scaffold.adaptations.push(
-    `[${new Date().toISOString()}] Beat "${beat.id}" triggered by ${event.type}: ${event.summary || ""}`
-  );
-
-  // Update scaffold in ECS
-  if (world) updateStoryScaffold(world, scaffold);
-
-  // Notify callbacks
-  for (const cb of beatCallbacks) {
-    try { cb(tension, beat, event); } catch {}
-  }
-
-  // Record in chronicle
-  chronicle.record("crisis_event", {
-    name: `Beat: ${beat.description.slice(0, 50)}`,
-    act: beat.act,
-    tension: tension.description.slice(0, 50),
-    trigger: event.type,
-  });
 }

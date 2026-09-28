@@ -117,6 +117,14 @@ export interface EffectDefinition {
 
 export interface AffordanceDefinition {
   name: string;
+  /** A known operation without an implemented backend must not report success. */
+  unavailableReason?: string;
+  /** Available to a current actor decision, but never replayed from a stored
+   * plan/habit. Useful for context-sensitive communication or judgment. */
+  requiresFreshDecision?: boolean;
+  /** Completion reveals previously unknown evidence. Background plans end at
+   * this operation; they cannot pre-author a reaction to its result. */
+  opensEvidenceBoundary?: boolean;
   /** Human-readable description of what this affordance does */
   description?: string;
   /** Traits the TARGET must have to allow this action */
@@ -127,6 +135,8 @@ export interface AffordanceDefinition {
   actorRequires?: string[];
   /** Duration in game ticks (0 = instant) */
   duration?: number;
+  /** Explicit physical duration in simulation milliseconds. Legacy tick duration is not reinterpreted. */
+  durationMs?: number;
   /** Effects that happen when this affordance is executed */
   effects?: EffectDefinition[];
   /** Description template for perception (shown to nearby agents) */
@@ -349,6 +359,7 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
 
   send_text: {
     name: "send_text",
+    unavailableReason: "No messaging backend is attached to this device.",
     requires: ["textable"],
     descriptionTemplate: "{actor.name} sends a text message.",
     effects: [
@@ -358,6 +369,7 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
 
   use_computer: {
     name: "use_computer",
+    description: "Operate the keyboard. This alone does not create a document, send a message, or complete work.",
     requires: ["usable", "typeable"],
     descriptionTemplate: "{actor.name} uses the computer.",
     effects: [
@@ -368,6 +380,7 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
 
   browse_web: {
     name: "browse_web",
+    unavailableReason: "No web browsing backend is attached to this device.",
     requires: ["browsable"],
     descriptionTemplate: "{actor.name} browses the web.",
     effects: [
@@ -377,6 +390,7 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
 
   send_email: {
     name: "send_email",
+    unavailableReason: "No email delivery backend is attached to this device.",
     requires: ["usable", "typeable"],
     descriptionTemplate: "{actor.name} sends an email.",
     effects: [
@@ -386,6 +400,7 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
 
   check_email: {
     name: "check_email",
+    unavailableReason: "No email inbox is attached to this device.",
     requires: ["usable", "browsable"],
     descriptionTemplate: "{actor.name} checks their email.",
     effects: [
@@ -395,6 +410,7 @@ export const BASE_AFFORDANCES: Record<string, AffordanceDefinition> = {
 
   search_files: {
     name: "search_files",
+    unavailableReason: "No searchable file store is attached to this device.",
     requires: ["searchable"],
     descriptionTemplate: "{actor.name} searches through files.",
     effects: [
@@ -678,6 +694,16 @@ function normalizeEdibleType(def: ObjectTypeDefinition): ObjectTypeDefinition {
 
 // Base object types (GodAI can add more)
 export const BASE_OBJECT_TYPES: Record<string, ObjectTypeDefinition> = {
+  // Collision geometry remains visible/examinable without inheriting a generic
+  // prop's storage or occupancy states. This type is semantic, not a name rule.
+  structural_wall: {
+    name: "structural_wall",
+    description: "A solid structural wall",
+    traits: ["structural_geometry", "examinable"],
+    states: { solid: { description: "A solid structural wall; not a storage container." } },
+    defaultState: "solid",
+    category: "structure",
+  },
   // Generic object used for simple props created outside specialized schema types.
   // Lets the engine keep ObjectType/ObjectState/Traits canonical even for “plain objects”.
   object: {
@@ -1419,6 +1445,8 @@ export interface RuleCondition {
   not?: string[];
   /** Entity must be in this state */
   inState?: string;
+  /** Minimum elapsed simulation milliseconds in inState, never engine ticks. */
+  minStateAgeMs?: number;
   /** Custom condition expression */
   expression?: string;
 }
@@ -1441,6 +1469,8 @@ export interface RuleEffect {
 export interface RuleDefinition {
   name: string;
   description: string;
+  /** A persisted marker is not authority; Lawgiver rules need a runtime grant. */
+  executionScope?: "lawgiver-runtime";
   /** When this rule triggers */
   when: {
     event: string;
@@ -1514,16 +1544,16 @@ export const BASE_RULES: RuleDefinition[] = [
   },
   {
     name: "food_decays",
-    description: "Food decays over time",
+    description: "Fresh food becomes stale after six elapsed simulation hours",
     when: {
       event: "tick",
-      condition: { has: ["edible"], inState: "fresh" },
+      condition: { has: ["edible"], inState: "fresh", minStateAgeMs: 6 * 60 * 60 * 1000 },
     },
     then: [
       {
         action: "transition_state",
         target: "self",
-        params: { state: "stale", chance: 0.01 },
+        params: { state: "stale" },
       },
     ],
     priority: 1,
@@ -1547,6 +1577,13 @@ export const BASE_RULES: RuleDefinition[] = [
     enabled: true,
   },
 ];
+
+// Pinned native definitions, not names alone. Snapshot content cannot create
+// execution authority by removing a runtime marker or impersonating a base rule.
+const snapshotRuleShape = (rule: RuleDefinition) => JSON.stringify({...rule,enabled:true}, (_key,value) =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b))) : value);
+const nativeRuleShapes = new Map(BASE_RULES.map(rule=>[rule.name,snapshotRuleShape(rule)]));
 
 // ============================================================================
 // WORLD SCHEMA - The main registry
@@ -1663,6 +1700,8 @@ export class WorldSchema {
       .sort((a, b) => (b.priority || 0) - (a.priority || 0));
   }
 
+  getAllRules(): RuleDefinition[] { return Array.from(this.rules.values()); }
+
   // --- Traits ---
 
   hasTrait(trait: string): boolean {
@@ -1695,6 +1734,16 @@ export class WorldSchema {
     };
   }
 
+  /** Restore in place so ObjectManager, rules and God retain the same authority. */
+  restoreFromJSON(data: object): void {
+    const restored = WorldSchema.fromJSON(structuredClone(data));
+    this.baseAffordances = restored.baseAffordances;
+    this.runtimeAffordances = restored.runtimeAffordances;
+    this.objectTypes = restored.objectTypes;
+    this.rules = restored.rules;
+    this.traits = restored.traits;
+  }
+
   static fromJSON(data: any): WorldSchema {
     const schema = new WorldSchema();
     // Clear defaults and load from data
@@ -1725,7 +1774,11 @@ export class WorldSchema {
       schema.objectTypes.set(name, obj as ObjectTypeDefinition);
     }
     for (const [name, rule] of Object.entries(data.rules || {})) {
-      schema.rules.set(name, rule as RuleDefinition);
+      if(!rule || typeof rule!=="object" || (rule as RuleDefinition).name!==name)throw new Error("Invalid snapshot rule identity");
+      const definition=structuredClone(rule) as RuleDefinition;
+      if(definition.executionScope===undefined && nativeRuleShapes.get(name)!==snapshotRuleShape(definition))
+        definition.executionScope="lawgiver-runtime";
+      schema.rules.set(name, definition);
     }
     for (const trait of data.traits || []) {
       schema.traits.add(trait);
@@ -1750,8 +1803,10 @@ export const worldSchema = new WorldSchema();
 const affordanceListeners: Array<(def: AffordanceDefinition) => void> = [];
 
 /** Register a callback for when new affordances are created (for agent BT discovery) */
-export function onAffordanceRegistered(cb: (def: AffordanceDefinition) => void): void {
-  affordanceListeners.push(cb);
+export function onAffordanceRegistered(cb: (def: AffordanceDefinition) => void): () => void {
+  const subscription = (def: AffordanceDefinition) => cb(def);
+  affordanceListeners.push(subscription);
+  return () => { const index = affordanceListeners.indexOf(subscription); if (index >= 0) affordanceListeners.splice(index, 1); };
 }
 
 export function registerAffordance(def: AffordanceDefinition): void {
@@ -1770,7 +1825,7 @@ export function registerAffordance(def: AffordanceDefinition): void {
   }
 
   // Notify listeners (e.g., grow exploration branches in agent BTs)
-  for (const cb of affordanceListeners) {
+  for (const cb of [...affordanceListeners]) {
     try { cb(def); } catch { /* listener error */ }
   }
 }

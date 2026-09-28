@@ -154,6 +154,7 @@ export interface SystemLogEvent extends BusEvent {
 }
 
 export type SystemEvent =
+  | { type: "system:build"; timestamp: number; jobId: string; status: string; source: string; message: string }
   | SystemCreatedEvent
   | SystemExecutedEvent
   | SystemErrorEvent
@@ -357,6 +358,32 @@ export interface SimulationErrorEvent extends BusEvent {
   error: string;
 }
 
+export interface SimulationSavedEvent extends BusEvent {
+  type: "simulation:saved";
+  simulationId: string;
+  simulationName: string;
+  tick: number;
+}
+
+export interface SimulationLoadedEvent extends BusEvent {
+  type: "simulation:loaded";
+  simulationId: string;
+  simulationName: string;
+  tick: number;
+}
+
+export interface SimulationSavesListEvent extends BusEvent {
+  type: "simulation:saves_list";
+  saves: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    createdAt: number;
+    lastSavedAt: number;
+    currentTick: number;
+  }>;
+}
+
 // All Events Union
 export type SimulationEvent =
   | GodEvent
@@ -367,7 +394,10 @@ export type SimulationEvent =
   | RoomEvent
   | DaemonEvent
   | SimulationStatusEvent
-  | SimulationErrorEvent;
+  | SimulationErrorEvent
+  | SimulationSavedEvent
+  | SimulationLoadedEvent
+  | SimulationSavesListEvent;
 
 // Channel types
 export type ChannelType =

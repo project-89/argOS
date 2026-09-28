@@ -16,6 +16,10 @@
  */
 
 import { tool } from "ai";
+import { getWorldRuntimeHealth } from "../runtime/fast-system-health";
+import { getCodingDaemon } from "../engineering/coding-daemon";
+import { getCommittedEvents } from "../runtime/committed-events";
+import { getSimulationTaskSignal } from "../runtime/task-scope";
 import { z } from "zod";
 import type { World } from "../ecs/world";
 import type { SystemRegistry, SystemDefinition } from "../ecs/dynamic-systems";
@@ -25,11 +29,16 @@ import {
   activateSystem,
   deactivateSystem,
 } from "../ecs/dynamic-systems";
-import { modifySystem, bakeSystem } from "../god/system-baker";
+import { bakeSystem } from "../god/system-baker";
 import { queueStimulus } from "../cognition/cognition-system";
-import { query } from "bitecs";
-import { Agent, Mind, Name } from "../ecs/components";
+import { hasComponent, query } from "bitecs";
+import { Agent, GodAgent, Mind, Name } from "../ecs/components";
 import type { SpiritRegistry } from "./spirit-registry";
+import { getActiveSpirits, reportToSuperior } from "./spirit-registry";
+import type { SpiritState } from "./types";
+import { captureSpiritCycleScope } from "./spirit-cycle-scope";
+import { bindSpiritMessageDelivery, isCurrentSpiritMessage } from "./spirit-message-delivery";
+import { readSimulationTime } from "../ecs/simulation-time";
 
 // =============================================================================
 // ARTIFICER TOOLS - System Maintenance
@@ -37,8 +46,29 @@ import type { SpiritRegistry } from "./spirit-registry";
 
 export function createArtificerTools(
   world: World,
-  systemRegistry: SystemRegistry
+  systemRegistry: SystemRegistry,
+  options: { autoFixEnabled?: boolean; ignoreSystems?: string[];
+    /** Trusted host binding, never model-authored routing or authority. */
+    reporting?: { registry: SpiritRegistry; spirit: SpiritState } } = {}
 ) {
+  const source = getCommittedEvents(world), signal = getSimulationTaskSignal();
+  const reporting = options.reporting;
+  const reportScope = reporting?.registry.world === world && reporting.registry.spirits.get(reporting.spirit.eid) === reporting.spirit
+    ? captureSpiritCycleScope(world, reporting.spirit, reporting.registry) : undefined;
+  const observedAtSimMs = readSimulationTime(world), expiresAtSimMs = observedAtSimMs + 120_000;
+  const versions = new Map([...systemRegistry.systems].map(([name, system]) => [name,
+    { system, code: system.code, fn: system.compiledFn }]));
+  const allowed = (name: string) => {
+    const now = getCommittedEvents(world), before = versions.get(name), system = systemRegistry.systems.get(name);
+    if (!source.sourceId || now.stopped || now.sourceId !== source.sourceId || signal?.aborted)
+      return { success: false, systemName: name, error: "Maintenance source/task expired" };
+    if (reporting && (!reportScope?.sourceCurrent() || !getActiveSpirits(reporting.registry).includes(reporting.spirit)))
+      return { success: false, systemName: name, error: "Maintenance spirit is inactive or replaced" };
+    if (options.ignoreSystems?.includes(name)) return { success: false, systemName: name, error: "System excluded from maintenance" };
+    if (before && (system !== before.system || system?.code !== before.code || system?.compiledFn !== before.fn))
+      return { success: false, systemName: name, error: "Maintenance target version changed" };
+    if (!before && system) return { success: false, systemName: name, error: "Target was not in this maintenance observation" };
+  };
   return {
     listSystems: tool({
       description: "List all systems and their current status (active/inactive, last run, error count)",
@@ -51,6 +81,11 @@ export function createArtificerTools(
           frequency: s.frequency,
           lastRun: s.lastRun,
           hasCode: !!s.code,
+          managed: getCodingDaemon(world)?.ownsSystem(s.name) ?? false,
+          consecutiveErrors: s.consecutiveErrors ?? 0,
+          totalErrors: s.totalErrors ?? 0,
+          disabledReason: s.disabledReason,
+          lastError: s.lastError,
           description: s.description?.slice(0, 100),
         }));
       },
@@ -102,29 +137,31 @@ export function createArtificerTools(
     }),
 
     repairSystem: tool({
-      description: "Use AI to repair/modify a system's code. Describe what needs to be fixed.",
+      description: "Queue a managed, isolated repair. Queued/validated/activated do not mean recovered. Unmanaged systems require host migration.",
       inputSchema: z.object({
         systemName: z.string().describe("Name of the system to repair"),
         fixDescription: z.string().describe("What needs to be fixed (e.g., 'Add null checks for entity existence', 'Fix the loop that causes infinite iteration')"),
       }),
       execute: async ({ systemName, fixDescription }) => {
-        const result = await modifySystem(
-          systemName,
-          fixDescription,
-          world,
-          systemRegistry
-        );
-        if (result.success) {
-          systemRegistry.errorCounts.delete(systemName);
-          systemRegistry.errors = systemRegistry.errors.filter(e => e.systemName !== systemName);
-        }
-        return {
-          success: result.success,
-          error: result.error,
-          message: result.success
-            ? `Successfully repaired ${systemName}`
-            : `Failed to repair: ${result.error}`,
-        };
+        const denied=allowed(systemName);if(denied)return denied;
+        if(options.autoFixEnabled===false)return {success:false,systemName,error:"Automatic repair disabled"};
+        try {
+          const daemon=getCodingDaemon(world);
+          if(!daemon || daemon.registry!==systemRegistry)throw Error("No matching managed coding daemon; unmanaged migration requires host approval");
+          const job=daemon.requestRepair(systemName,`Repair ${systemName}: ${fixDescription}. Preserve the admitted contract and add a regression test.`);
+          return {success:false,queued:true,systemName,jobId:job.id,stage:daemon.getRepairStatus(job.id)?.stage,
+            message:"Repair queued; native execution must demonstrate recovery."};
+        } catch(error) {return {success:false,systemName,error:String(error)};}
+      },
+    }),
+
+    getRepairStatus: tool({
+      description: "Inspect retained managed repair jobs and native recovery evidence; polling does not run or activate a candidate.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const daemon=getCodingDaemon(world);
+        return daemon?.registry===systemRegistry ? daemon.getStatus().jobs.filter(job=>job.repairOfJobId)
+          .map(job=>daemon.getRepairStatus(job.id)) : [];
       },
     }),
 
@@ -134,8 +171,11 @@ export function createArtificerTools(
         systemName: z.string().describe("Name of the system to enable"),
       }),
       execute: async ({ systemName }) => {
+        const denied=allowed(systemName);if(denied)return denied;
+        if(getCodingDaemon(world)?.ownsSystem(systemName))return {success:false,systemName,error:"Managed activation belongs to the coding daemon"};
         const success = activateSystem(systemRegistry, systemName);
         return {
+          systemName,
           success,
           message: success
             ? `Enabled ${systemName}`
@@ -150,8 +190,10 @@ export function createArtificerTools(
         systemName: z.string().describe("Name of the system to disable"),
       }),
       execute: async ({ systemName }) => {
+        const denied=allowed(systemName);if(denied)return denied;
         const success = deactivateSystem(systemRegistry, systemName);
         return {
+          systemName,
           success,
           message: success
             ? `Disabled ${systemName}`
@@ -161,14 +203,12 @@ export function createArtificerTools(
     }),
 
     clearSystemErrors: tool({
-      description: "Clear the error log for a system (use after fixing issues)",
+      description: "Acknowledge retained error evidence. This does not erase history or prove recovery.",
       inputSchema: z.object({
         systemName: z.string().describe("Name of the system"),
       }),
       execute: async ({ systemName }) => {
-        systemRegistry.errorCounts.delete(systemName);
-        systemRegistry.errors = systemRegistry.errors.filter(e => e.systemName !== systemName);
-        return { success: true, message: `Cleared error log for ${systemName}` };
+        return { success: true, message: `Historical errors for ${systemName} are retained. Recovery requires successful native execution.` };
       },
     }),
 
@@ -179,6 +219,9 @@ export function createArtificerTools(
         newFrequency: z.number().describe("New frequency in milliseconds (e.g., 5000 for 5 seconds)"),
       }),
       execute: async ({ systemName, newFrequency }) => {
+        const denied=allowed(systemName);if(denied)return denied;
+        if(!Number.isFinite(newFrequency) || newFrequency<0 || getCodingDaemon(world)?.ownsSystem(systemName))
+          return {success:false,systemName,error:"Invalid frequency or managed contract; requires explicit host change"};
         const system = getSystem(systemRegistry, systemName);
         if (!system) {
           return { error: `System not found: ${systemName}` };
@@ -193,21 +236,36 @@ export function createArtificerTools(
     }),
 
     reportToGodAI: tool({
-      description: "Send a report to GodAI about a system issue that requires architectural changes",
+      description: "Queue a source-bound maintenance report for the current GodAI. A queued report is not proof of review, repair or approval.",
       inputSchema: z.object({
-        systemName: z.string().describe("Name of the problematic system"),
-        issue: z.string().describe("Description of the issue"),
-        recommendation: z.string().describe("Your recommended solution"),
+        systemName: z.string().min(1).max(200).describe("Name of the problematic system"),
+        issue: z.string().min(1).max(4000).describe("Description of the issue"),
+        recommendation: z.string().min(1).max(4000).describe("Your recommended solution"),
         severity: z.enum(["low", "medium", "high", "critical"]).describe("How urgent is this?"),
-      }),
+      }).strict(),
       execute: async ({ systemName, issue, recommendation, severity }) => {
-        // This would integrate with the spirit reporting system
-        console.log(`[Artificer Report] ${severity.toUpperCase()}: ${systemName}`);
-        console.log(`  Issue: ${issue}`);
-        console.log(`  Recommendation: ${recommendation}`);
+        const denied = allowed(systemName); if (denied) return denied;
+        if (!versions.has(systemName)) return { success: false, systemName, error: "System was not in this maintenance observation" };
+        if (!reporting || !reportScope || reportScope.destination === undefined
+          || reportScope.destination !== reporting.registry.godAgentEid
+          || reporting.registry.spirits.has(reportScope.destination) || !hasComponent(world, reportScope.destination, GodAgent))
+          return { success: false, systemName, error: "God reporting is unavailable for this maintenance source" };
+        // Invocation belongs to this cycle; accepted advice survives the next
+        // inspection, but not changed code, producer/recipient, task or lifetime.
+        const current = () => reportScope.sourceCurrent() && !allowed(systemName) && readSimulationTime(world) <= expiresAtSimMs;
+        if (!reportScope.isCurrent() || !current())
+          return { success: false, systemName, error: "Maintenance report source, target or observation expired" };
+        const message = reportToSuperior(reporting.registry, reporting.spirit.eid, `System maintenance: ${systemName}`,
+          `Issue: ${issue}\nRecommendation: ${recommendation}`,
+          severity === "critical" ? "urgent" : severity === "medium" ? "normal" : severity,
+          { systemName, issue, recommendation, severity, sourceId: source.sourceId, observedAtSimMs });
+        if (!message) return { success: false, systemName, error: "God reporting is unavailable" };
+        bindSpiritMessageDelivery(reporting.registry, message, current, { expiresAtSimMs });
+        if (!isCurrentSpiritMessage(reporting.registry, message, reportScope.destination))
+          return { success: false, systemName, error: "Maintenance report delivery expired" };
         return {
-          success: true,
-          message: `Report submitted to GodAI: ${systemName} (${severity})`,
+          success: true, status: "queued", systemName, messageId: message.id,
+          message: `Report queued for GodAI: ${systemName} (${severity}); not yet reviewed or repaired.`,
         };
       },
     }),
@@ -267,6 +325,8 @@ export function createArchitectTools(
         description: z.string().describe("Full natural language description including system name, what it does, and how often it should run"),
       }),
       execute: async ({ description }) => {
+        const daemon=getCodingDaemon(world);
+        if(daemon) return {success:true,queued:true,job:daemon.enqueue({source:"The Weaver",instruction:description}),message:"Queued, not yet active"};
         const result = await bakeSystem(
           description,
           world,
@@ -351,11 +411,12 @@ export function createWatcherTools(
     }),
 
     getSystemHealth: tool({
-      description: "Get health status of all systems",
+      description: "Inspect registered ECS system status and separate native fast-loop failure telemetry. A returned callback is not proof that its child systems succeeded.",
       inputSchema: z.object({}),
       execute: async () => {
         const systems = listSystems(systemRegistry);
         return {
+          runtimeHealth: getWorldRuntimeHealth(world),
           total: systems.length,
           active: systems.filter(s => s.active).length,
           inactive: systems.filter(s => !s.active).length,
@@ -466,7 +527,7 @@ export function createManagerTools(
         if (!agent) {
           return { error: `Agent not found: ${agentName}` };
         }
-        queueStimulus({
+        const accepted = queueStimulus(world, {
           targetEid: agent,
           type: type === "intuition" ? "cognitive" : type,
           modality: type === "intuition" ? "cognitive" : "auditory",
@@ -475,8 +536,8 @@ export function createManagerTools(
           intensity,
         });
         return {
-          success: true,
-          message: `Sent ${type} stimulus to ${agentName}: "${content}"`,
+          success: accepted,
+          message: accepted ? `Queued ${type} stimulus for ${agentName}: "${content}"` : `Stimulus for ${agentName} was rejected; no input was delivered.`,
         };
       },
     }),

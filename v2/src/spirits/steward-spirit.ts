@@ -13,15 +13,26 @@
  */
 
 import { generateText } from "ai";
+import { getWorldAuthoringContext, getWorldTheme } from "../world/world-specification";
+import { randomUUID } from "node:crypto";
 import { spiritModel } from "../llm/config";
-import { hasComponent, query } from "bitecs";
+import { entityExists, Prefab, hasComponent, query } from "bitecs";
+import type { World } from "../ecs/world";
 import type { SpiritRegistry } from "./spirit-registry";
 import { createSpirit } from "./spirit-registry";
 import type { SpiritDefinition, SpiritState, DivineMessage } from "./types";
-import { Name, Room, Traits, Agent } from "../ecs/components";
+import { Name, Description, Room, Traits, Agent, Removed, WorkingMemoryIdentity } from "../ecs/components";
+import { workingMemoryEntityRef } from "../cognition/working-memory";
+import { getCommittedEvents, startCommittedEvents } from "../runtime/committed-events";
+import { assertSimulationTaskActive, getSimulationTaskSignal } from "../runtime/task-scope";
+import { canonicalBuildJson } from "../engineering/build-work-identity";
 import { getRoomForEntity } from "../ecs/location";
 import { worldSchema, type ObjectTypeDefinition, type StimulusDefinition, type StateDefinition } from "../world/schema";
 import { ObjectManager } from "../world/object-manager";
+import { computeObjectTypeTraits } from "../world/object-type-traits";
+import { observeRoomInventories } from "./room-inventory-observation";
+import { reportGap } from "./observation-aggregator";
+import { assertWorldConstructionAvailable, getWorldConstructionStatus } from "../runtime/world-construction-budget";
 
 // =============================================================================
 // TYPES
@@ -31,6 +42,8 @@ import { ObjectManager } from "../world/object-manager";
  * A room creation request delegated from GodAI
  */
 export interface RoomCreationRequest {
+  /** Diagnostic identifier only. Authority resides in the host's request scope. */
+  observationScopeId?: string;
   id: string;
   timestamp: number;
   requestedBy: number; // Spirit EID (usually God)
@@ -44,6 +57,7 @@ export interface RoomCreationRequest {
     connectedRooms?: string[]; // Nearby rooms for context
   };
   constraints?: {
+    /** Maximum constructed entities, including ambient sources and native fallbacks. */
     maxItems?: number;
     requiredItems?: string[]; // Must include these
     forbiddenItems?: string[]; // Must NOT include these
@@ -273,6 +287,71 @@ export function getPendingRoomRequests(): RoomCreationRequest[] {
   return stewardState.pendingRequests;
 }
 
+type PopulationScope = { world: World; roomEid: number; recipe: string; current: () => boolean };
+const populationScopes = new WeakMap<RoomCreationRequest, PopulationScope>();
+const populationRecipe = (request: RoomCreationRequest) => canonicalBuildJson({ roomName: request.roomName,
+  roomType: request.roomType, context: request.context, constraints: request.constraints ?? {}, requestedBy: request.requestedBy });
+function populationRequestCurrent(world: World, request: RoomCreationRequest, roomEid: number): boolean {
+  const scope = populationScopes.get(request);
+  if (!scope) return !request.observationScopeId; // Legacy direct host requests retain their existing API.
+  return scope.world === world && scope.roomEid === roomEid && scope.current();
+}
+
+/** A concrete author delegation, unlike an inventory observation. Bind it to
+ * this world/source and room identity before putting asynchronous work in flight. */
+export function requestRoomPopulationForRoom(world: World, roomEid: number, options: {
+  roomType?: string; context?: RoomCreationRequest["context"]; constraints?: RoomCreationRequest["constraints"]; requestedBy?: number;
+} = {}): RoomCreationRequest {
+  assertSimulationTaskActive();
+  if (!entityExists(world, roomEid) || !hasComponent(world, roomEid, Room) || !hasComponent(world, roomEid, Name)
+    || hasComponent(world, roomEid, Removed) || hasComponent(world, roomEid, Prefab)) throw new Error("Population requires an existing live room");
+  const source = getCommittedEvents(world), signal = getSimulationTaskSignal();
+  if (source.stopped) throw new Error("Cannot delegate population on a stopped source");
+  // Initial authoring can precede sim.start(). Establish that first epoch now;
+  // never let a null-source delegation attach to whichever run starts later.
+  const sourceId = source.sourceId ?? startCommittedEvents(world);
+  const ref = workingMemoryEntityRef(world, roomEid)!;
+  const basis = () => canonicalBuildJson([Name.value[roomEid], Description.value[roomEid], Room.capacity[roomEid], Room.ambience[roomEid]]);
+  const observed = basis(), roomType = options.roomType || inferRoomType(ref.label);
+  const context = structuredClone({ ...options.context, worldTheme: options.context?.worldTheme ?? getWorldTheme(world),
+    primaryFunction: options.context?.primaryFunction
+    || Description.value[roomEid]?.trim() || `A ${roomType}` });
+  const constraints = structuredClone(options.constraints ?? {});
+  if (constraints.maxItems !== undefined && (!Number.isSafeInteger(constraints.maxItems) || constraints.maxItems < 0))
+    throw new Error("Room maxItems must be a non-negative safe integer");
+  const requestedBy = options.requestedBy ?? 0;
+  const recipe = canonicalBuildJson({ roomName: ref.label, roomType, context, constraints, requestedBy });
+  const previous = stewardState.pendingRequests.find(request => {
+    const scope = populationScopes.get(request);
+    return scope?.world === world && scope.roomEid === roomEid && scope.recipe === recipe && scope.current();
+  });
+  if (previous) return previous;
+  const request = requestRoomPopulation(roomType, ref.label, context, constraints, requestedBy);
+  const scopeId = `population:${randomUUID()}`; request.observationScopeId = scopeId;
+  populationScopes.set(request, { world, roomEid, recipe, current: () => {
+    try {
+      return !signal?.aborted && !getCommittedEvents(world).stopped && getCommittedEvents(world).sourceId === sourceId
+        && entityExists(world, roomEid) && hasComponent(world, roomEid, Room) && !hasComponent(world, roomEid, Removed)
+        && WorkingMemoryIdentity.id[roomEid] === ref.key && basis() === observed
+        && request.observationScopeId === scopeId && populationRecipe(request) === recipe;
+    } catch { return false; }
+  } });
+  return request;
+}
+
+/** Operator/author diagnostics only; blocked work is neither completion nor
+ * permission to reissue the same request under a fresh identifier. */
+export function getRoomPopulationStatus(world: World) {
+  return stewardState.pendingRequests.flatMap(request => {
+    const scope = populationScopes.get(request);
+    if (scope && scope.world !== world) return [];
+    return [{ id: request.id, roomName: request.roomName, roomEid: scope?.roomEid, roomType: request.roomType,
+      authority: scope ? "source_scoped" : request.observationScopeId ? "unavailable" : "legacy_host",
+      status: (scope && !scope.current() || !scope && request.observationScopeId) ? "stale"
+        : getWorldConstructionStatus(world).remaining === 0 ? "capacity_blocked" : "pending" }];
+  });
+}
+
 // =============================================================================
 // AI-POWERED ROOM POPULATION
 // =============================================================================
@@ -301,13 +380,16 @@ TEMPLATE HINTS for ${request.roomType}:
 
   const prompt = `You are The Steward, a spirit responsible for furnishing and populating rooms in a living simulation.
 
-TASK: Generate a complete entity manifest for "${request.roomName}" (a ${request.roomType}).
+${populationScopes.has(request) ? getWorldAuthoringContext(populationScopes.get(request)!.world) : ""}
+
+TASK: Generate a complete entity manifest for "${request.roomName}" (room-type hint: ${request.roomType}).
 
 CONTEXT:
-- World theme: ${request.context.worldTheme || "medieval fantasy"}
+- World theme: ${request.context.worldTheme || "unspecified setting"}
 - Economy level: ${request.context.economyLevel || "modest"}
 - Primary function: ${request.context.primaryFunction || `A working ${request.roomType}`}
 - Inhabitants: ${request.context.inhabitants?.join(", ") || "Various villagers"}
+The primary function describes the actual place; room-type and template hints apply only where compatible with it.
 ${templateHint}
 
 CONSTRAINTS:
@@ -651,6 +733,11 @@ export async function populateRoomViaSchema(
   request: RoomCreationRequest,
   roomEid: number // EID of the room entity to populate
 ): Promise<SchemaPopulatedRoom | null> {
+  if (!populationRequestCurrent(world, request, roomEid)) return null;
+  const allowance = roomPopulationAllowance(world, request);
+  // A pending request is not a failed/successful construction. Capacity cannot
+  // be recovered by another paid rephrasing, so leave it pending without inference.
+  if (allowance === 0) return null;
   const model = spiritModel;
   const objectManager = new ObjectManager(world);
 
@@ -662,12 +749,16 @@ export async function populateRoomViaSchema(
 
   const prompt = `You are The Steward, populating a room using the WorldSchema system.
 
-TASK: Define what entities should exist in "${request.roomName}" (a ${request.roomType}).
+${getWorldAuthoringContext(world)}
+
+TASK: Define what entities should exist in "${request.roomName}" (room-type hint: ${request.roomType}).
 
 CONTEXT:
-- World theme: ${request.context.worldTheme || "medieval fantasy"}
+- World theme: ${request.context.worldTheme || "unspecified setting"}
 - Economy level: ${request.context.economyLevel || "modest"}
 - Primary function: ${request.context.primaryFunction || `A working ${request.roomType}`}
+The primary function describes the actual place; room-type and template hints apply only where compatible with it.
+${Number.isFinite(allowance) ? `Construction allowance: at most ${allowance} total ECS entities, including ambient sources and any native food fallback. This is the current upper bound, not a target to fill; other authors can consume capacity while you plan.` : ""}
 
 EXISTING OBJECT TYPE IDS IN SCHEMA (use these IDs verbatim in "entities[].type"):
 ${existingTypes.join(", ")}
@@ -691,7 +782,7 @@ RULES:
    - states with stimuli (what agents perceive in each state)
    - category
 7. Stimuli are how agents PERCEIVE - each state should emit sensory data (visual, smell, sound, heat, etc.)
-8. Generate 8-15 entities total
+8. Generate only what this primary function needs, within the construction allowance. An intentionally empty transit space may need no objects. Described functionality must be supported by actual native traits, states and affordances, not merely by an impressive description.
 
 Respond with JSON:
 {
@@ -878,6 +969,34 @@ function autoDefineMissingType(typeIdRaw: string): string | undefined {
   return id;
 }
 
+function roomPopulationAllowance(world: any, request: RoomCreationRequest): number {
+  const maximum = request.constraints?.maxItems;
+  if (maximum !== undefined && (!Number.isSafeInteger(maximum) || maximum < 0))
+    throw new Error("Room maxItems must be a non-negative safe integer");
+  return Math.min(maximum ?? Infinity, getWorldConstructionStatus(world).remaining ?? Infinity);
+}
+
+/** Count the plan's allocations without registering types or spawning objects.
+ * This catches known capacity failures, not every possible schema/observer error. */
+function roomPopulationCount(request: RoomCreationRequest, plan: any): number {
+  const entities = Array.isArray(plan?.entities) ? plan.entities.filter((e: any) => e?.type && typeof e.type === "string") : [];
+  const ambient = Array.isArray(plan?.ambientStimuli) ? plan.ambientStimuli.filter((s: any) => s?.template && typeof s.template === "string" && s?.type && typeof s.type === "string") : [];
+  const types = new Map<string, Pick<ObjectTypeDefinition, "name" | "traits" | "states" | "defaultState">>(worldSchema.getAllObjectTypeIds()
+    .map(id => [id, worldSchema.getObjectType(id)!]));
+  for (const d of Array.isArray(plan?.newTypes) ? plan.newTypes : [])
+    if (d?.name && typeof d.name === "string" && !types.has(d.name)) types.set(d.name,
+      { name: d.name, traits: d.traits || [], states: d.states || { normal: { description: "A " + d.name } }, defaultState: d.defaultState || "normal" });
+  const hasFood = entities.some((e: any) => {
+    // Existing types win exactly as they do during registration. Previewing an
+    // incoming definition must never grant it permission to replace that type.
+    const definition = types.get(e.type)
+      ?? [...types.values()].find(d => d.name.trim().toLowerCase() === e.type.trim().toLowerCase())
+      ?? types.get(toSnakeCaseId(e.type));
+    return !!definition && computeObjectTypeTraits(definition, e.state || definition.defaultState).includes("edible");
+  });
+  return entities.length + ambient.length + (shouldEnsureFood(request.roomType) && !hasFood ? 1 : 0);
+}
+
 export function materializeRoomFromSchemaPlan(
   world: any,
   request: RoomCreationRequest,
@@ -885,6 +1004,14 @@ export function materializeRoomFromSchemaPlan(
   plan: any,
   objectManager: ObjectManager = new ObjectManager(world)
 ): SchemaPopulatedRoom {
+  if (!populationRequestCurrent(world, request, roomEid)) throw new Error("Room population authority is stale or unavailable");
+  roomPopulationAllowance(world, request); // Validate the caller's explicit bound.
+  const count = roomPopulationCount(request, plan);
+  if (request.constraints?.maxItems !== undefined && count > request.constraints.maxItems)
+    throw new Error(`Room population exceeds maxItems (${count}/${request.constraints.maxItems})`);
+  // Recheck after asynchronous authoring, BEFORE schema/partial-world writes.
+  // Ordinary per-entity admission still owns the actual allocations.
+  assertWorldConstructionAvailable(world, count);
   const result: SchemaPopulatedRoom = {
     roomName: request.roomName,
     roomType: request.roomType,
@@ -998,71 +1125,13 @@ export function materializeRoomFromSchemaPlan(
 // PROACTIVE ROOM SCANNING
 // =============================================================================
 
-let lastProactiveScan = 0;
-const PROACTIVE_SCAN_INTERVAL_MS = 30_000; // Scan every 30 seconds
-
 /**
- * Scan for rooms that exist in the ECS but have no entities inside them.
- * Automatically queue population requests for any unpopulated rooms.
- * This makes The Steward autonomous - it detects new rooms without being told.
+ * Compatibility inventory query. This no longer grants construction authority.
+ * God/architect receive the same actual observations and decide whether a place
+ * needs furnishing; explicit delegated requests still execute normally.
  */
 export function scanForUnpopulatedRooms(world: any): number {
-  const now = Date.now();
-  if (now - lastProactiveScan < PROACTIVE_SCAN_INTERVAL_MS) return 0;
-  lastProactiveScan = now;
-
-  const rooms = Array.from(query(world, [Room]));
-  let queued = 0;
-
-  for (const roomEid of rooms) {
-    const roomName = Name.value[roomEid];
-    if (!roomName) continue;
-
-    // Skip if already tracked or has a pending request
-    if (stewardState.roomInventory.has(roomName)) continue;
-    if (stewardState.pendingRequests.some(r => r.roomName === roomName)) continue;
-    if (stewardState.completedSchemaRooms.some(r => r.roomName === roomName)) continue;
-    if (stewardState.completedRooms.some(r => r.roomName === roomName)) continue;
-
-    // Check if room has any entities inside it (objects, not agents)
-    // A room with 0 non-agent entities is likely unpopulated
-    const allNamedEntities = Array.from(query(world, [Name]));
-    const hasEntities = allNamedEntities.some(eid => {
-      if (eid === roomEid) return false;
-      // Skip agents - we want objects/furniture
-      if (hasComponent(world, eid, Agent)) return false;
-      const entityRoom = getRoomForEntity(world, eid);
-      return entityRoom === roomEid;
-    });
-
-    if (!hasEntities) {
-      // Report to observation aggregator
-      try {
-        const { reportGap } = require("./observation-aggregator");
-        reportGap(
-          "The Steward",
-          "environmental_gap",
-          `${roomName} is unpopulated`,
-          `Room "${roomName}" has no objects or furniture. Agents visiting this room will have nothing to interact with.`,
-          "medium"
-        );
-      } catch {}
-
-      // Infer room type from name
-      const roomType = inferRoomType(roomName);
-      requestRoomPopulation(
-        roomType,
-        roomName,
-        { worldTheme: "slice_of_life", primaryFunction: `A ${roomType}` },
-        { maxItems: 12 },
-        0 // Self-requested
-      );
-      queued++;
-      console.log(`[Steward] Auto-detected unpopulated room: "${roomName}" (type: ${roomType})`);
-    }
-  }
-
-  return queued;
+  return observeRoomInventories(world).rooms.filter(room => room.objectCount === 0).length;
 }
 
 /**
@@ -1079,7 +1148,7 @@ function inferRoomType(roomName: string): string {
   if (lower.includes("bed") || lower.includes("chamber") || lower.includes("quarters")) return "bedroom";
   if (lower.includes("kitchen") || lower.includes("cook")) return "tavern";
   if (lower.includes("garden") || lower.includes("yard") || lower.includes("courtyard")) return "garden";
-  if (lower.includes("hall") || lower.includes("common") || lower.includes("gathering")) return "tavern";
+  if (/\b(?:hall|common|gathering)\b/.test(lower)) return "tavern";
   if (lower.includes("temple") || lower.includes("shrine") || lower.includes("chapel")) return "library";
   if (lower.includes("stable") || lower.includes("barn")) return "general_store";
   if (lower.includes("office") || lower.includes("work")) return "general_store";
@@ -1105,8 +1174,8 @@ function findRoomEidByName(world: any, roomName: string): number | undefined {
 
 /**
  * Run The Steward's main cycle
- * Now includes proactive room scanning - The Steward autonomously detects
- * unpopulated rooms and furnishes them without needing God AI.
+ * Execute delegated population work. Inventory observations are separately
+ * visible to autonomous authors; they are not implicit population commands.
  */
 export async function runStewardCycle(
   world: any,
@@ -1119,19 +1188,16 @@ export async function runStewardCycle(
   let roomsPopulated = 0;
   let entitiesGenerated = 0;
 
-  // Proactive: scan for unpopulated rooms and auto-queue them
-  const autoQueued = scanForUnpopulatedRooms(world);
-  if (autoQueued > 0) {
-    console.log(`[Steward] Auto-queued ${autoQueued} unpopulated rooms for furnishing`);
-  }
-
   // Process pending room requests
   for (const request of [...stewardState.pendingRequests]) {
-    const roomEid = findRoomEidByName(world, request.roomName);
+    const scope = populationScopes.get(request);
+    if (scope && scope.world !== world) continue;
+    const roomEid = scope?.roomEid ?? findRoomEidByName(world, request.roomName);
     if (roomEid === undefined) {
       console.warn(`[Steward] Room entity not found for '${request.roomName}', skipping population`);
       continue;
     }
+    if (!populationRequestCurrent(world, request, roomEid)) continue;
 
     const populated = await populateRoomViaSchema(world, request, roomEid);
     if (populated) {

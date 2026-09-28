@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "license": "CC0-1.0",
+  "creator": "Kenney",
+  "verifiedAt": "2026-09-25",
+  "sourcePages": [
+    "https://kenney.nl/assets/furniture-kit",
+    "https://kenney.nl/assets/blocky-characters"
+  ],
+  "totalBytes": 495971,
+  "files": [
+    {
+      "path": "characters/Textures/texture-a.png",
+      "bytes": 20171,
+      "sha256": "257e944c582ce7cda206fbd8ceb717be648f9721756baf377a36478c11c0059a"
+    },
+    {
+      "path": "characters/Textures/texture-b.png",
+      "bytes": 15606,
+      "sha256": "c614148428fbf63ab701ab95e2ebe0b6103ea0e2e6212c986d8931899bad7692"
+    },
+    {
+      "path": "characters/Textures/texture-f.png",
+      "bytes": 15886,
+      "sha256": "54404f22588bac5a7f8df09c2aac0520e101a6f32944ce4070f550d7ad80c6f7"
+    },
+    {
+      "path": "characters/character-a.glb",
+      "bytes": 113596,
+      "sha256": "8ee5dae167ec589863f6bba222467eb90ace8be357a4c5abfcab289290181616"
+    },
+    {
+      "path": "characters/character-b.glb",
+      "bytes": 113596,
+      "sha256": "30ed390a741a1b285f587544819aa8a02c8f7f270e552ed742eb84785034f62a"
+    },
+    {
+      "path": "characters/character-f.glb",
+      "bytes": 113592,
+      "sha256": "04223c1c6cdce5da6fe9c9729a24e1aa9c765dec93af952379112f7da24a828a"
+    },
+    {
+      "path": "furniture/bookcaseOpen.glb",
+      "bytes": 18020,
+      "sha256": "750702218d68c062b15dfef6ab06a4014d1cfa8bd05f02e57c53b7e13bec157c"
+    },
+    {
+      "path": "furniture/chairCushion.glb",
+      "bytes": 12588,
+      "sha256": "33544228984857f2cb502b58452fed72157335f9b1caf29e96da5c9094c53fdc"
+    },
+    {
+      "path": "furniture/kitchenCabinet.glb",
+      "bytes": 10444,
+      "sha256": "7238c57778935ae25db5e57e9f7af3ba7068c71b005ff7cfbff3b6f3b1a13200"
+    },
+    {
+      "path": "furniture/kitchenFridge.glb",
+      "bytes": 20116,
+      "sha256": "8af4f4bbb1b5525ad8226e97926a5af60fa8fb20a3cb74dbda5328a9d320dbab"
+    },
+    {
+      "path": "furniture/lampRoundFloor.glb",
+      "bytes": 6600,
+      "sha256": "50fe1b5b588edf15bfa9cc880f71a02a4fda6036350b24733d0ef4de5cc5e908"
+    },
+    {
+      "path": "furniture/loungeSofa.glb",
+      "bytes": 9644,
+      "sha256": "1886b811c0d3ad0d8525a4fd43adf4112c497c8e0ed906f06877ca3517f4c7dd"
+    },
+    {
+      "path": "furniture/plantSmall1.glb",
+      "bytes": 8224,
+      "sha256": "2b9c022feb47be857b2c4fdc29f36522766ba9b70c578c31d7c05d71b4377d15"
+    },
+    {
+      "path": "furniture/rugRectangle.glb",
+      "bytes": 3188,
+      "sha256": "a989d2d59c04e3071e0c90388b113a9a8f339ce1814ef984c51cb6dcd7c8e0eb"
+    },
+    {
+      "path": "furniture/tableCoffee.glb",
+      "bytes": 8256,
+      "sha256": "e38bea760fbd514efbb75528d09b4752c91af44677bbb97e6d4386c263525179"
+    },
+    {
+      "path": "furniture/tableRound.glb",
+      "bytes": 6444,
+      "sha256": "f8daea9124a542a00b7bdacfddac82dc468573d43e44d7b54dd6316e9695754b"
+    }
+  ]
+}

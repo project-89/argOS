@@ -1,24 +1,17 @@
 import type { World } from "../ecs/world";
 import type { SystemContext, SystemDefinition } from "../ecs/dynamic-systems";
 import { addComponent, addEntity, entityExists, hasComponent, query, removeComponent, getRelationTargets } from "bitecs";
-import { Agent, Goal, LastToolResult, Name, PendingToolJob, Plan, ToolResult } from "../ecs/components";
-import { HasGoal, HasToolResult } from "../ecs/relations";
+import { Agent, Goal, LastAction, LastToolResult, Name, PendingToolJob, Plan, ToolResult } from "../ecs/components";
+import { HasGoal, HasPlan, HasToolResult } from "../ecs/relations";
 import { getRoomForEntity } from "../ecs/location";
 import { drainCompletedOfficeJobs } from "../office-tools/async-jobs";
 import { queueStimulus } from "../cognition/stimulus-queue";
-import { advanceAgentPlan } from "../cognition/cognition-system";
-import { failPlan, getNextPlannedAction, getPlanForGoal } from "../cognition/planning-system";
+import { advanceAgentPlan, recordCompletedGoalAction } from "../cognition/cognition-system";
+import { failPlan, getCurrentStep } from "../cognition/planning-system";
 import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "../cognition/procedural-skills";
-
-function getTopActiveGoalEid(world: World, agentEid: number): number | undefined {
-  const goals = (getRelationTargets(world as any, agentEid, HasGoal as any) as number[])
-    .filter((eid) => entityExists(world as any, eid))
-    .filter((eid) => hasComponent(world as any, eid, Goal as any))
-    .filter((eid) => String(Goal.status[eid] || "") === "active")
-    .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0));
-  const top = goals[0];
-  return typeof top === "number" ? top : undefined;
-}
+import { routeAsyncActionCompletions, takeAsyncAction } from "../cognition/async-action-evidence";
+import { recordCoordinationAction } from "../cognition/coordination-memory";
+import { resolveDecision } from "../cognition/bt-compiler";
 
 function toolIdToAffordance(toolId: string): string {
   const id = String(toolId || "");
@@ -29,6 +22,11 @@ function toolIdToAffordance(toolId: string): string {
   if (id === "workspace.git_apply_from_last_gemini") return "git_apply_from_last_gemini";
   if (id === "vision.describe_image") return "describe_image";
   return id;
+}
+
+function actionTokens(content: string): { verb: string; args: string } {
+  const match = content.trim().match(/^(\S+)([\s\S]*)$/);
+  return { verb: String(match?.[1] || "").toLowerCase().replace(/^["'`]+|["'`]+$/g, "").replace(/[^\p{L}\p{N}_-]+$/gu, ""), args: String(match?.[2] || "").trim() };
 }
 
 function hasWorkspaceWriteEvidenceForGoal(world: World, actorEid: number, goalEid: number): boolean {
@@ -71,7 +69,8 @@ function shouldAdvanceToolPlanStep(nextStep: any, resultOk: boolean): boolean {
 
 const ASYNC_PLAN_STEP_FAILURE_WINDOW_MS = 30_000;
 const MAX_ASYNC_PLAN_STEP_FAILURES_BEFORE_REPLAN = 2;
-const recentAsyncPlanStepFailures = new Map<number, { signature: string; count: number; lastAtMs: number }>();
+const recentAsyncPlanStepFailures = new WeakMap<World, Map<number, { signature: string; count: number; lastAtMs: number }>>();
+const completedJobIds = new WeakMap<World, Set<string>>();
 
 export function createOfficeToolJobSystem(): SystemDefinition {
   return {
@@ -82,12 +81,21 @@ export function createOfficeToolJobSystem(): SystemDefinition {
     active: true,
     lastRun: 0,
     compiledFn: (world: World, _ctx: SystemContext) => {
-      const completed = drainCompletedOfficeJobs();
+      const completed = routeAsyncActionCompletions(world, drainCompletedOfficeJobs());
       if (!completed.length) return;
+      let processed = completedJobIds.get(world);
+      if (!processed) { processed = new Set(); completedJobIds.set(world, processed); }
+      let failures = recentAsyncPlanStepFailures.get(world);
+      if (!failures) { failures = new Map(); recentAsyncPlanStepFailures.set(world, failures); }
 
       for (const job of completed) {
+        if (processed.has(job.jobId)) continue;
+        processed.add(job.jobId);
+        if (processed.size > 2048) processed.delete(processed.values().next().value!);
+        const issuance = takeAsyncAction(world, job.jobId);
         const actorEid = job.actorEid;
         if (!entityExists(world as any, actorEid)) continue;
+        if (issuance && issuance.actorEid !== actorEid) continue;
 
         const result = job.result;
         if (!result) continue;
@@ -95,6 +103,7 @@ export function createOfficeToolJobSystem(): SystemDefinition {
         // Prefer the original affordance args (stored on the actor as PendingToolJob.command) for contracts/learning.
         // For some async tools we spawn helper processes (e.g. node -e), so job.command may not include the user intent.
         let commandForEvidence = String(job.command || "");
+        if (issuance?.action.type === "interact") commandForEvidence = String(issuance.action.content || "").trim().replace(/^\S+\s*/, "");
         if (hasComponent(world as any, actorEid, PendingToolJob as any)) {
           const pendingId = String(PendingToolJob.jobId[actorEid] || "");
           if (pendingId === job.jobId) {
@@ -116,7 +125,9 @@ export function createOfficeToolJobSystem(): SystemDefinition {
         // Append-only tool evidence entity for multi-step goal contracts.
         const toolEid = addEntity(world as any);
         addComponent(world as any, toolEid, ToolResult as any);
-        const goalEid = getTopActiveGoalEid(world, actorEid);
+        // Historical evidence belongs to the issuing goal, even if it has since
+        // been superseded. Unregistered jobs get no invented goal association.
+        const goalEid = issuance?.goalEid ?? issuance?.plan?.goalEid;
         ToolResult.toolId[toolEid] = String(job.toolId || "");
         ToolResult.command[toolEid] = commandForEvidence;
         ToolResult.ok[toolEid] = !!result.ok;
@@ -146,7 +157,7 @@ export function createOfficeToolJobSystem(): SystemDefinition {
         parts.push(`[Tool:${job.toolId}] ${result.summary}`);
         if (stdout.trim()) parts.push(`stdout:\n${clip(stdout)}`);
         if (stderr.trim()) parts.push(`stderr:\n${clip(stderr)}`);
-        queueStimulus({
+        queueStimulus(world, {
           targetEid: actorEid,
           type: "tool_result",
           modality: "cognitive",
@@ -182,7 +193,7 @@ export function createOfficeToolJobSystem(): SystemDefinition {
                 if (!Agent.active[recipientEid]) continue;
                 if (getRoomForEntity(world as any, recipientEid) !== roomEid) continue;
 
-                queueStimulus({
+                queueStimulus(world, {
                   targetEid: recipientEid,
                   type: "image_asset",
                   modality: "visual",
@@ -194,12 +205,27 @@ export function createOfficeToolJobSystem(): SystemDefinition {
           }
         }
 
+        if (issuance) {
+          addComponent(world, actorEid, LastAction);
+          LastAction.type[actorEid] = issuance.action.type;
+          LastAction.target[actorEid] = issuance.action.target || "";
+          LastAction.content[actorEid] = issuance.action.content || "";
+          LastAction.success[actorEid] = !!result.ok;
+          LastAction.timestamp[actorEid] = Date.now();
+          if (issuance.coordination) recordCoordinationAction(world, actorEid, issuance.coordination, {
+            succeeded: !!result.ok, summary: `${issuance.action.type} ${issuance.action.target || job.toolId}: ${result.ok ? "completed" : "failed"}`,
+            targetKey: issuance.targetKey,
+          });
+          if (result.ok) recordCompletedGoalAction(world, actorEid, issuance.action, issuance.goalEid ?? null);
+          resolveDecision(world, actorEid, !!result.ok, issuance.action);
+        }
+
         // Learn procedural skills from the *actual* tool outcome (exitCode/ok),
         // not from the mere fact that a tool job was started.
         const affordance = toolIdToAffordance(job.toolId);
-        const targetName = String(Name.value[job.deviceEid] || job.toolId || "").trim();
+        const targetName = String(issuance?.action.target || Name.value[job.deviceEid] || job.toolId || "").trim();
         const args = commandForEvidence;
-        if (affordance && targetName) {
+        if (issuance && affordance && targetName) {
           upsertProceduralSkillFromInteraction(world as any, actorEid, {
             affordance,
             args,
@@ -216,11 +242,17 @@ export function createOfficeToolJobSystem(): SystemDefinition {
         }
 
         // If the agent is waiting on a tool step, advance it automatically when the tool finishes successfully.
-        const next = getNextPlannedAction(world as any, actorEid);
+        const identity = issuance?.plan;
+        const planStillMatches = identity !== undefined && entityExists(world, identity.planEid) && entityExists(world, identity.goalEid) &&
+          hasComponent(world, identity.planEid, Plan) && hasComponent(world, identity.goalEid, Goal) &&
+          Plan.status[identity.planEid] === "active" && Goal.status[identity.goalEid] === "active" &&
+          Plan.goalEid[identity.planEid] === identity.goalEid && Plan.currentStep[identity.planEid] === identity.currentStep &&
+          getRelationTargets(world, actorEid, HasPlan).includes(identity.planEid) && getRelationTargets(world, actorEid, HasGoal).includes(identity.goalEid);
+        const next = planStillMatches ? getCurrentStep(identity!.planEid) : null;
         if (next && String(next.actionType || "") === "interact") {
           const expected = toolIdToAffordance(job.toolId);
           const content = String(next.content || "").trim();
-          const stepAff = content.split(/\s+/)[0] || "";
+          const stepAff = actionTokens(content).verb;
           const isTicketGoal =
             typeof goalEid === "number" &&
             goalEid >= 0 &&
@@ -240,10 +272,15 @@ export function createOfficeToolJobSystem(): SystemDefinition {
             !isVerification &&
             !hasWorkspaceWriteEvidenceForGoal(world, actorEid, goalEid as any);
 
-          const matchesStep = stepAff === expected;
+          const issuedAction = issuance!.action;
+          const matchesStep = stepAff === expected && issuedAction.type === next.actionType &&
+            String(next.target || "").trim().toLowerCase() === String(issuedAction.target || "").trim().toLowerCase() &&
+            actionTokens(next.content || "").verb === actionTokens(issuedAction.content || "").verb &&
+            actionTokens(next.content || "").args === actionTokens(issuedAction.content || "").args;
           const shouldAdvance = shouldAdvanceToolPlanStep(next, !!result.ok) || allowInitialFailAdvance;
           if (matchesStep && shouldAdvance) {
-            advanceAgentPlan(world as any, actorEid);
+            advanceAgentPlan(world as any, actorEid, identity);
+            failures.delete(actorEid);
             const name = String(Name.value[actorEid] || "");
             if (name) {
               console.log(`📋 ${name} completed plan step: ${String(next.description || "").trim()}`);
@@ -252,20 +289,20 @@ export function createOfficeToolJobSystem(): SystemDefinition {
             // Async tool failures (e.g. terminal.run CI failures) don't pass through executeActions(),
             // so we must mark the plan step as failed here or agents will spam retries forever.
             const now = Date.now();
-            const signature = `${next.actionType}|${String(next.target || "")}|${String(next.content || "")}`;
-            const prev = recentAsyncPlanStepFailures.get(actorEid);
+            const signature = `${identity!.planEid}|${identity!.currentStep}|${next.actionType}|${String(next.target || "")}|${String(next.content || "")}`;
+            const prev = failures.get(actorEid);
             const within = prev && prev.signature === signature && now - prev.lastAtMs < ASYNC_PLAN_STEP_FAILURE_WINDOW_MS;
             const count = within ? prev!.count + 1 : 1;
-            recentAsyncPlanStepFailures.set(actorEid, { signature, count, lastAtMs: now });
+            failures.set(actorEid, { signature, count, lastAtMs: now });
 
             if (count >= MAX_ASYNC_PLAN_STEP_FAILURES_BEFORE_REPLAN && typeof goalEid === "number" && goalEid >= 0) {
-              const planEid = getPlanForGoal(world as any, actorEid, goalEid);
+              const planEid = identity!.planEid;
               if (typeof planEid === "number") {
                 failPlan(planEid, `Repeated async plan-step failure: ${String(next.description || "").trim()}`);
                 // This replanning loop is deterministic for many goals (e.g. CLI ticket skeletons),
                 // so allow immediate retry rather than waiting for the generic 15s backoff.
                 Plan.lastUpdated[planEid] = 0;
-                queueStimulus({
+                queueStimulus(world, {
                   targetEid: actorEid,
                   type: "planning",
                   modality: "cognitive",
@@ -273,7 +310,7 @@ export function createOfficeToolJobSystem(): SystemDefinition {
                   source: "planning",
                 });
               }
-              recentAsyncPlanStepFailures.delete(actorEid);
+              failures.delete(actorEid);
             }
           }
         }

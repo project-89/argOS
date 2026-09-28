@@ -66,8 +66,8 @@ function normalizeStimulusType(data: any): { type: string; modality?: SensoryMod
  * Without this, systems can emit "stimulus" events but agents never perceive them,
  * because `runWorldTickAt()` drains the system event buffer each tick.
  */
-export function bridgeWorldEventsToStimuli(world: World, events: WorldEvent[]): { queued: number } {
-  let queued = 0;
+export function bridgeWorldEventsToStimuli(world: World, events: WorldEvent[]): { queued: number; rejected: number } {
+  let queued = 0, rejected = 0;
 
   for (const ev of events) {
     const data = ev?.data ?? {};
@@ -96,11 +96,10 @@ export function bridgeWorldEventsToStimuli(world: World, events: WorldEvent[]): 
       if (!content) continue;
 
       if (targetEid !== undefined) {
-        queueStimulus({ targetEid, type, modality, content, source, intensity: data?.intensity });
-        queued++;
+        if (queueStimulus(world, { targetEid, type, modality, content, source, intensity: data?.intensity })) queued++; else rejected++;
       } else if (roomEid !== undefined) {
-        broadcastToRoom(world, roomEid, { type, modality, content, source, intensity: data?.intensity });
-        queued++;
+        const result = broadcastToRoom(world, roomEid, { type, modality, content, source, intensity: data?.intensity });
+        if (result.accepted) queued++; rejected += result.rejected;
       }
       continue;
     }
@@ -132,16 +131,14 @@ export function bridgeWorldEventsToStimuli(world: World, events: WorldEvent[]): 
           : "visual";
 
       if (targetEid !== undefined) {
-        queueStimulus({ targetEid, type: evType, modality, content, source });
-        queued++;
+        if (queueStimulus(world, { targetEid, type: evType, modality, content, source })) queued++; else rejected++;
       } else if (roomEid !== undefined) {
-        broadcastToRoom(world, roomEid, { type: evType, modality, content, source });
-        queued++;
+        const result = broadcastToRoom(world, roomEid, { type: evType, modality, content, source });
+        if (result.accepted) queued++; rejected += result.rejected;
       }
       continue;
     }
   }
 
-  return { queued };
+  return { queued, rejected };
 }
-

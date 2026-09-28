@@ -22,6 +22,7 @@ import { addEntity, addComponent, query, getRelationTargets, hasComponent, remov
 import { Name, Description, Agent, Mind, Schedule, Goal, Room } from "../ecs/components";
 import { HasSchedule, HasGoal } from "../ecs/relations";
 import { getKnowledgeSummary } from "./knowledge-graph";
+import { formatSimulationHour } from "../ecs/simulation-time";
 
 const model = flashModel;
 
@@ -39,23 +40,6 @@ export interface DailySchedule {
   activities: ScheduledActivity[];
   flexibility: number;     // 0-1, how strictly to follow
   personality: string;     // Brief personality description used in generation
-}
-
-function workLocationKeywordForRole(role: string): string | undefined {
-  const r = String(role || "").toLowerCase();
-  // Fantasy / village archetypes
-  if (r.includes("baker")) return "bakery";
-  if (r.includes("smith") || r.includes("blacksmith")) return "forge";
-  if (r.includes("healer") || r.includes("cleric")) return "temple";
-  if (r.includes("merchant") || r.includes("trader")) return "market";
-  if (r.includes("scholar") || r.includes("librarian")) return "library";
-  // Office archetypes
-  if (r.includes("engineer") || r.includes("developer") || r.includes("programmer")) return "office";
-  if (r.includes("designer")) return "studio";
-  if (r.includes("research")) return "lab";
-  // Generic
-  if (r.includes("npc") || r.includes("villager")) return "square";
-  return "work";
 }
 
 /**
@@ -136,20 +120,11 @@ export function getActivityForHour(scheduleEid: number, hour: number): Scheduled
     const activities = JSON.parse(activitiesJson) as ScheduledActivity[];
 
     for (const activity of activities) {
-      const endHour = (activity.startHour + activity.duration) % 24;
-
-      // Handle activities that span midnight
-      if (activity.startHour <= endHour) {
-        // Normal case: activity doesn't span midnight
-        if (hour >= activity.startHour && hour < endHour) {
-          return activity;
-        }
-      } else {
-        // Activity spans midnight (e.g., 22:00 - 06:00)
-        if (hour >= activity.startHour || hour < endHour) {
-          return activity;
-        }
-      }
+      if (!Number.isFinite(hour) || hour < 0 || hour >= 24 || !Number.isFinite(activity.startHour)
+        || activity.startHour < 0 || activity.startHour >= 24 || !Number.isFinite(activity.duration)
+        || activity.duration <= 0 || activity.duration > 24) continue;
+      // Half-open daily interval, including overnight and full-day occurrences.
+      if ((hour - activity.startHour + 24) % 24 < activity.duration) return activity;
     }
 
     return null;
@@ -216,7 +191,7 @@ export function getNextActivity(world: World, agentEid: number): { activity: Sch
  */
 function buildScheduleContext(world: World, agentEid: number): string {
   const agentName = Name.value[agentEid];
-  const agentDesc = Description.value[agentEid];
+  const agentDesc = hasComponent(world, agentEid, Description) ? Description.value[agentEid] || "" : "";
   const agentRole = Agent.role[agentEid];
 
   // Get available rooms
@@ -226,9 +201,9 @@ function buildScheduleContext(world: World, agentEid: number): string {
   // Get knowledge for context
   const knowledge = getKnowledgeSummary(world, agentEid);
 
-  return `You are generating a daily schedule for an agent in a simulation.
+  return `Plan a daily routine for this character.
 
-AGENT:
+CHARACTER:
 - Name: ${agentName}
 - Description: ${agentDesc}
 - Role: ${agentRole}
@@ -236,9 +211,7 @@ AGENT:
 ${knowledge ? `AGENT'S KNOWLEDGE:\n${knowledge}` : ""}
 
 AVAILABLE LOCATIONS:
-${roomNames.length > 0 ? roomNames.join(", ") : "Various locations"}
-
-Create a realistic daily schedule that fits this character's personality and role.`;
+${roomNames.length > 0 ? roomNames.join(", ") : "No locations supplied"}`;
 }
 
 /**
@@ -249,13 +222,7 @@ export async function generateSchedule(world: World, agentEid: number): Promise<
   const agentName = Name.value[agentEid];
   const agentRole = Agent.role[agentEid];
 
-  const prompt = `Create a realistic daily schedule for this agent.
-
-The schedule should:
-1. Reflect the agent's personality and role
-2. Include 5-8 activities spanning the full 24 hours
-3. Include basic needs (sleep, eating) and role-specific activities
-4. Assign appropriate locations when known
+  const prompt = `Create 5-8 activities across a 24-hour day, including sleep, meals, and work or other interests appropriate to this character. Use a listed location when suitable; otherwise omit the location.
 
 Respond with JSON only:
 {
@@ -339,10 +306,13 @@ Hours are 0-23. Duration is in hours. Priority is 1-10.`;
 }
 
 /**
- * Create a default schedule for an agent (without LLM)
+ * Baseline daily rhythms, not an invented job or a fully prescribed agenda.
+ * Unscheduled hours belong to the actor's own purposes. Employment, shifts and
+ * preferred places come from an authored/generated schedule, not a role keyword
+ * or the room where the actor happened to spawn. Keep the role argument for API
+ * compatibility; a label alone cannot establish a particular obligation.
  */
-export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
-  const workLoc = workLocationKeywordForRole(agentRole);
+export function createDefaultSchedule(_agentRole: string): ScheduledActivity[] {
   const baseSchedule: ScheduledActivity[] = [
     {
       name: "sleep",
@@ -350,7 +320,6 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 8,
       priority: 9,
       interruptible: false,
-      location: "home",
       description: "Resting and recovering energy",
     },
     {
@@ -359,7 +328,6 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 7,
       interruptible: true,
-      location: "home",
       description: "Waking up and preparing for the day",
     },
     {
@@ -368,17 +336,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 6,
       interruptible: true,
-      location: "tavern",
       description: "Eating the first meal of the day",
-    },
-    {
-      name: "work",
-      startHour: 8,
-      duration: 4,
-      priority: 8,
-      interruptible: true,
-      ...(workLoc ? { location: workLoc } : {}),
-      description: "Primary daily activities and responsibilities",
     },
     {
       name: "lunch",
@@ -386,17 +344,7 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 6,
       interruptible: true,
-      location: "tavern",
       description: "Midday meal and break",
-    },
-    {
-      name: "afternoon_work",
-      startHour: 13,
-      duration: 4,
-      priority: 7,
-      interruptible: true,
-      ...(workLoc ? { location: workLoc } : {}),
-      description: "Continuing daily activities",
     },
     {
       name: "leisure",
@@ -404,7 +352,6 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 3,
       priority: 4,
       interruptible: true,
-      location: "square",
       description: "Personal time and relaxation",
     },
     {
@@ -413,7 +360,6 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 6,
       interruptible: true,
-      location: "tavern",
       description: "Evening meal",
     },
     {
@@ -422,7 +368,6 @@ export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
       duration: 1,
       priority: 5,
       interruptible: true,
-      location: "home",
       description: "Winding down before bed",
     },
   ];
@@ -447,11 +392,12 @@ export function runScheduleSystem(world: World): void {
     const storedActivity = Schedule.currentActivity[scheduleEid];
 
     // Check if activity changed
-    if (currentActivity && currentActivity.name !== storedActivity) {
-      Schedule.currentActivity[scheduleEid] = currentActivity.name;
+    const currentName = currentActivity?.name ?? "";
+    if (currentName !== storedActivity) {
+      Schedule.currentActivity[scheduleEid] = currentName;
 
       const agentName = Name.value[agentEid];
-      console.log(`[Schedule] ${agentName}'s activity changed to: ${currentActivity.name}`);
+      console.log(`[Schedule] ${agentName}'s activity changed to: ${currentName || "unscheduled"}`);
 
       // Could create a goal for this activity if desired
       // createActivityGoal(world, agentEid, currentActivity);
@@ -470,11 +416,11 @@ export function formatScheduleForContext(world: World, agentEid: number): string
   const currentActivity = getActivityForHour(scheduleEid, currentHour);
   const nextInfo = getNextActivity(world, agentEid);
 
-  const lines: string[] = ["DAILY SCHEDULE:"];
+  const lines: string[] = ["DAILY SCHEDULE:", `Current time: ${formatSimulationHour(currentHour)} (Day ${getCurrentDay(world)})`];
 
   if (currentActivity) {
-    lines.push(`Current time: ${currentHour}:00`);
-    lines.push(`Current activity: ${currentActivity.name}${currentActivity.description ? ` - ${currentActivity.description}` : ""}`);
+    lines.push(`Scheduled activity: ${currentActivity.name}${currentActivity.description ? ` - ${currentActivity.description}` : ""}`);
+    lines.push(`Scheduled start: ${formatSimulationHour(currentActivity.startHour)}; ${Math.floor(((currentHour - currentActivity.startHour + 24) % 24) * 60 + 1e-9)} minutes since start. A schedule is an intention, not proof of attendance or execution.`);
 
     if (currentActivity.location) {
       lines.push(`Preferred location: ${currentActivity.location}`);
@@ -482,7 +428,7 @@ export function formatScheduleForContext(world: World, agentEid: number): string
   }
 
   if (nextInfo) {
-    lines.push(`Next: ${nextInfo.activity.name} in ${nextInfo.hoursUntil} hour(s)`);
+    lines.push(`Next: ${nextInfo.activity.name} in ${(nextInfo.hoursUntil * 60).toFixed(1)} minutes`);
   }
 
   return lines.join("\n");
@@ -546,13 +492,14 @@ export async function initializeAllSchedules(world: World, useLLM: boolean = fal
  * Ensure every active agent has a schedule planned for the current simulation day.
  *
  * - If an agent has no schedule: create one (default or LLM).
- * - If an agent's schedule is for a previous day: regenerate it.
+ * - Existing daily routines carry forward unchanged unless LLM replanning is
+ *   explicitly enabled. The default installer does not own authored agendas.
  * - Optional throttling via `maxAgents` to avoid bursting LLM calls.
  */
 export async function ensureSchedulesForCurrentDay(
   world: World,
   opts: { useLLM?: boolean; maxAgents?: number } = {}
-): Promise<{ processed: number; created: number; regenerated: number }> {
+): Promise<{ processed: number; created: number; regenerated: number; carriedForward: number }> {
   const useLLM = opts.useLLM === true;
   const maxAgents = Number.isFinite(opts.maxAgents) ? Math.max(1, Math.floor(opts.maxAgents!)) : Infinity;
   const currentDay = getCurrentDay(world);
@@ -561,6 +508,7 @@ export async function ensureSchedulesForCurrentDay(
   let processed = 0;
   let created = 0;
   let regenerated = 0;
+  let carriedForward = 0;
 
   for (const agentEid of agents) {
     if (!Agent.active[agentEid]) continue;
@@ -578,6 +526,14 @@ export async function ensureSchedulesForCurrentDay(
 
     processed++;
 
+    if (!needsNew && !useLLM) {
+      // Same schedule identity/content, new day. The occurrence ledger already
+      // distinguishes daily slots; no need to erase explicit shifts or choices.
+      Schedule.plannedDay[scheduleEid!] = currentDay;
+      carriedForward++;
+      continue;
+    }
+
     if (useLLM) {
       console.log(`[Schedule] Planning day ${currentDay} for ${agentName}...`);
       const generated = await generateSchedule(world, agentEid);
@@ -594,5 +550,5 @@ export async function ensureSchedulesForCurrentDay(
     else regenerated++;
   }
 
-  return { processed, created, regenerated };
+  return { processed, created, regenerated, carriedForward };
 }

@@ -7,11 +7,15 @@
 
 import { addEntity, removeEntity, query, addComponent, removeComponent, getRelationTargets, hasComponent } from "bitecs";
 import type { World } from "../ecs/world";
-import { Name, Description, Traits, ObjectState, ObjectType, Needs, Health, Mind, StimulusSource, ObjectProperties, DynamicDescription, StateTransition, Agent, KanbanCard, KanbanColumn, OrgGovernance, Room, Goal, LastToolResult, ToolResult } from "../ecs/components";
+import { Name, Description, Traits, ObjectState, ObjectType, Needs, Health, Mind, StimulusSource, Agent, KanbanCard, KanbanColumn, OrgGovernance, Room, Goal, LastToolResult, ToolResult } from "../ecs/components";
 import { getDirectContainer, getRoomForEntity, listDirectContents, setLocatedIn } from "../ecs/location";
+import { isEntityPresent } from "../ecs/entity-presence";
 import { AllRelations, HasGoal, HasToolResult } from "../ecs/relations";
 import { hasInventory, syncInventoryCache, tryAddToInventory } from "../ecs/inventory";
 import { ObjectManager } from "./object-manager";
+import { ensureCanonicalObjectState, setTraits, transitionObjectState } from "./object-state";
+export { transitionObjectState } from "./object-state";
+import { captureWorkingMemoryRemoval } from "../cognition/working-memory-removal";
 
 // Map of ECS component names to their actual component objects
 const ECS_COMPONENTS: Record<string, any> = {
@@ -31,7 +35,9 @@ import {
   createDynamicComponent,
 } from "../ecs/dynamic-components";
 import { queueStimulus, broadcastToRoom } from "../cognition/stimulus-queue";
+import { getAgentSensoryCapabilities } from "../cognition/sensory-capabilities";
 import type { EffectDefinition, AffordanceDefinition, ComponentModification } from "./schema";
+import { BASE_AFFORDANCES } from "./schema";
 import { runOfficeTool } from "../office-tools/tool-registry";
 
 export interface EffectContext {
@@ -216,31 +222,6 @@ function interpolate(template: string, ctx: EffectContext): string {
  * Get current traits of an entity as a Set
  * Uses the ECS Traits component (JSON array format) as the source of truth
  */
-function ensureCanonicalObjectState(world: World, eid: number): void {
-  if (!hasComponent(world, eid, ObjectType) || !hasComponent(world, eid, ObjectState) || !hasComponent(world, eid, Traits)) {
-    const meta = getDynamicComponentValues("ObjectMeta", eid);
-    if (!meta) return;
-
-    if (!hasComponent(world, eid, ObjectType) && meta.type) {
-      addComponent(world, eid, ObjectType);
-      ObjectType.typeId[eid] = meta.type;
-      ObjectType.instanceName[eid] = Name.value[eid] || meta.type;
-    }
-
-    if (!hasComponent(world, eid, ObjectState) && meta.state) {
-      addComponent(world, eid, ObjectState);
-      ObjectState.current[eid] = meta.state;
-      ObjectState.previous[eid] = "";
-      ObjectState.lockedUntil[eid] = 0;
-    }
-
-    if (!hasComponent(world, eid, Traits) && meta.traits) {
-      addComponent(world, eid, Traits);
-      const traitsArray = meta.traits.split(",").map((t: string) => t.trim()).filter(Boolean);
-      Traits.active[eid] = JSON.stringify(traitsArray);
-    }
-  }
-}
 
 function getTraits(world: World, eid: number): Set<string> {
   ensureCanonicalObjectState(world, eid);
@@ -274,7 +255,7 @@ function getTraits(world: World, eid: number): Set<string> {
  */
 export function getEffectiveActorTraits(world: World, actorEid: number, visited: Set<number> = new Set()): Set<string> {
   // Prevent infinite loops in case of circular containment
-  if (visited.has(actorEid)) return new Set();
+  if (visited.has(actorEid) || !isEntityPresent(world,actorEid)) return new Set();
   visited.add(actorEid);
 
   // Start with actor's own traits
@@ -285,6 +266,7 @@ export function getEffectiveActorTraits(world: World, actorEid: number, visited:
 
   // For each held item, collect its capability traits (traits starting with "has")
   for (const itemEid of inventoryItems) {
+    if(!isEntityPresent(world,itemEid))continue;
     const itemTraits = getTraits(world, itemEid);
 
     // Add capability traits from the item
@@ -307,199 +289,6 @@ export function getEffectiveActorTraits(world: World, actorEid: number, visited:
   }
 
   return effectiveTraits;
-}
-
-/**
- * Set traits on an entity
- * Updates both the ECS Traits component and ObjectMeta for compatibility
- */
-function setTraits(world: World, eid: number, traits: Set<string>): void {
-  const traitsArray = Array.from(traits);
-
-  // Update ECS Traits component (primary)
-  if (Traits?.active) {
-    if (!hasComponent(world, eid, Traits)) addComponent(world, eid, Traits);
-    Traits.active[eid] = JSON.stringify(traitsArray);
-  }
-
-  // Also update ObjectMeta for backwards compatibility
-  ensureObjectMetaComponent();
-  setDynamicComponentValue("ObjectMeta", eid, "traits", traitsArray.join(","));
-}
-
-/**
- * Recalculate traits based on object type and current state
- * Uses ECS ObjectType and ObjectState components as primary source
- */
-function recalculateTraits(eid: number, ctx: EffectContext): void {
-  ensureCanonicalObjectState(ctx.world, eid);
-
-  const typeId = ObjectType?.typeId?.[eid];
-  const currentState = ObjectState?.current?.[eid];
-
-  if (!typeId) {
-    console.warn(`[recalculateTraits] No typeId for eid=${eid}`);
-    return;
-  }
-
-  const objectType = ctx.worldSchema?.getObjectType(typeId);
-  if (!objectType) {
-    console.warn(`[recalculateTraits] No objectType found for typeId="${typeId}" (eid=${eid})`);
-    return;
-  }
-
-  const stateData = objectType.states[currentState || objectType.defaultState];
-  if (!stateData) {
-    console.warn(`[recalculateTraits] No stateData for state="${currentState}" (type=${typeId}, eid=${eid})`);
-  }
-
-  // Start with base traits
-  const traitSet = new Set<string>(objectType.traits);
-
-  // Add state-specific traits
-  if (stateData?.traits) {
-    stateData.traits.forEach((t: string) => traitSet.add(t));
-  }
-
-  // Remove blocked traits
-  if (stateData?.blockedTraits) {
-    stateData.blockedTraits.forEach((t: string) => traitSet.delete(t));
-  }
-  if (process.env.DEBUG_RECALCULATE_TRAITS === "1") {
-
-  console.log(`[recalculateTraits] eid=${eid}, type=${typeId}, state=${currentState}, traits=[${Array.from(traitSet).join(", ")}]`);
-  }
-  setTraits(ctx.world, eid, traitSet);
-}
-
-function substituteTemplate(
-  template: string,
-  world: World,
-  eid: number,
-  typeDef?: any
-): string {
-  let out = template;
-
-  // Common substitutions
-  out = out.replace(/\{name\}/g, Name.value[eid] || "");
-  out = out.replace(/\{description\}/g, Description.value[eid] || "");
-  out = out.replace(/\{role\}/g, Agent.role?.[eid] || "");
-  out = out.replace(/\{ambience\}/g, Room.ambience?.[eid] || "");
-
-  // ObjectProperties substitutions
-  if (hasComponent(world, eid, ObjectProperties)) {
-    const base: Record<string, string> = {
-      adjective: ObjectProperties.adjective[eid] || "",
-      material: ObjectProperties.material[eid] || "",
-      color: ObjectProperties.color[eid] || "",
-      size: ObjectProperties.size[eid] || "",
-    };
-    for (const [k, v] of Object.entries(base)) {
-      if (v) out = out.replace(new RegExp(`\\{${k}\\}`, "g"), v);
-    }
-
-    const customJson = ObjectProperties.custom[eid];
-    if (customJson) {
-      try {
-        const custom = JSON.parse(customJson) as Record<string, string>;
-        for (const [k, v] of Object.entries(custom)) {
-          if (v) out = out.replace(new RegExp(`\\{${k}\\}`, "g"), v);
-        }
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  // Schema variable defaults
-  if (typeDef?.variables) {
-    for (const [key, def] of Object.entries(typeDef.variables as Record<string, any>)) {
-      if (def?.default) {
-        out = out.replace(new RegExp(`\\{${key}\\}`, "g"), String(def.default));
-      }
-    }
-  }
-
-  return out;
-}
-
-function ensureObjectMetaComponent(): void {
-  if (getDynamicComponent("ObjectMeta")) return;
-  createDynamicComponent({
-    name: "ObjectMeta",
-    description: "Legacy mirror of ObjectType/ObjectState/Traits for compatibility",
-    properties: { type: "string", state: "string", traits: "string" },
-  });
-}
-
-export function transitionObjectState(
-  world: World,
-  targetEid: number,
-  newState: string,
-  ctx: EffectContext,
-  triggeredBy: string = "effect"
-): { ok: boolean; oldState?: string; error?: string } {
-  ensureCanonicalObjectState(world, targetEid);
-
-  if (!hasComponent(world, targetEid, ObjectState) || !hasComponent(world, targetEid, ObjectType)) {
-    return { ok: false, error: "Target missing ObjectState/ObjectType" };
-  }
-
-  const typeId = ObjectType.typeId[targetEid];
-  const typeDef = ctx.worldSchema?.getObjectType(typeId);
-  if (typeDef && !typeDef.states?.[newState]) {
-    const oldState = ObjectState.current[targetEid];
-    return {
-      ok: false,
-      oldState,
-      error: `Invalid state '${newState}' for type '${typeId}'. Available: ${Object.keys(typeDef.states || {}).join(", ")}`,
-    };
-  }
-
-  const oldState = ObjectState.current[targetEid];
-  ObjectState.previous[targetEid] = oldState;
-  ObjectState.current[targetEid] = newState;
-
-  // Update legacy mirror
-  ensureObjectMetaComponent();
-  setDynamicComponentValue("ObjectMeta", targetEid, "state", newState);
-
-  // Recalculate traits
-  recalculateTraits(targetEid, ctx);
-
-  // Update description from schema state (unless dynamically overridden)
-  const stateDef = typeDef?.states?.[newState];
-
-  if (stateDef?.description && !hasComponent(world, targetEid, DynamicDescription)) {
-    Description.value[targetEid] = substituteTemplate(stateDef.description, world, targetEid, typeDef);
-  }
-
-  // Update StimulusSource from state stimuli (simple: pick strongest)
-  const stimuli: any[] = Array.isArray(stateDef?.stimuli) ? stateDef.stimuli : [];
-  if (stimuli.length === 0) {
-    if (hasComponent(world, targetEid, StimulusSource)) {
-      removeComponent(world, targetEid, StimulusSource);
-    }
-  } else {
-    const primary = stimuli.reduce((best, curr) => (curr.intensity ?? 0.5) > (best.intensity ?? 0.5) ? curr : best);
-    if (!hasComponent(world, targetEid, StimulusSource)) {
-      addComponent(world, targetEid, StimulusSource);
-    }
-    StimulusSource.stimulusType[targetEid] = primary.type;
-    StimulusSource.template[targetEid] = substituteTemplate(primary.template, world, targetEid, typeDef);
-    StimulusSource.interval[targetEid] = primary.interval ?? 5000;
-    StimulusSource.lastEmit[targetEid] = 0;
-  }
-
-  // Record transition marker (optional)
-  if (!hasComponent(world, targetEid, StateTransition)) {
-    addComponent(world, targetEid, StateTransition);
-  }
-  StateTransition.targetState[targetEid] = newState;
-  StateTransition.triggeredBy[targetEid] = triggeredBy;
-  StateTransition.timestamp[targetEid] = Date.now();
-
-  return { ok: true, oldState };
 }
 
 /**
@@ -584,6 +373,13 @@ export function executeEffect(effect: EffectDefinition, ctx: EffectContext): Eff
               break;
           }
 
+          // Native needs use 0..100 in either direction (e.g. hunger deficit,
+          // energy reserve). An affordance cannot eat below zero or overflow.
+          if (mod.component === "Needs") {
+            if (typeof newValue !== "number" || !Number.isFinite(newValue))
+              return { success: false, message: "Invalid numeric need effect", changes };
+            newValue = Math.max(0, Math.min(100, newValue));
+          }
           ecsComponent[mod.property][targetEid] = newValue;
           changes.push(`${mod.component}.${mod.property}: ${currentValue} -> ${newValue}`);
           continue;  // Skip dynamic component handling
@@ -667,12 +463,14 @@ export function executeEffect(effect: EffectDefinition, ctx: EffectContext): Eff
     }
 
     case "destroy": {
-      if (targetEid === undefined) {
+      if (targetEid === undefined || !isEntityPresent(ctx.world, targetEid)) {
         return { success: false, message: "Target not found", changes: [] };
       }
 
       const name = Name.value[targetEid];
+      const recordRemoval = captureWorkingMemoryRemoval(ctx.world, targetEid, ctx.actorEid);
       removeEntity(ctx.world, targetEid);
+      recordRemoval();
       ctx.registry.byName.delete(name);
       ctx.registry.byId.delete(targetEid);
       changes.push(`destroyed: ${name}`);
@@ -683,29 +481,34 @@ export function executeEffect(effect: EffectDefinition, ctx: EffectContext): Eff
       const content = interpolate(effect.stimulusContent || "", ctx);
       const stimulusType = effect.stimulusType || "event";
       const actorName = ctx.actorEid !== undefined ? Name.value[ctx.actorEid] : "world";
+      let queued = 0, rejected = 0;
 
       if (effect.target === "nearby") {
         // Broadcast to room
         if (ctx.actorEid !== undefined) {
           const roomEid = getRoomForEntity(ctx.world, ctx.actorEid);
           if (roomEid !== undefined) {
-            broadcastToRoom(ctx.world, roomEid, {
+            const delivery = broadcastToRoom(ctx.world, roomEid, {
               type: stimulusType,
               content,
               source: actorName,
             }, ctx.actorEid);
+            queued += delivery.accepted; rejected += delivery.rejected;
           }
         }
       } else if (targetEid !== undefined) {
         // Send to specific target
-        queueStimulus({
+        const accepted = queueStimulus(ctx.world, {
           targetEid,
           type: stimulusType,
           content,
           source: actorName,
         });
+        if (accepted) queued++; else rejected++;
       }
-      changes.push(`stimulus: ${stimulusType}`);
+      if (rejected) return { success: false, message: `Stimulus delivery rejected for ${rejected} recipients; ${queued} queued`,
+        changes: queued ? [`stimulus: ${stimulusType} (queued ${queued})`] : [] };
+      changes.push(`stimulus: ${stimulusType} (queued ${queued})`);
       break;
     }
 
@@ -836,7 +639,7 @@ export function executeEffect(effect: EffectDefinition, ctx: EffectContext): Eff
       if (result.pending && result.jobId) {
         const recipient = resolveTarget(effect.toolResultTarget || "actor", ctx);
         if (recipient !== undefined) {
-          queueStimulus({
+          queueStimulus(ctx.world, {
             targetEid: recipient,
             type: effect.toolResultType || "tool_result",
             content: `[Tool:${effect.toolId}] ${result.summary}`,
@@ -878,7 +681,7 @@ export function executeEffect(effect: EffectDefinition, ctx: EffectContext): Eff
         if (stdout.trim()) parts.push(`stdout:\n${clip(stdout)}`);
         if (stderr.trim()) parts.push(`stderr:\n${clip(stderr)}`);
 
-        queueStimulus({
+        queueStimulus(ctx.world, {
           targetEid: recipient,
           type: effect.toolResultType || "tool_result",
           content: parts.join("\n\n"),
@@ -967,6 +770,20 @@ export function canUseAffordance(
   actorEid: number,
   targetEid: number
 ): { available: boolean; reason?: string } {
+  if(!isEntityPresent(world,actorEid)||!isEntityPresent(world,targetEid))return {available:false,reason:"Actor or target is no longer physically present"};
+  if (affordance.unavailableReason) return { available: false, reason: affordance.unavailableReason };
+  // Old snapshots predate unavailableReason. Recognize only the original
+  // stimulus-only placeholders; a real replacement backend is not disabled by
+  // its command name. No restore may turn a canned receipt into delivery.
+  const base = BASE_AFFORDANCES[affordance.name];
+  const placeholder = base?.unavailableReason && base.effects?.length === 1 ? base.effects[0] : undefined;
+  const effect = affordance.effects?.length === 1 ? affordance.effects[0] : undefined;
+  if (placeholder && effect && Object.keys(effect).length === Object.keys(placeholder).length
+    && Object.entries(placeholder).every(([field, value]) => (effect as unknown as Record<string, unknown>)[field] === value))
+    return { available: false, reason: base.unavailableReason };
+  if (affordance.name === "examine" && getAgentSensoryCapabilities(world, actorEid).visual <= 0) {
+    return { available: false, reason: "Visual inspection is unavailable without sight" };
+  }
   // Grounding for canonical containment:
   // - take: only if target is directly in the actor's room (on the ground) and not already held
   // - drop: only if target is directly located in the actor
@@ -984,8 +801,6 @@ export function canUseAffordance(
   }
 
   const targetTraits = getTraits(world, targetEid);
-  // Use DYNAMIC resolution for actor - capabilities come from held items
-  const actorTraits = getEffectiveActorTraits(world, actorEid);
 
   // Check target requirements
   for (const req of affordance.requires) {
@@ -1006,15 +821,20 @@ export function canUseAffordance(
     }
   }
 
-  // Check actor requirements (using DYNAMIC traits from held items)
-  for (const req of affordance.actorRequires || []) {
-    if (!actorTraits.has(req)) {
-      // Show what actor currently has for context
-      const currentTraits = Array.from(actorTraits).filter(t => t.startsWith("has"));
-      const context = currentTraits.length > 0
-        ? `you have: [${currentTraits.join(", ")}]`
-        : "you have no tool capabilities";
-      return { available: false, reason: `Actor lacks trait: ${req} (${context})` };
+  // Only an otherwise eligible action with actor requirements needs inventory
+  // traversal. Resolve afresh here: pickup, drop and tool state changes must
+  // affect this admission, not a cached actor capability projection.
+  if (affordance.actorRequires?.length) {
+    const actorTraits = getEffectiveActorTraits(world, actorEid);
+    for (const req of affordance.actorRequires) {
+      if (!actorTraits.has(req)) {
+        // Show what actor currently has for context
+        const currentTraits = Array.from(actorTraits).filter(t => t.startsWith("has"));
+        const context = currentTraits.length > 0
+          ? `you have: [${currentTraits.join(", ")}]`
+          : "you have no tool capabilities";
+        return { available: false, reason: `Actor lacks trait: ${req} (${context})` };
+      }
     }
   }
 
@@ -1040,6 +860,11 @@ export function executeAffordance(
     .toLowerCase()
     .replace(/^["'`]+|["'`]+$/g, "")
     .replace(/[^\p{L}\p{N}_-]+$/gu, "");
+
+  // A failed native visual action must not fall through to a permissive variant.
+  if (normalizedAffordanceName === "examine" && getAgentSensoryCapabilities(ctx.world, ctx.actorEid).visual <= 0) {
+    return { success: false, message: "Visual inspection is unavailable without sight", changes: [] };
+  }
 
   // Try to find a usable affordance - first exact match, then variants
   let affordance = ctx.worldSchema?.getAffordance(normalizedAffordanceName);

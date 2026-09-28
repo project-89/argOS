@@ -14,11 +14,13 @@
  * evolves gradually rather than being replaced.
  */
 
-import { hasComponent, query } from "bitecs";
-import { Agent, BehaviorPolicy, Name } from "../ecs/components";
+import { entityExists, hasComponent, query } from "bitecs";
+import { Agent, BehaviorPolicy, Name, WorkingMemoryIdentity } from "../ecs/components";
 import type { World } from "../ecs/world";
 import { chronicle } from "./simulation-chronicle";
 import { onAffordanceRegistered } from "../world/schema";
+import { workingMemoryEntityRef } from "./working-memory";
+import { getCommittedEvents, subscribeCommittedSourceStop } from "../runtime/committed-events";
 import {
   type BehaviorNode,
   type PolicyAction,
@@ -58,14 +60,39 @@ interface ReinforcementEntry {
 // STATE
 // =============================================================================
 
-/** Per-agent reinforcement history: action signature → success rate */
-const reinforcementState: Map<number, Map<string, ReinforcementEntry>> = new Map();
-
-/** Track which affordances each agent has already grown a branch for */
-const knownAffordances: Map<number, Set<string>> = new Map();
-
-/** Track which memory-keywords each agent has already grown a branch for */
-const knownMemoryBranches: Map<number, Set<string>> = new Map();
+type ActorLearning = { ownerKey: string; reinforcement: Map<string, ReinforcementEntry>;
+  affordances: Set<string>; memories: Set<string> };
+let learningStates = new WeakMap<World, Map<number, ActorLearning>>();
+// Compatibility for old operator-only EID inspection. These weak hints never
+// select mutation ownership, and cannot retain every world created by a host.
+const debugOwners = new Map<number, { world: WeakRef<World>; key: string }>();
+function learning(world: World, eid: number, create = false): ActorLearning | undefined {
+  const states = learningStates.get(world);
+  if (!entityExists(world, eid) || !hasComponent(world, eid, Agent)) {
+    states?.delete(eid); return;
+  }
+  const stopped = getCommittedEvents(world).stopped;
+  const key = create && !stopped ? workingMemoryEntityRef(world, eid)?.key
+    : hasComponent(world, eid, WorkingMemoryIdentity) ? WorkingMemoryIdentity.id[eid] : undefined;
+  const existing = states?.get(eid);
+  if (existing && existing.ownerKey !== key) states!.delete(eid);
+  // A stopped source admits neither observations nor learning writes, but an
+  // operator inspection must not erase the same actor's accumulated history.
+  if (stopped) return;
+  if (existing && existing.ownerKey === key) return existing;
+  if (!create || !key) return;
+  const state: ActorLearning = { ownerKey: key, reinforcement: new Map(), affordances: new Set(), memories: new Set() };
+  const next = states ?? new Map<number, ActorLearning>(); next.set(eid, state); learningStates.set(world, next);
+  debugOwners.delete(eid); debugOwners.set(eid, { world: new WeakRef(world), key });
+  while (debugOwners.size > 1024) debugOwners.delete(debugOwners.keys().next().value!);
+  return state;
+}
+function inspectLearning(eid: number, world?: World): ActorLearning | undefined {
+  const hint = debugOwners.get(eid), owner = world ?? hint?.world.deref();
+  if (!owner) return;
+  const state = learning(owner, eid);
+  return world || state?.ownerKey === hint?.key ? state : undefined;
+}
 
 // Tuning constants
 const WEIGHT_BOOST = 0.5;         // Weight increase for success
@@ -93,11 +120,8 @@ export function recordOutcome(world: World, outcome: ActionOutcome): void {
 
   // Update reinforcement state
   const sig = actionSignature(action, affordance);
-  let agentState = reinforcementState.get(agentEid);
-  if (!agentState) {
-    agentState = new Map();
-    reinforcementState.set(agentEid, agentState);
-  }
+  const agentState = learning(world, agentEid, true)?.reinforcement;
+  if (!agentState) return;
 
   const entry = agentState.get(sig) || { successRate: 0.5, attempts: 0, lastUpdated: 0 };
   entry.attempts++;
@@ -219,11 +243,8 @@ export function growMemoryBranch(
   if (!BehaviorPolicy.enabled[agentEid]) return false;
 
   // Don't grow duplicate branches for the same memory keyword
-  let known = knownMemoryBranches.get(agentEid);
-  if (!known) {
-    known = new Set();
-    knownMemoryBranches.set(agentEid, known);
-  }
+  const known = learning(world, agentEid, true)?.memories;
+  if (!known) return false;
   if (known.has(memoryKeyword.toLowerCase())) return false;
 
   const raw = String(BehaviorPolicy.treeJson[agentEid] || "").trim();
@@ -286,11 +307,8 @@ export function growAffordanceBranch(
   if (!BehaviorPolicy.enabled[agentEid]) return false;
 
   // Don't grow duplicate branches for the same affordance
-  let known = knownAffordances.get(agentEid);
-  if (!known) {
-    known = new Set();
-    knownAffordances.set(agentEid, known);
-  }
+  const known = learning(world, agentEid, true)?.affordances;
+  if (!known) return false;
   if (known.has(affordanceName.toLowerCase())) return false;
 
   const raw = String(BehaviorPolicy.treeJson[agentEid] || "").trim();
@@ -411,8 +429,9 @@ function actionSignature(action: PolicyAction, affordance?: string): string {
 // =============================================================================
 
 /** Get the reinforcement state for an agent (for debugging/UI) */
-export function getReinforcementState(agentEid: number): Map<string, ReinforcementEntry> | undefined {
-  return reinforcementState.get(agentEid);
+export function getReinforcementState(agentEid: number, world?: World): Map<string, ReinforcementEntry> | undefined {
+  const state = inspectLearning(agentEid, world);
+  return state ? new Map([...state.reinforcement].map(([key, value]) => [key, { ...value }])) : undefined;
 }
 
 /** Get the number of nodes in an agent's current tree */
@@ -428,15 +447,16 @@ export function getTreeSize(world: World, agentEid: number): number {
 }
 
 /** Get growth history for an agent */
-export function getGrowthSummary(agentEid: number): {
+export function getGrowthSummary(agentEid: number, world?: World): {
   knownAffordanceCount: number;
   knownMemoryBranchCount: number;
   reinforcementEntries: number;
 } {
+  const state = inspectLearning(agentEid, world);
   return {
-    knownAffordanceCount: knownAffordances.get(agentEid)?.size ?? 0,
-    knownMemoryBranchCount: knownMemoryBranches.get(agentEid)?.size ?? 0,
-    reinforcementEntries: reinforcementState.get(agentEid)?.size ?? 0,
+    knownAffordanceCount: state?.affordances.size ?? 0,
+    knownMemoryBranchCount: state?.memories.size ?? 0,
+    reinforcementEntries: state?.reinforcement.size ?? 0,
   };
 }
 
@@ -444,7 +464,8 @@ export function getGrowthSummary(agentEid: number): {
 // AUTO-DISCOVERY: hook into affordance registration
 // =============================================================================
 
-let discoveryInitialized = false;
+const discoveries = new WeakMap<World, { stop(): void }>();
+const discoveryRefs = new Set<WeakRef<{ stop(): void }>>();
 
 /**
  * Initialize auto-discovery: when a new affordance is registered by the
@@ -454,10 +475,11 @@ let discoveryInitialized = false;
  * Call once during simulation startup.
  */
 export function initializeAffordanceDiscovery(world: World): void {
-  if (discoveryInitialized) return;
-  discoveryInitialized = true;
+  if (discoveries.has(world) || getCommittedEvents(world).stopped) return;
+  let unsubscribeStop = () => {};
 
-  onAffordanceRegistered((def: any) => {
+  const unsubscribe = onAffordanceRegistered((def: any) => {
+    if (getCommittedEvents(world).stopped || getCommittedEvents(world).sourceId !== source) return;
     // Skip base affordances (registered at startup before agents exist)
     if (!def.requires || def.requires.length === 0) return;
     const trait = def.requires[0];
@@ -475,12 +497,20 @@ export function initializeAffordanceDiscovery(world: World): void {
       console.log(`[Discovery] ${grewCount} agents learned about new affordance: ${def.name}`);
     }
   });
+  const state = { stop: () => { unsubscribe(); unsubscribeStop(); discoveries.delete(world); discoveryRefs.delete(ref); } };
+  const ref = new WeakRef(state);
+  discoveries.set(world, state); discoveryRefs.add(ref);
+  for (const old of discoveryRefs) if (!old.deref()) discoveryRefs.delete(old);
+  unsubscribeStop = subscribeCommittedSourceStop(world, state.stop);
+  // Legacy callers may not have established a ledger yet. The stop subscription
+  // does that; capture its actual epoch rather than a permanently stale null.
+  const source = getCommittedEvents(world).sourceId;
 }
 
 /** Reset all learning state (for tests) */
 export function resetLearningState(): void {
-  reinforcementState.clear();
-  knownAffordances.clear();
-  knownMemoryBranches.clear();
-  discoveryInitialized = false;
+  learningStates = new WeakMap();
+  debugOwners.clear();
+  for (const ref of [...discoveryRefs]) ref.deref()?.stop();
+  discoveryRefs.clear();
 }

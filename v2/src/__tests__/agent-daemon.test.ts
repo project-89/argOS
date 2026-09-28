@@ -227,7 +227,7 @@ describe("Agent Daemon System", () => {
   });
 
   describe("Concern Detection", () => {
-    it("should detect low arousal concern", () => {
+    it("should not treat low arousal alone as a concern", () => {
       const state: AgentStateSnapshot = {
         timestamp: Date.now(),
         arousal: 0.1, // Very low
@@ -241,7 +241,7 @@ describe("Agent Daemon System", () => {
 
       const concerns = detectConcerns(state, null, "Test Agent");
 
-      expect(concerns.some(c => c.type === "low_arousal")).toBe(true);
+      expect(concerns).toEqual([]);
     });
 
     it("should detect high arousal concern", () => {
@@ -280,7 +280,7 @@ describe("Agent Daemon System", () => {
       expect(concerns.find(c => c.type === "danger")?.severity).toBe("high");
     });
 
-    it("should detect goal drift when no goals", () => {
+    it("should permit rest without an active goal", () => {
       const state: AgentStateSnapshot = {
         timestamp: Date.now(),
         arousal: 0.5,
@@ -294,10 +294,10 @@ describe("Agent Daemon System", () => {
 
       const concerns = detectConcerns(state, null, "Test Agent");
 
-      expect(concerns.some(c => c.type === "goal_drift")).toBe(true);
+      expect(concerns).toEqual([]);
     });
 
-    it("should detect stuck agent", () => {
+    it("should not infer blockage from unchanged position and focus", () => {
       const previous: AgentStateSnapshot = {
         timestamp: Date.now() - 10000,
         position: { x: 5, y: 5 },
@@ -324,12 +324,12 @@ describe("Agent Daemon System", () => {
 
       const concerns = detectConcerns(current, previous, "Test Agent");
 
-      expect(concerns.some(c => c.type === "stuck")).toBe(true);
+      expect(concerns).toEqual([]);
     });
   });
 
   describe("Growth Opportunity Detection", () => {
-    it("should detect ready_for_challenge when agent is healthy and stable", () => {
+    it("should detect renewed readiness after recovery, not stable health alone", () => {
       const state: AgentStateSnapshot = {
         timestamp: Date.now(),
         arousal: 0.5,
@@ -342,12 +342,13 @@ describe("Agent Daemon System", () => {
         stuckTicks: 0,
       };
 
-      const opportunities = detectGrowthOpportunities(state, null, "Test Agent", 0.1);
+      expect(detectGrowthOpportunities(state, null, "Test Agent", 0.1)).toEqual([]);
+      const opportunities = detectGrowthOpportunities(state, { ...state, health: 20 }, "Test Agent", 0.1);
 
       expect(opportunities.some(o => o.type === "ready_for_challenge")).toBe(true);
     });
 
-    it("should detect breakthrough_possible during high arousal flow state", () => {
+    it("should not infer an impending breakthrough from arousal alone", () => {
       const state: AgentStateSnapshot = {
         timestamp: Date.now(),
         arousal: 0.75, // High but not overwhelming
@@ -362,10 +363,10 @@ describe("Agent Daemon System", () => {
 
       const opportunities = detectGrowthOpportunities(state, null, "Test Agent", 0.1);
 
-      expect(opportunities.some(o => o.type === "breakthrough_possible")).toBe(true);
+      expect(opportunities).toEqual([]);
     });
 
-    it("should detect needs_conflict when arousal is flat", () => {
+    it("should not prescribe conflict when arousal is steady", () => {
       const state: AgentStateSnapshot = {
         timestamp: Date.now(),
         arousal: 0.45, // Mid-range, flat
@@ -380,7 +381,7 @@ describe("Agent Daemon System", () => {
 
       const opportunities = detectGrowthOpportunities(state, null, "Test Agent", 0.1);
 
-      expect(opportunities.some(o => o.type === "needs_conflict")).toBe(true);
+      expect(opportunities).toEqual([]);
     });
 
     it("should include suggested challenges", () => {
@@ -396,8 +397,9 @@ describe("Agent Daemon System", () => {
         stuckTicks: 0,
       };
 
-      const opportunities = detectGrowthOpportunities(state, null, "Test Agent", 0.1);
+      const opportunities = detectGrowthOpportunities(state, { ...state, health: 20 }, "Test Agent", 0.1);
 
+      expect(opportunities).toHaveLength(1);
       for (const opp of opportunities) {
         expect(opp.suggestedChallenge).toBeDefined();
         expect(opp.suggestedChallenge.length).toBeGreaterThan(0);

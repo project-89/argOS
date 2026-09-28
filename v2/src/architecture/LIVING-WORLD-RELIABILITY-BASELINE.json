@@ -1,0 +1,28 @@
+{
+  "recordedAt": "2026-09-06T23:12:36.842Z",
+  "branch": "main",
+  "head": "fe67f548bdbf2fa6ef9560ec660253b7b3c6ec52",
+  "trackedDiffSha256": "a7bd4cf93393612e03241af8f2739c759ca7524b326e33d9ec0d246d21393482",
+  "statusSha256": "77fcb562eca0186238a98c289d9e841cc480701dbb43e14effaa00006c8b2fe9",
+  "models": {
+    "agent": "gemini-3.8-flash",
+    "code": "gemini-3.8-flash",
+    "render": "gemini-3.8-flash"
+  },
+  "files": {
+    "src/persistence/world-persistence.ts": "5517e0d228e05a95ce0b1f4fea683c83c9d4353c2b6e3ecd8fa82e6093c8313a",
+    "src/ecs/components.ts": "eb123669d5e2993b47238dbaf5ffc60ccc4108f5fec2abadacf129a1e8fa04c0",
+    "src/ecs/world.ts": "d4b78122901614c7b2cef7d9c10f33f6c9fc50f2bf23f9f3fed7b3bad1ef5738",
+    "src/ecs/component-registry.ts": "931a47bc81c658eebc74079f893ee772c9be50a74b3c753962eb6e6ac988f25c",
+    "src/cognition/social-memory.ts": "521e35e3c5aefd8c3b3e6eae960fd1e0fdb4dceeac2c0ab693aa845c5a922125",
+    "src/cognition/activity-review.ts": "6e5db074afe7a6492eb1a6862acd6adff465fb62737d363685e38e534dfd2cf4",
+    "src/cognition/cognition-system.ts": "d4823b3c9a72d46c81049d0339480305875613ace5d6231bfb907f80437a265e",
+    "src/cognition/actor-continuation.ts": "f6515a23e73400ca5fdba7e0c733185c4c3a2ca5eaf885d23d3aa4012e24f0f0",
+    "src/systems/scheduled-activity-systems.ts": "3b8bba005a7ffe0b9312af20c9b23188482573364334356ccf81d040347377f7",
+    "src/world/schema.ts": "0f1f0efb168708075d0e7d37eca7be6547bf98c7dc44b7a1341d9d7404b0cbec",
+    "src/demo/apartment-sitcom.ts": "1767382b8d2bab02db1a3c11852c027a7f823185e8161a071a3ac4cde18879e0",
+    "src/index.ts": "b40114c3320d474b8c63a6d33cab62f397dc58b48ca80b4e1f25bc0e0f3b181c",
+    "src/llm/config.ts": "29fde3d4f27845be2e42732f61e5e5bff307339d17687adb3abbe905855e744c",
+    "package.json": "83a91b41564814a5c02c13500875c46b171cc21db15f5fc78b7895f066fccd97"
+  }
+}

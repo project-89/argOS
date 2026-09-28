@@ -16,8 +16,8 @@
  *   - Failure learning: goals that fail create avoidance branches
  */
 
-import { hasComponent, getRelationTargets } from "bitecs";
-import { Agent, BehaviorPolicy, Goal, Plan, Name, Needs, LastAction } from "../ecs/components";
+import { addComponent, removeComponent, entityExists, hasComponent, getRelationTargets } from "bitecs";
+import { Agent, AuthoredAspirations, WorkingMemoryIdentity, Removed, BehaviorPolicy, Goal, Plan, Name, Needs, LastAction } from "../ecs/components";
 import { HasGoal, HasPlan } from "../ecs/relations";
 import type { World } from "../ecs/world";
 import {
@@ -28,6 +28,11 @@ import {
 import { compileSequenceToSkill, hasSkill, registerSkill, composeSkills, listSkills } from "./skill-registry";
 import { chronicle } from "./simulation-chronicle";
 import { getRoomForEntity } from "../ecs/location";
+import { growMemoryBranch } from "./policy-learning";
+import { workingMemoryEntityRef } from "./working-memory";
+import { assertSimulationTaskActive } from "../runtime/task-scope";
+import { getCommittedEvents } from "../runtime/committed-events";
+import { createHash } from "node:crypto";
 
 // =============================================================================
 // TYPES
@@ -51,15 +56,15 @@ export interface GoalCompletionEvent {
 // =============================================================================
 
 /** Track goals per agent and the actions taken during pursuit */
-const goalActionLog: Map<number, Map<number, Array<{
+export type SuccessfulGoalAction = {
   type: string; target?: string; content?: string; affordance?: string; tick: number;
-}>>> = new Map();
+};
+
+const goalActionLog: Map<number, Map<number, SuccessfulGoalAction[]>> = new Map();
+let worldGoalActionLog = new WeakMap<World, Map<number, Map<number, SuccessfulGoalAction[]>>>();
 
 /** Track which goal-skills have been compiled per agent */
 const compiledGoalSkills: Map<number, Set<string>> = new Map();
-
-/** Agent aspirations — long-term wants */
-const aspirations: Map<number, string[]> = new Map();
 
 let tickCounter = 0;
 
@@ -75,13 +80,15 @@ export function trackGoalAction(
   world: World,
   agentEid: number,
   action: { type: string; target?: string; content?: string; affordance?: string },
+  goalEid?: number,
 ): void {
   tickCounter++;
 
   // Get active goals for this agent
   const goalEids = getRelationTargets(world as any, agentEid, HasGoal as any)
     .filter((gid: number) => hasComponent(world as any, gid, Goal as any))
-    .filter((gid: number) => String(Goal.status[gid] || "") === "active");
+    .filter((gid: number) => String(Goal.status[gid] || "") === "active" && (goalEid === undefined || gid === goalEid))
+    .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0)).slice(0, 1);
 
   if (goalEids.length === 0) return;
 
@@ -91,7 +98,7 @@ export function trackGoalAction(
     goalActionLog.set(agentEid, agentLog);
   }
 
-  // Record this action against all active goals
+  // Credit only the goal being pursued, not every suspended/background desire.
   for (const goalEid of goalEids) {
     let actions = agentLog.get(goalEid);
     if (!actions) {
@@ -101,7 +108,28 @@ export function trackGoalAction(
     actions.push({ ...action, tick: tickCounter });
     // Cap at 20 steps per goal
     if (actions.length > 20) actions.shift();
+
+    let worldLog = worldGoalActionLog.get(world);
+    if (!worldLog) { worldLog = new Map(); worldGoalActionLog.set(world, worldLog); }
+    let worldAgentLog = worldLog.get(agentEid);
+    if (!worldAgentLog) { worldAgentLog = new Map(); worldLog.set(agentEid, worldAgentLog); }
+    let worldActions = worldAgentLog.get(goalEid);
+    if (!worldActions) { worldActions = []; worldAgentLog.set(goalEid, worldActions); }
+    worldActions.push({ ...action, tick: tickCounter });
+    if (worldActions.length > 20) worldActions.shift();
   }
+}
+
+/** Successful, goal-attributed actions are stronger learning evidence than a
+ * model-authored plan: they are recorded only after the world accepts them. */
+export function getSuccessfulGoalActions(
+  world: World,
+  agentEid: number,
+  goalEid: number,
+): SuccessfulGoalAction[] {
+  if (!hasComponent(world as any, goalEid, Goal as any)) return [];
+  if (!getRelationTargets(world as any, agentEid, HasGoal as any).includes(goalEid)) return [];
+  return (worldGoalActionLog.get(world)?.get(agentEid)?.get(goalEid) || []).map(action => ({ ...action }));
 }
 
 // =============================================================================
@@ -179,6 +207,7 @@ export function onGoalCompleted(world: World, agentEid: number, goalEid: number)
 
   // Clean up the action log for this goal
   agentLog?.delete(goalEid);
+  worldGoalActionLog.get(world)?.get(agentEid)?.delete(goalEid);
 }
 
 /**
@@ -191,7 +220,6 @@ export function onGoalFailed(world: World, agentEid: number, goalEid: number): v
 
   // Record failure as a negative memory for the learning system
   try {
-    const { growMemoryBranch } = require("./policy-learning");
     // Extract a keyword from the goal
     const keyword = goalDesc.split(/\s+/).find(w => w.length > 4)?.toLowerCase();
     if (keyword) {
@@ -202,6 +230,7 @@ export function onGoalFailed(world: World, agentEid: number, goalEid: number): v
 
   // Clean up the action log
   goalActionLog.get(agentEid)?.delete(goalEid);
+  worldGoalActionLog.get(world)?.get(agentEid)?.delete(goalEid);
 }
 
 // =============================================================================
@@ -369,31 +398,131 @@ function insertGoalSkillBranch(
 // ASPIRATIONS — Long-term wants that drive goal creation
 // =============================================================================
 
+// Components use process-global sparse arrays. A world must not adopt another
+// world's overwritten slot merely because the numerical entity ID matches.
+// This is provenance, not a second payload store: the ECS remains authoritative.
+// Concurrent worlds with overlapping IDs still require process isolation for
+// the other shared ECS components; aspirations fail closed under that collision.
+const aspirationBindings = new WeakMap<World, Map<number, { ownerKey: string; digest: string }>>();
+interface AuthoredMotivations { version: 1; drives: string[]; aspirations: string[] }
+function readAuthoredMotivations(itemsJson: string): AuthoredMotivations | null {
+  try {
+    const value = JSON.parse(itemsJson);
+    const strings = (items: unknown): items is string[] => Array.isArray(items) && items.every(item => typeof item === "string");
+    // Old snapshots did not distinguish drives from aspirations. Preserve their
+    // exact meaning as long-term wants; do not invent a formative past on load.
+    if (strings(value)) return { version: 1, drives: [], aspirations: value };
+    if (value && value.version === 1 && strings(value.drives) && strings(value.aspirations)
+      && Object.keys(value).every(key => ["version", "drives", "aspirations"].includes(key))) return value;
+  } catch { /* Invalid private state fails closed. */ }
+  return null;
+}
+function aspirationDigest(itemsJson: string): string {
+  return createHash("sha256").update(itemsJson).digest("hex");
+}
+function bindAspirations(world: World, eid: number): void {
+  let bindings = aspirationBindings.get(world);
+  if (!bindings) { bindings = new Map(); aspirationBindings.set(world, bindings); }
+  bindings.set(eid, { ownerKey: AuthoredAspirations.ownerKey[eid], digest: aspirationDigest(AuthoredAspirations.itemsJson[eid]) });
+}
+
+/** Persistence-only rebind after all of an actor's components have loaded. */
+export function restoreAuthoredAspirationOwnership(world: World, eid: number): void {
+  assertSimulationTaskActive();
+  if (!aspirationComponentOwner(world, eid)) return;
+  if (readAuthoredMotivations(AuthoredAspirations.itemsJson[eid])) bindAspirations(world, eid);
+}
+
+/** A validated private persistence record; never serialize a foreign array slot. */
+export function snapshotAuthoredAspirations(world: World, eid: number): { ownerKey: string; itemsJson: string } | null {
+  return ownsAspirations(world, eid)
+    ? { ownerKey: AuthoredAspirations.ownerKey[eid], itemsJson: AuthoredAspirations.itemsJson[eid] } : null;
+}
+
 /**
- * Set aspirations for an agent. These are long-term wants like
+ * Replace ambitions, preserving separately authored core drives. These are long-term wants like
  * "build a house", "become master blacksmith", "find a wife".
  *
  * Aspirations are injected into the agent's LLM context so the LLM
  * creates goals aligned with them.
  */
-export function setAspirations(agentEid: number, wants: string[]): void {
-  aspirations.set(agentEid, wants);
+export function setAspirations(world: World, agentEid: number, wants: string[]): void {
+  setMotivations(world, agentEid, wants, "aspirations");
+}
+
+/** Authored enduring motives are distinct from current long-term ambitions.
+ * Updating ambitions must not silently erase the character's formative drives. */
+export function setCoreDrives(world: World, agentEid: number, drives: string[]): void {
+  setMotivations(world, agentEid, drives, "drives");
+}
+
+function setMotivations(world: World, agentEid: number, wants: string[], field: "drives" | "aspirations"): void {
+  assertSimulationTaskActive();
+  if (!aspirationActor(world, agentEid) || getCommittedEvents(world).stopped
+    || !Array.isArray(wants) || !wants.every(want => typeof want === "string")) return;
+  // Existing, foreign/corrupted component data cannot grant write authority.
+  // A newly created/recycled actor has no component membership and can bind.
+  if (hasComponent(world, agentEid, AuthoredAspirations) && !ownsAspirations(world, agentEid)) return;
+  const previous = hasComponent(world, agentEid, AuthoredAspirations)
+    ? readAuthoredMotivations(AuthoredAspirations.itemsJson[agentEid]) : { version: 1 as const, drives: [], aspirations: [] };
+  if (!previous) return;
+  const owner = workingMemoryEntityRef(world, agentEid); if (!owner) return;
+  addComponent(world, agentEid, AuthoredAspirations);
+  AuthoredAspirations.ownerKey[agentEid] = owner.key;
+  AuthoredAspirations.itemsJson[agentEid] = JSON.stringify({ ...previous, [field]: [...wants] });
+  bindAspirations(world, agentEid);
 }
 
 /**
  * Get agent's aspirations for LLM context injection.
  */
-export function getAspirations(agentEid: number): string[] {
-  return aspirations.get(agentEid) || [];
+export function getAspirations(world: World, agentEid: number): string[] {
+  // Compatibility projection for existing cognition consumers. No second store.
+  return [...new Set([...getCoreDrives(world, agentEid), ...getLongTermAspirations(world, agentEid)])];
+}
+export function getCoreDrives(world: World, agentEid: number): string[] {
+  return getMotivations(world, agentEid, "drives");
+}
+export function getLongTermAspirations(world: World, agentEid: number): string[] {
+  return getMotivations(world, agentEid, "aspirations");
+}
+function getMotivations(world: World, agentEid: number, field: "drives" | "aspirations"): string[] {
+  if (!ownsAspirations(world, agentEid)) return [];
+  return [...(readAuthoredMotivations(AuthoredAspirations.itemsJson[agentEid])?.[field] ?? [])];
+}
+
+/** Release constructor-owned state when an additive NPC construction rolls back. */
+export function clearAspirations(world: World, agentEid: number): void {
+  if (!ownsAspirations(world, agentEid)) return;
+  assertSimulationTaskActive();
+  removeComponent(world, agentEid, AuthoredAspirations);
+  delete AuthoredAspirations.ownerKey[agentEid]; delete AuthoredAspirations.itemsJson[agentEid];
+  aspirationBindings.get(world)?.delete(agentEid);
+}
+
+function aspirationActor(world: World, eid: number): boolean {
+  return entityExists(world, eid) && hasComponent(world, eid, Agent) && !hasComponent(world, eid, Removed);
+}
+function aspirationComponentOwner(world: World, eid: number): boolean {
+  return aspirationActor(world, eid) && hasComponent(world, eid, AuthoredAspirations)
+    && hasComponent(world, eid, WorkingMemoryIdentity) && !!WorkingMemoryIdentity.id[eid]
+    && AuthoredAspirations.ownerKey[eid] === WorkingMemoryIdentity.id[eid];
+}
+function ownsAspirations(world: World, eid: number): boolean {
+  const binding = aspirationBindings.get(world)?.get(eid);
+  return !!binding && aspirationComponentOwner(world, eid)
+    && binding.ownerKey === AuthoredAspirations.ownerKey[eid]
+    && typeof AuthoredAspirations.itemsJson[eid] === "string"
+    && binding.digest === aspirationDigest(AuthoredAspirations.itemsJson[eid]);
 }
 
 /**
  * Format aspirations for inclusion in agent LLM prompt.
  */
-export function formatAspirationsForContext(agentEid: number): string {
-  const wants = aspirations.get(agentEid);
-  if (!wants || wants.length === 0) return "";
-  return `\nLONG-TERM ASPIRATIONS (what you dream of achieving):\n${wants.map(w => `  - ${w}`).join("\n")}\n`;
+export function formatAspirationsForContext(world: World, agentEid: number): string {
+  const drives = getCoreDrives(world, agentEid), wants = getLongTermAspirations(world, agentEid);
+  return [drives.length ? `CORE DRIVES (enduring motives, not obligations):\n${drives.map(w => `  - ${w}`).join("\n")}` : "",
+    wants.length ? `LONG-TERM ASPIRATIONS (what you dream of achieving):\n${wants.map(w => `  - ${w}`).join("\n")}` : ""].filter(Boolean).join("\n");
 }
 
 // =============================================================================
@@ -412,7 +541,7 @@ function countNodes(node: any): number {
 // INTROSPECTION
 // =============================================================================
 
-export function getGoalLearningStats(agentEid: number): {
+export function getGoalLearningStats(world: World, agentEid: number): {
   compiledGoalSkills: number;
   activeGoalActions: number;
   aspirations: string[];
@@ -420,13 +549,14 @@ export function getGoalLearningStats(agentEid: number): {
   return {
     compiledGoalSkills: compiledGoalSkills.get(agentEid)?.size ?? 0,
     activeGoalActions: goalActionLog.get(agentEid)?.size ?? 0,
-    aspirations: aspirations.get(agentEid) || [],
+    aspirations: getAspirations(world, agentEid),
   };
 }
 
 export function resetGoalLearning(): void {
   goalActionLog.clear();
+  worldGoalActionLog = new WeakMap();
   compiledGoalSkills.clear();
-  aspirations.clear();
+  // Authored aspirations are durable actor data, not resettable learning caches.
   tickCounter = 0;
 }

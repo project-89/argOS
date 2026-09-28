@@ -1,13 +1,14 @@
 import type { World } from "../ecs/world";
-import { addComponent, addEntity, hasComponent } from "bitecs";
-import { Goal, Memory, Plan } from "../ecs/components";
-import { HasMemory } from "../ecs/relations";
+import { addComponent, addEntity, hasComponent, getRelationTargets } from "bitecs";
+import { Goal, Memory, Plan, PlanningDecision } from "../ecs/components";
+import { HasMemory, HasGoal, HasPlan } from "../ecs/relations";
 import { ensureGoalSignature, goalSignatureId } from "./goal-contract";
 import {
   getProceduralSkillBySignature,
   serializeProceduralSkillV1,
   type ProceduralSkillV1,
 } from "./procedural-skills";
+import type { SuccessfulGoalAction } from "./goal-learning";
 
 type PlanStep = {
   description: string;
@@ -16,6 +17,8 @@ type PlanStep = {
   content?: string;
   estimatedDuration?: string;
   prerequisites?: string[];
+  resolution?: unknown;
+  waitUntil?: unknown;
 };
 
 function normalizeGoalKey(goalDesc: string): string {
@@ -90,6 +93,114 @@ function planStepsToProcedureSteps(steps: PlanStep[]): ProceduralSkillV1["steps"
   return out.slice(0, 40);
 }
 
+function successfulActionsToProcedureSteps(actions: SuccessfulGoalAction[]): ProceduralSkillV1["steps"] {
+  const out: ProceduralSkillV1["steps"] = [];
+  for (const action of actions) {
+    const type = String(action.type || "").trim().toLowerCase();
+    const target = String(action.target || "").trim() || undefined;
+    const content = String(action.content || "").trim() || undefined;
+    if (type === "pickup" && target) {
+      out.push({ type: "interact", target, content: content || "take" });
+    } else if (type === "use" && target && content) {
+      out.push({ type: "interact", target, content });
+    } else if (type === "examine" && target) {
+      out.push({ type: "observe", target });
+    } else if (type === "interact" && target && content) {
+      out.push({ type: "interact", target, content });
+    } else if (type === "move" && target) {
+      out.push({ type: "move", target });
+    } else if (type === "observe" && target) {
+      out.push({ type: "observe", target });
+    } else if (type === "speak" && content) {
+      out.push({ type: "speak", target, content });
+    } else if (type === "think" && content) {
+      out.push({ type: "think", content });
+    } else if (type === "wait") {
+      out.push({ type: "wait" });
+    }
+  }
+  return out.slice(-40);
+}
+
+function storeGoalProcedure(
+  world: World,
+  agentEid: number,
+  goalEid: number,
+  procedureSteps: ProceduralSkillV1["steps"],
+  signatureSource: string,
+): { ok: true; signature: string } | { ok: false; reason: string } {
+  if (!hasComponent(world as any, goalEid, Goal as any)) return { ok: false, reason: "missing Goal component" };
+  if (String(Goal.status[goalEid] || "") !== "completed") return { ok: false, reason: "goal success not verified" };
+  if (!getRelationTargets(world, agentEid, HasGoal).includes(goalEid)) return { ok: false, reason: "goal ownership mismatch" };
+  if (goalHasEvidenceBoundary(world, agentEid, goalEid)) return { ok: false, reason: "evidence waits require a condition-preserving procedure format" };
+
+  const goalDesc = String(Goal.description[goalEid] || "").trim();
+  if (!goalDesc) return { ok: false, reason: "empty goal description" };
+  const meaningful = procedureSteps.filter(step => step.type !== "wait").length;
+  if (meaningful < 2) return { ok: false, reason: "procedure too small to compile" };
+
+  const signature = buildMacroSignatureForGoal(world, goalEid, goalDesc, signatureSource);
+  const now = Date.now();
+  const existing = getProceduralSkillBySignature(world, agentEid, signature);
+  if (existing) {
+    const skill = existing.skill;
+    skill.stats.lastUsedAt = now;
+    skill.stats.successes += 1;
+    skill.steps = procedureSteps;
+    Memory.content[existing.memoryEid] = serializeProceduralSkillV1(skill);
+    Memory.lastRecalled[existing.memoryEid] = now;
+    Memory.recallCount[existing.memoryEid] = (Memory.recallCount[existing.memoryEid] || 0) + 1;
+    return { ok: true, signature };
+  }
+
+  const newSkill: ProceduralSkillV1 = {
+    kind: "procedure_v1",
+    signature,
+    name: `Macro: ${goalDesc.slice(0, 80)}`,
+    trigger: { affordance: "__goal_macro__" },
+    steps: procedureSteps,
+    stats: { successes: 1, failures: 0, createdAt: now, lastUsedAt: now },
+  };
+  const memoryEid = addEntity(world as any);
+  addComponent(world as any, memoryEid, Memory as any);
+  addComponent(world as any, agentEid, HasMemory(memoryEid) as any);
+  Memory.type[memoryEid] = "procedural";
+  Memory.content[memoryEid] = serializeProceduralSkillV1(newSkill);
+  Memory.importance[memoryEid] = 0.85;
+  Memory.emotionalValence[memoryEid] = 0.1;
+  Memory.timestamp[memoryEid] = now;
+  Memory.lastRecalled[memoryEid] = now;
+  Memory.recallCount[memoryEid] = 0;
+  return { ok: true, signature };
+}
+
+function goalHasEvidenceBoundary(world: World, agentEid: number, goalEid: number): boolean {
+  return getRelationTargets(world, agentEid, HasPlan).some(id => {
+    if (!hasComponent(world, id, Plan) || Plan.goalEid[id] !== goalEid) return false;
+    if (hasComponent(world, id, PlanningDecision)) return true;
+    try {
+      const steps = JSON.parse(Plan.steps[id] || "[]");
+      return !Array.isArray(steps) || steps.some((step: PlanStep) => !step || step.actionType === "wait" || step.waitUntil !== undefined);
+    } catch { return true; }
+  });
+}
+
+/** Compile the successful physical episode that actually earned typed goal
+ * proof. This is preferred when replanning means no single Plan represents the
+ * whole causal sequence. */
+export function compileSuccessfulGoalActionsToProceduralMacro(
+  world: World,
+  agentEid: number,
+  goalEid: number,
+  actions: SuccessfulGoalAction[],
+): { ok: true; signature: string } | { ok: false; reason: string } {
+  // Flat procedure_v1 cannot represent actor-evidence barriers. Learning only
+  // the surrounding successful actions would silently erase the condition.
+  if (goalHasEvidenceBoundary(world, agentEid, goalEid)) return { ok: false, reason: "evidence waits require a condition-preserving procedure format" };
+  const steps = successfulActionsToProcedureSteps(actions);
+  return storeGoalProcedure(world, agentEid, goalEid, steps, JSON.stringify(steps));
+}
+
 /**
  * Compile a completed plan into a reusable procedural macro.
  *
@@ -109,9 +220,11 @@ export function compileCompletedPlanToProceduralMacro(
   if (!hasComponent(world as any, planEid, Plan as any)) return { ok: false, reason: "missing Plan component" };
   if (!hasComponent(world as any, goalEid, Goal as any)) return { ok: false, reason: "missing Goal component" };
   if (String(Plan.status[planEid] || "") !== "completed") return { ok: false, reason: "plan not completed" };
-
-  const goalDesc = String(Goal.description[goalEid] || "").trim();
-  if (!goalDesc) return { ok: false, reason: "empty goal description" };
+  if (String(Goal.status[goalEid] || "") !== "completed") return { ok: false, reason: "goal success not verified" };
+  if (Plan.goalEid[planEid] !== goalEid || !getRelationTargets(world, agentEid, HasGoal).includes(goalEid) ||
+      !getRelationTargets(world, agentEid, HasPlan).includes(planEid)) {
+    return { ok: false, reason: "plan/goal ownership mismatch" };
+  }
 
   const stepsJson = String(Plan.steps[planEid] || "").trim();
   if (!stepsJson) return { ok: false, reason: "empty plan steps" };
@@ -125,54 +238,17 @@ export function compileCompletedPlanToProceduralMacro(
     return { ok: false, reason: "invalid plan steps JSON" };
   }
 
+  // Reconciliation can satisfy an arrival/inspection intention from existing
+  // evidence, but it is not an executed demonstration to imitate as a macro.
+  if (steps.some(step => step.resolution)) return { ok: false, reason: "plan includes reconciled rather than executed steps" };
+  if (steps.some(step => step.actionType === "wait" || step.waitUntil !== undefined)) return { ok: false, reason: "evidence waits require a condition-preserving procedure format" };
+
   const procedureSteps = planStepsToProcedureSteps(steps);
-  const meaningful = procedureSteps.filter((s) => s.type !== "wait").length;
-  if (meaningful < 2) return { ok: false, reason: "plan too small to compile" };
-
-  const signature = buildMacroSignatureForGoal(world, goalEid, goalDesc, stepsJson);
-  const now = Date.now();
-
-  const existing = getProceduralSkillBySignature(world, agentEid, signature);
-  if (existing) {
-    const skill = existing.skill;
-    skill.stats.lastUsedAt = now;
-    skill.stats.successes += 1;
-    // Keep the latest compiled steps (plans can drift).
-    skill.steps = procedureSteps;
-    Memory.content[existing.memoryEid] = serializeProceduralSkillV1(skill);
-    Memory.lastRecalled[existing.memoryEid] = now;
-    Memory.recallCount[existing.memoryEid] = (Memory.recallCount[existing.memoryEid] || 0) + 1;
-    return { ok: true, signature };
-  }
-
-  const newSkill: ProceduralSkillV1 = {
-    kind: "procedure_v1",
-    signature,
-    name: `Macro: ${goalDesc.slice(0, 80)}`,
-    trigger: {
-      // Special marker affordance; this is not executed directly, but used for matching/auto-starting.
-      affordance: "__goal_macro__",
-    },
-    steps: procedureSteps,
-    stats: {
-      successes: 1,
-      failures: 0,
-      createdAt: now,
-      lastUsedAt: now,
-    },
-  };
-
-  const memoryEid = addEntity(world as any);
-  addComponent(world as any, memoryEid, Memory as any);
-  addComponent(world as any, agentEid, HasMemory(memoryEid) as any);
-
-  Memory.type[memoryEid] = "procedural";
-  Memory.content[memoryEid] = serializeProceduralSkillV1(newSkill);
-  Memory.importance[memoryEid] = 0.85;
-  Memory.emotionalValence[memoryEid] = 0.1;
-  Memory.timestamp[memoryEid] = now;
-  Memory.lastRecalled[memoryEid] = now;
-  Memory.recallCount[memoryEid] = 0;
-
-  return { ok: true, signature };
+  // Episode-local dialogue/evidence IDs describe when a plan was safe to issue,
+  // not which reusable behavior was learned. Hash only executable actions so
+  // another successful episode reinforces the same actor-owned skill.
+  const compiled = storeGoalProcedure(world, agentEid, goalEid, procedureSteps, JSON.stringify(procedureSteps));
+  return !compiled.ok && compiled.reason === "procedure too small to compile"
+    ? { ok: false, reason: "plan too small to compile" }
+    : compiled;
 }

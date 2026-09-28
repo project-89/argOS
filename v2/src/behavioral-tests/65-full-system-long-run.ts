@@ -108,7 +108,7 @@ async function main() {
   for (const eid of agents) {
     const name = String(Name.value[eid] || "");
     const role = String(Agent.role[eid] || "");
-    const aspirations = getAspirations(eid);
+    const aspirations = getAspirations(sim.world, eid);
     info(`  ${name} (${role}) — Aspirations: ${aspirations.join("; ") || "none yet"}`);
   }
 
@@ -233,7 +233,7 @@ async function main() {
     const role = String(Agent.role[eid] || "");
     const treeSize = getTreeSize(sim.world, eid);
     const compiled = getCompilationStats(eid);
-    const aspirations = getAspirations(eid);
+    const aspirations = getAspirations(sim.world, eid);
     const hunger = Needs.hunger[eid] || 0;
     const energy = Needs.energy[eid] || 100;
 
@@ -278,8 +278,8 @@ async function main() {
   // Genesis (15 pts)
   check("Genesis created agents", agentList.length >= 2, 5, `${agentList.length} agents`);
   check("Genesis created rooms", true, 5, `rooms exist`); // If genesis ran at all
-  check("Agents have aspirations", agentList.some(eid => getAspirations(eid).length > 0), 5,
-    `${agentList.filter(eid => getAspirations(eid).length > 0).length}/${agentList.length} have aspirations`);
+  check("Agents have aspirations", agentList.some(eid => getAspirations(sim.world, eid).length > 0), 5,
+    `${agentList.filter(eid => getAspirations(sim.world, eid).length > 0).length}/${agentList.length} have aspirations`);
 
   // Agent behavior (25 pts)
   check("Agents took actions", stats.agentActions >= 10, 5, `${stats.agentActions} actions`);

@@ -234,7 +234,7 @@ async function runOneTask(
         type === "visual" || type === "auditory" || type === "olfactory" || type === "tactile" || type === "cognitive"
           ? (type as any)
           : ("cognitive" as any);
-      queueStimulus({
+      queueStimulus(world, {
         targetEid,
         type: type === "cognitive" ? "system" : type,
         content: String(data.content || ""),

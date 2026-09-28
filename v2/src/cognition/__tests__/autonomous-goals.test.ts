@@ -81,7 +81,7 @@ describe("Aspiration Assignment at Agent Creation", () => {
     const room = createRoomEntity(world, { name: "Village", description: "A village" });
     const agent = makeAgent(world, "Aldric", "blacksmith", room);
 
-    const aspirations = getAspirations(agent);
+    const aspirations = getAspirations(world, agent);
     expect(aspirations.length).toBeGreaterThanOrEqual(3);
     expect(aspirations.some(a => /forge|weapon|craft/i.test(a))).toBe(true);
   });
@@ -91,7 +91,7 @@ describe("Aspiration Assignment at Agent Creation", () => {
     const room = createRoomEntity(world, { name: "Market", description: "A market" });
     const agent = makeAgent(world, "Greta", "merchant", room);
 
-    const context = formatAspirationsForContext(agent);
+    const context = formatAspirationsForContext(world, agent);
     expect(context).toContain("ASPIRATIONS");
     expect(context).toContain("trade");
   });
@@ -109,7 +109,7 @@ describe("Goal Generation Gating", () => {
     expect(shouldGenerateGoal(world, agent)).toBe(true);
   });
 
-  test("shouldGenerateGoal returns false when agent has active goals", () => {
+  test("a single active goal does not monopolize background agenda formation", () => {
     const world = makeWorld();
     const room = createRoomEntity(world, { name: "Room", description: "A room" });
     const agent = makeAgent(world, "Test", "worker", room);
@@ -119,7 +119,7 @@ describe("Goal Generation Gating", () => {
 
     for (let i = 0; i < 10; i++) advanceGoalTick();
 
-    expect(shouldGenerateGoal(world, agent)).toBe(false);
+    expect(shouldGenerateGoal(world, agent)).toBe(true);
   });
 
   test("shouldGenerateGoal respects cooldown", () => {
@@ -222,8 +222,8 @@ describe("Goal Expiration", () => {
 
     for (let i = 0; i < 10; i++) advanceGoalTick();
 
-    // Before expiration — has active goal
-    expect(shouldGenerateGoal(world, agent)).toBe(false);
+    // Review is allowed alongside work, and remains allowed after expiration.
+    expect(shouldGenerateGoal(world, agent)).toBe(true);
 
     // After expiration — no active goals
     expireStaleGoals(world, agent, 60 * 1000);

@@ -222,31 +222,16 @@ ${traitList || "  (none)"}
 Relationships:
 ${relationshipList || "  (none)"}
 
-Valid room names for "move" actions: ${roomList || "(any room in the world)"}
+Valid room names for "move" actions: ${roomList || "(none supplied; do not invent a movement target)"}
 
 ## Requirements
-1. Root must be a "selector". Priority: survival → memory-driven reactions → role duties → social → weighted_random fallback.
-2. MUST include at least 2 interact_with_trait nodes using affordances from the list above matching the agent's role.
-3. MUST include at least one has_memory or has_belief condition for character-driven behavior.
-4. MUST include last_n_actions_exclude guards on repeated action types to prevent spam.
-5. MUST end with a weighted_random fallback containing observe, think, wander, social_visit.
-6. Nest selectors for sub-decisions. Target depth 3-5, 20-50 nodes.
-7. move targets: ONLY valid room names listed above. Use interact_with_trait for objects.
-8. Never use "wait" as a standalone action — use observe, think, or reflect.
+Use a selector root. Prioritize urgent needs and current commitments, then relevant role or social behavior. Keep the tree as small as its decisions require.
+Use only the supplied affordances, traits, relationships and room names. Use interact_with_trait for objects. Add has_memory or has_belief conditions when remembered context matters; a belief or reported statement is not a current physical-state check.
+Guard repeatable branches with relevant preconditions and last_n_actions_exclude. A weighted_random fallback may offer suitable quiet activity or rest. Waiting is valid when there is nothing useful to change; do not force speech, wandering or fresh thoughts on every tick.
 
-## CRITICAL Output Format Rules
-
-Return ONLY a single JSON object. No markdown fences, no explanation, no comments. Raw JSON only.
-
-Conditions MUST use this exact nested format:
-  { "type": "condition", "op": { "type": "need_below", "need": "energy", "value": 15 } }
-NOT this: { "type": "need_below", "need": "energy", "value": 15 }
-NOT this: { "type": "condition", "name": "need_below", "need": "energy", "amount": 15 }
-
-Actions MUST use this exact nested format:
-  { "type": "action", "action": { "type": "move", "target": "RoomName" } }
-NOT this: { "type": "move", "target": "RoomName" }
-NOT this: { "type": "action", "name": "move", "target": "RoomName" }`;
+Return one JSON object using the nested schema. For example:
+Condition: { "type": "condition", "op": { "type": "need_below", "need": "energy", "value": 15 } }
+Action: { "type": "action", "action": { "type": "rest" } }`;
 }
 
 function buildUserPrompt(context: PolicyGenerationContext): string {
@@ -268,7 +253,7 @@ function buildUserPrompt(context: PolicyGenerationContext): string {
     .slice(0, 3);
 
   const affordanceHint = roleAffordances.length > 0
-    ? `\n\nYou MUST use these affordances in interact_with_trait nodes: ${roleAffordances.map(a => `"${a.name}" (trait: "${a.requires[0] || "any"}")`).join(", ")}`
+    ? `\n\nPotentially relevant affordances, when their preconditions hold: ${roleAffordances.map(a => `"${a.name}"${a.requires[0] ? ` (trait: "${a.requires[0]}")` : ""}`).join(", ")}`
     : "";
 
   return `Generate a behavior tree for ${context.name}, a ${context.role} in a ${context.worldTheme}.
@@ -276,11 +261,7 @@ function buildUserPrompt(context: PolicyGenerationContext): string {
 Personality: ${context.personality}
 Home room: ${context.currentRoom}
 
-This agent's tree MUST include:
-1. A has_memory condition (e.g., has_memory("danger"), has_memory("friend"), has_memory("task")) — pick something fitting for a ${context.role}
-2. A last_n_actions_exclude guard on at least 3 action branches
-3. A nested selector for role-specific sub-decisions
-4. A weighted_random fallback as the last child${affordanceHint}`;
+Choose behavior fitting this person and the available setting. Express repeat guards and prerequisites in the tree; avoid adding branches merely to fill a quota.${affordanceHint}`;
 }
 
 function buildEvolvePrompt(
@@ -294,14 +275,14 @@ function buildEvolvePrompt(
 Agent: ${context.name} (${context.role})
 Room: ${context.currentRoom}
 
-Current policy:
+Current policy (may be truncated):
 ${JSON.stringify(currentPolicy, null, 2).slice(0, 3000)}
 
 Reason: ${reason}
 Problems:
 ${observedProblems.map(p => `  - ${p}`).join("\n")}
 
-Generate a STRUCTURALLY DIFFERENT policy that fixes these problems. Keep survival needs, add variety, use the world's affordances.`;
+Revise the branches responsible for the observed problems while preserving behavior that still works. Keep physical prerequisites and need handling intact. Do not add activity or structural complexity just to make the policy different.`;
 }
 
 // =============================================================================

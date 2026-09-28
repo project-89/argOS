@@ -1,4 +1,6 @@
+import { stampGoalTiming, stampSimulationTime } from "./temporal-age";
 import type { World } from "./world";
+import { hasSimulationClock, readSimulationTime } from "./simulation-time";
 import { query, hasComponent, getRelationTargets, addEntity, addComponent, removeEntity, entityExists } from "bitecs";
 import { AllComponents, Name, Agent, Mind, StimulusSource, Stimulus, WorldMap, GridPosition, Goal, Memory, Belief, Thought, Impression } from "./components";
 import { AllRelations, HasGoal, HasMemory, HasBelief, HasThought, HasImpression } from "./relations";
@@ -13,8 +15,10 @@ import {
   runPostTickAnalysis,
 } from "../spirits/effectiveness-tracker";
 import { getDirectContainer, getRoomForEntity, listDirectContents } from "./location";
+import { isEntityPresent } from "./entity-presence";
 import { getMergedComponents, getComponent, registryCreateComponent, attachToEntity } from "./component-registry";
 import type { ComponentDefinition } from "./dynamic-components";
+import { OperationalEvidenceTail, type EvidenceLimits, type EvidenceCoverage } from "../runtime/operational-evidence";
 
 /**
  * Safe wrapper for getRelationTargets that filters out non-existent entities.
@@ -57,7 +61,14 @@ export interface SystemDefinition {
   active: boolean;
   lastRun: number;
   code?: string;
+  /** Managed modules must be rebound through their validated release loader. */
+  managedRelease?: { digest: string; jobId: string };
+  /** Inert snapshot placeholder; never an executable or restored worker lease. */
+  managedRestorePending?: { active: boolean };
   compiledFn?: (world: World, context: SystemContext) => void | Promise<void>;
+  /** Optional pure physical boundary on the authoritative simulation clock.
+   * Splits coarse world ticks so discrete consequences commit at their time. */
+  nextDeadline?: (world: World) => number | undefined;
   async?: boolean;
   running?: boolean;
   // Rollback fields for effectiveness-based regression detection
@@ -88,13 +99,18 @@ export interface SystemTelemetry {
 }
 
 const systemTelemetry = new Map<string, SystemTelemetry>();
+const registryTelemetry = new WeakMap<SystemRegistry, WeakMap<SystemDefinition, SystemTelemetry>>();
 
-export function getSystemTelemetrySnapshot(): SystemTelemetry[] {
+export function getSystemTelemetrySnapshot(registry?: SystemRegistry): SystemTelemetry[] {
+  if (registry) return [...registry.systems.values()].flatMap(system => {
+    const record = registryTelemetry.get(registry)?.get(system); return record ? [{ ...record }] : [];
+  });
   return Array.from(systemTelemetry.values()).map((t) => ({ ...t }));
 }
 
-function getOrCreateTelemetry(systemName: string): SystemTelemetry {
-  const existing = systemTelemetry.get(systemName);
+function getOrCreateTelemetry(systemName: string, registry: SystemRegistry, system: SystemDefinition): SystemTelemetry {
+  let owned = registryTelemetry.get(registry); if (!owned) { owned = new WeakMap(); registryTelemetry.set(registry, owned); }
+  const existing = owned.get(system);
   if (existing) return existing;
   const fresh: SystemTelemetry = {
     systemName,
@@ -109,6 +125,7 @@ function getOrCreateTelemetry(systemName: string): SystemTelemetry {
     lastTimestamp: 0,
   };
   systemTelemetry.set(systemName, fresh);
+  owned.set(system, fresh);
   return fresh;
 }
 
@@ -223,14 +240,85 @@ export interface SystemRegistry {
   errorCounts: Map<string, number>;  // Track error frequency per system
 }
 
-export function createSystemRegistry(): SystemRegistry {
+export interface SystemDiagnosticRetentionOptions {
+  logs?: EvidenceLimits;
+  errors?: EvidenceLimits;
+}
+export type SystemDiagnosticRecord =
+  | { channel: "logs"; sequence: number; value: string }
+  | { channel: "errors"; sequence: number; value: SystemError };
+export interface SystemDiagnosticCoverage {
+  logs: EvidenceCoverage;
+  errors: EvidenceCoverage;
+  observerFailures: number;
+  /** World-event delivery is NOT a lossy diagnostic tail. Within-tick emission
+   * remains unbounded pending a separate admission/backpressure policy. */
+  events: { retention: "pending-delivery-unbounded"; pending: number };
+}
+
+interface RegistryDiagnostics {
+  logs: OperationalEvidenceTail<string>;
+  errors: OperationalEvidenceTail<SystemError>;
+  listeners: Set<(record: SystemDiagnosticRecord) => void>;
+  observerFailures: number;
+}
+const registryDiagnostics = new WeakMap<SystemRegistry, RegistryDiagnostics>();
+
+/** Adopt older manually-constructed registries without changing their public
+ * append/read/drain API. Scope and lifetime belong to this registry, not its name. */
+export function ensureSystemDiagnosticRetention(registry: SystemRegistry, options: SystemDiagnosticRetentionOptions = {}): void {
+  if (registryDiagnostics.has(registry)) return;
+  const priorLogs = registry.logs, priorErrors = registry.errors;
+  const listeners = new Set<(record: SystemDiagnosticRecord) => void>();
+  const notify = (record: SystemDiagnosticRecord): void => {
+    for (const listener of listeners) {
+      try { listener(record); } catch { state.observerFailures++; }
+    }
+  };
+  const state: RegistryDiagnostics = {
+    logs: new OperationalEvidenceTail(options.logs ?? { maxEntries: 1024, maxBytes: 1024 * 1024 },
+      (value, sequence) => notify({ channel: "logs", sequence, value })),
+    errors: new OperationalEvidenceTail(options.errors ?? { maxEntries: 256, maxBytes: 4 * 1024 * 1024 },
+      (value, sequence) => notify({ channel: "errors", sequence, value })),
+    listeners, observerFailures: 0,
+  };
+  registryDiagnostics.set(registry, state);
+  Object.defineProperties(registry, {
+    logs: { enumerable: true, configurable: true, get: () => state.logs.values, set: (values: string[]) => { state.logs.replace(values); } },
+    errors: { enumerable: true, configurable: true, get: () => state.errors.values, set: (values: SystemError[]) => { state.errors.replace(values); } },
+  });
+  state.logs.replace(priorLogs); state.errors.replace(priorErrors);
+}
+
+/** Full new diagnostic records before eviction. Sequence is monotonic per
+ * channel across consumes; subscribe before execution for a complete journal.
+ * This API does not itself persist evidence and never consumes world events. */
+export function subscribeSystemDiagnostics(registry: SystemRegistry, listener: (record: SystemDiagnosticRecord) => void): () => void {
+  ensureSystemDiagnosticRetention(registry);
+  const state = registryDiagnostics.get(registry)!;
+  state.listeners.add(listener);
+  return () => { state.listeners.delete(listener); };
+}
+
+export function getSystemDiagnosticCoverage(registry: SystemRegistry): SystemDiagnosticCoverage {
+  ensureSystemDiagnosticRetention(registry);
+  const state = registryDiagnostics.get(registry)!;
   return {
+    logs: state.logs.coverage(), errors: state.errors.coverage(), observerFailures: state.observerFailures,
+    events: { retention: "pending-delivery-unbounded", pending: registry.events.length },
+  };
+}
+
+export function createSystemRegistry(options: SystemDiagnosticRetentionOptions = {}): SystemRegistry {
+  const registry: SystemRegistry = {
     systems: new Map(),
     events: [],
     logs: [],
     errors: [],
     errorCounts: new Map(),
   };
+  ensureSystemDiagnosticRetention(registry, options);
+  return registry;
 }
 
 /** Number of consecutive errors before a registry system is auto-disabled. */
@@ -248,6 +336,7 @@ export function reportSystemError(
   error: string,
   context?: string
 ): void {
+  ensureSystemDiagnosticRetention(registry);
   const currentCount = (registry.errorCounts.get(systemName) || 0) + 1;
   registry.errorCounts.set(systemName, currentCount);
 
@@ -270,8 +359,6 @@ export function reportSystemError(
     lastCode: system?.code,
     context,
   };
-
-  registry.errors.push(errorReport);
 
   // Auto-disable systems that fail repeatedly
   if (system && (system.consecutiveErrors ?? 0) >= MAX_REGISTRY_CONSECUTIVE_ERRORS) {
@@ -296,6 +383,10 @@ export function reportSystemError(
     });
   }
 
+  // Notify after health fields/auto-disable are final, so observers see the
+  // actual failure state even when the bounded diagnostic tail is already full.
+  registry.errors.push(errorReport);
+
   console.error(`[SystemError] ${systemName} (${currentCount}x): ${error}`);
 }
 
@@ -303,6 +394,7 @@ export function reportSystemError(
  * Get pending system errors for GodAI to review
  */
 export function consumeSystemErrors(registry: SystemRegistry): SystemError[] {
+  ensureSystemDiagnosticRetention(registry);
   const errors = [...registry.errors];
   registry.errors = [];
   return errors;
@@ -394,6 +486,7 @@ export function reEnableSystem(registry: SystemRegistry, name: string): boolean 
 }
 
 export function registerSystem(registry: SystemRegistry, definition: SystemDefinition): void {
+  ensureSystemDiagnosticRetention(registry);
   // Ensure health tracking fields are initialised
   if (definition.consecutiveErrors === undefined) definition.consecutiveErrors = 0;
   if (definition.totalErrors === undefined) definition.totalErrors = 0;
@@ -455,7 +548,7 @@ function createGridContext(): GridContext {
 
 const sharedGridContext = createGridContext();
 
-function createCognitiveContext(): CognitiveContext {
+function createCognitiveContext(world: World): CognitiveContext {
   return {
     createGoal: (world: World, agentEid: number, data: GoalData): number => {
       const goalEid = addEntity(world);
@@ -471,6 +564,7 @@ function createCognitiveContext(): CognitiveContext {
       Goal.progress[goalEid] = data.progress ?? 0;
       Goal.deadline[goalEid] = data.deadline ?? 0;
       Goal.createdAt[goalEid] = data.createdAt ?? Date.now();
+      stampGoalTiming(world, goalEid);
       return goalEid;
     },
     createMemory: (world: World, agentEid: number, data: MemoryData): number => {
@@ -483,6 +577,8 @@ function createCognitiveContext(): CognitiveContext {
       Memory.importance[memEid] = data.importance ?? 0.5;
       Memory.timestamp[memEid] = Date.now();
       Memory.lastRecalled[memEid] = Date.now();
+      stampSimulationTime(world, memEid, "Memory.timestamp", Memory.timestamp[memEid]);
+      stampSimulationTime(world, memEid, "Memory.lastRecalled", Memory.lastRecalled[memEid]);
       Memory.recallCount[memEid] = 0;
       return memEid;
     },
@@ -506,6 +602,7 @@ function createCognitiveContext(): CognitiveContext {
       Thought.type[thoughtEid] = data.type ?? "reflection";
       Thought.salience[thoughtEid] = data.salience ?? 0.5;
       Thought.timestamp[thoughtEid] = Date.now();
+      stampSimulationTime(world, thoughtEid, "Thought.timestamp", Thought.timestamp[thoughtEid]);
       return thoughtEid;
     },
     createImpression: (world: World, agentEid: number, data: ImpressionData): number => {
@@ -573,6 +670,9 @@ function createCognitiveContext(): CognitiveContext {
       if (updates.progress !== undefined) Goal.progress[eid] = updates.progress;
       if (updates.deadline !== undefined) Goal.deadline[eid] = updates.deadline;
       if (updates.createdAt !== undefined) Goal.createdAt[eid] = updates.createdAt;
+      if (updates.createdAt !== undefined) stampGoalTiming(world, eid);
+      else if (updates.deadline !== undefined) stampSimulationTime(world, eid, "Goal.deadline", updates.deadline,
+        world.time.elapsed + Math.max(0, updates.deadline - Date.now()));
     },
     completeGoal: (world: World, eid: number): void => {
       Goal.status[eid] = "completed";
@@ -584,7 +684,7 @@ function createCognitiveContext(): CognitiveContext {
   };
 }
 
-const sharedCognitiveContext = createCognitiveContext();
+const cognitiveContexts = new WeakMap<World, CognitiveContext>();
 const sharedLocationContext: LocationContext = {
   getDirectContainer,
   getRoomForEntity,
@@ -592,10 +692,13 @@ const sharedLocationContext: LocationContext = {
 };
 
 function createSystemContext(world: World, registry: SystemRegistry, tick: number, delta: number): SystemContext {
+  ensureSystemDiagnosticRetention(registry);
+  let cognitive = cognitiveContexts.get(world);
+  if (!cognitive) { cognitive = createCognitiveContext(world); cognitiveContexts.set(world, cognitive); }
   return {
     tick,
     delta,
-    elapsed: tick * delta,
+    elapsed: hasSimulationClock(world) ? readSimulationTime(world) : tick * delta,
     emit: (type, data) => {
       registry.events.push({ type, data, timestamp: Date.now() });
     },
@@ -615,25 +718,36 @@ function createSystemContext(world: World, registry: SystemRegistry, tick: numbe
     ai: sharedAIContext,
     grid: sharedGridContext,
     location: sharedLocationContext,
-    cognitive: sharedCognitiveContext,
+    cognitive,
     getComponent: (name: string) => getComponent(name),
     createComponent: (def: ComponentDefinition) => registryCreateComponent(def),
     attachComponent: (eid: number, name: string, values?: Record<string, any>) => attachToEntity(world, eid, name, values),
   };
 }
 
+// Keep cadence in simulation time without repurposing lastRun's existing wall
+// timestamp used by monitoring. Worlds using only the legacy low-level runner
+// retain its old wall cadence until explicitly enrolled in the simulation clock.
+const simulationSystemRuns = new WeakMap<World, WeakMap<SystemDefinition, number>>();
+
 export function runSystems(world: World, registry: SystemRegistry, tick: number, delta: number): void {
   const context = createSystemContext(world, registry, tick, delta);
   const now = Date.now();
+  const managed = hasSimulationClock(world);
+  let runs = simulationSystemRuns.get(world);
+  if (!runs) simulationSystemRuns.set(world, runs = new WeakMap());
+  const simNow = readSimulationTime(world);
 
   for (const system of registry.systems.values()) {
     if (!system.active) continue;
-    if (now - system.lastRun < system.frequency) continue;
+    const lastSimRun = runs.get(system);
+    if (managed ? lastSimRun !== undefined && simNow - lastSimRun < system.frequency
+      : now - system.lastRun < system.frequency) continue;
     if (system.async) continue;
 
     try {
       if (system.compiledFn) {
-        const telemetry = getOrCreateTelemetry(system.name);
+        const telemetry = getOrCreateTelemetry(system.name, registry, system);
         telemetry.lastEmitCount = 0;
         telemetry.lastLogCount = 0;
         telemetry.lastTick = tick;
@@ -641,6 +755,9 @@ export function runSystems(world: World, registry: SystemRegistry, tick: number,
 
         const ctxForSystem: SystemContext = {
           ...context,
+          // A throttled physical system must integrate the interval since its
+          // own previous run, not lose all intervening simulation ticks.
+          delta: managed && lastSimRun !== undefined ? simNow - lastSimRun : delta,
           emit: (type, data) => {
             telemetry.lastEmitCount++;
             telemetry.totalEmits++;
@@ -668,6 +785,7 @@ export function runSystems(world: World, registry: SystemRegistry, tick: number,
         telemetry.totalDurationMs += duration;
 
         system.lastRun = now;
+        if (managed) runs.set(system, simNow);
         // Successful execution — reset consecutive error counter
         system.consecutiveErrors = 0;
       }
@@ -692,7 +810,7 @@ export function runAsyncSystems(world: World, registry: SystemRegistry, tick: nu
       system.running = true;
       system.lastRun = now;
 
-      const telemetry = getOrCreateTelemetry(system.name);
+      const telemetry = getOrCreateTelemetry(system.name, registry, system);
       telemetry.lastEmitCount = 0;
       telemetry.lastLogCount = 0;
       telemetry.lastTick = tick;
@@ -746,6 +864,7 @@ export function consumeEvents(registry: SystemRegistry): Array<{ type: string; d
 }
 
 export function consumeLogs(registry: SystemRegistry): string[] {
+  ensureSystemDiagnosticRetention(registry);
   const logs = [...registry.logs];
   registry.logs = [];
   return logs;
@@ -850,6 +969,10 @@ export function createStimulusEmissionSystem(): SystemDefinition {
       const now = Date.now();
 
       for (const sourceEid of sources) {
+        // Historical/tombstoned objects retain components for persistence and
+        // author inspection, but neither they nor contents of removed holders
+        // can keep manufacturing current sensory evidence.
+        if (!isEntityPresent(world, sourceEid)) continue;
         const interval = StimulusSource.interval[sourceEid];
         const lastEmit = StimulusSource.lastEmit[sourceEid];
 
@@ -865,6 +988,7 @@ export function createStimulusEmissionSystem(): SystemDefinition {
 
         const agents = Array.from(ctx.query(world, [Agent]));
         for (const agentEid of agents) {
+          if (!Agent.active[agentEid] || !isEntityPresent(world, agentEid)) continue;
           if (getRoomForEntity(world, agentEid) === roomEid) {
             const agentName = Name.value[agentEid];
             ctx.emit("stimulus", {

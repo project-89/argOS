@@ -10,7 +10,10 @@
 import { addComponent as bitecsAddComponent, removeComponent as bitecsRemoveComponent, hasComponent as bitecsHasComponent } from "bitecs";
 import type { World } from "./world";
 import { AllComponents } from "./components";
+import { builtinComponentSchema } from "./builtin-component-schema";
 import type { ComponentDefinition, DynamicComponent } from "./dynamic-components";
+import { assertParticipantMutationAllowed } from "../runtime/participant-identities";
+import { assertComponentValueFormat, getComponentValueFormats, prepareComponentEncodedValues } from "./component-value-formats";
 
 export interface RegistryEntry {
   soa: any;                        // The SoA object (same shape as static components)
@@ -36,11 +39,7 @@ export function initializeRegistry(world: World): void {
 
   // Register all static components
   for (const [name, soa] of Object.entries(AllComponents)) {
-    const properties: Record<string, "number" | "string" | "boolean"> = {};
-    for (const prop of Object.keys(soa)) {
-      // Default to string; could inspect existing values for better inference
-      properties[prop] = "string";
-    }
+    const properties = { ...builtinComponentSchema[name as keyof typeof builtinComponentSchema] };
     entries.set(name, {
       soa,
       definition: {
@@ -65,6 +64,15 @@ export function registerComponent(
   definition?: ComponentDefinition,
   isStatic: boolean = false
 ): void {
+  const existing = entries.get(name);
+  if (existing) {
+    const existingKind = existing.isStatic ? "built-in" : "dynamic";
+    const incomingKind = isStatic ? "built-in" : "dynamic";
+    throw new Error(
+      `[Registry] Component name collision: "${name}" is already registered as ${existingKind}; cannot replace it with ${incomingKind}`
+    );
+  }
+
   entries.set(name, { soa, definition, isStatic });
   _version++;
   _cachedMerged = null;
@@ -99,6 +107,21 @@ export function getComponent(name: string): any | undefined {
   return entries.get(name)?.soa;
 }
 
+/** Additive live schema migration. Preserve the SoA identity held by BitECS queries. */
+export function extendDynamicComponent(def: ComponentDefinition): void {
+  const entry = entries.get(def.name);
+  if (!entry) { registryCreateComponent(def); return; }
+  if (entry.isStatic) throw new Error(`Cannot redefine built-in ${def.name}`);
+  for (const [field, old] of Object.entries(entry.definition?.properties ?? {})) {
+    const oldType = typeof old === "string" ? old : (old as any).type;
+    if (def.properties[field] !== oldType) throw new Error(`Incompatible schema change: ${def.name}.${field}`);
+  }
+  for (const field of Object.keys(def.properties)) if (!Object.hasOwn(entry.soa, field)) entry.soa[field] = [];
+  entry.definition = def;
+  _version++;
+  _cachedMerged = null;
+}
+
 /**
  * Check if a component exists in the registry.
  */
@@ -121,10 +144,12 @@ export function attachToEntity(
   if (!entry) return false;
 
   // BitECS addComponent is idempotent — safe to call repeatedly
+  assertParticipantMutationAllowed(world,eid,name,values);
+  const prepared=prepareComponentEncodedValues(name,values,!bitecsHasComponent(world,eid,entry.soa));
   bitecsAddComponent(world, eid, entry.soa);
 
-  if (values) {
-    for (const [prop, value] of Object.entries(values)) {
+  if (prepared) {
+    for (const [prop, value] of Object.entries(prepared)) {
       if (prop in entry.soa) {
         entry.soa[prop][eid] = value;
       }
@@ -228,4 +253,27 @@ export function getRegistryWorld(): World | null {
  */
 export function getRegistryEntry(name: string): RegistryEntry | undefined {
   return entries.get(name);
+}
+
+/** Pure preflight shared by additive entity/object materializers. Neither a
+ * missing schema nor sampled values can define the type of a requested field. */
+export function validateComponentInitialValues(definition: ComponentDefinition, values: unknown): Record<string, string | number | boolean> {
+  const name = definition.name;
+  if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error(`Invalid component values: ${name}`);
+  const fields = definition.properties;
+  const valid = (kind: unknown, value: unknown) => ["string", "number", "boolean"].includes(String(kind)) && typeof value === kind
+    && (typeof value !== "number" || Number.isFinite(value)) && (typeof value !== "string" || value.length <= 4000);
+  for (const [field, value] of Object.entries(values)) {
+    const schema: any = Object.hasOwn(fields, field) ? fields[field] : undefined;
+    const kind = typeof schema === "string" ? schema : schema?.type;
+    if (!valid(kind, value)) throw new Error(`Invalid type or unknown field ${name}.${field}`);
+  }
+  return Object.fromEntries(Object.entries(fields).map(([field, schema]: [string, any]) => {
+    const kind = typeof schema === "string" ? schema : schema?.type;
+    const value = Object.hasOwn(values, field) ? (values as Record<string, unknown>)[field]
+      : definition.defaults?.[field] ?? schema?.default ?? getComponentValueFormats(name)[field]?.defaultValue ?? (kind === "number" ? 0 : kind === "boolean" ? false : "");
+    if (!valid(kind, value)) throw new Error(`Invalid default or schema ${name}.${field}`);
+    assertComponentValueFormat(name,field,value);
+    return [field, value as string | number | boolean];
+  }));
 }

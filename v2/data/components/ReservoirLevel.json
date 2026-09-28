@@ -1,0 +1,8 @@
+{
+  "name": "ReservoirLevel",
+  "description": "Water depth and capacity for reservoir entities",
+  "properties": {
+    "depth": "number",
+    "capacity": "number"
+  }
+}

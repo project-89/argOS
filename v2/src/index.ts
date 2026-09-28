@@ -28,22 +28,50 @@
  */
 
 import "dotenv/config";
+import { deserializeWorld, type SerializedWorld } from "./persistence/world-persistence";
+import { validateSimulationSnapshot } from "./persistence/simulation-snapshot";
+import { syncEntityRegistryFromWorld } from "./ecs/entity-lookup";
 import { createArgosWorld, type WorldContext } from "./ecs/world";
+import { validateSimulationDelta, validateTimeScale } from "./ecs/simulation-time";
+import { clearTimedSpeech } from "./cognition/timed-speech";
+import { clearSimulationTimeline } from "./runtime/simulation-timeline";
+import { configureWorldConstructionBudget, getWorldConstructionStatus } from "./runtime/world-construction-budget";
+import { startCommittedEvents, stopCommittedEvents } from "./runtime/committed-events";
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "./ecs/prefabs";
 import { initializeRegistry } from "./ecs/component-registry";
-import { createGodAgent, godCommand, getWorldState, tickWorld, runWorldTickAt, type GodAgentState, type GodAgentConfig } from "./god/god-agent";
+import { createGodAgent, godCommand, getWorldState, tickWorld, runWorldTickAt, updateGlobalTime, type GodAgentState, type GodAgentConfig } from "./god/god-agent";
 import { createPrebakePreset, getAvailablePresets, type PrebakePreset } from "./god/system-baker";
-import { runCognitionCycle, executeActions, broadcastToRoom, queueStimulus } from "./cognition/cognition-system";
+import { runCognitionCycle, runActorControlStep, executeActions, broadcastToRoom, queueStimulus, hasPendingCognitionStimuli } from "./cognition/cognition-system";
+import { getStimulusQueueStatus } from "./cognition/stimulus-queue";
+import { getNativeRuntimeServices, registerNativeRuntimeServices } from "./runtime/native-services";
+import { hasUnintegratedAttention } from "./cognition/agent-mind";
+import { hasDueAttentionSignal } from "./cognition/unresolved-attention";
+import { captureThoughtPublication, takeNewAuthoredThoughtEvents, type ThoughtPublicationCursor } from "./cognition/thought-publication";
+import { isForegroundCognitionReady, isForegroundActorAvailable } from "./cognition/idle-cognition";
+import { hasExperienceAppraisal, isExperienceAppraisalPending, runExperienceAppraisal } from "./cognition/experience-appraisal";
+import { runAppearanceEmitter } from "./cognition/appearance-emitter";
+import { runEmotionalDynamics } from "./cognition/emotional-life";
 import { bridgeWorldEventsToStimuli } from "./cognition/world-event-bridge";
 import { registerAllBuiltinSystems, createMovementSystem, createRoomArrivalSystem } from "./systems/builtin-systems";
-import { fixAllQueuedSystems, getSystemsNeedingFix } from "./systems/system-loader";
+import {
+  getAllSystemHealth,
+  getSystemTelemetrySnapshot,
+  subscribeSystemDiagnostics,
+  getSystemDiagnosticCoverage,
+  type SystemHealthReport,
+} from "./ecs/dynamic-systems";
 import { createSimulationServer } from "./server/simulation-server";
-import { query, addComponent } from "bitecs";
-import { Agent, Name, Mind, Room } from "./ecs/components";
+import { query, addComponent, entityExists } from "bitecs";
+import { getAgentWorldCapabilities } from "./cognition/world-capabilities";
+import { advanceGoalTick, hasPendingPersonalGoalReview } from "./cognition/autonomous-goals";
+import { Agent, Name, Mind, Room, PhysicalObject, Goal } from "./ecs/components";
 import { getDirectContainer, setLocatedIn } from "./ecs/location";
 import { initializeAllSchedules } from "./cognition/schedule-system";
-import { generateText } from "ai";
-import { google } from "@ai-sdk/google";
+import { runPlanningSystem, hasPendingPlanning } from "./cognition/planning-system";
+import { runCoordinationReview, hasPendingCoordinationReview } from "./cognition/coordination-review";
+import { initializeReflectionState } from "./cognition/reflection-system";
+import { hasSubconsciousWork, runAgentSubconscious } from "./cognition/subconscious-system";
+export { runAgentSubconscious, hasSubconsciousWork } from "./cognition/subconscious-system";
 import {
   SimulationBus,
   createSimulationBus,
@@ -119,8 +147,8 @@ import {
   type SpiritSystemState,
 } from "./spirits";
 import { createSpiritRegistry } from "./spirits/spirit-registry";
-import { runWorldCrafterCycle, getPendingInteractions } from "./spirits/world-crafter-spirit";
-import { runStewardCycle, requestRoomPopulation, getPendingRoomRequests } from "./spirits/steward-spirit";
+import { requestRoomPopulationForRoom } from "./spirits/steward-spirit";
+import { installSpiritPhysicalEffectProfile } from "./spirits/physical-effect-capabilities";
 import { RulesEngine } from "./world/rules-engine";
 import { ObjectManager } from "./world/object-manager";
 import { worldSchema } from "./world/schema";
@@ -138,16 +166,40 @@ import {
   registerAIOperation,
   startSimulation as startRuntimeSimulation,
   stopSimulation as stopRuntimeSimulation,
+  drainSimulationOperations,
   pauseSimulation as pauseRuntimeSimulation,
   resumeSimulation as resumeRuntimeSimulation,
+  getSimulationStats as getRuntimeStats,
   type SimulationState as RuntimeSimulationState,
 } from "./runtime/simulation-loop";
+import { registerBuiltinOfficeTools } from "./office-tools/builtin-tools";
+import { setWorldOfficeToolPolicy, type HostOfficeToolsPolicy } from "./office-tools/tool-registry";
+export { setWorldOfficeToolPolicy, isWorldOfficeToolAllowed, type HostOfficeToolsPolicy } from "./office-tools/tool-registry";
+import { generateStoryScaffold } from "./nle/story-scaffold";
+import { startBeatDetection, stopBeatDetection } from "./nle/beat-detector";
+import { runNarrativeDirectorCycle, setDirectorGodAgent } from "./nle/narrative-director";
+import { setNudgeDaemonRegistry } from "./nle/npc-nudge";
+import {
+  createEvolutionCoordinator,
+  type EvolutionCoordinatorConfig,
+  type EvolutionCoordinatorStatus,
+} from "./runtime/evolution-coordinator";
+import { CodingDaemon, type CodingDaemonConfig } from "./engineering/coding-daemon";
+export type { CodingDaemonConfig } from "./engineering/coding-daemon";
+export type { BuildRequest, BuildJob, BuildStatus, AcceptanceTest } from "./engineering/contracts";
+import type { BuildRequest, BuildJob } from "./engineering/contracts";
+import { applyRuntimeProfile } from "./runtime/runtime-profile";
+import { parseWorldSpecification, setWorldSpecification, getWorldTheme, type WorldSpecificationInput } from "./world/world-specification";
+export { EMBODIED_RUNTIME_PROFILE } from "./runtime/runtime-profile";
+export { parseWorldSpecification, getWorldSpecification, type WorldSpecification, type WorldSpecificationInput } from "./world/world-specification";
 
 // ============================================================================
 // Types
 // ============================================================================
 
 export interface AgentConfig {
+  /** Private pre-simulation history and formative identity memories. */
+  past?: import("./cognition/character-past-schema").CharacterPast;
   name: string;
   role: string;
   description?: string;
@@ -180,6 +232,30 @@ export interface ObjectConfig {
 }
 
 export interface SimulationConfig {
+  /** Immutable authoring brief, including private creation seeds. It does not
+   * grant execution authority. Selects embodied-v1 unless explicitly configured. */
+  worldSpecification?: WorldSpecificationInput;
+  /** Opt-in fast ECS/background cognition configuration. Autonomous evolution,
+   * coding, God autopilot and host tools default off; host overrides are explicit. */
+  runtimeProfile?: "embodied-v1";
+  /** Optional lifetime world-construction admissions, including authored seed
+   * rooms/NPCs/props. Internal cognition entities do not consume these slots.
+   * Failed initialization/deletion do not refund them; snapshots preserve them. */
+  maxWorldEntities?: number;
+  /** Trusted saved ECS/system code, restored before runtime wiring. Authored
+   * rooms/agents/objects/preset are not reseeded. Host permissions come from
+   * this config, never the snapshot. No pending action callbacks are resumed. */
+  restoreSnapshot?: SerializedWorld;
+  /** Real host office-tool access, not fictional device capability. Defaults to
+   * false; use an exact tool-ID allowlist or explicit true for trusted workflows.
+   * Shell/provider mode and environment checks remain additional restrictions. */
+  hostOfficeTools?: HostOfficeToolsPolicy;
+  /** Experimental high-level cognition policy. Default preserves priority arbitration. */
+  cognitionController?: "priority" | "situated";
+  /** Allow lived-event appraisals to revise existing subjective personal intentions. */
+  experienceReconsideration?: boolean;
+  /** First-person emotional episodes and durable narrative memory, separate from goals. */
+  narrativeMind?: boolean;
   /** Name of the simulation */
   name: string;
   /** High-level narrative/setting description */
@@ -194,8 +270,12 @@ export interface SimulationConfig {
   rooms?: RoomConfig[];
   /** Objects to create */
   objects?: ObjectConfig[];
-  /** Time scale multiplier (default: 1.0) */
+  /** In-world delta multiplier (default: 1). AI and recording wall clocks are unaffected. */
   timeScale?: number;
+  /** Give speech a finite in-world duration before its content is delivered (default: true). */
+  timedSpeech?: boolean;
+  /** Finite physical action durations; explicitly false retains legacy atomic execution. */
+  timedActions?: boolean;
   /** Enable web server for visualization (default: false) */
   enableServer?: boolean;
   /** Server port (default: 3456) */
@@ -209,20 +289,30 @@ export interface SimulationConfig {
   /** Disable all LLM-powered cognition/spirits/god commands for deterministic runs */
   enableAI?: boolean;
   /**
-   * Enable the planning phase inside the cognition loop (LLM-heavy).
+   * Enable background multi-step planning, independently of immediate cognition.
    * - `true` (default): agents with goals may generate multi-step plans
    * - `false`: skip plan generation (use policies/procedures/LLM action selection only)
    */
   enablePlanning?: boolean;
+  /** Accumulate experiences and reflect in the per-actor subconscious (default: true with AI). */
+  enableReflection?: boolean;
+  /** Fast appraisal of personally experienced events, independently of slow planning/reflection. */
+  enableExperienceAppraisal?: boolean;
   /** Enable spirit system (Narrator, Arbiter, Crafter, Steward, Weaver) - default: true */
   enableSpirits?: boolean;
+  /** Enable continuous entity/component/system/rule evolution, or override its tick cadences. */
+  evolution?: boolean | Partial<EvolutionCoordinatorConfig>;
+  /** Isolated coding jobs and tick-boundary hot loading. Enabled with world evolution. */
+  codingDaemons?: boolean | CodingDaemonConfig;
+  /** Build and run the narrative director/scaffold layer. Defaults to true in genesis mode. */
+  enableNarrativeEngine?: boolean;
   /** Auto-populate rooms with entities via The Steward - default: true when roomType is provided */
   autoPopulateRooms?: boolean;
   /** Use the dual-loop runtime (fast ECS tick + async AI tasks) */
   dualLoop?: boolean;
   /** ECS tick rate (ticks per second) when dual-loop is enabled (default: ~0.33 to match legacy pacing) */
   ecsTickRate?: number;
-  /** Delta passed to deterministic ECS systems (ms) when dual-loop is enabled (default: 5000 for legacy pacing) */
+  /** Base simulation ms per tick, before timeScale (default: 1000 / ecsTickRate). Also used by step(). */
   ecsDeltaMs?: number;
   /**
    * Enable GodAI autopilot to consume spirit/daemon reports and act autonomously.
@@ -233,7 +323,8 @@ export interface SimulationConfig {
   godAutopilot?: boolean | Partial<GodAutopilotConfig>;
   /**
    * Genesis mode: God creates the world from a seed description.
-   * When enabled, no builtin systems, presets, or config-driven rooms/agents are created.
+   * Builtin substrate systems remain active; authored presets and config-driven
+   * rooms/agents/objects are replaced by a generated world.
    * - `true`: use `narrative` as the seed
    * - `{ seed: string }`: use the provided seed description
    */
@@ -273,26 +364,44 @@ export interface ArgosSimulation {
   start: () => Promise<void>;
   /** Stop the simulation */
   stop: () => void;
+  /** After stop, await runtime-owned operation finalizers, bounded in wall time. Does not advance the world. */
+  drainPendingOperations: (timeoutMs?: number) => Promise<void>;
   /** Pause the simulation */
   pause: () => void;
   /** Resume the simulation */
   resume: () => void;
-  /** Run a single tick */
-  step: () => Promise<void>;
+  /** Run one tick; an explicit delta is exact in-world ms, not multiplied by timeScale. */
+  step: (deltaMs?: number) => Promise<void>;
 
   // --- State ---
   /** Get current world state as string */
   getState: () => string;
   /** Get simulation statistics */
   getStats: () => SimulationStats;
+  /** Native services outside the generated-system registry; configuration, not execution evidence. */
+  getRuntimeServices: () => ReturnType<typeof getNativeRuntimeServices>;
+  /** Inspect the continuous world-evolution and system-repair loop */
+  getEvolutionStatus: () => EvolutionCoordinatorStatus;
+  getCodingStatus: () => ReturnType<CodingDaemon["getStatus"]> | null;
+  requestSystemBuild: (request: BuildRequest) => BuildJob;
+  /** Registered builtin/generated system health. Outer native callbacks are in getRuntimeStatus().fastSystemHealth. */
+  getSystemHealth: () => SystemHealthReport[];
+  /** Native fast-callback failures plus scheduling/latency; null before dual-loop startup. Queue totals are process-wide. */
+  getRuntimeStatus: () => ReturnType<typeof getRuntimeStats> | null;
+  /** World-owned input admission and operational log coverage, including rejected/evicted evidence. */
+  getOperationalStatus: () => {
+    stimuli: ReturnType<typeof getStimulusQueueStatus>;
+    systemDiagnostics: ReturnType<typeof getSystemDiagnosticCoverage>;
+  };
+  getWorldConstructionStatus: () => ReturnType<typeof getWorldConstructionStatus>;
 
   // --- Commands & Stimuli ---
   /** Send a god command */
   command: (cmd: string) => Promise<void>;
   /** Broadcast a stimulus to all agents in a room */
   broadcast: (roomName: string, content: string, type?: string) => void;
-  /** Queue a stimulus to a specific agent */
-  stimulate: (agentName: string, content: string, type?: string) => void;
+  /** Queue a stimulus to a specific agent; false means it was not admitted. Inspect getOperationalStatus(). */
+  stimulate: (agentName: string, content: string, type?: string) => boolean;
 
   // --- Observation Hooks (Outbound) ---
   /** Subscribe to all simulation events */
@@ -391,8 +500,46 @@ export interface ArgosSimulation {
  * });
  * ```
  */
-export async function createSimulation(config: SimulationConfig): Promise<ArgosSimulation> {
+/** In-process integration API: component arrays/registries are process-global.
+ * Do not construct concurrent worlds through this legacy path. Use
+ * createSimulationHost for process-isolated concurrent simulations. */
+export async function createSimulation(input: SimulationConfig | string): Promise<ArgosSimulation> {
+  const supplied: SimulationConfig = typeof input === "string"
+    ? {
+        name: input.trim().split(/\n|[.!?]/, 1)[0]?.slice(0, 49) || "Generated World",
+        narrative: input,
+        genesis: { seed: input },
+        enableNarrativeEngine: true,
+      }
+    : input;
+  const specification = supplied.worldSpecification === undefined ? undefined : parseWorldSpecification(supplied.worldSpecification);
+  const config = applyRuntimeProfile({ ...supplied,
+    ...(specification ? { worldSpecification: specification,
+      narrative: supplied.narrative ?? specification.setting.premise,
+      agents: supplied.agents ?? specification.inhabitants } : {}) });
   const aiEnabled = config.enableAI !== false;
+  const restoring = config.restoreSnapshot;
+  const savedGod = restoring !== undefined ? validateSimulationSnapshot(restoring) : undefined;
+  if (restoring && specification && (!restoring.worldSpecification
+    || JSON.stringify(parseWorldSpecification(restoring.worldSpecification)) !== JSON.stringify(specification)))
+    throw new Error("Restore must retain the saved world specification; use a new world for a different authoring brief");
+  if (restoring?.systems.some(system => system.managedRelease)
+    && config.codingDaemons !== true && !(config.codingDaemons && typeof config.codingDaemons === "object"))
+    throw new Error("Managed snapshot restore requires caller-enabled codingDaemons and its accepted release store");
+  if (restoring && (config.genesis || config.useGodCommand || config.generateSchedules))
+    throw new Error("Restore cannot also run genesis, setup commands or schedule regeneration");
+  if (config.narrativeMind !== undefined && typeof config.narrativeMind !== "boolean") throw new Error("narrativeMind must be boolean");
+  if (config.experienceReconsideration !== undefined && typeof config.experienceReconsideration !== "boolean") {
+    throw new Error("experienceReconsideration must be boolean");
+  }
+  if (config.cognitionController !== undefined && !["priority", "situated"].includes(config.cognitionController)) {
+    throw new Error("Unknown cognition controller; choose priority or situated");
+  }
+  const timeScale = validateTimeScale(config.timeScale ?? 1);
+  const ecsTickRate = config.ecsTickRate ?? (1 / 3);
+  if (!Number.isFinite(ecsTickRate) || ecsTickRate <= 0) throw new RangeError("ecsTickRate must be finite and greater than zero");
+  const baseDeltaMs = validateSimulationDelta(config.ecsDeltaMs ?? 1000 / ecsTickRate);
+  const defaultDeltaMs = validateSimulationDelta(baseDeltaMs * timeScale);
 
   // Validate API key only when LLM features are enabled
   if (aiEnabled && !process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
@@ -410,30 +557,65 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
 
   // Create world
   const world = createArgosWorld(config.name);
+  if (specification && !restoring) setWorldSpecification(world, specification);
+  if (config.runtimeProfile === "embodied-v1") {
+    startCommittedEvents(world);
+    // Retain a deny-by-default tombstone, not an active host grant. Native
+    // integrations may install their own scoped profile after construction;
+    // start/restart must never replace that later host-installed authority.
+    installSpiritPhysicalEffectProfile(world).close();
+  }
+  if (config.maxWorldEntities !== undefined) configureWorldConstructionBudget(world, config.maxWorldEntities);
+  setWorldOfficeToolPolicy(world, config.hostOfficeTools ?? false);
   // Expose key runtime flags to ECS systems via the world context.
   (world as any).meta.aiEnabled = aiEnabled;
+  world.meta.cognitionController = config.cognitionController ?? "priority";
+  world.meta.experienceReconsideration = config.experienceReconsideration ?? false;
+  world.meta.experienceAppraisalEnabled = config.enableExperienceAppraisal !== false;
+  world.meta.narrativeMind = config.narrativeMind ?? false;
+  world.meta.timedSpeech = config.timedSpeech ?? true;
+  world.meta.timedActions = config.timedActions ?? true;
   (world as any).meta.generateSchedules = Boolean(config.generateSchedules);
 
-  // Initialize unified component registry (must be before prefabs or god agent)
-  initializeRegistry(world);
-
+  // Prefab initialization also establishes the unified component registry.
   initializePrefabs(world);
+  registerBuiltinOfficeTools();
 
   // Create god agent
   const godConfig: GodAgentConfig = {
     name: "The Weaver",
-    worldName: config.name,
-    narrative: config.narrative || "A living world where stories unfold.",
+    worldName: restoring?.name ?? config.name,
+    narrative: config.narrative ?? restoring?.entities.find(entity => entity.id === savedGod)?.components.GodAgent?.narrative
+      ?? restoring?.narrative ?? "A living world where stories unfold.",
     preset: config.statePreset as any,
-    timeScale: config.timeScale,
+    timeScale,
   };
   const god = createGodAgent(world, godConfig);
 
   const isGenesis = Boolean(config.genesis);
+  const narrativeEngineEnabled = aiEnabled && (config.enableNarrativeEngine ?? isGenesis);
 
-  if (!isGenesis) {
-    // Standard path: register builtin systems + apply prebake preset
-    registerAllBuiltinSystems(god.systemRegistry);
+  // The deterministic substrate belongs to every world, including generated
+  // ones. Genesis replaces authored content, not physics, cognition, goals,
+  // schedules, stimuli, or monitoring.
+  registerAllBuiltinSystems(god.systemRegistry);
+
+  if (restoring) {
+    deserializeWorld(world, god.systemRegistry, restoring, { reuseGod: { savedEid: savedGod!, liveEid: god.eid }, strictSystems: true });
+    syncEntityRegistryFromWorld(world, god.registry);
+    god.tick = world.time.tick;
+    updateGlobalTime(god, 0);
+    // Explicit runtime mode overrides remain caller-owned; defaults retain save modes.
+    const restoreModes = supplied.runtimeProfile ? config : supplied;
+    if (restoreModes.timedSpeech !== undefined) world.meta.timedSpeech = restoreModes.timedSpeech;
+    if (restoreModes.timedActions !== undefined) world.meta.timedActions = restoreModes.timedActions;
+    if (restoreModes.narrativeMind !== undefined) world.meta.narrativeMind = restoreModes.narrativeMind;
+  }
+  registerNativeRuntimeServices(world, { ai: aiEnabled, planning: config.enablePlanning !== false,
+    reflection: config.enableReflection !== false, timedSpeech: world.meta.timedSpeech, timedActions: world.meta.timedActions });
+
+  if (!isGenesis && !restoring) {
+    // Standard path: apply authored prebake preset.
 
     const preset = config.preset || "slice-of-life";
     console.log(`⚙️  Applying preset: ${preset}`);
@@ -441,7 +623,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
     if (prebakeResult.errors.length > 0) {
       console.warn(`⚠️  Prebake warnings: ${prebakeResult.errors.join(", ")}`);
     }
-  } else {
+  } else if (isGenesis) {
     console.log(`🌱 Genesis mode — God will create the world from seed`);
   }
 
@@ -455,8 +637,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
       tickInterval: 10000,
       autoCreateNarrator: false,
     });
-    createStandardHierarchy(god.eid);
-    startSpiritSystem();
+    createStandardHierarchy(god.eid, world);
     console.log(`   Spirits: Narrator, Arbiter, Crafter, Steward, Weaver, Tinker`);
 
     // --- GodAI Autopilot wiring ---
@@ -480,8 +661,18 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
         const spirit = spiritSystem?.registry.spirits.get(fromEid);
         return spirit?.definition.name || `Spirit#${fromEid}`;
       });
-    });
+    }, world);
   }
+
+  const evolutionSetting = config.evolution;
+  const evolutionEnabled = spiritsEnabled && evolutionSetting !== false;
+  const evolutionCoordinator = createEvolutionCoordinator({
+    ...(typeof evolutionSetting === "object" ? evolutionSetting : {}),
+    enabled: evolutionEnabled,
+  });
+  const codingSetting = config.codingDaemons;
+  const codingDaemon = (codingSetting === true || typeof codingSetting === "object" || (codingSetting !== false && evolutionEnabled))
+    ? new CodingDaemon(world, god.systemRegistry, typeof codingSetting === "object" ? codingSetting : {}) : null;
 
   // Initialize ObjectManager and RulesEngine for deterministic world behavior
   const objectManager = new ObjectManager(world);
@@ -491,7 +682,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
   // Create rooms first (so agents can be placed in them)
   const roomMap = new Map<string, number>();
   const roomsToPopulate: { name: string; roomType: string }[] = [];
-  if (config.rooms && !config.useGodCommand && !isGenesis) {
+  if (config.rooms && !config.useGodCommand && !isGenesis && !restoring) {
     console.log(`🏠 Creating ${config.rooms.length} rooms...`);
     for (const roomConfig of config.rooms) {
       const roomEid = createRoomEntity(world, {
@@ -505,11 +696,12 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
       roomMap.set(roomConfig.name, roomEid);
 
       // Queue for population if roomType is provided
-      const shouldPopulate = roomConfig.autoPopulate !== false && (roomConfig.roomType || config.autoPopulateRooms);
+      const shouldPopulate = roomConfig.autoPopulate ?? config.autoPopulateRooms ?? Boolean(roomConfig.roomType);
       if (shouldPopulate && roomConfig.roomType && spiritsEnabled) {
-        requestRoomPopulation(roomConfig.roomType, roomConfig.name, {
-          worldTheme: "fantasy",
-          economyLevel: "modest",
+        requestRoomPopulationForRoom(world, roomEid, {
+          roomType: roomConfig.roomType,
+          context: { worldTheme: getWorldTheme(world), economyLevel: "modest" },
+          requestedBy: god.eid,
         });
         roomsToPopulate.push({ name: roomConfig.name, roomType: roomConfig.roomType });
         console.log(`   - ${roomConfig.name} (${roomConfig.roomType}) → queued for The Steward`);
@@ -520,7 +712,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
   }
 
   // Create agents
-  if (config.agents && !config.useGodCommand && !isGenesis) {
+  if (config.agents && !config.useGodCommand && !isGenesis && !restoring) {
     console.log(`👥 Creating ${config.agents.length} agents...`);
     for (const agentConfig of config.agents) {
       const roomEid = agentConfig.startRoom ? roomMap.get(agentConfig.startRoom) : undefined;
@@ -529,6 +721,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
         role: agentConfig.role,
         description: agentConfig.description || `A ${agentConfig.role}`,
         systemPrompt: agentConfig.systemPrompt || `You are ${agentConfig.name}, a ${agentConfig.role}. ${agentConfig.description || ""}`,
+        past: agentConfig.past,
         roomId: roomEid,
         gridPosition: agentConfig.gridPosition,
       });
@@ -557,7 +750,7 @@ export async function createSimulation(config: SimulationConfig): Promise<ArgosS
   }
 
   // Create objects
-  if (config.objects && !config.useGodCommand && !isGenesis) {
+  if (config.objects && !config.useGodCommand && !isGenesis && !restoring) {
     console.log(`📦 Creating ${config.objects.length} objects...`);
     for (const objConfig of config.objects) {
       const roomEid = objConfig.room ? roomMap.get(objConfig.room) : undefined;
@@ -592,7 +785,11 @@ SEED DESCRIPTION: ${seed}
 
 Your task:
 1. Create 2-4 rooms that fit the setting (use createRoom)
-2. Create 2-4 agents with appropriate roles placed in those rooms (use createAgent)
+2. ${specification?.inhabitants.length ? `Create the ${specification.inhabitants.length} named inhabitants in the PRIVATE CHARACTER CREATION SEEDS, using their declared rooms where provided` : "Create 2-4 agents with appropriate roles placed in those rooms"} (use createAgent).
+   Use its past field to give each person a private background, enduring drives,
+   and 2-4 formative recollections with personal meaning. Include ordinary warmth,
+   belonging or achievement, not only trauma. Keep shared histories consistent;
+   one person's recollection is not another person's knowledge or a current event.
 3. Create 3-8 objects/furniture to populate the rooms (use createObject)
 4. Optionally create 1-2 custom components if the setting calls for unique mechanics (use createComponent)
 5. Optionally create 1-2 custom systems for unique world behaviors (use bakeNewSystem)
@@ -608,12 +805,41 @@ Do NOT explain — just create everything using your tools.`;
     const results = await godCommand(god, genesisPrompt);
     const successCount = results.filter(r => r.success).length;
     console.log(`🌱 Genesis complete: ${successCount}/${results.length} tool calls succeeded`);
+
+    const generatedAgents = Array.from(query(world, [Agent])).length;
+    const generatedRooms = Array.from(query(world, [Room])).length;
+    const generatedObjects = Array.from(query(world, [PhysicalObject])).length;
+    if (generatedAgents === 0 || generatedRooms === 0 || generatedObjects === 0) {
+      const firstError = results.find((result) => !result.success)?.error;
+      throw new Error(
+        `Genesis failed its world-integrity gate: ${generatedAgents} agents, ${generatedRooms} rooms, `
+        + `${generatedObjects} objects were created${firstError ? `. First error: ${firstError}` : ""}`,
+      );
+    }
   }
 
-  // Generate schedules if requested
+  if (narrativeEngineEnabled && !restoring) {
+    const narrativeSeed = typeof config.genesis === "object" && config.genesis.seed
+      ? config.genesis.seed
+      : config.narrative || config.name;
+    console.log(`🕯️  Building narrative scaffold...`);
+    const scaffold = await generateStoryScaffold(world, narrativeSeed);
+    if (!scaffold) {
+      console.warn(`⚠️  Narrative scaffold generation failed; simulation can still run without direction`);
+    }
+  }
+
+  // Settle baseline routines before the first deterministic world tick, which
+  // projects their activity goals before cognition issues its first request.
+  // Otherwise the async daily installer can introduce a routine goal during
+  // inference and correctly invalidate a choice made from an incomplete agenda.
+  // Restored worlds retain their exact saved state; genuinely new schedules
+  // and later agenda changes still use ordinary stale-decision validation.
   if (config.generateSchedules) {
     console.log(`📅 Generating agent schedules...`);
     await initializeAllSchedules(world, true);
+  } else if (!restoring && god.systemRegistry.systems.get("DailySchedulePlanner")?.active) {
+    await initializeAllSchedules(world, false);
   }
 
   // Create daemon registry for agent guardians
@@ -625,6 +851,9 @@ Do NOT explain — just create everything using your tools.`;
   );
 
   if (aiEnabled) {
+    if (config.enableReflection !== false) {
+      for (const eid of query(world, [Agent, Mind])) initializeReflectionState(world, eid);
+    }
     // Create daemons for all agents
     const daemonCount = createDaemonsForAllAgents(daemonRegistry, world);
     console.log(`   Created ${daemonCount} guardian daemons`);
@@ -638,6 +867,11 @@ Do NOT explain — just create everything using your tools.`;
     console.log(`   (enableAI:false) Skipping daemon creation`);
   }
 
+  if (narrativeEngineEnabled) {
+    setDirectorGodAgent(god);
+    setNudgeDaemonRegistry(world, daemonRegistry);
+  }
+
   // Setup web server if enabled
   let server: ReturnType<typeof createSimulationServer> | null = null;
   if (config.enableServer) {
@@ -646,7 +880,7 @@ Do NOT explain — just create everything using your tools.`;
     server.setSimulationState({
       world,
       registry: god.systemRegistry,
-      tick: 0,
+      tick: world.time.tick,
       events: [],
       logs: [],
       daemonRegistry,
@@ -659,7 +893,81 @@ Do NOT explain — just create everything using your tools.`;
   // Create event bus
   const bus = createSimulationBus();
   bus.setBuffering(true, 500); // Enable buffering for late subscribers
+  // Private operator/actor observations, never public committed world events.
+  // Each writer owns its thought type: a background appraisal finishing during
+  // foreground inference must not be published by both overlapping cursors.
+  const publishThoughts = (cursor: ThoughtPublicationCursor, type: "decision" | "reflection") => {
+    for (const event of takeNewAuthoredThoughtEvents(cursor)) if (event.thoughtType === type) bus.emit(event);
+  };
+  const appraiseWithThoughtPublication = async (eid: number) => {
+    const cursor = captureThoughtPublication(world, eid);
+    const result = await runExperienceAppraisal(world, eid);
+    publishThoughts(cursor, "reflection");
+    return result;
+  };
+  if (codingDaemon) {
+    codingDaemon.setEventHandler(({job,message}) => {
+      bus.emit({type:"system:build",timestamp:Date.now(),jobId:job.id,status:job.status,source:job.request.source,message});
+      if (!["active","rejected","rolled_back","cancelled"].includes(job.status)) return;
+      const report = {id:`coding:${job.id}:${job.status}`,timestamp:Date.now(),from:god.eid,to:god.eid,
+        type:"report" as const,domain:"ecology" as const,
+        priority:job.status === "rejected" || job.status === "rolled_back" ? "high" as const : "normal" as const,
+        subject:`Coding daemon ${job.status}: ${job.systems?.join(", ") || job.id}`,
+        content:message,data:{jobId:job.id,status:job.status,systems:job.systems},requiresResponse:false};
+      if (god.autopilot) enqueueSpiritMessages(god,[report],()=>"Coding daemon");
+      const requester = [...(spiritSystem?.registry.spirits.values() ?? [])].find(s=>s.definition.name===job.request.source);
+      if(requester) requester.inbox.push({...report,to:requester.eid});
+    });
+    await codingDaemon.initialize();
+  }
 
+  // Turn registry-local execution data into the public event stream. This is
+  // intentionally part of the library: generated systems must remain
+  // observable even when no development server or UI exists.
+  const observedSystems = new Set<string>();
+  const observedRuns = new Map(
+    getSystemTelemetrySnapshot().map((entry) => [entry.systemName, entry.runs]),
+  );
+  // Observe appends, not tail length: a full bounded tail rotates at constant
+  // length, and external consumers may drain it between monitoring ticks.
+  subscribeSystemDiagnostics(god.systemRegistry, ({ channel, value }) => {
+    if (channel !== "errors") return;
+    const system = god.systemRegistry.systems.get(value.systemName);
+    bus.emit({
+      type: "system:error", timestamp: value.timestamp, systemName: value.systemName,
+      error: value.error, errorCount: value.errorCount,
+      disabled: system ? !system.active : undefined,
+    });
+  });
+  const emitSystemMonitoring = (): void => {
+    for (const system of god.systemRegistry.systems.values()) {
+      if (observedSystems.has(system.name)) continue;
+      observedSystems.add(system.name);
+      bus.emit({
+        type: "system:created",
+        timestamp: Date.now(),
+        systemName: system.name,
+        description: system.description,
+        frequency: system.frequency,
+        pseudocode: system.pseudocode,
+      });
+    }
+
+    for (const telemetry of getSystemTelemetrySnapshot()) {
+      if (!god.systemRegistry.systems.has(telemetry.systemName)) continue;
+      const previousRuns = observedRuns.get(telemetry.systemName) ?? 0;
+      if (telemetry.runs > previousRuns) {
+        bus.emit({
+          type: "system:executed",
+          timestamp: telemetry.lastTimestamp || Date.now(),
+          systemName: telemetry.systemName,
+          duration: telemetry.lastDurationMs,
+        });
+      }
+      observedRuns.set(telemetry.systemName, telemetry.runs);
+    }
+
+  };
   // Register injection handlers
   bus.registerInjectionHandler("inject:god_command", async (msg) => {
     if (msg.type === "inject:god_command") {
@@ -680,13 +988,14 @@ Do NOT explain — just create everything using your tools.`;
       const agents = Array.from(query(world, [Agent]));
       for (const agentEid of agents) {
         if (Name.value[agentEid] === msg.targetAgentName) {
-          queueStimulus({
+          const admitted = queueStimulus(world, {
             targetEid: agentEid,
             type: msg.stimulusType || "perception",
             modality: "cognitive",
             content: msg.stimulus,
             source: msg.source || "external",
           });
+          if (!admitted) throw new Error(`Stimulus to ${msg.targetAgentName} was not admitted; inspect simulation.getOperationalStatus().stimuli`);
           console.log(`[Bus] Injected stimulus to ${msg.targetAgentName}`);
           return;
         }
@@ -717,8 +1026,9 @@ Do NOT explain — just create everything using your tools.`;
 
   // Build simulation state
   let running = false;
+  let stopping = false;
   let paused = false;
-  let tick = 0;
+  let tick = world.time.tick;
   let loopTimeout: NodeJS.Timeout | null = null;
   let runtime: RuntimeSimulationState | null = null;
 
@@ -727,30 +1037,42 @@ Do NOT explain — just create everything using your tools.`;
     god,
     bus,
     daemons: daemonRegistry,
-    tick: 0,
+    tick,
     running: false,
     paused: false,
 
     start: async () => {
       if (running) return;
+      startCommittedEvents(world);
       running = true;
       simulation.running = true;
+      if (spiritsEnabled) startSpiritSystem(world);
+      codingDaemon?.start();
       console.log(`\n🎭 Starting simulation loop...\n`);
+
+      if (narrativeEngineEnabled) {
+        startBeatDetection(world);
+      }
 
 	      if (dualLoopEnabled) {
 	        if (!runtime) {
 	          const spiritRegistry = spiritSystem?.registry ?? createSpiritRegistry(world);
 	          runtime = createRuntimeSimulation(world, god.systemRegistry, spiritRegistry, {
-	            ecsTickRate: config.ecsTickRate ?? (1 / 3),
+	            ecsTickRate, ecsDeltaMs: baseDeltaMs, timeScale, ownsWorldClock: false,
 	            logTickStats: false,
 	          });
 
           // Fast deterministic tick (no awaits)
           registerFastSystem(runtime, {
             name: "WorldTick",
-            execute: (_w, _delta, t) => {
-              const worldEvents = runWorldTickAt(god, t, config.ecsDeltaMs ?? 5000);
+            execute: (_w, deltaMs, t) => {
+              advanceGoalTick(world);
+              codingDaemon?.commitReady(t);
+              const worldEvents = runWorldTickAt(god, t, deltaMs);
+              runEmotionalDynamics(world);
+              runAppearanceEmitter(world);
               bridgeWorldEventsToStimuli(world, worldEvents);
+              emitSystemMonitoring();
               simulation.tick = t;
               simulation.running = running;
               simulation.paused = paused;
@@ -801,66 +1123,124 @@ Do NOT explain — just create everything using your tools.`;
 
 	          // Cognition loop: always registered so behavior policies fire even without AI.
 	          // When AI is off, planning is skipped and LLM fallback is never reached.
-	          registerAIOperation(runtime, {
-	            name: "AgentCognition",
-	            interval: 1,
-	            priority: "high",
-	            execute: async () => {
-	              const actions = await runCognitionCycle(world, god.systemRegistry, {
-	                enablePlanning: aiEnabled && config.enablePlanning !== false,
-	              });
+              // Independent actors: a slow secondary NPC cannot hold Mara's
+              // completed decision in a Promise.all batch. Foreground slots are
+              // reserved, so world-building cannot occupy the entire AI queue.
+              const enrolled = new Set<number>();
+              const modelDemand = new Set<number>(), deliberating = new Set<number>();
+              registerFastSystem(runtime, {
+                name: "CognitionEnrollment",
+                execute: () => {
+                  for (const eid of query(world, [Agent, Mind])) {
+                    if (enrolled.has(eid)) continue;
+                    enrolled.add(eid);
+                    registerAIOperation(runtime!, {
+                      name: `AgentCognition:${eid}`, interval: 1, priority: "high", lane: "foreground",
+                      ready: () => modelDemand.has(eid) && entityExists(world, eid) && Agent.active[eid] && isForegroundActorAvailable(world, eid)
+                        && isForegroundCognitionReady(world, eid, { hasQueuedStimuli: hasPendingCognitionStimuli(world, eid),
+                          hasPendingStimuli: hasPendingCognitionStimuli(world, eid) || hasUnintegratedAttention(world, eid, false),
+                          hasDueAttention: hasDueAttentionSignal(world, eid) }),
+                      execute: async () => {
+                        deliberating.add(eid);
+                        try {
+                          const thoughtCursor = captureThoughtPublication(world, eid);
+                          const actions = await runCognitionCycle(world, god.systemRegistry, { tick: runtime!.tick, enablePlanning: false, agentEids: [eid] });
+                          for (const { action } of actions) {
+                            if (server) server.pushAgentAction(Name.value[eid], action);
+                            bus.emit({ type: "agent:action", timestamp: Date.now(), agentId: eid,
+                              agentName: Name.value[eid], action: action.type, target: action.target, content: action.content } as SimulationEvent);
+                          }
+                          executeActions(world, actions, god.systemRegistry);
+                          publishThoughts(thoughtCursor, "decision");
+                        } finally { deliberating.delete(eid); }
+                      },
+                    });
+                    if (aiEnabled) {
+                      const active = () => entityExists(world, eid) && Agent.active[eid];
+                      if (config.enableExperienceAppraisal !== false) registerAIOperation(runtime!, {
+                        name: `AgentAppraisal:${eid}`, interval: 1, priority: "high", lane: "subconscious",
+                        ready: () => active() && hasExperienceAppraisal(world, eid),
+                        execute: () => appraiseWithThoughtPublication(eid),
+                      });
+                      if (config.enableReflection !== false) initializeReflectionState(world, eid);
+                      if (config.enableReflection !== false) registerAIOperation(runtime!, {
+                        name: `AgentCoordinationReview:${eid}`, interval: 2, priority: "normal", lane: "subconscious",
+                        ready: () => active() && hasPendingCoordinationReview(world, eid),
+                        execute: () => runCoordinationReview(world, eid),
+                      });
+                      if (config.enablePlanning !== false) {
+                        registerAIOperation(runtime!, {
+                          name: `AgentPlanning:${eid}`, interval: 1, priority: "high", lane: "subconscious",
+                          ready: () => active() && !hasPendingPersonalGoalReview(world, eid) && hasPendingPlanning(world, eid, { focusActiveGoal: true, background: true }),
+                          execute: () => runPlanningSystem(world, { agentEids: [eid], focusActiveGoal: true, background: true }),
+                        });
+                      }
+                      registerAIOperation(runtime!, {
+                        name: `AgentPersonalReview:${eid}`, interval: 1, priority: "high", lane: "subconscious",
+                        ready: () => active() && hasPendingPersonalGoalReview(world, eid),
+                        execute: () => runAgentSubconscious(world, eid, { enableReflection: config.enableReflection }),
+                      });
+                      registerAIOperation(runtime!, {
+                        name: `AgentSubconscious:${eid}`, interval: 5, priority: "normal", lane: "subconscious",
+                        ready: () => active() && !hasPendingPersonalGoalReview(world, eid) && hasSubconsciousWork(world, eid, { enableReflection: config.enableReflection }),
+                        execute: () => runAgentSubconscious(world, eid, { enableReflection: config.enableReflection }),
+                      });
+                    }
+                  }
+                },
+              });
 
-	              for (const { eid, action } of actions) {
-	                const name = Name.value[eid];
-	                if (server) server.pushAgentAction(name, action);
-	                bus.emit({
-	                  type: "agent:action",
-	                  timestamp: Date.now(),
-	                  agentId: eid,
-	                  agentName: name,
-	                  action: action.type,
-	                  target: action.target,
-	                  content: action.content,
-	                } as SimulationEvent);
-	              }
-
-	              executeActions(world, actions, god.systemRegistry);
-	            },
-	          });
+              registerFastSystem(runtime, {
+                name: "ActorControl",
+                execute: () => {
+                  for (const eid of query(world, [Agent, Mind])) {
+                    try {
+                      const thoughtCursor = captureThoughtPublication(world, eid);
+                      const needsModel = runActorControlStep(world, eid, god.systemRegistry, {
+                        deliberating: deliberating.has(eid),
+                        appraisalPending: config.enableExperienceAppraisal !== false && isExperienceAppraisalPending(world, eid),
+                        onAction: action => {
+                          if (server) server.pushAgentAction(Name.value[eid], action);
+                          bus.emit({ type: "agent:action", timestamp: Date.now(), agentId: eid,
+                            agentName: Name.value[eid], action: action.type, target: action.target, content: action.content } as SimulationEvent);
+                        },
+                      });
+                      publishThoughts(thoughtCursor, "decision");
+                      if (needsModel) modelDemand.add(eid); else modelDemand.delete(eid);
+                    } catch {
+                      // A faulty/unloaded actor package must not starve every
+                      // later actor in this tick or launch speculative inference.
+                      modelDemand.delete(eid);
+                      console.warn(`[ActorControl] Could not advance actor ${eid}; retrying next tick.`);
+                    }
+                  }
+                },
+              });
 
 	          if (aiEnabled) {
-
-	            // Auto-fix file-based systems that error inside the fast tick.
-	            // Note: the fast tick uses `runWorldTickAt` (sync), so runtime fixes must happen here (async).
-	            registerAIOperation(runtime, {
-	              name: "FileSystemAutoFixer",
-	              interval: 10,
-	              priority: "normal",
-	              execute: async () => {
-	                if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim()) return;
-	                const queued = getSystemsNeedingFix();
-	                if (queued.length === 0) return;
-	                const res = await fixAllQueuedSystems(god.fileSystems);
-	                if (res.fixed.length > 0) {
-	                  god.systemRegistry.logs.push(`[AutoFix] Fixed file systems: ${res.fixed.join(", ")}`);
-	                }
-	                if (res.failed.length > 0) {
-	                  god.systemRegistry.logs.push(`[AutoFix] Failed to fix file systems: ${res.failed.join(", ")}`);
-	                }
-	              },
-	            });
-
 	            // Daemon observations (async)
 	            registerAIOperation(runtime, {
 	              name: "DaemonSystem",
 	              interval: 1,
 	              priority: "normal",
 	              execute: async () => {
+	                createDaemonsForAllAgents(daemonRegistry, world);
 	                await runDaemonSystem(world, daemonRegistry, spiritSystem?.registry);
 	              },
 	            });
 
-	            // Spirits + materialization (async)
+              if (narrativeEngineEnabled) {
+                registerAIOperation(runtime, {
+                  name: "NarrativeDirector",
+                  interval: 1,
+                  priority: "normal",
+                  execute: async () => {
+                    await runNarrativeDirectorCycle(world);
+                  },
+                });
+              }
+
+	            // Generic spirit cognition and message routing (async)
 	            registerAIOperation(runtime, {
 	              name: "SpiritSystem",
 	              interval: 1,
@@ -869,15 +1249,24 @@ Do NOT explain — just create everything using your tools.`;
 	                if (!spiritsEnabled || !spiritSystem) return;
 
 	                await tickSpiritSystem(world, god.registry);
-
-	                await runWorldCrafterCycle(world, spiritSystem.registry, god);
-
-	                const pendingRooms = getPendingRoomRequests();
-	                if (pendingRooms.length > 0) {
-	                  await runStewardCycle(world, spiritSystem.registry);
-	                }
 	              },
 	            });
+
+              if (evolutionEnabled && spiritSystem) {
+                registerAIOperation(runtime, {
+                  name: "WorldEvolution",
+                  interval: 1,
+                  priority: "normal",
+                  execute: async () => {
+                    await evolutionCoordinator.run(runtime?.tick ?? simulation.tick, {
+                      world,
+                      god,
+                      spirits: spiritSystem!.registry,
+                    });
+                    emitSystemMonitoring();
+                  },
+                });
+              }
 
               // GodAI Autopilot (async)
               // Consumes spirit/daemon reports from the inbox and issues godCommand calls under throttling.
@@ -918,16 +1307,34 @@ Do NOT explain — just create everything using your tools.`;
     },
 
     stop: () => {
+      if (stopping) return;
+      stopping = true;
+      const errors: unknown[] = [];
+      const cleanup = (run: () => void) => { try { run(); } catch (error) { errors.push(error); } };
+      // Fence scheduling first. Preserve cancellation receipts before sealing
+      // their source, but never let a consumer failure skip native shutdown.
       running = false;
       simulation.running = false;
       if (loopTimeout) {
         clearTimeout(loopTimeout);
         loopTimeout = null;
       }
-      if (dualLoopEnabled && runtime) {
-        stopRuntimeSimulation(runtime);
-      }
+      try {
+        cleanup(() => clearTimedSpeech(world));
+        cleanup(() => clearSimulationTimeline(world));
+        cleanup(() => stopCommittedEvents(world));
+        cleanup(() => codingDaemon?.stop());
+        if (dualLoopEnabled && runtime) cleanup(() => stopRuntimeSimulation(runtime!));
+        if (narrativeEngineEnabled) cleanup(() => stopBeatDetection(world));
+        if (spiritsEnabled) cleanup(() => stopSpiritSystem(world));
+      } finally { stopping = false; }
+      if (errors.length) throw new AggregateError(errors, "Simulation cleanup failed after attempting all teardown stages");
       console.log(`\n🛑 Simulation stopped.`);
+    },
+
+    drainPendingOperations: async timeoutMs => {
+      if (running || simulation.running) throw new Error("Operation drain requires a stopped simulation");
+      if (runtime) await drainSimulationOperations(runtime, timeoutMs);
     },
 
     pause: () => {
@@ -944,18 +1351,29 @@ Do NOT explain — just create everything using your tools.`;
       console.log(`▶️  Simulation resumed.`);
     },
 
-	    step: async () => {
-	      tick++;
+	    step: async (deltaMs = defaultDeltaMs) => {
+          validateSimulationDelta(deltaMs);
+          if (dualLoopEnabled && runtime?.ecsTimer) throw new Error("Pause the live runtime before manually stepping");
+	      tick = Math.max(tick, world.time.tick) + 1;
 	      simulation.tick = tick;
+      codingDaemon?.commitReady(tick);
+      void codingDaemon?.pump();
 	      console.log(`\n--- Tick ${tick} ---`);
 
       // Update god systems
-      const worldEvents = tickWorld(god, 5000);
+      const worldEvents = runWorldTickAt(god, tick, deltaMs);
+      runEmotionalDynamics(world);
+      runAppearanceEmitter(world);
       bridgeWorldEventsToStimuli(world, worldEvents);
+      emitSystemMonitoring();
+
+      if (aiEnabled && config.enableExperienceAppraisal !== false)
+        for (const eid of query(world, [Agent, Mind])) if (hasExperienceAppraisal(world, eid)) await appraiseWithThoughtPublication(eid);
 
 	      // Run cognition cycle (AI)
+	      const thoughtCursors = aiEnabled ? Array.from(query(world, [Agent, Mind]), eid => captureThoughtPublication(world, eid)) : [];
 	      const actions = aiEnabled
-	        ? await runCognitionCycle(world, god.systemRegistry, { enablePlanning: config.enablePlanning !== false })
+	        ? await runCognitionCycle(world, god.systemRegistry, { tick, enablePlanning: false })
 	        : [];
 
       // Log actions and emit events
@@ -980,6 +1398,7 @@ Do NOT explain — just create everything using your tools.`;
 
       // Execute actions
       executeActions(world, actions, god.systemRegistry);
+      for (const cursor of thoughtCursors) publishThoughts(cursor, "decision");
 
       // Run deterministic rules (fire spreads, decay, etc.)
       const ruleEvents = rulesEngine.processTick(tick);
@@ -1015,13 +1434,20 @@ Do NOT explain — just create everything using your tools.`;
 
 	      // Run daemon observation system (AI)
 	      if (aiEnabled) {
+            // Batch stepping explicitly awaits background work AFTER action execution.
+            // Live dual-loop runs these jobs independently; neither detaches promises.
+            for (const eid of query(world, [Agent, Mind])) {
+              await runAgentSubconscious(world, eid, { enableReflection: config.enableReflection });
+            }
+            if (config.enablePlanning !== false) await runPlanningSystem(world, { focusActiveGoal: true });
+            createDaemonsForAllAgents(daemonRegistry, world);
 	        const daemonResult = await runDaemonSystem(world, daemonRegistry, spiritSystem?.registry);
 	        if (daemonResult.observations > 0) {
 	          console.log(`  [Daemons] ${daemonResult.observations} observations, ${daemonResult.whispers} whispers, ${daemonResult.challenges} challenges, ${daemonResult.reports} reports`);
 	        }
 	      }
 
-	      // Run spirit system (AI)
+	      // Run generic spirit cognition and the specialist evolution pipeline (AI)
 	      if (aiEnabled && spiritsEnabled && spiritSystem) {
         // Tick spirits (Narrator, Arbiter, etc.)
         const spiritResult = await tickSpiritSystem(world, god.registry);
@@ -1029,20 +1455,15 @@ Do NOT explain — just create everything using your tools.`;
           console.log(`  [Spirits] ${spiritResult.spiritsProcessed} spirits processed`);
         }
 
-        // Run The Crafter (entity materialization)
-        const crafterResult = await runWorldCrafterCycle(world, spiritSystem.registry, god);
-        if (crafterResult.entitiesCreated > 0) {
-          console.log(`  [Crafter] Created ${crafterResult.entitiesCreated} entities`);
+        if (evolutionEnabled) {
+          await evolutionCoordinator.run(tick, { world, god, spirits: spiritSystem.registry });
+          emitSystemMonitoring();
         }
+        if (god.autopilot) await runGodAutopilotCycle(god);
+      }
 
-        // Run The Steward (room population)
-        const pendingRooms = getPendingRoomRequests();
-        if (pendingRooms.length > 0) {
-          const stewardResult = await runStewardCycle(world, spiritSystem.registry);
-          if (stewardResult.roomsPopulated > 0) {
-            console.log(`  [Steward] Populated ${stewardResult.roomsPopulated} rooms with ${stewardResult.entitiesGenerated} entities`);
-          }
-        }
+      if (narrativeEngineEnabled) {
+        await runNarrativeDirectorCycle(world);
       }
 
       // Emit world state through bus
@@ -1068,11 +1489,29 @@ Do NOT explain — just create everything using your tools.`;
         tick: simulation.tick || tick,
         agentCount: agents.length,
         roomCount: rooms.length,
-        objectCount: 0, // TODO: count objects
-        activeGoals: 0, // TODO: count goals
+        objectCount: Array.from(query(world, [PhysicalObject])).length,
+        activeGoals: Array.from(query(world, [Goal])).filter(
+          (goalEid) => Goal.status[goalEid] === "active" || Goal.status[goalEid] === "in_progress",
+        ).length,
         systemCount: god.systemRegistry.systems.size,
       };
     },
+
+    getEvolutionStatus: () => evolutionCoordinator.getStatus(),
+    getRuntimeServices: () => getNativeRuntimeServices(world),
+    getRuntimeStatus: () => runtime ? getRuntimeStats(runtime) : null,
+    getOperationalStatus: () => ({
+      stimuli: getStimulusQueueStatus(world),
+      systemDiagnostics: getSystemDiagnosticCoverage(god.systemRegistry),
+    }),
+    getWorldConstructionStatus: () => getWorldConstructionStatus(world),
+    getCodingStatus: () => codingDaemon?.getStatus() ?? null,
+    requestSystemBuild: (request: BuildRequest) => {
+      if(!codingDaemon) throw new Error("Enable codingDaemons to request system builds");
+      return codingDaemon.enqueue(request);
+    },
+
+    getSystemHealth: () => getAllSystemHealth(god.systemRegistry),
 
 	    command: async (cmd: string) => {
 	      if (!aiEnabled) {
@@ -1100,17 +1539,17 @@ Do NOT explain — just create everything using your tools.`;
       const agents = Array.from(query(world, [Agent]));
       for (const agentEid of agents) {
         if (Name.value[agentEid] === agentName) {
-          queueStimulus({
+          return queueStimulus(world, {
             targetEid: agentEid,
             type,
             modality: "cognitive",
             content,
             source: "narrator",
           });
-          return;
         }
       }
       console.warn(`Agent "${agentName}" not found`);
+      return false;
     },
 
     // --- Observation Hooks ---
@@ -1262,8 +1701,8 @@ Do NOT explain — just create everything using your tools.`;
 /**
  * Create a simulation from a natural language prompt.
  *
- * This function uses the LLM to interpret your description and
- * generate appropriate configuration, then creates the simulation.
+ * Compatibility wrapper for the single genesis path. New callers can pass
+ * the prompt directly to `createSimulation(prompt)`.
  *
  * @example
  * ```typescript
@@ -1279,54 +1718,13 @@ export async function createSimulationFromPrompt(
   prompt: string,
   options: Partial<SimulationConfig> = {}
 ): Promise<ArgosSimulation> {
-  const model = google("gemini-2.0-flash");
-
-  console.log(`🔮 Interpreting prompt...`);
-
-  const systemPrompt = `You are an ArgOS simulation configurator. Given a natural language description,
-you generate a JSON configuration for creating a simulation.
-
-Output ONLY valid JSON with this structure:
-{
-  "name": "Simulation Name",
-  "narrative": "One paragraph setting description",
-  "agents": [
-    { "name": "Name", "role": "role", "description": "description", "startRoom": "Room Name" }
-  ],
-  "rooms": [
-    { "name": "Room Name", "description": "room description" }
-  ],
-  "objects": [
-    { "name": "Object Name", "description": "description", "room": "Room Name", "traits": ["trait1"] }
-  ]
-}
-
-Keep it focused - 2-5 agents, 2-5 rooms, 0-5 objects.
-Rooms should match where agents start.
-Agent roles should be simple (baker, blacksmith, traveler, etc).`;
-
-  const { text } = await generateText({
-    model,
-    system: systemPrompt,
-    prompt: `Create a simulation configuration from this description:\n\n${prompt}`,
-  });
-
-  // Extract JSON from response
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error("Failed to parse LLM response into configuration");
-  }
-
-  const config = JSON.parse(jsonMatch[0]) as SimulationConfig;
-
-  // Merge with options
   const finalConfig: SimulationConfig = {
-    ...config,
+    name: prompt.trim().split(/\n|[.!?]/, 1)[0]?.slice(0, 49) || "Generated World",
+    narrative: prompt,
+    genesis: { seed: prompt },
     ...options,
-    preset: options.preset || "slice-of-life",
+    enableNarrativeEngine: options.enableNarrativeEngine ?? true,
   };
-
-  console.log(`📋 Generated config: ${finalConfig.agents?.length || 0} agents, ${finalConfig.rooms?.length || 0} rooms`);
 
   return createSimulation(finalConfig);
 }
@@ -1368,7 +1766,15 @@ export async function createVillageSimulation(): Promise<ArgosSimulation> {
 
 // ECS Core
 export { createArgosWorld, type WorldContext } from "./ecs/world";
+export { approveRuntimeRuleDefinitions, restoreRuntimeRuleApprovals, type RuntimeRuleApprovalCatalogue } from "./world/runtime-rule-restoration";
+export { readSimulationTime, getSimulationTimeSnapshot, advanceSimulationTime, type SimulationTimeSnapshot } from "./ecs/simulation-time";
 export { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity, createGodAgentEntity } from "./ecs/prefabs";
+export { registerExternalParticipant, getExternalParticipants, authorizeParticipantEmbodiment,
+  type ParticipantEmbodimentGrant } from "./runtime/participant-identities";
+export { initializeWorkDocument, getDocumentAffordances, readProductiveGoalTime } from "./world/productive-work";
+export { createSimulationHost, type SimulationHost, type SimulationHostSnapshot, type SimulationHostHealth } from "./runtime/simulation-host";
+export { hasFinitePortions, isPortionVessel, transferSinglePortion, consumeSinglePortion,
+  type PortionSupplyStore, type PortionVesselStore } from "./world/finite-portions";
 export { query, addEntity, removeEntity, addComponent, removeComponent, hasComponent, getRelationTargets } from "bitecs";
 
 // Unified Component Registry
@@ -1393,13 +1799,27 @@ export { createGodAgent, godCommand, getWorldState, tickWorld } from "./god/god-
 export type { GodAgentState, GodAgentConfig } from "./god/god-agent";
 
 // System Management
-export { createSystemRegistry, registerSystem, runSystems, runAsyncSystems, type SystemDefinition, type SystemRegistry } from "./ecs/dynamic-systems";
+export { createSystemRegistry, registerSystem, runSystems, runAsyncSystems, subscribeSystemDiagnostics,
+  getSystemDiagnosticCoverage, type SystemDefinition, type SystemRegistry, type SystemDiagnosticRecord } from "./ecs/dynamic-systems";
 export { registerAllBuiltinSystems, createMovementSystem, createRoomArrivalSystem, setMovementTarget, clearMovementTarget } from "./systems/builtin-systems";
 export { createPrebakePreset, getAvailablePresets, bakeSystem } from "./god/system-baker";
 export type { PrebakePreset } from "./god/system-baker";
 
 // Cognition System
 export { runCognitionCycle, executeActions, broadcastToRoom, queueStimulus } from "./cognition/cognition-system";
+export { getStimulusQueueStatus } from "./cognition/stimulus-queue";
+export { queueExperiencedEvent, hasExperienceAppraisal, runExperienceAppraisal, subscribeExperienceAppraisal } from "./cognition/experience-appraisal";
+export { snapshotActorContinuation } from "./cognition/actor-continuation";
+export { createPersonalIntention } from "./cognition/goal-lifecycle";
+export { snapshotAffect } from "./cognition/affect-state";
+export { getForegroundCognitionReadiness, type ForegroundCognitionReadiness } from "./cognition/idle-cognition";
+export { getWorkingMemory, getWorkingMemoryRevision, formatWorkingMemoryContext,
+  type ActorWorkingMemory, type WorkingMemoryFact, type WorkingMemoryReceipt } from "./cognition/working-memory";
+export { getCoordinationMemory, getCoordinationRevision, formatCoordinationContext,
+  type ActorCoordinationMemory, type CoordinationItem, type CoordinationGoalRef } from "./cognition/coordination-memory";
+export { recordPrivateCommunication, getPrivateCommunications, type PrivateCommunicationReceipt } from "./cognition/communication-memory";
+export { getCurrentInspection, type InspectionMemory } from "./cognition/inspection-memory";
+export { getSocialClosures, type SocialClosure } from "./cognition/social-memory";
 export { initializeSchedule, getCurrentActivity, getSchedule } from "./cognition/schedule-system";
 export { createMemoryConsolidationSystem, runMemoryConsolidation, recallMemory } from "./cognition/memory-consolidation";
 export { createBeliefRevisionSystem, runBeliefRevision, updateBeliefWithEvidence } from "./cognition/belief-revision";
@@ -1539,4 +1959,24 @@ export {
 } from "./spirits/agent-daemon";
 
 // Version
+export { getNarrativeHistory, narrativeEntryCount, getIdentityAnchors, type NarrativeRecord, type NarrativeEvidence } from "./cognition/narrative-memory";
+export { characterPastSchema, type CharacterPast } from "./cognition/character-past-schema";
+export { getEmotionalEpisodes, emotionalActivation, type EmotionalEpisode } from "./cognition/emotional-life";
 export const VERSION = "2.0.0";
+
+// In-world speech timing is distinct from model latency and video playback.
+export { estimateSpeechDurationMs, getSpeakingActivity, isSpeaking, type SpeechInterval } from "./cognition/timed-speech";
+
+// Small social laboratory + read-only multi-character rendering surface.
+export { GenerativeAgentsTestbed, type GenerativeAgentsOptions, type TestbedCharacter } from "./demo/generative-agents";
+export { SceneDirector, projectMultiCharacterScene, snapshotDirectorScene, type SceneSnapshot, type SceneShot } from "./rendering/scene-director";
+export { attachCommittedSceneRenderer } from "./rendering/attach-committed-renderer";
+export { attachCommittedSceneSource, type CommittedSceneSource, type CommittedSceneSourceOptions } from "./rendering/committed-scene-source";
+// Optional embodied world package: ECS owns locomotion; renderers only observe.
+export { createSpatialWorld, type SpatialAdmission, type SpatialOutcome, type SpatialPoint, type SpatialRect } from "./world/spatial-world";
+export type { SceneEvent, SceneActor, SceneProp, SceneActionInterval, SceneActionStatus } from "./rendering/scene-snapshot";
+export { CommittedSceneHistory, type CommittedSceneWindow, type CommittedSceneWorldWindow,
+  type SceneWorldState, type WorldRoomEvidence, type SceneWorldWindowResult } from "./rendering/committed-scene-history";
+export { CommittedSceneRenderer, projectCommittedSceneWindow, type CommittedRenderSegment } from "./rendering/committed-scene-renderer";
+export { SourcePlaybackTimeline } from "./rendering/source-playback-timeline";
+export { configureCharacterAppearance, registerGarment, tryWearGarment, tryRemoveGarment, snapshotCharacterAppearance, type CharacterAppearanceSnapshot } from "./rendering/character-appearance";

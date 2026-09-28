@@ -26,6 +26,9 @@ import { getRoomForEntity } from "../ecs/location";
 import { broadcastToRoom, queueStimulus } from "../cognition/cognition-system";
 import type { SensoryModality } from "../cognition/sensory-system";
 import type { EntityRegistry } from "../ecs/tools";
+import { formatCoordinationContext, getCoordinationMemory } from "../cognition/coordination-memory";
+import { getRecentPhysicalAttempts, hasRepeatedPhysicalFailures, type RecentPhysicalAttempts } from "../runtime/recent-physical-attempts";
+import { getWorldRuntimeHealth } from "../runtime/fast-system-health";
 
 // =============================================================================
 // TYPES
@@ -41,8 +44,11 @@ export interface AgentSummary {
   mode: string;
   active: boolean;
   recentActions: string[];
+  recentAttempts?: RecentPhysicalAttempts;
   relationships: Array<{ name: string; attitude: string }>;
   goals: Array<{ description: string; priority: number; status: string }>;
+  /** Omniscient monitoring only; never a broadcast to other NPCs or the renderer. */
+  coordination?: string;
 }
 
 export interface RoomSummary {
@@ -79,6 +85,7 @@ export interface WorldStateSummary {
   activeConflicts: ConflictSummary[];
   narrativeArc: NarrativeArc;
   stagnationScore: number;
+  runtimeHealth?: ReturnType<typeof getWorldRuntimeHealth>;
 }
 
 export interface InjectedEvent {
@@ -96,6 +103,8 @@ export interface EventInjectionTarget {
 }
 
 export interface ObservationResult {
+  /** Operational failure needs review, not a narrative nudge or forced NPC action. */
+  requiresRuntimeReview: boolean;
   summary: WorldStateSummary;
   recommendations: string[];
   shouldIntervene: boolean;
@@ -138,6 +147,7 @@ export function getWorldSummary(
     activeConflicts,
     narrativeArc,
     stagnationScore,
+    runtimeHealth: getWorldRuntimeHealth(world),
   };
 }
 
@@ -186,8 +196,10 @@ export function getAgentSummaries(world: World, registry: EntityRegistry): Agent
       mode,
       active,
       recentActions: [], // Would need action history tracking
+      recentAttempts: getRecentPhysicalAttempts(world, eid),
       relationships,
       goals,
+      coordination: getCoordinationMemory(world, eid).items.length ? formatCoordinationContext(world, eid) : undefined,
     };
   });
 }
@@ -366,27 +378,11 @@ export function calculateStagnation(
   agentSummaries: AgentSummary[],
   recentEvents: string[]
 ): number {
-  let stagnation = 0;
-
-  // Few recent events = stagnation
-  if (recentEvents.length < 3) stagnation += 0.4;
-  else if (recentEvents.length < 10) stagnation += 0.2;
-
-  // All agents inactive = stagnation
-  const inactiveAgents = agentSummaries.filter(a => !a.active || a.mode === "waiting");
-  if (inactiveAgents.length === agentSummaries.length) {
-    stagnation += 0.4;
-  } else {
-    stagnation += (inactiveAgents.length / Math.max(agentSummaries.length, 1)) * 0.2;
-  }
-
-  // Low average arousal = stagnation
-  const avgArousal = agentSummaries.length > 0
-    ? agentSummaries.reduce((sum, a) => sum + a.arousal, 0) / agentSummaries.length
-    : 0.5;
-  if (avgArousal < 0.3) stagnation += 0.2;
-
-  return Math.min(1, stagnation);
+  // Legacy field/API: fraction of active actors with recent repeated physical
+  // failures. Event volume, waiting and arousal cannot establish blockage.
+  // Textual event summaries are not executor receipts.
+  const active = agentSummaries.filter(actor => actor.active);
+  return active.length ? active.filter(actor => hasRepeatedPhysicalFailures(actor.recentAttempts)).length / active.length : 0;
 }
 
 // =============================================================================
@@ -426,22 +422,23 @@ export function injectEvent(
   if (target.broadcast) {
     // Broadcast to all agents
     const agents = Array.from(query(world, [Agent]));
+    let accepted = 0;
     for (const eid of agents) {
-      queueStimulus({
+      if (queueStimulus(world, {
         targetEid: eid,
         type: event.type,
         modality: event.modality,
         content: event.content,
         source,
         intensity,
-      });
+      })) accepted++;
     }
-    return { success: true, message: `Broadcast event to ${agents.length} agents` };
+    return { success: accepted > 0 && accepted === agents.length, message: `Queued event for ${accepted}/${agents.length} agents; ${agents.length - accepted} rejected` };
   }
 
   if (target.room !== undefined) {
     // Broadcast to room
-    broadcastToRoom(world, target.room, {
+    const result = broadcastToRoom(world, target.room, {
       type: event.type,
       modality: event.modality,
       content: event.content,
@@ -449,12 +446,12 @@ export function injectEvent(
       intensity,
     });
     const roomName = Name.value[target.room] || "room";
-    return { success: true, message: `Injected event into ${roomName}` };
+    return { success: result.accepted > 0 && result.rejected === 0, message: `Queued event in ${roomName} for ${result.accepted} agents; ${result.rejected} rejected` };
   }
 
   if (target.agent !== undefined) {
     // Send to specific agent
-    queueStimulus({
+    const accepted = queueStimulus(world, {
       targetEid: target.agent,
       type: event.type,
       modality: event.modality,
@@ -463,7 +460,7 @@ export function injectEvent(
       intensity,
     });
     const agentName = Name.value[target.agent] || "agent";
-    return { success: true, message: `Injected event to ${agentName}` };
+    return { success: accepted, message: accepted ? `Queued event for ${agentName}` : `Stimulus for ${agentName} was rejected; no input was delivered` };
   }
 
   return { success: false, message: "No valid target specified" };
@@ -552,42 +549,23 @@ export function getSteeringRecommendations(
 ): SteeringRecommendation[] {
   const recommendations: SteeringRecommendation[] = [];
 
-  // Pattern 1: Gentle Nudges (for stagnation)
-  if (summary.stagnationScore > 0.5) {
+  for (const actor of summary.agentSummaries) {
+    if (!actor.active || !hasRepeatedPhysicalFailures(actor.recentAttempts)) continue;
     recommendations.push({
       pattern: "nudge",
-      description: "Simulation appears stagnant - agents are inactive or repetitive",
-      suggestedAction: "Inject environmental stimulus to spark interaction",
-      priority: summary.stagnationScore,
-    });
-  }
-
-  // Pattern 2: Catalyst Introduction (no conflicts, low tension)
-  if (summary.activeConflicts.length === 0 && summary.narrativeArc.tension < 0.3) {
-    recommendations.push({
-      pattern: "catalyst",
-      description: "No active conflicts and low tension - story lacks drama",
-      suggestedAction: "Introduce new NPC with conflicting goals or trigger a crisis",
+      description: `${actor.name} has ${actor.recentAttempts!.consecutiveFailures} recent failed physical attempts`,
+      suggestedAction: "Inspect the failed attempts and current prerequisites; offer relevant help if still needed. Do not replace the actor's intention or assume a skill deficit.",
       priority: 0.6,
     });
   }
 
-  // Pattern 3: Escalation (conflict exists but tension is low)
-  if (summary.activeConflicts.length > 0 && summary.narrativeArc.tension < 0.5) {
-    recommendations.push({
-      pattern: "escalation",
-      description: "Conflicts exist but tension is low - stakes aren't high enough",
-      suggestedAction: "Raise stakes via environmental pressure or deadline",
-      priority: 0.5,
-    });
-  }
-
-  // Pattern 4: Resolution Facilitation (tension too high for too long)
-  if (summary.narrativeArc.tension > 0.8 && summary.narrativeArc.eventCount > 30) {
+  // Inferred conflicts may warrant checking, never amplification solely because
+  // their intensity is low. A quiet world is a valid world.
+  if (summary.activeConflicts.some(conflict => conflict.intensity > 0.7)) {
     recommendations.push({
       pattern: "resolution",
-      description: "Tension has been high for extended period - risk of narrative exhaustion",
-      suggestedAction: "Create opportunity for resolution (mediator, common threat)",
+      description: "Monitoring infers a high-intensity conflict; verify what participants actually need",
+      suggestedAction: "Check current evidence and whether assistance is wanted; do not invent a common threat or force reconciliation.",
       priority: 0.7,
     });
   }
@@ -653,13 +631,15 @@ export function runObservation(
   const summary = getWorldSummary(world, registry, state.recentEvents, tick);
   const recommendations = getSteeringRecommendations(summary);
 
-  const shouldIntervene = summary.stagnationScore > 0.6 ||
-    (summary.narrativeArc.currentPhase === "stagnant");
+  // Advisory review, not automatic world mutation. One blocked actor still
+  // deserves attention even in a large otherwise healthy group.
+  const shouldIntervene = recommendations.length > 0;
 
   const suggestedInterventions = recommendations.map(r => r.suggestedAction);
 
   return {
     summary,
+    requiresRuntimeReview: summary.runtimeHealth?.requiresRuntimeReview ?? false,
     recommendations: recommendations.map(r => r.description),
     shouldIntervene,
     suggestedInterventions,
@@ -702,9 +682,10 @@ export function getWorldSummaryText(summary: WorldStateSummary): string {
   const lines: string[] = [];
 
   lines.push(`=== WORLD STATE (Tick ${summary.tick}) ===`);
+  if (summary.runtimeHealth) lines.push(`Native fast-loop execution (not generated-system health): ${JSON.stringify(summary.runtimeHealth)}`);
   lines.push(`Narrative Phase: ${summary.narrativeArc.currentPhase}`);
   lines.push(`Tension: ${(summary.narrativeArc.tension * 100).toFixed(0)}%`);
-  lines.push(`Stagnation: ${(summary.stagnationScore * 100).toFixed(0)}%`);
+  lines.push(`Active actors with recent repeated physical failures: ${(summary.stagnationScore * 100).toFixed(0)}%`);
   lines.push("");
 
   lines.push(`--- AGENTS (${summary.agentCount}) ---`);
@@ -716,6 +697,9 @@ export function getWorldSummaryText(summary: WorldStateSummary): string {
     if (agent.relationships.length > 0) {
       const rels = agent.relationships.map(r => `${r.name}(${r.attitude})`).join(", ");
       lines.push(`  Relationships: ${rels}`);
+    }
+    if (agent.coordination) {
+      lines.push(`  Private coordination account (advisory; a blocker is not proof that a capability must be created):\n${agent.coordination}`);
     }
   }
   lines.push("");

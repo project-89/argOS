@@ -13,6 +13,7 @@
  * still allowing for spontaneous changes.
  */
 
+import { readStampedSimulationTime } from "../ecs/temporal-age";
 import { generateText } from "ai";
 import type { World } from "../ecs/world";
 import { query, entityExists, hasComponent } from "bitecs";
@@ -194,7 +195,7 @@ export async function generateDailyPlan(
     goalDescription: Goal.description[geid] || "Unknown goal",
     importance: (Goal.priority[geid] || 5) / 10,
     timeRequired: 2, // Default estimate
-    mustComplete: Goal.deadline[geid] ? Goal.deadline[geid] < simDate.getTime() + 86400000 : false,
+    mustComplete: Goal.deadline[geid] ? readStampedSimulationTime(world, geid, "Goal.deadline", Goal.deadline[geid]) < world.time.elapsed + 86400000 : false,
   }));
 
   // Get base schedule template

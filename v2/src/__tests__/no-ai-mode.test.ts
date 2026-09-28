@@ -18,10 +18,21 @@ describe("No-AI deterministic mode", () => {
         agents: [{ name: "Alice", role: "tester", startRoom: "Room" }],
       });
 
+      const systemEvents: string[] = [];
+      sim.onSystem((event) => systemEvents.push(event.type));
       await sim.step();
+      const stats = sim.getStats();
+      expect(stats.agentCount).toBe(1);
+      expect(stats.roomCount).toBe(1);
+      expect(stats.systemCount).toBeGreaterThan(0);
+      expect(sim.getEvolutionStatus().enabled).toBe(false);
+      expect(sim.getSystemHealth()).toHaveLength(stats.systemCount);
+      expect(sim.getSystemHealth().every((system) => system.active)).toBe(true);
+      expect(systemEvents).toContain("system:created");
+      expect(systemEvents).toContain("system:executed");
+      sim.stop();
     } finally {
       if (prev !== undefined) process.env.GOOGLE_GENERATIVE_AI_API_KEY = prev;
     }
   }, 30000);
 });
-

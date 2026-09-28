@@ -1,3 +1,4 @@
+import { stampGoalTiming } from "../ecs/temporal-age";
 import type { World } from "../ecs/world";
 import type { SystemContext, SystemDefinition } from "../ecs/dynamic-systems";
 import { addComponent, addEntity, entityExists, getRelationTargets, hasComponent, query } from "bitecs";
@@ -238,6 +239,7 @@ function createTicketGoal(world: World, agentEid: number, boardEid: number, boar
   Goal.progress[goalEid] = 0;
   Goal.deadline[goalEid] = 0;
   Goal.createdAt[goalEid] = Date.now();
+  stampGoalTiming(world, goalEid);
   // Ticket contract:
   // - Perform required writes (if specified) so ownership actually implies work.
   // - Optionally require CI/test runs for code/QA tickets.

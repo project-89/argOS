@@ -6,12 +6,14 @@
  */
 
 import { generateText } from "ai";
+import { getWorldAuthoringContext } from "../world/world-specification";
+import { reviewNarrativeOpportunity } from "./narrative-opportunities";
 import { google } from "@ai-sdk/google";
-import { query, getRelationTargets } from "bitecs";
+import { query, getRelationTargets, hasComponent } from "bitecs";
 import type { World } from "../ecs/world";
-import { Name, Description, Agent, Mind, Room, Goal, Impression, StimulusSource } from "../ecs/components";
+import { Name, Description, Agent, Mind, Room, Goal, Impression, StimulusSource, PhysicalObject, Thought, ObjectState } from "../ecs/components";
 import { HasGoal, HasImpression } from "../ecs/relations";
-import { getRoomForEntity } from "../ecs/location";
+import { getRoomForEntity, getDirectContainer } from "../ecs/location";
 import { getDynamicComponentValues } from "../ecs/dynamic-components";
 import type { EntityRegistry } from "../ecs/tools";
 import type {
@@ -29,8 +31,17 @@ import type {
   NarrativeState,
 } from "./types";
 import type { SpiritRegistry } from "./spirit-registry";
-import { reportToSuperior } from "./spirit-registry";
-import { broadcastToRoom, queueStimulus } from "../cognition/cognition-system";
+import { sendMessage, pruneSpiritInbox, markSpiritObservationCompleted } from "./spirit-registry";
+import { broadcastToRoom, getActiveGoals } from "../cognition/cognition-system";
+import { getAgentThoughts } from "../cognition/agent-mind";
+import { assertSimulationTaskActive } from "../runtime/task-scope";
+import { recordIssue } from "./consistency-spirit";
+import { captureSpiritInterventionScope, type SpiritInterventionScope } from "./spirit-intervention-scope";
+import { captureSpiritInterventionEvidence, type SpiritInterventionEvidence } from "./spirit-intervention-evidence";
+import { captureSpiritCycleScope } from "./spirit-cycle-scope";
+import { nudgeNpc } from "../nle/npc-nudge";
+import { captureSpiritPhysicalEffects } from "./physical-effect-capabilities";
+import { captureSpiritPublicEventReview, type SpiritPublicEventInput } from "./spirit-public-event-review";
 
 // =============================================================================
 // MODEL CONFIGURATION - LOCKED MODELS from centralized config
@@ -95,14 +106,17 @@ function collectAgentSnapshots(world: World, registry: EntityRegistry): AgentSna
       focus,
       mode: mode as string,
       active,
-      recentThoughts: [],  // Would need thought history
+      recentThoughts: getAgentThoughts(world, eid).slice(-3).map(id => Thought.content[id] || "").filter(Boolean),
+      goals: getActiveGoals(world, eid),
     };
   });
 }
 
 function collectRoomSnapshots(world: World, registry: EntityRegistry): RoomSnapshot[] {
   const roomEids = Array.from(query(world, [Room]));
-  const allStimulusSources = Array.from(query(world, [StimulusSource]));
+  // A quiet prop is still real. Phones, desks and carried objects need not
+  // have StimulusSource, and must not look "missing" to world maintenance.
+  const allObjects = [...new Set([...query(world, [StimulusSource]), ...query(world, [PhysicalObject])])];
 
   return roomEids.map(eid => {
     const name = Name.value[eid] || "Unknown";
@@ -117,16 +131,28 @@ function collectRoomSnapshots(world: World, registry: EntityRegistry): RoomSnaps
       })
       .map(aid => Name.value[aid] || "Unknown");
 
-    // Find objects (entities with StimulusSource that are in this room)
+    // Include nested/held physical objects, without exposing private message bodies.
     const objects: string[] = [];
+    const objectPlacements: NonNullable<RoomSnapshot["objectPlacements"]> = [];
 
-    for (const objEid of allStimulusSources) {
+    for (const objEid of allObjects) {
       // Skip agents (they're in occupants)
-      if (Agent.active[objEid] !== undefined) continue;
+      if (hasComponent(world, objEid, Agent)) continue;
 
       if (getRoomForEntity(world, objEid) === eid) {
         const objName = Name.value[objEid];
-        if (objName) objects.push(objName);
+        if (objName) {
+          objects.push(objName);
+          const container = getDirectContainer(world, objEid);
+          const state = hasComponent(world, objEid, ObjectState) ? ObjectState.current[objEid] : undefined;
+          const description = hasComponent(world, objEid, Description) ? Description.value[objEid] : undefined;
+          objectPlacements.push({ eid: objEid, name: objName,
+            container: container === undefined ? null : Name.value[container] || `entity:${container}`,
+            held: container !== undefined && hasComponent(world, container, Agent),
+            ...(typeof state === "string" ? { state: state.slice(0, 128) } : {}),
+            ...(typeof description === "string" ? { description: description.slice(0, 1000) } : {}),
+          });
+        }
       }
     }
 
@@ -136,6 +162,7 @@ function collectRoomSnapshots(world: World, registry: EntityRegistry): RoomSnaps
       description,
       occupants,
       objects,
+      objectPlacements,
       ambience,
     };
   });
@@ -160,35 +187,57 @@ export async function runSpiritCognition(
   const startTime = Date.now();
 
   // 1. Collect ECS snapshot
+  const cycleScope = captureSpiritCycleScope(world, spirit, spiritRegistry);
+  if (!cycleScope.isCurrent()) return discardedCycleOutput();
   const ecsSnapshot = collectEcsSnapshot(world, registry, recentActions);
+  const interventionScope = captureSpiritInterventionScope(world, spirit, spiritRegistry, cycleScope.sourceCurrent);
+  const physicalEffects = captureSpiritPhysicalEffects(world, spirit, spiritRegistry);
+  const publicReview = captureSpiritPublicEventReview(world, spirit, spiritRegistry, cycleScope.isCurrent);
 
   // 2. Prepare input
+  // Keep receipt identity separate from the immutable text offered to this
+  // cycle. New reports can arrive while inference or output delivery awaits.
+  pruneSpiritInbox(spiritRegistry, spirit);
+  const observedMessages = new Map(spirit.inbox.map(message => [message, { ...message }]));
+  const interventionEvidence = captureSpiritInterventionEvidence(world, [...observedMessages.values()].map(message => ({
+    sender: message.senderLabel ?? `spirit:${message.from}`,
+    subject: message.subject, content: message.content,
+  })));
   const input: SpiritCognitionInput = {
     spirit,
     ecsSnapshot,
     recentEvents: spirit.observations.slice(-20),
-    incomingMessages: spirit.inbox,
+    incomingMessages: [...observedMessages.values()],
     activeDirectives: spirit.pendingDirectives.filter(d => d.status === "pending" || d.status === "active"),
+    interventionEvidence: { records: interventionEvidence.records, omittedRecords: interventionEvidence.omittedRecords },
+    physicalEffectPolicy: { restricted: physicalEffects.restricted, description: physicalEffects.description },
   };
 
   // 3. Build prompt based on spirit type (including global context if available)
-  const prompt = buildSpiritPrompt(spirit, input, globalContext);
+  const authoringContext = [getWorldAuthoringContext(world), globalContext].filter(Boolean).join("\n\n");
+  const prompt = buildSpiritPrompt(spirit, input, authoringContext, publicReview.input);
 
   // 4. Run LLM
   const model = models[spirit.definition.model];
   let output: SpiritCognitionOutput;
+  let acceptedResponse = false;
 
   try {
     const response = await generateText({
       model,
-      system: spirit.definition.systemPrompt,
+      system: `${spirit.definition.systemPrompt}\n\nPERSISTENCE AND AGENCY: Live ECS state is authoritative; narrative setup, descriptions and previous reports may be stale. Absence from a remembered starting room is not evidence of a missing entity. Check current location and possession across the whole world before reporting a missing prop. A moved, carried, consumed, depleted, locked or intentionally removed object may be a real player consequence or puzzle condition, not an engine fault. Do not recommend restoring or duplicating it to force a planned beat. Report uncertainty, adapt the narrative, and distinguish genuine missing mechanics from story obstacles. NPC choices and unread/private information must not be fabricated as world events.`,
       prompt,
       temperature: 0.7,
     });
 
     // 5. Parse response
+    assertSimulationTaskActive();
+    if (!cycleScope.isCurrent()) return discardedCycleOutput();
     output = parseSpiritResponse(spirit, response.text, input);
+    acceptedResponse = true;
   } catch (error) {
+    assertSimulationTaskActive();
+    if (!cycleScope.isCurrent()) return discardedCycleOutput();
     console.error(`[Spirit] ${spirit.definition.name} cognition error:`, error);
     output = {
       thoughts: `Error during cognition: ${error}`,
@@ -200,11 +249,21 @@ export async function runSpiritCognition(
   }
 
   // 6. Process outputs
-  await processOutputs(spirit, output, world, registry, spiritRegistry);
+  assertSimulationTaskActive();
+  if (!cycleScope.isCurrent()) return discardedCycleOutput();
+  processOutputs(spirit, output, world, spiritRegistry, interventionScope, interventionEvidence, cycleScope, physicalEffects);
+  if (!cycleScope.isCurrent()) return discardedCycleOutput();
 
   // 7. Update spirit state
-  spirit.lastObservationTime = Date.now();
-  spirit.inbox = [];  // Clear processed messages
+  if(acceptedResponse) reviewNarrativeOpportunity(world,spirit,[...observedMessages.keys()],output.reports);
+  markSpiritObservationCompleted(spiritRegistry, spirit);
+  if (acceptedResponse) {
+    spirit.inbox = spirit.inbox.filter(message => {
+      const observed = observedMessages.get(message);
+      // A replacement receipt or amended prompt-visible text needs a fresh read.
+      return !observed || observed.id !== message.id || observed.subject !== message.subject || observed.content !== message.content;
+    });
+  }
 
   // Add thoughts to memory
   if (output.thoughts) {
@@ -214,18 +273,32 @@ export async function runSpiritCognition(
     }
   }
 
+  publicReview.finish({ accepted: acceptedResponse, interventions: output.interventions,
+    phase: spirit.narrativeState?.currentPhase, tension: spirit.narrativeState?.tension });
+
   const duration = Date.now() - startTime;
   console.log(`[Spirit] ${spirit.definition.name} cycle complete (${duration}ms)`);
 
   return output;
 }
 
+function discardedCycleOutput(): SpiritCognitionOutput {
+  return { discarded: "stale_cycle", thoughts: "", observations: [], reports: [], interventions: [], directiveResponses: [] };
+}
+
 // =============================================================================
 // PROMPT BUILDING
 // =============================================================================
 
-function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, globalContext?: string): string {
+function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, globalContext?: string,
+  publicEvents?: SpiritPublicEventInput): string {
   const sections: string[] = [];
+  const narrative = spirit.definition.domain === "narrative";
+  const physicalPolicy = () => {
+    sections.push("PHYSICAL EFFECT POLICY: Room inject_stimulus, mood modification and all unlisted effects are forbidden. inject_stimulus may only offer an optional, evidence-grounded consideration to an agent; it cannot create an event, fact, goal or action. Physical changes require the following host-issued capability, exact JSON and room/place evidence. Unchanged state is a valid outcome; do not claim a suggested effect happened before its native receipt.");
+    sections.push(input.physicalEffectPolicy?.description ?? "No physical-effect capability is granted to this spirit; report suggestions only.");
+    sections.push("");
+  };
 
   // Header
   sections.push(`You are ${spirit.definition.name}, a ${spirit.definition.rank} spirit managing the ${spirit.definition.domain} domain.`);
@@ -238,32 +311,64 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, glo
     sections.push("");
   }
 
-  // Current state
-  sections.push("=== CURRENT WORLD STATE ===");
-  sections.push("");
+  // Put the live capability menu before the evidence, not after a town-sized
+  // inventory. This is still the same captured, native authority grant.
+  if (narrative && input.physicalEffectPolicy?.restricted) physicalPolicy();
 
-  // Agents
-  sections.push("AGENTS:");
-  for (const agent of input.ecsSnapshot.agents) {
-    sections.push(`  ${agent.name} [${agent.mood}] @ ${agent.location}${agent.active ? "" : " (inactive)"}`);
-    if (agent.focus) {
-      sections.push(`    Focus: ${agent.focus}`);
+  if (narrative) {
+    sections.push("=== PUBLIC SCENE ===");
+    sections.push(`Captured at ${publicEvents?.observedAtSimMs ?? "unknown"} simulated milliseconds. The issued current evidence below supplies actor presence and object state, placement and exterior detail. Omitted evidence is unknown, not absence.`);
+    sections.push("PLACE CONTEXT (setting descriptions, not new events):");
+    for (const room of input.ecsSnapshot.rooms) sections.push(`  ${room.name}: ${(room.description || "").slice(0, 600)}`);
+    sections.push("");
+  } else {
+    // Other supervisory domains retain their existing diagnostic view. The
+    // public Narrator above must not turn that private cognition into a story.
+    sections.push("=== CURRENT WORLD STATE ===");
+    sections.push("");
+    sections.push("AGENTS:");
+    for (const agent of input.ecsSnapshot.agents) {
+      sections.push(`  ${agent.name} [${agent.mood}] @ ${agent.location}${agent.active ? "" : " (inactive)"}`);
+      if (agent.focus) sections.push(`    Focus: ${agent.focus}`);
+      sections.push(`    Active goals: ${agent.goals?.map(g => `${g.description} (priority ${g.priority})`).join("; ") || "none"}`);
+      if (agent.recentThoughts.length) sections.push(`    Recent thoughts: ${JSON.stringify(agent.recentThoughts)}`);
     }
+    sections.push("");
+    sections.push("LOCATIONS:");
+    for (const room of input.ecsSnapshot.rooms) {
+      const occupants = room.occupants.length > 0 ? room.occupants.join(", ") : "empty";
+      sections.push(`  ${room.name}: [${occupants}]`);
+      if (room.objectPlacements?.length) {
+        sections.push("    Physical objects (current public state):");
+        for (const object of room.objectPlacements) {
+          sections.push(`      ${object.name}${object.state ? ` [${object.state}]` : ""} (${object.held ? "held by" : "in/on"} ${object.container})${object.description ? `: ${object.description}` : ""}`);
+        }
+      }
+    }
+    sections.push("");
   }
-  sections.push("");
 
-  // Rooms
-  sections.push("LOCATIONS:");
-  for (const room of input.ecsSnapshot.rooms) {
-    const occupants = room.occupants.length > 0 ? room.occupants.join(", ") : "empty";
-    sections.push(`  ${room.name}: [${occupants}]`);
+  // Native history is independent of the legacy shared action buffer and the
+  // spirit's own interpretations. These receipts cannot authorize an effect.
+  if (publicEvents) {
+    sections.push("COMMITTED_PUBLIC_EVENTS_SINCE_REVIEW:");
+    sections.push(JSON.stringify(publicEvents));
+    sections.push("These are historical native receipts, not predictions or current-state guarantees. Pending actions have not completed. Spoken text contains only already-spoken slices; coalescing does not establish that an utterance is finished. Dropped or omitted receipts mean this history is incomplete, not that the world was quiet. Actor, room and target keys identify the historical participants, even if a name or entity slot changes. Use the separate issued current evidence for any intervention.");
+    if (narrative) sections.push("Compare the progress window with the previous accepted review in simulated time. Repeated inspection is another attempt, not proof of another discovery; its contents are not available in the public action tape. Spoken claims establish what was said, not that their contents happened. Judge consequences from native outcomes and current evidence, while allowing useful work, rest and listening. These counts inform judgment; they are not a stagnation verdict or an intervention quota.");
+    sections.push("");
   }
-  sections.push("");
 
-  // Recent actions
+  // Current, field-scoped intervention authority remains separate.
+  if (input.interventionEvidence) {
+    sections.push("ISSUED_INTERVENTION_EVIDENCE:");
+    sections.push(JSON.stringify(input.interventionEvidence));
+    sections.push("For each intervention or nudge_character, cite 1–8 issued evidenceIds covering the facts it relies on. State, placement and description are separate observations; cite each relevant field. Missing or stale citations reject the suggestion. These observations are supervisor context, not proof the character knows them. Attributed reports establish only what was reported, not current physical facts or another character's knowledge. Use current physical observations for physical premises. If the needed evidence is absent, report uncertainty instead of intervening.");
+    sections.push("");
+  }
+
   if (input.recentEvents.length > 0) {
-    sections.push("RECENT EVENTS:");
-    for (const event of input.recentEvents.slice(-10)) {
+    sections.push("PRIOR SPIRIT INTERPRETATIONS (not native event receipts):");
+    for (const event of input.recentEvents.slice(narrative ? -3 : -10)) {
       sections.push(`  - [${event.type}] ${event.content}`);
     }
     sections.push("");
@@ -271,7 +376,7 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, glo
 
   // Domain-specific state
   if (spirit.definition.domain === "narrative" && spirit.narrativeState) {
-    sections.push("=== NARRATIVE STATE ===");
+    sections.push("=== NARRATIVE STATE (previous assessment, not evidence of progress) ===");
     sections.push(`Act: ${spirit.narrativeState.currentAct}`);
     sections.push(`Phase: ${spirit.narrativeState.currentPhase}`);
     sections.push(`Tension: ${(spirit.narrativeState.tension * 100).toFixed(0)}%`);
@@ -291,48 +396,18 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, glo
     }
     sections.push("");
 
-    // Add explicit grounding constraints for narrative spirits
-    sections.push("=== GROUNDING CONSTRAINTS (CRITICAL) ===");
-    sections.push("You may ONLY reference the following in your storyProse:");
-    sections.push("");
-    sections.push("VALID AGENT NAMES (can mention):");
-    for (const agent of input.ecsSnapshot.agents) {
-      sections.push(`  - "${agent.name}" (mood: ${agent.mood}, location: ${agent.location})`);
-    }
-    sections.push("");
-    sections.push("VALID LOCATIONS (can mention):");
-    for (const room of input.ecsSnapshot.rooms) {
-      sections.push(`  - "${room.name}": ${room.description || "(no description)"}`);
-    }
-    sections.push("");
-    sections.push("OBJECTS IN WORLD:");
-    let hasObjects = false;
-    for (const room of input.ecsSnapshot.rooms) {
-      if (room.objects && room.objects.length > 0) {
-        sections.push(`  In ${room.name}: ${room.objects.join(", ")}`);
-        hasObjects = true;
-      }
-    }
-    if (!hasObjects) {
-      sections.push("  (No objects currently exist in the world)");
-    }
-    sections.push("");
-    sections.push("⚠️ DO NOT mention any entities, items, creatures, or locations not listed above!");
-    sections.push("⚠️ If you need something to exist, request it via reportToSuperior.");
+    sections.push("Ground storyProse in the public receipts and issued current evidence above, using their exact names. Their participants' private minds are not public evidence. A prospective new person, place or mechanism requires a request to God and native construction before it exists.");
     sections.push("");
 
     // Add recent prose to prevent repetition
     if (spirit.narrativeState.recentProse && spirit.narrativeState.recentProse.length > 0) {
-      sections.push("=== RECENT PROSE (AVOID REPETITION) ===");
-      sections.push("You have recently written these summaries. DO NOT repeat similar ideas or phrasing:");
+      sections.push("=== RECENT PROSE ===");
       for (const prose of spirit.narrativeState.recentProse.slice(-5)) {
         sections.push(`  - "${prose.slice(0, 100)}${prose.length > 100 ? '...' : ''}"`);
       }
       sections.push("");
-      sections.push("⚠️ CRITICAL: Write something NEW. Advance the story. If characters are doing the same thing,");
-      sections.push("   describe the PROGRESSION or CHANGE, not the same action again.");
-      sections.push("   BAD: 'Emma moves toward the forge' (again)");
-      sections.push("   GOOD: 'Emma arrives at the forge, her breath catching at the sight of Lars'");
+      sections.push("Describe only changes supported by current events and state. Movement intent is not evidence of arrival.");
+      sections.push("If nothing new is established, leave storyProse empty.");
       sections.push("");
     }
   }
@@ -341,7 +416,7 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, glo
   if (input.incomingMessages.length > 0) {
     sections.push("=== MESSAGES ===");
     for (const msg of input.incomingMessages) {
-      sections.push(`From superior: ${msg.subject}`);
+      sections.push(`From ${msg.senderLabel ?? `spirit:${msg.from}`} (${msg.type}): ${msg.subject}`);
       sections.push(`  ${msg.content}`);
     }
     sections.push("");
@@ -379,8 +454,11 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, glo
   sections.push('  },');
   sections.push('  "intervention": {');
   sections.push('    "needed": true/false,');
-  sections.push('    "type": "inject_stimulus|modify_mood",');
+  sections.push(input.physicalEffectPolicy?.restricted
+    ? '    "type": "world_effect|inject_stimulus",' : '    "type": "inject_stimulus|modify_mood",');
   sections.push('    "target": "agent or room name",');
+  sections.push('    "targetType": "agent|room",');
+  sections.push('    "evidenceIds": ["issued observation ID"],');
   sections.push('    "content": "What to inject or change",');
   sections.push('    "reason": "Why this intervention"');
   sections.push('  },');
@@ -398,6 +476,7 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, glo
     sections.push('      "type": "nudge_character|resolve_thread|escalate|create_event|suggest_beat",');
     sections.push('      "target": "character name or thread name",');
     sections.push('      "action": "What should happen - be specific",');
+    sections.push('      "evidenceIds": ["issued observation ID; required for nudge_character"],');
     sections.push('      "reason": "Why this advances the story"');
     sections.push('    }');
     sections.push('  ],');
@@ -406,6 +485,7 @@ function buildSpiritPrompt(spirit: SpiritState, input: SpiritCognitionInput, glo
 
   sections.push("}");
   sections.push("```");
+  if (!narrative && input.physicalEffectPolicy?.restricted) physicalPolicy();
 
   return sections.join("\n");
 }
@@ -555,6 +635,7 @@ function parseSpiritResponse(
     const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
     const jsonStr = jsonMatch ? jsonMatch[1] : responseText;
     const parsed = JSON.parse(jsonStr);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Spirit response must be a JSON object");
 
     // Extract thoughts
     output.thoughts = parsed.thoughts || "";
@@ -605,6 +686,7 @@ function parseSpiritResponse(
         },
         content: parsed.intervention.content || "",
         reason: parsed.intervention.reason || "",
+        evidenceIds: parsed.intervention.evidenceIds,
       });
     }
 
@@ -664,6 +746,7 @@ function parseSpiritResponse(
               target: { type: "agent", name: directive.target },
               content: `[Narrative nudge] ${directive.action}`,
               reason: directive.reason || "Story progression",
+              evidenceIds: directive.evidenceIds,
             });
             break;
 
@@ -717,7 +800,6 @@ function parseSpiritResponse(
 
         // Import and use consistency reporting if available
         try {
-          const { recordIssue } = require("./consistency-spirit");
           recordIssue({
             id: `hal_${Date.now()}`,
             timestamp: Date.now(),
@@ -726,8 +808,8 @@ function parseSpiritResponse(
             description: `Narrator mentioned non-existent entities: ${hallucinations.join(", ")}`,
             evidence: [rawProse.substring(0, 150)],
             affectedEntities: hallucinations,
-            recommendation: `Create these entities if needed, or instruct narrator to avoid mentioning them.`,
-            autoFixable: true,
+            recommendation: `Ground narration in verified entities and events; do not create entities merely to justify prose.`,
+            autoFixable: false,
           });
         } catch {
           // Consistency spirit not available
@@ -754,8 +836,9 @@ function parseSpiritResponse(
     }
 
   } catch (error) {
-    console.error(`[Spirit] ${spirit.definition.name} failed to parse response:`, error);
-    output.thoughts = `Failed to parse response: ${responseText.slice(0, 200)}...`;
+    // Never apply a partially parsed response or acknowledge its input. The
+    // cognition caller handles this as a failed cycle with empty effects.
+    throw new Error("Invalid spirit response", { cause: error });
   }
 
   return output;
@@ -765,13 +848,16 @@ function parseSpiritResponse(
 // OUTPUT PROCESSING
 // =============================================================================
 
-async function processOutputs(
+function processOutputs(
   spirit: SpiritState,
   output: SpiritCognitionOutput,
   world: World,
-  registry: EntityRegistry,
-  spiritRegistry: SpiritRegistry
-): Promise<void> {
+  spiritRegistry: SpiritRegistry,
+  interventionScope: SpiritInterventionScope,
+  interventionEvidence: SpiritInterventionEvidence,
+  cycleScope: ReturnType<typeof captureSpiritCycleScope>,
+  physicalEffects: ReturnType<typeof captureSpiritPhysicalEffects>
+): void {
   // Add observations to spirit's history
   for (const obs of output.observations) {
     spirit.observations.push(obs);
@@ -783,21 +869,26 @@ async function processOutputs(
 
   // Send reports
   for (const report of output.reports) {
-    if (spirit.superiorEid !== undefined || spiritRegistry.godAgentEid !== undefined) {
-      reportToSuperior(
+    if (!cycleScope.isCurrent()) return;
+    if (cycleScope.destination !== undefined) {
+      sendMessage(
         spiritRegistry,
         spirit.eid,
+        cycleScope.destination,
+        "report",
         report.subject,
         report.content,
-        report.priority
+        { priority: report.priority }
       );
     }
   }
 
   // Execute interventions
   for (const intervention of output.interventions) {
-    await executeIntervention(intervention, world, registry, spirit);
+    if (!cycleScope.isCurrent()) return;
+    executeIntervention(intervention, world, spirit, interventionScope, interventionEvidence, physicalEffects);
   }
+  if (!cycleScope.isCurrent()) return;
 
   // Update narrative state
   if (output.updatedNarrativeState && spirit.narrativeState) {
@@ -810,12 +901,32 @@ async function processOutputs(
   }
 }
 
-async function executeIntervention(
+function executeIntervention(
   intervention: Intervention,
   world: World,
-  registry: EntityRegistry,
-  spirit: SpiritState
-): Promise<void> {
+  spirit: SpiritState,
+  scope: SpiritInterventionScope,
+  evidence: SpiritInterventionEvidence,
+  physicalEffects: ReturnType<typeof captureSpiritPhysicalEffects>
+): void {
+  const advice = intervention.type === "inject_stimulus" && intervention.target.type === "agent";
+  if (intervention.type !== "world_effect" && !advice && !physicalEffects.legacyAllowed()) {
+    intervention.result = "rejected_physical_effect_policy"; return;
+  }
+  const binding = scope(intervention.target);
+  if (!binding?.isCurrent()) { intervention.result = "stale_or_invalid_target"; return; }
+  const evidenceCurrent = evidence.bind(intervention.evidenceIds);
+  if (!evidenceCurrent?.()) { intervention.result = "stale_or_invalid_evidence"; return; }
+  const isCurrent = () => binding.isCurrent() && evidenceCurrent();
+  if (intervention.type === "world_effect") {
+    const ids = Array.isArray(intervention.evidenceIds) ? intervention.evidenceIds : [];
+    if (intervention.target.type !== "room" || !evidence.records.some(record => record.kind === "place"
+      && record.subject === intervention.target.name && ids.includes(record.id))) {
+      intervention.result = "rejected_physical_effect_evidence"; return;
+    }
+    intervention.result = physicalEffects.execute(intervention.content, binding.eid, isCurrent).status;
+    return;
+  }
   console.log(`[Spirit] ${spirit.definition.name} intervening: ${intervention.type} -> ${intervention.target.name}`);
 
   switch (intervention.type) {
@@ -824,7 +935,7 @@ async function executeIntervention(
       if (!targetName) break;
 
       if (intervention.target.type === "room") {
-        const roomEid = registry.byName.get(targetName);
+        const roomEid = binding.eid;
         if (roomEid !== undefined) {
           broadcastToRoom(world, roomEid, {
             type: "environmental",
@@ -834,16 +945,10 @@ async function executeIntervention(
           });
         }
       } else if (intervention.target.type === "agent") {
-        const agentEid = registry.byName.get(targetName);
-        if (agentEid !== undefined) {
-          queueStimulus({
-            targetEid: agentEid,
-            type: "intuition",
-            content: intervention.content,
-            source: "inner sense",
-            modality: "cognitive",
-          });
-        }
+        intervention.result = nudgeNpc(world, targetName, {
+          type: "reflect", action: intervention.content, reason: intervention.reason,
+        }, isCurrent) ? "accepted" : "rejected";
+        return; // Accepted advice is not proof of delivery or an executed action.
       }
       break;
     }
@@ -852,7 +957,7 @@ async function executeIntervention(
       const targetName = intervention.target.name;
       if (!targetName) break;
 
-      const agentEid = registry.byName.get(targetName);
+      const agentEid = intervention.target.type === "agent" ? binding.eid : undefined;
       if (agentEid !== undefined) {
         // Parse content for arousal value
         const arousalMatch = intervention.content.match(/arousal[:\s]+(\d+\.?\d*)/i);

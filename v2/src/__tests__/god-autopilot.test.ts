@@ -27,7 +27,7 @@ function msg(partial: Partial<DivineMessage> & { id: string; priority: DivineMes
 }
 
 describe("GodAI autopilot", () => {
-  it("invokes executor for eligible messages and removes them from inbox", async () => {
+  it("reviews eligible receipts independently and retains each until its own review", async () => {
     const world = createArgosWorld("TestWorld");
     initializePrefabs(world);
     const god = createGodAgent(world, { name: "God", worldName: "TestWorld", narrative: "" });
@@ -46,6 +46,7 @@ describe("GodAI autopilot", () => {
       msg({ id: "m_urgent", priority: "urgent", subject: "urgent", content: "urgent content", from: 4 }),
     ];
 
+    messages.forEach(message=>message.to=god.eid);
     enqueueSpiritMessages(god, messages, (eid) => `Spirit#${eid}`);
 
     const seen: string[] = [];
@@ -58,14 +59,20 @@ describe("GodAI autopilot", () => {
 
     expect(res.ran).toBe(true);
     expect(res.executed).toBe(true);
-    expect(res.messagesIncluded).toBe(2);
+    expect(res.messagesIncluded).toBe(1);
     expect(seen.length).toBe(1);
     expect(seen[0]).toContain("urgent content");
-    expect(seen[0]).toContain("high content");
+    expect(seen[0]).not.toContain("high content");
     expect(seen[0]).not.toContain("low content");
 
-    // Only the non-eligible message should remain.
+    expect(god.autopilot?.inbox.map((m) => m.id)).toEqual(["m_high", "m_low"]);
+    const next = await runGodAutopilotCycle(god, { executeCommand: async command => { seen.push(command); } });
+    expect(next).toMatchObject({ ran: true, executed: true, messagesIncluded: 1 });
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toContain("high content");
+    expect(seen[1]).not.toContain("urgent content");
+    expect(seen[1]).not.toContain("low content");
+    // Only the non-eligible message remains after both independent reviews.
     expect(god.autopilot?.inbox.map((m) => m.id)).toEqual(["m_low"]);
   });
 });
-

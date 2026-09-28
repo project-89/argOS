@@ -26,17 +26,63 @@ export const Mind = {
   lastUpdate: [] as number[],
 };
 
+/** Private, actor-authored appraisal. Public facial appearance is separate. */
+export const AffectState = {
+  ownerKey: [] as string[],
+  feeling: [] as string[],
+  valence: [] as number[],
+  arousal: [] as number[],
+  reason: [] as string[],
+  revision: [] as number[],
+  updatedAtSimMs: [] as number[],
+};
+
 export const WorkingMemory = {
   capacity: [] as number[],
   currentLoad: [] as number[],
   decayRate: [] as number[],
+  /** Bounded, actor-owned last-known evidence. Keys are labels/identities, not EIDs. */
+  factsJson: [] as string[],
+  receiptsJson: [] as string[],
+  /** Ownership guard against shared sparse-array residue after EID recycling. */
+  ownerKey: [] as string[],
+  revision: [] as number[],
+  /** Evidence at or before this retired timestamp cannot be replayed into memory. */
+  evidenceFloorMs: [] as number[],
 };
+
+/** Stable physical referent used by actor-owned memory across EID remapping. */
+export const WorkingMemoryIdentity = { id: [] as string[] };
+
+/** Private authored long-term wants. Stable owner identity survives save/remap;
+ * aspirations are not goals, action authority, or a process-global cache. */
+export const AuthoredAspirations = { ownerKey: [] as string[], itemsJson: [] as string[] };
+
+/** Host-owned remote identity, not a located person or shared NPC knowledge. */
+export const ExternalParticipant = {
+  id: [] as string[], displayName: [] as string[], aliasesJson: [] as string[], revision: [] as number[],
+};
+/** Explicitly delegated autonomous avatar; never proof the remote human is present. */
+export const ParticipantEmbodiment = { participantId: [] as string[], ownerKey: [] as string[] };
+
+/** Parallel in-world ages. Existing timestamps remain source/evidence identity. */
+export const SimulationAge = { marksJson: [] as string[] };
+/** Persistent cadence for explicitly migrated historical discrete physical laws. */
+export const LegacySystemTime = { stateJson: [] as string[] };
+/** A persisted forgetting-curve origin; repeated polling must not compound aging. */
+export const MemoryDecayState = { stateJson: [] as string[] };
 
 export const Attention = {
   target: [] as string[],
   intensity: [] as number[],
   duration: [] as number[],
   lastShift: [] as number[],
+  /** Private experienced signals, independent of the short perception tail. */
+  ownerKey: [] as string[],
+  signalsJson: [] as string[],
+  /** Bounded actor-owned, source-epoch-bound receipts for actually resolved cues. */
+  resolutionsJson: [] as string[],
+  droppedSignals: [] as number[],
 };
 
 export const Personality = {
@@ -52,6 +98,40 @@ export const Thought = {
   type: [] as string[],
   salience: [] as number[],
   timestamp: [] as number[],
+  /** Source observation time for a delayed interpretation; -1 for legacy thoughts. */
+  observedAtSimMs: [] as number[],
+};
+
+/** Private continuing purpose. Serialized state carries no queued-action authority. */
+export const CognitiveControl = {
+  ownerKey: [] as string[],
+  stateJson: [] as string[],
+};
+
+/** Private significance of actually appraised experiences, independent of an
+ * executable goal's active/paused status. Never a public scene description. */
+export const PersonalConcerns = {
+  ownerKey: [] as string[],
+  itemsJson: [] as string[],
+};
+
+/** Private semantic episodes. A thread is not a goal or execution contract. */
+export const EmotionalLife = {
+  ownerKey: [] as string[], episodesJson: [] as string[], revision: [] as number[],
+};
+/** Continuous activation has its own clock; a historical appraisal is not rewritten by decay. */
+export const EmotionalDynamics = {
+  ownerKey: [] as string[], anchorLevel: [] as number[], anchorAtSimMs: [] as number[],
+};
+/** Append-only private autobiographical archive, separate from the 50-memory working store. */
+export const NarrativeEntry = {
+  /** Optional identity meaning/provenance; private and append-only like the entry. */
+  identityJson: [] as string[],
+  sequence: [] as number[],
+  episodeSnapshotJson: [] as string[],
+  id: [] as string[], ownerKey: [] as string[], kind: [] as string[], monologue: [] as string[],
+  evidenceJson: [] as string[], episodeId: [] as string[], importance: [] as number[],
+  atSimMs: [] as number[], sourceAtSimMs: [] as number[],
 };
 
 export const Perception = {
@@ -67,6 +147,38 @@ export const ConversationTurn = {
   content: [] as string[],
   timestamp: [] as number[],
 };
+
+/** Actor-owned memory of actual audible dialogue, not model prompt history.
+ * Bounded JSON records contain source labels rather than cross-world entity IDs. */
+export const SocialMemory = {
+  turnsJson: [] as string[],
+  fragmentsJson: [] as string[],
+  exchangesJson: [] as string[],
+  closuresJson: [] as string[],
+  contributionsJson: [] as string[],
+  revision: [] as number[],
+  lastSpokeAt: [] as number[],
+};
+
+/** Actor-owned coordination accounts. Public words and private work progress
+ * remain separate; stable identities, not ECS IDs, survive checkpoint remaps. */
+export const CoordinationMemory = {
+  ownerKey: [] as string[],
+  itemsJson: [] as string[],
+  revision: [] as number[],
+};
+
+/** Personally sent/read correspondence; never audible room dialogue. */
+export const CommunicationMemory = {
+  ownerKey: [] as string[],
+  receiptsJson: [] as string[],
+};
+export const CoordinationReviewState = {
+  ownerKey: [] as string[],
+  reviewedJson: [] as string[],
+};
+/** Durable organizing intention; this is not an executable action lease. */
+export const OngoingActivity = { ownerKey: [] as string[], stateJson: [] as string[] };
 
 export const Stimulus = {
   type: [] as string[],
@@ -122,6 +234,35 @@ export const Goal = {
   progress: [] as number[],
   deadline: [] as number[],
   createdAt: [] as number[],
+};
+
+/** Optional lived-time stall budget, bound to the goal episode that authored it.
+ * This does not extend the absolute deadline or prove task accomplishment. */
+export const GoalInactivityBudget = {
+  timeoutMs: [] as number[],
+  goalIdentity: [] as string[],
+};
+
+/** Lifecycle authority for agent-generated intentions; authored goals remain untouched. */
+export const GoalLifecycle = {
+  source: [] as string[],
+  mode: [] as string[], // verified contract, social desire, or bounded exploratory episode
+  persistence: [] as string[], // episodic by default; an explicitly authored standing desire does not expire for inactivity
+  parentGoalEid: [] as number[],
+  parentCreatedAt: [] as number[],
+  parentSignature: [] as string[],
+  settledAt: [] as number[],
+  reason: [] as string[],
+  reviewAfter: [] as number[],
+  /** Actor-owned temporary deferral; never a completion certificate. */
+  deferredJson: [] as string[],
+  /** Maintenance requested reconsideration, not an actor's abandonment or action grant. */
+  reviewPendingJson: [] as string[],
+  /** Private handoff review draft. Reconsideration only, never queued execution or automatic retirement. */
+  handoffReviewJson: [] as string[],
+  /** Monotonic execution fence across active -> review -> retained transitions. */
+  reviewRevision: [] as number[],
+  resumedAt: [] as number[],
 };
 
 export const LastAction = {
@@ -208,6 +349,32 @@ export const WikiDoc = {
   status: [] as string[],
   createdAt: [] as number[],
   updatedAt: [] as number[],
+};
+
+/** Physical in-world document work; content itself remains in WikiDoc. */
+export const WorkDocument = {
+  revision: [] as number[],
+  reviewedRevision: [] as number[],
+  deviceKey: [] as string[],
+  lastWriterKey: [] as string[],
+  completedAtSimMs: [] as number[],
+};
+
+/** Earned work time for one actor-owned goal contract, not mere room attendance. */
+export const GoalWorkProgress = {
+  actorKey: [] as string[],
+  goalKey: [] as string[],
+  contract: [] as string[],
+  roomsJson: [] as string[],
+};
+
+/** Execution history inhibits repeated attempts; it is not objective progress. */
+export const GoalAttempt = {
+  actorKey: [] as string[],
+  goalKey: [] as string[],
+  contract: [] as string[],
+  lastActivitySimMs: [] as number[],
+  exhaustedMacrosJson: [] as string[],
 };
 
 export const OrgGovernance = {
@@ -453,6 +620,14 @@ export const Needs = {
   comfort: [] as number[],
 };
 
+/** Admitted rest persists between cognition turns; recovery uses explicit ECS tick delta. */
+export const RestState = {
+  active: [] as boolean[],
+  startedAt: [] as number[],
+  lastUpdatedAt: [] as number[],
+  recoveryNotified: [] as boolean[],
+};
+
 // ============================================================================
 // PLANNING & REFLECTION COMPONENTS
 // ============================================================================
@@ -462,9 +637,19 @@ export const Plan = {
   goalEid: [] as number[],           // Links to Goal entity this plan is for
   steps: [] as string[],             // JSON array of step descriptions
   currentStep: [] as number[],       // Index of current step (0-based)
-  status: [] as string[],            // "active", "completed", "failed", "paused"
+  status: [] as string[],            // active / awaiting_evidence / awaiting_decision / completed / failed / paused / retired
   createdAt: [] as number[],         // When plan was created
   lastUpdated: [] as number[],       // Last time plan was updated
+  heardDialogueId: [] as string[],   // Latest heard speech event at planning; "" means none, absent means legacy/untrusted
+  routeRoomKey: [] as string[],      // Expected room before remaining route; updated only by matched movement completion
+};
+
+/** Non-executable proposal at the end of a plan prefix. Review is a private
+ * choice, never an action receipt. Restored data carries no execution grant. */
+export const PlanningDecision = {
+  ownerKey: [] as string[],
+  definitionJson: [] as string[],
+  reviewJson: [] as string[],
 };
 
 /** Daily/time-based schedule for an agent */
@@ -481,6 +666,13 @@ export const Schedule = {
 export const DayPlanState = {
   plannedDay: [] as number[],        // Simulation day the day-plan was seeded for
   lastPlannedAt: [] as number[],     // Wall-clock timestamp
+};
+
+/** Durable admissions, not completion claims. Collected goals do not reopen a
+ * schedule occurrence; source/day/activity identity distinguishes the next one. */
+export const ScheduleLedger = {
+  ownerKey: [] as string[],
+  recordsJson: [] as string[],
 };
 
 /** Scheduled activity within a Schedule */
@@ -522,6 +714,7 @@ export const WorldEvent = {
   priority: [] as number[],          // 0-100, higher overrides lower
   startTick: [] as number[],         // When the event started
   duration: [] as number[],          // How many ticks it lasts (0 = permanent until removed)
+  durationMs: [] as number[],        // In-world duration; legacy ticks migrate at 1,000ms each
   affectsGoals: [] as string[],      // JSON: goal biases, e.g. {"social": 2, "survive": -1}
   location: [] as string[],          // Where it's happening (room name, or "" for global)
 };
@@ -533,6 +726,7 @@ export const ReflectionState = {
   reflectionThreshold: [] as number[], // Threshold to trigger reflection (default 100)
   reflectionCount: [] as number[],   // Total reflections performed
   insights: [] as string[],          // JSON array of recent insights
+  questions: [] as string[],         // Private, bounded reflection questions and sourced reviews
 };
 
 // ============================================================================
@@ -562,7 +756,7 @@ export const StoryScaffold = {
 export const ProcedureState = {
   signature: [] as string[],         // ProceduralSkillV1.signature
   stepIndex: [] as number[],         // Current step index in skill.steps
-  status: [] as string[],            // "active" | "completed" | "failed"
+  status: [] as string[],            // "active" | "completed" | "failed" | "needs_revision" after restore
   startedAt: [] as number[],         // When execution began
   lastUpdatedAt: [] as number[],     // Last progress update time
 };
@@ -711,25 +905,51 @@ export const Appearance = {
 };
 
 export const AllComponents = {
+  PlanningDecision,
   Name,
   Description,
   Position,
   Room,
   Agent,
   Mind,
+  AffectState,
   WorkingMemory,
+  WorkingMemoryIdentity,
+  AuthoredAspirations,
+  ExternalParticipant,
+  ParticipantEmbodiment,
+  SimulationAge,
+  LegacySystemTime,
+  MemoryDecayState,
   Attention,
   Personality,
   Thought,
+  CognitiveControl,
+  PersonalConcerns,
+  EmotionalLife,
+  EmotionalDynamics,
+  NarrativeEntry,
   Perception,
   ConversationTurn,
+  SocialMemory,
+  CoordinationMemory,
+  CommunicationMemory,
+  CoordinationReviewState,
+  OngoingActivity,
   Stimulus,
   KnowledgeNode,
   Memory,
   Belief,
   Goal,
+  GoalInactivityBudget,
+  GoalLifecycle,
+  GoalWorkProgress,
+  GoalAttempt,
+  WikiDoc,
+  WorkDocument,
   LastAction,
   LastToolResult,
+  ToolResult,
   Impression,
   Action,
   CognitiveEvent,
@@ -754,6 +974,7 @@ export const AllComponents = {
   EquipSlot,
   // Needs and behavior
   Needs,
+  RestState,
   Interactable,
   CurrentAction,
   CharacterRigConfig,
@@ -761,6 +982,7 @@ export const AllComponents = {
   Plan,
   Schedule,
   DayPlanState,
+  ScheduleLedger,
 	  ScheduledActivity,
 	  ReflectionState,
 	  ProcedureState,
@@ -780,6 +1002,7 @@ export const AllComponents = {
   ObjectProperties,
   // NPC appearance system
   Appearance,
+  StoryScaffold,
 };
 
 export type ComponentName = keyof typeof AllComponents;

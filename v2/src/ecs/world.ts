@@ -22,10 +22,13 @@ import {
 
 export interface WorldContext {
   time: {
+    /** Committed simulation step; independent of wall-clock time. */
     tick: number;
+    /** In-world milliseconds advanced by the latest step. */
     delta: number;
+    /** Monotonic elapsed in-world milliseconds. */
     elapsed: number;
-    /** Simulation hour (0-23), progressed by TimeProgression system */
+    /** Fractional simulation hour [0, 24), advanced by the authoritative clock. */
     simulationHour: number;
     /** Time of day: "dawn" | "morning" | "midday" | "afternoon" | "evening" | "night" */
     timeOfDay: string;
@@ -37,12 +40,29 @@ export interface WorldContext {
     createdAt: number;
     /** Whether LLM-powered features are enabled for this simulation */
     aiEnabled?: boolean;
+    /** Opt-in high-level decision policy; execution constraints are shared. */
+    cognitionController?: "priority" | "situated";
+    /** Experimental receipt-driven revision of personal intentions. */
+    experienceReconsideration?: boolean;
+    experienceAppraisalEnabled?: boolean;
+    narrativeMind?: boolean;
     /** Whether schedules should be LLM-generated (vs. deterministic defaults) */
     generateSchedules?: boolean;
+    /** Model utterances as finite in-world actions (enabled by the library). */
+    timedSpeech?: boolean;
+    /** Give otherwise atomic native and package physical actions world-time durations. */
+    timedActions?: boolean;
+    /** Legacy timestamp migration baseline; never an execution/evidence clock. */
+    temporalBaseline?: { wallAtMs: number; simAtMs: number };
   };
 }
 
+let isolatedWorldCreated = false;
 export function createArgosWorld(name: string = "ArgOS World"): WorldContext {
+  if (process.env.ARGOS_PROCESS_WORLD_HOST === "1") {
+    if (isolatedWorldCreated) throw new Error("An isolated worker supports one world; construct another process host instead");
+    isolatedWorldCreated = true;
+  }
   const context: WorldContext = {
     time: {
       tick: 0,

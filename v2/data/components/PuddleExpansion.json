@@ -1,0 +1,9 @@
+{
+  "name": "PuddleExpansion",
+  "description": "Tracks the expansion of a liquid puddle over time.",
+  "properties": {
+    "maxSize": "number",
+    "rate": "number",
+    "currentSize": "number"
+  }
+}

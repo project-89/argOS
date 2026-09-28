@@ -21,7 +21,6 @@ import { extractJSON } from "../llm/json-extract";
 import type { World } from "../ecs/world";
 import { Agent, Name, Description } from "../ecs/components";
 import { getRoomForEntity } from "../ecs/location";
-import { addMemory } from "../cognition/knowledge-graph";
 import { getActiveGoals } from "../cognition/cognition-system";
 import { getAspirations, setAspirations } from "../cognition/goal-learning";
 import { chronicle } from "../cognition/simulation-chronicle";
@@ -251,7 +250,7 @@ async function findBestCandidate(
     const candidateInfo = available.map(c => {
       const eid = Array.from(query(world as any, [Agent as any, Name as any]))
         .find(e => (Name.value[e] || "").toLowerCase() === c.name.toLowerCase());
-      const aspirations = eid ? getAspirations(eid) : [];
+      const aspirations = eid !== undefined ? getAspirations(world, eid) : [];
       return `${c.name} (current role: ${c.role}): aspirations=${aspirations.join("; ")}`;
     }).join("\n");
 
@@ -309,30 +308,9 @@ async function redistributeRole(
 
   if (toEid === undefined) return;
 
-  // Transfer secrets as memories
-  for (const secret of from.secrets) {
-    addMemory(world, toEid, {
-      type: "episodic",
-      content: `I learned something important: ${secret}`,
-      importance: 85,
-      emotionalValence: -0.3,
-      timestamp: Date.now(),
-    });
-  }
-
-  // Transfer hidden motivation
-  if (from.hiddenMotivation) {
-    addMemory(world, toEid, {
-      type: "semantic",
-      content: `With ${from.name} gone, I feel compelled to: ${from.hiddenMotivation}`,
-      importance: 80,
-      emotionalValence: 0.4,
-      timestamp: Date.now(),
-    });
-  }
-
-  // Update scaffold — absorb the role
-  // The NPC keeps their original role but gains the missing one's narrative weight
+  // Reassign advisory story possibilities only. Another actor disappearing is
+  // not evidence that this person learned their secrets or acquired a motive.
+  // The actor's own memories, goals and experiences remain untouched.
   to.secrets = [...to.secrets, ...from.secrets];
   if (from.hiddenMotivation && !to.hiddenMotivation) {
     to.hiddenMotivation = from.hiddenMotivation;

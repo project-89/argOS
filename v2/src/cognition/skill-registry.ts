@@ -18,6 +18,7 @@
  */
 
 import type { BehaviorNode } from "./behavior-policy";
+import { isDocumentOperation } from "../world/productive-work";
 
 // =============================================================================
 // TYPES
@@ -294,6 +295,10 @@ export function compileSequenceToSkill(
 ): boolean {
   if (actions.length === 0) return false;
   if (skills.has(name)) return false;
+  // A successful episode is still not a parameterized skill. Do not publish a
+  // reusable sequence containing one document's revision or authored text, or
+  // silently drop those steps and claim the remaining sequence did the work.
+  if (actions.some(action => isDocumentOperation({ type: action.type, content: action.content || action.affordance }))) return false;
 
   const children: BehaviorNode[] = actions.map(action => {
     // If we have trait + affordance, use interact_with_trait for better matching

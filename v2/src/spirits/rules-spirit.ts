@@ -13,11 +13,17 @@
  */
 
 import { generateText } from "ai";
+import { getWorldAuthoringContext, getWorldTheme } from "../world/world-specification";
 import { flashModel } from "../llm/config";
 import type { SpiritRegistry } from "./spirit-registry";
 import { createSpirit } from "./spirit-registry";
 import type { SpiritDefinition, SpiritState, DivineMessage } from "./types";
 import { worldSchema, type RuleDefinition, type RuleCondition, type RuleEffect } from "../world/schema";
+import type { World } from "../ecs/world";
+import { assertSimulationTaskActive, getSimulationTaskSignal } from "../runtime/task-scope";
+import { getCommittedEvents, startCommittedEvents } from "../runtime/committed-events";
+import { captureRuleSource, grantRuntimeRule } from "../world/runtime-rule-scope";
+import { validateRuleCandidate } from "./rule-admission";
 
 // =============================================================================
 // TYPES
@@ -34,12 +40,14 @@ export interface RuleProposal {
   priority?: number;
   reason: string;
   status: "proposed" | "approved" | "rejected" | "active";
+  rejectionReason?: string;
 }
 
 export interface RuleRequest {
   id: string;
   timestamp: number;
   requestedBy: string; // Spirit name or "god"
+  lastError?: string;
   description: string;
   context: {
     worldTheme?: string;
@@ -67,6 +75,30 @@ let lawgiverState: LawgiverState = {
   ruleHistory: [],
 };
 
+type RequestGrant = { world: World; sourceCurrent: () => boolean; current: () => boolean };
+type ProposalGrant = RequestGrant & { definition: string; signal?: AbortSignal; shapeError?: string };
+let requestGrants = new WeakMap<RuleRequest, RequestGrant>();
+let proposalGrants = new WeakMap<RuleProposal, ProposalGrant>();
+const generating = new WeakSet<RuleRequest>();
+let proposalIdCounter = 0;
+const requestDefinition = (r: RuleRequest) => JSON.stringify([r.id, r.timestamp, r.requestedBy, r.description, r.context]);
+const proposalDefinition = (p: RuleProposal) => JSON.stringify([p.id, p.timestamp, p.name, p.description, p.trigger, p.conditions, p.effects, p.priority, p.reason]);
+
+function freezeDefinition<T>(value: T): T {
+  if (value && typeof value === "object") { for (const child of Object.values(value)) freezeDefinition(child); Object.freeze(value); }
+  return value;
+}
+
+function protectRuleDefinition(rule: RuleDefinition): RuleDefinition {
+  // Preserve existing host enable/disable controls; they do not change the
+  // admitted effect definition or mint a grant for another rule/source.
+  for (const [key, value] of Object.entries(rule)) if (key !== "enabled") {
+    freezeDefinition(value);
+    Object.defineProperty(rule, key, { value, writable: false, configurable: false, enumerable: true });
+  }
+  return Object.seal(rule);
+}
+
 export function getLawgiverState(): LawgiverState {
   return lawgiverState;
 }
@@ -78,6 +110,7 @@ export function resetLawgiverState(): void {
     activeRules: [],
     ruleHistory: [],
   };
+  requestGrants = new WeakMap(); proposalGrants = new WeakMap();
 }
 
 // =============================================================================
@@ -92,15 +125,31 @@ let requestIdCounter = 0;
 export function requestRule(
   description: string,
   context: RuleRequest["context"],
-  requestedBy: string = "god"
+  requestedBy: string = "god",
+  world?: World
 ): RuleRequest {
+  assertSimulationTaskActive();
+  if (!world) throw new Error("Lawgiver requests require an explicit World as the fourth argument");
+  // Setup requests may precede the first tick; establish an initial epoch but
+  // never restart a stopped one merely because an author asks for work.
+  if (getCommittedEvents(world).sourceId === null) startCommittedEvents(world);
+  const sourceCurrent = captureRuleSource(world), state = lawgiverState, signal = getSimulationTaskSignal();
+  if (!sourceCurrent()) throw new Error("Lawgiver requests require a current committed world source");
   const request: RuleRequest = {
     id: `rule_req_${++requestIdCounter}_${Date.now()}`,
     timestamp: Date.now(),
     requestedBy,
     description,
-    context,
+    context: structuredClone(context),
   };
+
+  const definition = requestDefinition(request);
+  let valid = true;
+  const current = () => {
+    valid = valid && !signal?.aborted && state === lawgiverState && sourceCurrent() && requestDefinition(request) === definition;
+    return valid;
+  };
+  requestGrants.set(request, { world, sourceCurrent, current });
 
   lawgiverState.pendingRequests.push(request);
   console.log(`[Lawgiver] Rule request received: ${description}`);
@@ -125,6 +174,10 @@ export function getPendingRuleRequests(): RuleRequest[] {
 export async function generateRuleProposal(
   request: RuleRequest
 ): Promise<RuleProposal | null> {
+  assertSimulationTaskActive();
+  const grant = requestGrants.get(request), state = lawgiverState, signal = getSimulationTaskSignal();
+  if (!grant || !grant.current() || !state.pendingRequests.includes(request) || generating.has(request)) return null;
+  generating.add(request);
   const model = flashModel;
 
   // Get existing rules for context
@@ -133,10 +186,12 @@ export async function generateRuleProposal(
 
   const prompt = `You are The Lawgiver, creator of deterministic world rules.
 
+${getWorldAuthoringContext(grant.world)}
+
 TASK: Create a deterministic rule for: "${request.description}"
 
 CONTEXT:
-- World theme: ${request.context.worldTheme || "fantasy"}
+- World theme: ${request.context.worldTheme || getWorldTheme(grant.world) || "unspecified setting"}
 - Desired behavior: ${request.context.desiredBehavior}
 - Existing object type IDs (sample): ${existingTypes.slice(0, 20).join(", ")}...
 - Existing rules: ${existingRules.map(r => r.name).join(", ") || "none"}
@@ -173,7 +228,7 @@ Respond with JSON ONLY:
   "description": "Human readable description",
   "trigger": "tick",
   "priority": 50,
-  "condition": { "has": ["trait"], "not": ["trait"], "inState": "state" },
+  "condition": { "has": ["flammable"], "not": ["burning"] },
   "effects": [ { "action": "add_trait", "target": "self", "params": { "trait": "burning" } } ],
   "reason": "Why this creates good emergent behavior"
 }`;
@@ -183,38 +238,54 @@ Respond with JSON ONLY:
       model,
       prompt,
       temperature: 0.5, // Lower temp for more deterministic rule design
+      abortSignal: signal,
     });
 
     const jsonMatch = response.text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
+      request.lastError = "Malformed rule response";
       console.error("[Lawgiver] Failed to extract JSON from response");
       return null;
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
+    const allowedKeys = new Set(["name", "description", "trigger", "condition", "conditions", "effects", "priority", "reason", "when", "then"]);
+    const ambiguous = Object.keys(parsed).some(key => !allowedKeys.has(key))
+      || [parsed.condition, parsed.conditions, parsed.when?.condition].filter(value => value !== undefined).length > 1
+      || parsed.effects !== undefined && parsed.then !== undefined
+      || parsed.trigger !== undefined && parsed.when?.event !== undefined
+      || parsed.when !== undefined && (typeof parsed.when !== "object" || parsed.when === null || Array.isArray(parsed.when)
+        || Object.keys(parsed.when).some(key => !["event", "condition"].includes(key)));
 
-    const parsedCondition: RuleCondition | undefined =
-      (parsed.when?.condition as RuleCondition | undefined) ||
-      (parsed.condition as RuleCondition | undefined) ||
-      undefined;
+    // Preserve invalid values for atomic validation rather than silently
+    // converting null/false conditions into an unconditional global rule.
+    const conditions = parsed.when?.condition !== undefined ? [parsed.when.condition]
+      : parsed.condition !== undefined ? [parsed.condition]
+      : parsed.conditions !== undefined ? parsed.conditions : [];
 
     const proposal: RuleProposal = {
-      id: `rule_prop_${Date.now()}`,
+      id: `rule_prop_${Date.now()}_${++proposalIdCounter}`,
       timestamp: Date.now(),
       name: parsed.name,
       description: parsed.description,
-      trigger: parsed.when?.event || parsed.trigger || "tick",
-      conditions: parsedCondition ? [parsedCondition] : (parsed.conditions || []),
-      effects: parsed.then || parsed.effects || [],
-      priority: parsed.priority || 50,
+      trigger: parsed.when?.event !== undefined ? parsed.when.event : parsed.trigger !== undefined ? parsed.trigger : "tick",
+      conditions,
+      effects: parsed.then !== undefined ? parsed.then : parsed.effects !== undefined ? parsed.effects : [],
+      priority: parsed.priority !== undefined ? parsed.priority : 50,
       reason: parsed.reason || "Generated rule",
       status: "proposed",
     };
-
-    lawgiverState.proposedRules.push(proposal);
+    proposalGrants.set(proposal, { ...grant, definition: proposalDefinition(proposal), signal,
+      shapeError: ambiguous ? "Unknown or ambiguous rule fields" : undefined });
+    if (ambiguous) proposal.rejectionReason = "Unknown or ambiguous rule fields";
+    if (!grant.current() || signal?.aborted || !state.pendingRequests.includes(request)) {
+      proposal.status = "rejected"; proposal.rejectionReason = "Stale or cancelled authoring source";
+    }
+    // A reset does not authorize old work to append into a new request registry.
+    state.proposedRules.push(proposal);
 
     // Remove from pending
-    lawgiverState.pendingRequests = lawgiverState.pendingRequests.filter(
+    state.pendingRequests = state.pendingRequests.filter(
       r => r.id !== request.id
     );
 
@@ -222,85 +293,37 @@ Respond with JSON ONLY:
 
     return proposal;
   } catch (error) {
+    request.lastError = signal?.aborted ? "Rule authoring cancelled" : "Rule authoring failed";
     console.error("[Lawgiver] Error generating rule:", error);
     return null;
-  }
+  } finally { generating.delete(request); }
 }
 
 /**
  * Approve a rule proposal and register it with WorldSchema
  */
 export function approveRule(proposalId: string): boolean {
+  assertSimulationTaskActive();
   const proposal = lawgiverState.proposedRules.find(p => p.id === proposalId);
   if (!proposal || proposal.status !== "proposed") {
     return false;
   }
 
-  // Validate and normalize effects (LLM output can be malformed)
-  const allowedActions = new Set([
-    "add_trait",
-    "remove_trait",
-    "transition_state",
-    "modify_value",
-    "emit_event",
-    "destroy",
-    "spawn",
-  ]);
-
-  const normalizedEffects: RuleEffect[] = [];
-  let droppedEffects = 0;
-  for (const raw of proposal.effects || []) {
-    if (!raw || typeof raw !== "object") {
-      droppedEffects++;
-      continue;
-    }
-    const action = (raw as any).action;
-    if (typeof action !== "string" || action.trim().length === 0 || !allowedActions.has(action)) {
-      droppedEffects++;
-      continue;
-    }
-
-    normalizedEffects.push({
-      action,
-      target: (raw as any).target,
-      query: (raw as any).query,
-      params: (raw as any).params,
-    });
-  }
-
-  if (normalizedEffects.length === 0) {
+  try {
+    const grant = proposalGrants.get(proposal);
+    if (!grant || !grant.current() || grant.signal?.aborted || grant.definition !== proposalDefinition(proposal))
+      throw new Error("Stale, changed or unowned rule proposal");
+    if (grant.shapeError) throw new Error(grant.shapeError);
+    if (worldSchema.getRule(proposal.name)) throw new Error("Rule name already owned; replacement requires separate authority");
+    const ruleDef = protectRuleDefinition(validateRuleCandidate({ name: proposal.name, description: proposal.description,
+      trigger: proposal.trigger, conditions: proposal.conditions, effects: proposal.effects, priority: proposal.priority }));
+    grantRuntimeRule(grant.world, ruleDef, grant.sourceCurrent);
+    worldSchema.defineRule(ruleDef);
+  } catch (error) {
     proposal.status = "rejected";
-    console.warn(`[Lawgiver] Rejecting rule "${proposal.name}" - no valid effects (dropped=${droppedEffects})`);
+    proposal.rejectionReason = error instanceof Error ? error.message.slice(0, 1000) : "Invalid rule proposal";
     return false;
   }
-  if (droppedEffects > 0) {
-    console.warn(`[Lawgiver] Rule "${proposal.name}" had invalid effects dropped: ${droppedEffects}`);
-  }
-
-  // Convert to RuleDefinition
-  // Merge proposal conditions into a single RuleCondition
-  const mergedCondition: RuleCondition = {};
-  for (const cond of proposal.conditions) {
-    if (cond.has) mergedCondition.has = [...(mergedCondition.has || []), ...cond.has];
-    if (cond.not) mergedCondition.not = [...(mergedCondition.not || []), ...cond.not];
-    if (cond.inState) mergedCondition.inState = cond.inState;
-    if (cond.expression) mergedCondition.expression = cond.expression;
-  }
-
-  const ruleDef: RuleDefinition = {
-    name: proposal.name,
-    description: proposal.description,
-    enabled: true,
-    priority: proposal.priority || 50,
-    when: {
-      event: proposal.trigger,
-      condition: Object.keys(mergedCondition).length > 0 ? mergedCondition : undefined,
-    },
-    then: normalizedEffects,
-  };
-
-  // Register with WorldSchema
-  worldSchema.defineRule(ruleDef);
 
   // Update state
   proposal.status = "active";
@@ -320,12 +343,14 @@ export function approveRule(proposalId: string): boolean {
  * Reject a rule proposal
  */
 export function rejectRule(proposalId: string, reason: string): boolean {
+  assertSimulationTaskActive();
   const proposal = lawgiverState.proposedRules.find(p => p.id === proposalId);
   if (!proposal || proposal.status !== "proposed") {
     return false;
   }
 
   proposal.status = "rejected";
+  proposal.rejectionReason = reason.slice(0, 1000);
   console.log(`[Lawgiver] Rule rejected: ${proposal.name} - ${reason}`);
 
   return true;
@@ -450,10 +475,12 @@ export async function runLawgiverCycle(
   rulesProposed: number;
   rulesApproved: number;
 }> {
+  assertSimulationTaskActive();
   let rulesProposed = 0;
 
   // Process pending rule requests
   for (const request of [...lawgiverState.pendingRequests]) {
+    if (requestGrants.get(request)?.world !== registry.world) continue;
     const proposal = await generateRuleProposal(request);
     if (proposal) {
       rulesProposed++;
@@ -463,6 +490,7 @@ export async function runLawgiverCycle(
   // For now, auto-approve proposed rules (could add God approval flow)
   let rulesApproved = 0;
   for (const proposal of lawgiverState.proposedRules) {
+    if (proposalGrants.get(proposal)?.world !== registry.world) continue;
     if (proposal.status === "proposed") {
       if (approveRule(proposal.id)) {
         rulesApproved++;

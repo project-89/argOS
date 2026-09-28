@@ -411,7 +411,7 @@ describe("Daemon Narrative Arc System", () => {
       expect(isStagnating).toBe(false);
     });
 
-    it("should detect stagnation after threshold", () => {
+    it("should record elapsed review age without inferring blockage", () => {
       const daemon = createTestDaemon();
       startNarrativeArc(daemon, "test", "Test goal", "", { toGain: "", toLose: "" });
       daemon.narrativeArc.ticksSinceProgress = 8; // Two under threshold of 10
@@ -422,10 +422,11 @@ describe("Daemon Narrative Arc System", () => {
       expect(isStagnating).toBe(false);
       expect(daemon.narrativeArc.ticksSinceProgress).toBe(9);
 
-      // Still not stagnating (tick 10 = threshold, but stagnation triggers at >=)
+      // A due review is not proof of a failed attempt.
       isStagnating = checkArcStagnation(daemon);
-      expect(isStagnating).toBe(true); // Triggers at threshold
-      expect(daemon.narrativeArc.needsSelfResolution).toBe(true);
+      expect(isStagnating).toBe(false);
+      expect(daemon.narrativeArc.ticksSinceProgress).toBe(10);
+      expect(daemon.narrativeArc.needsSelfResolution).toBe(false);
     });
   });
 
@@ -438,7 +439,7 @@ describe("Daemon Narrative Arc System", () => {
       expect(nudge).toBeNull();
     });
 
-    it("should return appropriate nudge based on arc status", () => {
+    it("should not escalate merely because an arc is rising and a flag is set", () => {
       const daemon = createTestDaemon();
       startNarrativeArc(daemon, "test", "Test goal", "", { toGain: "", toLose: "" });
       daemon.narrativeArc.needsSelfResolution = true;
@@ -446,13 +447,11 @@ describe("Daemon Narrative Arc System", () => {
 
       const nudge = attemptSelfResolution(daemon);
 
-      expect(nudge).not.toBeNull();
-      expect(nudge!.type).toBe("escalate");
-      expect(nudge!.source).toBe("god");
-      expect(nudge!.priority).toBe("high");
+      expect(nudge).toBeNull();
+      expect(daemon.narrativeArc.status).toBe("rising");
     });
 
-    it("should abandon arc after too many attempts", () => {
+    it("should never abandon an arc because a review counter reached three", () => {
       const daemon = createTestDaemon();
       startNarrativeArc(daemon, "test", "Test goal", "", { toGain: "", toLose: "" });
       daemon.narrativeArc.needsSelfResolution = true;
@@ -461,9 +460,8 @@ describe("Daemon Narrative Arc System", () => {
       const nudge = attemptSelfResolution(daemon);
 
       expect(nudge).toBeNull();
-      expect(daemon.narrativeArc.status).toBe("dormant"); // Arc was abandoned
-      expect(daemon.narrativeArc.previousArcs.length).toBe(1);
-      expect(daemon.narrativeArc.previousArcs[0].resolution).toBe("abandoned");
+      expect(daemon.narrativeArc.status).toBe("setup");
+      expect(daemon.narrativeArc.previousArcs).toEqual([]);
     });
   });
 
@@ -544,14 +542,15 @@ describe("Daemon Narrative Arc System", () => {
       expect(summary).toContain("Found first clue");
     });
 
-    it("should indicate stagnation", () => {
+    it("should describe the need to review failure relevance without prescribing an ending", () => {
       const daemon = createTestDaemon();
       startNarrativeArc(daemon, "test", "Test", "", { toGain: "", toLose: "" });
       daemon.narrativeArc.needsSelfResolution = true;
 
       const summary = getArcSummary(daemon);
 
-      expect(summary).toContain("ARC STAGNATING");
+      expect(summary).toContain("review relevance to this arc");
+      expect(summary).toContain("No ending is implied");
     });
   });
 });
@@ -589,14 +588,18 @@ describe("Integration: Memory and Arc", () => {
     expect(summary).toContain("Investigate the servants");
   });
 
-  it("should handle arc stagnation and self-resolution flow", () => {
+  it("should allow optional failure review without choosing a goal or asserting progress", () => {
     const daemon = createTestDaemon("Bob");
 
     // Bob starts an arc
     startNarrativeArc(daemon, "escape", "Escape the prison",
       "Freedom", { toGain: "freedom", toLose: "life" });
 
-    // Simulate stagnation
+    // Explicit evidence for the standalone legacy daemon API. Native world
+    // evidence and expiry are covered by narrative-pressure.test.ts.
+    daemon.lastAgentState = { timestamp: Date.now(), arousal: 0.5, focus: "escape", mode: "active", active: true,
+      goalCount: 1, thoughtCount: 1, stuckTicks: 0,
+      recentAttempts: { status: "failed", consecutiveFailures: 2, executionId: "attempt-2" } };
     daemon.narrativeArc.stagnationThreshold = 3;
 
     checkArcStagnation(daemon); // tick 1
@@ -608,9 +611,11 @@ describe("Integration: Memory and Arc", () => {
     // Self-resolution should generate a nudge
     const nudge = attemptSelfResolution(daemon);
     expect(nudge).not.toBeNull();
-    expect(nudge!.priority).toBe("high");
+    expect(nudge!.priority).toBe("low");
+    expect(nudge!.type).toBe("reflect");
+    expect(daemon.narrativeArc.completedBeats).toEqual([]);
 
-    // Simulating the nudge being applied - progress happens
+    // Separately record an authored event, not completion implied by the review.
     progressNarrativeArc(daemon, "Found a loose bar in the window");
     expect(daemon.narrativeArc.needsSelfResolution).toBe(false);
   });

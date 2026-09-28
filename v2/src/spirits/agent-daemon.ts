@@ -12,13 +12,23 @@
  */
 
 import { generateText } from "ai";
+import { randomUUID } from "node:crypto";
 import { query, entityExists, hasComponent } from "bitecs";
 import type { World } from "../ecs/world";
-import { Name, Description, Agent, Mind, Goal, GridPosition, Health, Inventory } from "../ecs/components";
+import { readSimulationTime } from "../ecs/simulation-time";
+import { legacySimulationTimestamp } from "../ecs/temporal-age";
+import { Name, Description, Agent, Mind, Goal, GridPosition, Health, Inventory, WorkingMemoryIdentity, Removed, Room } from "../ecs/components";
 import { HasGoal, HasMemory, HasThought } from "../ecs/relations";
 import { getRoomForEntity } from "../ecs/location";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
-import { queueStimulus } from "../cognition/cognition-system";
+import { queueGuardedStimulus } from "../cognition/stimulus-queue";
+import { addPerception } from "../cognition/agent-mind";
+import { chronicle } from "../cognition/simulation-chronicle";
+import { workingMemoryEntityRef } from "../cognition/working-memory";
+import { getCommittedSource, startCommittedEvents } from "../runtime/committed-events";
+import { getRecentPhysicalAttempts, hasRepeatedPhysicalFailures } from "../runtime/recent-physical-attempts";
+import { assertSimulationTaskActive, getSimulationTaskSignal } from "../runtime/task-scope";
+import { formatCoordinationContext, getCoordinationMemory } from "../cognition/coordination-memory";
 import { daemonModel, THINKING_LEVELS } from "../llm/config";
 import type { SpiritRegistry } from "./spirit-registry";
 import { sendMessage, reportToSuperior } from "./spirit-registry";
@@ -187,6 +197,8 @@ function getContextualChallenge(
 // =============================================================================
 
 export interface DaemonState {
+  /** Parallel lived-time origins; source timestamps below retain their identity. */
+  temporalMarks?: Record<string, { sourceAt: number; simAt: number }>;
   daemonEid: number;
   agentEid: number;
   agentName: string;
@@ -217,7 +229,7 @@ export interface DaemonState {
     lastGoalChange: number;      // When did they last change goals?
     lastBeliefChange: number;    // When did they last update beliefs?
     lastRelationshipChange: number; // When did relationships last shift?
-    stagnationScore: number;     // 0-1, how stagnant is this character?
+    stagnationScore: number;     // Legacy name: latest repeated-physical-failure signal (0 or 1)
   };
 
   // ========================================
@@ -363,7 +375,7 @@ export interface DaemonNarrativeArc {
   stagnationThreshold: number;    // Ticks before self-resolution kicks in
 
   // Self-resolution
-  needsSelfResolution: boolean;   // Is this arc stuck and needs daemon intervention?
+  needsSelfResolution: boolean;   // Legacy name: due review plus recent failed attempts, not a required ending
   selfResolutionAttempts: number; // How many times we've tried to unstick it
 
   // Arc history
@@ -381,6 +393,8 @@ export interface CompletedArc {
 }
 
 export interface AgentStateSnapshot {
+  /** Recent public executor evidence, not inferred from stillness or goal count. */
+  recentAttempts?: { consecutiveFailures: number; status: "pending" | "succeeded" | "failed"; executionId: string };
   timestamp: number;
   position?: { x: number; y: number };
   room?: string;
@@ -393,6 +407,8 @@ export interface AgentStateSnapshot {
   thoughtCount: number;
   lastAction?: string;
   stuckTicks: number;  // How many ticks with no meaningful change
+  /** This daemon's own character account, not shared NPC knowledge. */
+  coordination?: string;
 }
 
 export interface DaemonObservation {
@@ -556,6 +572,19 @@ export function createEmptyDaemonArc(agentName: string): DaemonNarrativeArc {
 // =============================================================================
 
 let daemonIdCounter = 0;
+const daemonWorlds = new WeakMap<DaemonState, World>();
+/** Rebind a separately restored daemon to its actual world before it observes. */
+export function bindDaemonToWorld(daemon: DaemonState, world: World): void { daemonWorlds.set(daemon, world); }
+function stampDaemonTime(daemon: DaemonState, key: string, sourceAt: number): void {
+  const world = daemonWorlds.get(daemon);
+  if (world) { daemon.temporalMarks ??= {}; daemon.temporalMarks[key] = { sourceAt, simAt: readSimulationTime(world) }; }
+}
+function daemonAge(daemon: DaemonState, key: string, sourceAt: number): number {
+  const world = daemonWorlds.get(daemon);
+  if (!world) return Math.max(0, Date.now() - sourceAt); // Explicit legacy standalone daemon API.
+  const mark = daemon.temporalMarks?.[key];
+  return Math.max(0, readSimulationTime(world) - (mark?.sourceAt === sourceAt ? mark.simAt : legacySimulationTimestamp(world, sourceAt)));
+}
 
 /**
  * Create a daemon for an agent
@@ -611,6 +640,9 @@ export function createDaemonForAgent(
   };
 
   registry.daemons.set(agentEid, daemon);
+  bindDaemonToWorld(daemon, world);
+  for (const key of ["lastGoalChange", "lastBeliefChange", "lastRelationshipChange"] as const) stampDaemonTime(daemon, key, daemon.growthMetrics[key]);
+  stampDaemonTime(daemon, "arc.lastProgress", daemon.narrativeArc.lastProgressTimestamp);
 
   // Register capabilities for this daemon in spirit messaging system
   // This allows narrator/GodAI to route messages to specific character daemons
@@ -731,31 +763,94 @@ export function getDaemonsNeedingObservation(registry: DaemonRegistry): DaemonSt
 // NARRATIVE NUDGE HANDLING
 // =============================================================================
 
+export type NarrativeNudgeScope = { world: World; agentEid: number;
+  /** Trusted read-only validity of the captured evidence/plan, never JSON authority. */
+  isCurrent?: () => boolean };
+const SCOPED_NUDGE_PREFIX = "scoped-nudge:";
+type ScopedNudgeReceipt = { registry: DaemonRegistry; daemon: DaemonState; world: World;
+  agentEid: number; owner: string; persona: string; source: string | null; issuedAtSimMs: number; exact: string; consumed: boolean;
+  agentName: string; terminalDiagnostic?: "converted" | "perception_delivered" | "dropped";
+  isCurrent?: () => boolean };
+const scopedNudges = new WeakMap<NarrativeNudge, ScopedNudgeReceipt>();
+/** Operator diagnostics in the existing bounded log, not a public world event
+ * or proof the suggestion was considered, obeyed, or caused a later action.
+ * No suggestion text or private cognition enters this lifecycle record. */
+function recordScopedNudgeLifecycle(nudge: NarrativeNudge,
+  stage: "queued" | "converted" | "perception_delivered" | "dropped", perceptionEid?: number): void {
+  const receipt = scopedNudges.get(nudge); if (!receipt) return;
+  if (receipt.terminalDiagnostic && !(receipt.terminalDiagnostic === "converted" && (stage === "perception_delivered" || stage === "dropped"))) return;
+  if (stage !== "queued") receipt.terminalDiagnostic = stage;
+  chronicle.record("narrative_nudge_lifecycle", { nudgeId: nudge.id, sourceId: receipt.source, route: "daemon",
+    agent: receipt.agentName, actorKey: receipt.owner, stage, issuedAtSimMs: receipt.issuedAtSimMs,
+    atSimMs: readSimulationTime(receipt.world),
+    ...(stage === "dropped" ? { reason: "scope_invalid_or_consumed" } : {}),
+    ...(perceptionEid !== undefined ? { perceptionEid } : {}),
+  }, `Narrative advice transport: ${stage}`);
+}
+function nudgeGuardCurrent(guard: NarrativeNudgeScope["isCurrent"]): boolean {
+  try { return guard === undefined || typeof guard === "function" && guard() === true; } catch { return false; }
+}
+const nudgePersona = (eid: number) => JSON.stringify([Name.value[eid], Agent.role[eid], Agent.systemPrompt[eid]]);
+function currentNudgeRecipient(registry: DaemonRegistry, daemon: DaemonState, world: World, eid: number): boolean {
+  return registry.daemons.get(eid) === daemon && daemon.agentEid === eid && daemon.active
+    && daemonWorlds.get(daemon) === world && entityExists(world, eid) && hasComponent(world, eid, Agent)
+    && Agent.active[eid] && hasComponent(world, eid, Name) && Name.value[eid] === daemon.agentName;
+}
+function scopedNudgeCurrent(daemon: DaemonState, world: World, nudge: NarrativeNudge, registry?: DaemonRegistry): boolean {
+  const receipt = scopedNudges.get(nudge), source = getCommittedSource(world);
+  return !!receipt && !receipt.consumed && receipt.daemon === daemon && receipt.world === world
+    && (!registry || receipt.registry === registry)
+    && currentNudgeRecipient(receipt.registry, daemon, world, receipt.agentEid)
+    && hasComponent(world, receipt.agentEid, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[receipt.agentEid] === receipt.owner
+    && nudgePersona(receipt.agentEid) === receipt.persona && !source.stopped && source.sourceId === receipt.source
+    && Number.isFinite(readSimulationTime(world)) && readSimulationTime(world) >= receipt.issuedAtSimMs && JSON.stringify(nudge) === receipt.exact
+    && nudgeGuardCurrent(receipt.isCurrent);
+}
+function isScopedNudge(nudge: NarrativeNudge): boolean {
+  // The reserved serialized marker conveys no authority. Its only purpose is
+  // to stop a restored/copied scoped request from falling through as legacy.
+  return scopedNudges.has(nudge) || typeof nudge.id === "string" && nudge.id.startsWith(SCOPED_NUDGE_PREFIX);
+}
+
 /**
  * Queue a narrative nudge for a character daemon
- * Called by Narrator/GodAI to push characters in specific directions
+ * Scoped callers issue an optional suggestion to one live actor/daemon. The
+ * unscoped overload remains the explicit legacy standalone-daemon API.
  */
 export function queueNarrativeNudge(
   registry: DaemonRegistry,
   agentName: string,
-  nudge: Omit<NarrativeNudge, "id" | "timestamp">
+  nudge: Omit<NarrativeNudge, "id" | "timestamp">,
+  scope?: NarrativeNudgeScope
 ): boolean {
-  // Find daemon by agent name
-  const daemon = Array.from(registry.daemons.values())
-    .find(d => d.agentName.toLowerCase() === agentName.toLowerCase());
+  assertSimulationTaskActive();
+  const matches = Array.from(registry.daemons.values())
+    .filter(d => d.agentName.toLowerCase() === agentName.toLowerCase());
+  const daemon = scope ? registry.daemons.get(scope.agentEid) : matches[0];
 
   if (!daemon) {
     console.warn(`[Daemon] Cannot nudge ${agentName}: no daemon found`);
     return false;
   }
+  if (scope && (matches.length !== 1 || matches[0] !== daemon
+    || !currentNudgeRecipient(registry, daemon, scope.world, scope.agentEid) || getCommittedSource(scope.world).stopped
+    || !Number.isFinite(readSimulationTime(scope.world)) || readSimulationTime(scope.world) < 0 || !nudgeGuardCurrent(scope.isCurrent))) return false;
 
   const fullNudge: NarrativeNudge = {
     ...nudge,
-    id: `nudge_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+    id: scope ? `${SCOPED_NUDGE_PREFIX}${randomUUID()}` : `nudge_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
     timestamp: Date.now(),
   };
+  if (scope) {
+    scopedNudges.set(fullNudge, { registry, daemon, world: scope.world, agentEid: scope.agentEid,
+      owner: workingMemoryEntityRef(scope.world, scope.agentEid)!.key, persona: nudgePersona(scope.agentEid),
+      source: getCommittedSource(scope.world).sourceId, issuedAtSimMs: readSimulationTime(scope.world), exact: JSON.stringify(fullNudge), consumed: false,
+      agentName: daemon.agentName, isCurrent: scope.isCurrent });
+    Object.freeze(fullNudge);
+  }
 
   daemon.pendingNudges.push(fullNudge);
+  if (scope) recordScopedNudgeLifecycle(fullNudge, "queued");
   console.log(`[Daemon] Queued nudge for ${agentName}: ${nudge.type} - ${nudge.action}`);
 
   return true;
@@ -768,10 +863,27 @@ export function processPendingNudges(
   daemon: DaemonState,
   world: World
 ): DaemonWhisper[] {
+  return consumePendingNudges(daemon, world, false);
+}
+function discardInvalidScopedNudges(daemon: DaemonState, world: World, registry?: DaemonRegistry): void {
+  assertSimulationTaskActive();
+  // Reject every invalid scoped row before priority selection, including saved
+  // JSON copies without an in-process receipt. They must not become whispers
+  // or starve valid lower-priority suggestions. Legacy rows remain compatible.
+  daemon.pendingNudges = daemon.pendingNudges.filter(nudge => {
+    if (!isScopedNudge(nudge) || scopedNudgeCurrent(daemon, world, nudge, registry)) return true;
+    recordScopedNudgeLifecycle(nudge, "dropped");
+    return false;
+  });
+}
+function consumePendingNudges(daemon: DaemonState, world: World, scopedOnly: boolean,
+  deliver?: (whisper: DaemonWhisper) => number, registry?: DaemonRegistry): DaemonWhisper[] {
+  assertSimulationTaskActive();
   const whispers: DaemonWhisper[] = [];
+  discardInvalidScopedNudges(daemon, world, registry);
 
   // Sort by priority (high first)
-  const sortedNudges = [...daemon.pendingNudges].sort((a, b) => {
+  const sortedNudges = daemon.pendingNudges.filter(nudge => !scopedOnly || isScopedNudge(nudge) && shouldApplyNudge(daemon, nudge)).sort((a, b) => {
     const priorityOrder = { high: 0, normal: 1, low: 2 };
     return priorityOrder[a.priority] - priorityOrder[b.priority];
   });
@@ -780,26 +892,62 @@ export function processPendingNudges(
   const toProcess = sortedNudges.slice(0, 2);
 
   for (const nudge of toProcess) {
+    assertSimulationTaskActive();
+    if (isScopedNudge(nudge) && !scopedNudgeCurrent(daemon, world, nudge, registry)) {
+      recordScopedNudgeLifecycle(nudge, "dropped");
+      daemon.pendingNudges = daemon.pendingNudges.filter(row => row !== nudge);
+      continue;
+    }
     // Check if nudge respects narrative constraints
     if (!shouldApplyNudge(daemon, nudge)) {
       console.log(`[Daemon] Skipping nudge for ${daemon.agentName} - blocked by constraints`);
       continue;
     }
 
-    // Convert nudge to whisper based on type
-    const whisper = convertNudgeToWhisper(daemon, nudge);
-    if (whisper) {
-      whispers.push(whisper);
+    const receipt = scopedNudges.get(nudge);
+    if (receipt) {
+      // Duplicate references in the queue are one request, not repeat guidance.
+      if (!scopedNudgeCurrent(daemon, world, nudge, registry)) continue;
+      receipt.consumed = true;
     }
 
+    // Convert nudge to whisper based on type
+    const whisper = convertNudgeToWhisper(daemon, nudge);
     // Remove processed nudge
-    const idx = daemon.pendingNudges.findIndex(n => n.id === nudge.id);
-    if (idx !== -1) {
-      daemon.pendingNudges.splice(idx, 1);
+    if (receipt) daemon.pendingNudges = daemon.pendingNudges.filter(row => row !== nudge);
+    else {
+      const idx = daemon.pendingNudges.findIndex(n => n.id === nudge.id);
+      if (idx !== -1) daemon.pendingNudges.splice(idx, 1);
+    }
+    if (whisper) {
+      // Chronicle subscribers run synchronously. Publish transport diagnostics
+      // only after native admission so a subscriber cannot stop/rebind the
+      // recipient between its last scope check and this perception commit.
+      const perceptionEid = deliver?.(whisper);
+      recordScopedNudgeLifecycle(nudge, "converted");
+      if (perceptionEid !== undefined) recordScopedNudgeLifecycle(nudge,
+        perceptionEid >= 0 ? "perception_delivered" : "dropped", perceptionEid >= 0 ? perceptionEid : undefined);
+      whispers.push(whisper);
     }
   }
 
   return whispers;
+}
+
+/** Native cycles admit only newly scoped suggestions, synchronously, with the
+ * ordinary whisper cooldown. Legacy backlog is not newly granted delivery. */
+function deliverScopedNarrativeNudges(registry: DaemonRegistry, daemon: DaemonState, world: World): number {
+  assertSimulationTaskActive();
+  discardInvalidScopedNudges(daemon, world, registry);
+  if (daemon.lastWhisper && daemonAge(daemon, "lastWhisper", daemon.lastWhisper) < registry.whisperCooldown) return 0;
+  return consumePendingNudges(daemon, world, true, whisper => {
+    const perceptionEid = addPerception(world, daemon.agentEid, { type: "daemon_whisper", content: whisper.content, source: "inner_voice", intensity: 0.3 });
+    assertSimulationTaskActive();
+    daemon.lastWhisper = Date.now();
+    stampDaemonTime(daemon, "lastWhisper", daemon.lastWhisper);
+    daemon.whisperCount++;
+    return perceptionEid;
+  }, registry).length;
 }
 
 /**
@@ -836,27 +984,27 @@ function convertNudgeToWhisper(daemon: DaemonState, nudge: NarrativeNudge): Daem
 
   switch (nudge.type) {
     case "arrive":
-      content = `You've been traveling long enough. It's time to arrive and see what awaits you. ${nudge.action}`;
+      content = `A possibility for your journey: ${nudge.action}`;
       type = "guidance";
       break;
     case "interact":
-      content = `Someone nearby deserves your attention. ${nudge.action}`;
+      content = `A possible interaction to consider: ${nudge.action}`;
       type = "encouragement";
       break;
     case "resolve":
-      content = `This situation has gone on long enough. Perhaps it's time to bring it to a close. ${nudge.action}`;
+      content = `A possible way forward, if it fits: ${nudge.action}`;
       type = "guidance";
       break;
     case "escalate":
-      content = `Something stirs within you - a feeling that this moment matters. ${nudge.action}`;
+      content = `One option to weigh: ${nudge.action}`;
       type = "observation";
       break;
     case "reflect":
-      content = `Take a moment to consider what has happened. What does it mean? ${nudge.action}`;
+      content = `A question worth considering: ${nudge.action}`;
       type = "reminder";
       break;
     case "change_goal":
-      content = `Your priorities are shifting. Something new calls to you. ${nudge.action}`;
+      content = `Consider whether this fits your priorities: ${nudge.action}`;
       type = "guidance";
       break;
     default:
@@ -946,17 +1094,18 @@ export function getDaemonByAgentName(
  * Collect current state snapshot of an agent
  */
 export function collectAgentState(world: World, agentEid: number): AgentStateSnapshot | null {
-  if (!entityExists(world, agentEid)) return null;
+  if (!entityExists(world, agentEid) || !hasComponent(world, agentEid, Agent) || !hasComponent(world, agentEid, Mind)) return null;
 
   const roomEid = getRoomForEntity(world, agentEid);
   const roomName = roomEid !== undefined ? Name.value[roomEid] : undefined;
 
-  const goals = safeGetRelationTargets(world, agentEid, HasGoal);
+  const goals = safeGetRelationTargets(world, agentEid, HasGoal).filter(goal => hasComponent(world, goal, Goal) && Goal.status[goal] === "active");
   const thoughts = safeGetRelationTargets(world, agentEid, HasThought);
+  const recentAttempts = getRecentPhysicalAttempts(world, agentEid);
 
   return {
     timestamp: Date.now(),
-    position: GridPosition.x[agentEid] !== undefined ? {
+    position: hasComponent(world, agentEid, GridPosition) ? {
       x: GridPosition.x[agentEid],
       y: GridPosition.y[agentEid],
     } : undefined,
@@ -965,10 +1114,12 @@ export function collectAgentState(world: World, agentEid: number): AgentStateSna
     focus: Mind.focus[agentEid] || "",
     mode: Mind.mode[agentEid] || "reactive",
     active: Agent.active[agentEid] ?? true,
-    health: Health.current[agentEid],
+    health: hasComponent(world, agentEid, Health) ? Health.current[agentEid] : undefined,
     goalCount: goals.length,
     thoughtCount: thoughts.length,
     stuckTicks: 0,
+    ...(recentAttempts ? { recentAttempts } : {}),
+    coordination: getCoordinationMemory(world, agentEid).items.length ? formatCoordinationContext(world, agentEid) : undefined,
   };
 }
 
@@ -983,31 +1134,14 @@ export function detectConcerns(
   const concerns: DaemonConcern[] = [];
   const context = { focus: current.focus, room: current.room, stuckTicks: previous?.stuckTicks };
 
-  // Check for stuck agent (no position change over multiple observations)
-  if (previous) {
-    const samePosition = current.position && previous.position &&
-      current.position.x === previous.position.x &&
-      current.position.y === previous.position.y;
-    const sameFocus = current.focus === previous.focus;
-    const sameRoom = current.room === previous.room;
-
-    if (samePosition && sameFocus && sameRoom && previous.stuckTicks > 2) {
-      concerns.push({
-        type: "stuck",
-        severity: previous.stuckTicks > 5 ? "high" : "medium",
-        description: `${agentName} hasn't moved or changed focus for ${previous.stuckTicks} observations`,
-        suggestedWhisper: getContextualWhisper("stuck", agentName, context),
-      });
-    }
-  }
-
-  // Check for low arousal (disengaged)
-  if (current.arousal < 0.2) {
+  // Stationary work, listening and rest are not evidence of failure. Repeated
+  // executor failures warrant reconsidering an approach, not abandoning a goal.
+  if (current.active && current.recentAttempts?.status === "failed" && current.recentAttempts.consecutiveFailures >= 2) {
     concerns.push({
-      type: "low_arousal",
-      severity: "low",
-      description: `${agentName} seems disengaged (arousal: ${current.arousal.toFixed(2)})`,
-      suggestedWhisper: getContextualWhisper("low_arousal", agentName, context),
+      type: "stuck",
+      severity: "medium",
+      description: `${agentName}'s last ${current.recentAttempts.consecutiveFailures} physical attempts failed.`,
+      suggestedWhisper: "What blocked that attempt? Is there another approach that still serves your purpose?",
     });
   }
 
@@ -1016,8 +1150,8 @@ export function detectConcerns(
     concerns.push({
       type: "high_arousal",
       severity: "medium",
-      description: `${agentName} seems overwhelmed (arousal: ${current.arousal.toFixed(2)})`,
-      suggestedWhisper: getContextualWhisper("high_arousal", agentName, context),
+      description: `${agentName}'s activation is high (arousal: ${current.arousal.toFixed(2)}); its meaning depends on the situation.`,
+      suggestedWhisper: "Would slowing down help, or does this pace suit what matters to you?",
     });
   }
 
@@ -1031,15 +1165,8 @@ export function detectConcerns(
     });
   }
 
-  // Check for no goals
-  if (current.goalCount === 0) {
-    concerns.push({
-      type: "goal_drift",
-      severity: "low",
-      description: `${agentName} has no active goals`,
-      suggestedWhisper: getContextualWhisper("goal_drift", agentName, context),
-    });
-  }
+  // No explicit goal is valid during rest or an unstructured interval. The
+  // actor's cognition, not this observer, decides whether to choose a goal.
 
   // Check for inactive agent
   if (!current.active) {
@@ -1069,31 +1196,30 @@ export function updateGrowthMetrics(
   const now = Date.now();
   const metrics = daemon.growthMetrics;
 
+  // Retained legacy field: now an observed failure signal, never a novelty quota.
+  metrics.stagnationScore = current.active && hasRepeatedPhysicalFailures(current.recentAttempts) ? 1 : 0;
   if (!previous) return;
 
   // Check for goal changes
   if (current.goalCount !== previous.goalCount) {
     metrics.lastGoalChange = now;
+    stampDaemonTime(daemon, "lastGoalChange", now);
   }
 
   // Check for focus changes (proxy for belief/thought changes)
   if (current.focus !== previous.focus && current.focus !== "") {
     metrics.lastBeliefChange = now;
+    stampDaemonTime(daemon, "lastBeliefChange", now);
   }
 
   // Check for room changes (proxy for relationship opportunities)
   if (current.room !== previous.room) {
     metrics.lastRelationshipChange = now;
+    stampDaemonTime(daemon, "lastRelationshipChange", now);
   }
 
-  // Calculate stagnation score based on time since changes
-  const hourInMs = 60 * 60 * 1000;
-  const goalStagnation = Math.min(1, (now - metrics.lastGoalChange) / (5 * hourInMs));
-  const beliefStagnation = Math.min(1, (now - metrics.lastBeliefChange) / (3 * hourInMs));
-  const relationshipStagnation = Math.min(1, (now - metrics.lastRelationshipChange) / (10 * hourInMs));
-
-  // Weighted average - goals matter most, then beliefs, then relationships
-  metrics.stagnationScore = (goalStagnation * 0.5) + (beliefStagnation * 0.3) + (relationshipStagnation * 0.2);
+  // Time since these proxy observations is telemetry, not proof of a belief,
+  // relationship change, or need to replace an actor's ongoing intention.
 }
 
 /**
@@ -1113,24 +1239,24 @@ export function generateGrowthSuggestion(daemon: DaemonState): string {
   const metrics = daemon.growthMetrics;
   const suggestions: string[] = [];
 
-  const hoursSinceGoal = (Date.now() - metrics.lastGoalChange) / (60 * 60 * 1000);
-  const hoursSinceBelief = (Date.now() - metrics.lastBeliefChange) / (60 * 60 * 1000);
-  const hoursSinceRelationship = (Date.now() - metrics.lastRelationshipChange) / (60 * 60 * 1000);
+  const hoursSinceGoal = daemonAge(daemon, "lastGoalChange", metrics.lastGoalChange) / (60 * 60 * 1000);
+  const hoursSinceBelief = daemonAge(daemon, "lastBeliefChange", metrics.lastBeliefChange) / (60 * 60 * 1000);
+  const hoursSinceRelationship = daemonAge(daemon, "lastRelationshipChange", metrics.lastRelationshipChange) / (60 * 60 * 1000);
 
   if (hoursSinceGoal > 0.1) {  // 6 minutes in simulation time
-    suggestions.push(`${daemon.agentName} hasn't changed goals - needs new motivation or obstacle`);
+    suggestions.push(`${daemon.agentName}'s active goal count has not changed recently; this does not establish lack of progress`);
   }
 
   if (hoursSinceBelief > 0.05) {  // 3 minutes
-    suggestions.push(`${daemon.agentName}'s thinking is stagnant - needs new information or challenge to beliefs`);
+    suggestions.push(`${daemon.agentName}'s focus has remained stable; belief change is not measured here`);
   }
 
   if (hoursSinceRelationship > 0.15) {  // 9 minutes
-    suggestions.push(`${daemon.agentName} hasn't had meaningful social change - needs interaction or conflict`);
+    suggestions.push(`${daemon.agentName} has stayed in the same room; relationship change is not measured here`);
   }
 
   if (suggestions.length === 0) {
-    return `${daemon.agentName} is growing well - no immediate attention needed`;
+    return `${daemon.agentName}: these change intervals alone do not establish a need for intervention`;
   }
 
   return suggestions.join("; ");
@@ -1147,90 +1273,25 @@ export function detectGrowthOpportunities(
   concernLevel: number
 ): GrowthOpportunity[] {
   const opportunities: GrowthOpportunity[] = [];
-
-  // TOO COMFORTABLE: Agent has been stable with no challenges for too long
-  if (concernLevel < 0.1 && current.arousal > 0.3 && current.arousal < 0.6) {
-    // Mid-range arousal with low concerns = complacency zone
-    if (previous && previous.stuckTicks > 1) {
-      opportunities.push({
-        type: "too_comfortable",
-        description: `${agentName} has been in a comfort zone with no challenges`,
-        suggestedChallenge: getContextualChallenge("too_comfortable", agentName),
-        urgency: "low",
-      });
-    }
-  }
-
-  // READY FOR CHALLENGE: High health, stable arousal, has goals
-  if (current.health && current.health > 80 &&
-      current.arousal > 0.4 && current.arousal < 0.7 &&
-      current.goalCount >= 1) {
+  // Readiness is a meaningful recovery/change, not a permanent demand to seek
+  // novelty whenever a healthy actor has an ordinary active goal.
+  const ready = (state: AgentStateSnapshot) => state.active && state.health !== undefined && state.health > 80
+    && state.arousal > 0.4 && state.arousal < 0.7 && state.goalCount > 0;
+  if (previous && ready(current) && !ready(previous) && concernLevel < 0.3 && current.recentAttempts?.status !== "pending") {
     opportunities.push({
-      type: "ready_for_challenge",
-      description: `${agentName} is in prime condition for a challenge`,
-      suggestedChallenge: getContextualChallenge("ready_for_challenge", agentName),
-      urgency: "medium",
+      type: "ready_for_challenge", description: `${agentName}'s condition now permits renewed engagement with an existing goal.`,
+      suggestedChallenge: "Does returning to what you wanted to do fit how you feel now?", urgency: "medium",
     });
   }
-
-  // STAGNATING: Same position/focus for too long despite being active
-  if (current.stuckTicks > 3 && current.active && current.arousal > 0.2) {
+  if (current.active && current.goalCount > 0 && current.recentAttempts?.status === "failed"
+    && current.recentAttempts.consecutiveFailures >= 2) {
     opportunities.push({
-      type: "stagnating",
-      description: `${agentName} is stuck in a rut despite being engaged`,
-      suggestedChallenge: getContextualChallenge("stagnating", agentName),
-      urgency: "medium",
+      type: "skill_plateau", description: `${agentName} has recent failed physical attempts; consider whether they affect the current goal.`,
+      suggestedChallenge: "What have these attempts told you about the obstacle?", urgency: "medium",
     });
   }
-
-  // NEEDS CONFLICT: No recent emotional peaks, flat arousal history
-  if (current.arousal > 0.35 && current.arousal < 0.55 && concernLevel < 0.2) {
-    opportunities.push({
-      type: "needs_conflict",
-      description: `${agentName}'s emotional state is too flat - needs drama`,
-      suggestedChallenge: getContextualChallenge("needs_conflict", agentName),
-      urgency: "low",
-    });
-  }
-
-  // BREAKTHROUGH POSSIBLE: High arousal but productive (not danger)
-  if (current.arousal > 0.7 && current.arousal < 0.85 &&
-      current.health && current.health > 50 &&
-      current.goalCount >= 1) {
-    opportunities.push({
-      type: "breakthrough_possible",
-      description: `${agentName} is in flow state - prime for breakthrough moment`,
-      suggestedChallenge: getContextualChallenge("breakthrough_possible", agentName),
-      urgency: "high",
-    });
-  }
-
-  // SKILL PLATEAU: Has goals but not progressing (similar state over time)
-  if (previous && current.goalCount === previous.goalCount &&
-      current.goalCount > 0 && current.stuckTicks > 2) {
-    opportunities.push({
-      type: "skill_plateau",
-      description: `${agentName} may have hit a plateau in pursuing their goals`,
-      suggestedChallenge: getContextualChallenge("skill_plateau", agentName),
-      urgency: "medium",
-    });
-  }
-
-  // RELATIONSHIP TEST: Agent is stable - good time for social challenge
-  if (current.health && current.health > 60 &&
-      current.arousal > 0.3 && current.arousal < 0.6 &&
-      concernLevel < 0.3) {
-    // Only add occasionally (not every observation)
-    if (Math.random() < 0.3) {
-      opportunities.push({
-        type: "relationship_test",
-        description: `${agentName} is in stable condition for relationship dynamics`,
-        suggestedChallenge: getContextualChallenge("relationship_test", agentName),
-        urgency: "low",
-      });
-    }
-  }
-
+  // Calmness, an unchanged goal count and a fixed position establish neither
+  // complacency nor a need for conflict or relationship tests.
   return opportunities;
 }
 
@@ -1511,6 +1572,7 @@ export function progressNarrativeArc(daemon: DaemonState, eventDescription: stri
   // Reset stagnation counter
   arc.ticksSinceProgress = 0;
   arc.lastProgressTimestamp = now;
+  stampDaemonTime(daemon, "arc.lastProgress", now);
   arc.needsSelfResolution = false;
 
   // Record the beat
@@ -1550,90 +1612,43 @@ export function progressNarrativeArc(daemon: DaemonState, eventDescription: stri
 /**
  * Check if arc is stagnating and needs self-resolution
  */
-export function checkArcStagnation(daemon: DaemonState): boolean {
+export function checkArcStagnation(daemon: DaemonState, current?: AgentStateSnapshot): boolean {
   const arc = daemon.narrativeArc;
 
   // Dormant arcs don't stagnate
-  if (arc.status === "dormant") return false;
+  if (arc.status === "dormant") { arc.needsSelfResolution = false; return false; }
 
-  arc.ticksSinceProgress++;
+  // The legacy threshold unit was one ten-second observation. Count lived
+  // duration, not observation/model-completion callbacks, in a bound world.
+  arc.ticksSinceProgress = daemonWorlds.has(daemon)
+    ? Math.floor(daemonAge(daemon, "arc.lastProgress", arc.lastProgressTimestamp) / 10_000)
+    : arc.ticksSinceProgress + 1;
 
-  if (arc.ticksSinceProgress >= arc.stagnationThreshold) {
-    arc.needsSelfResolution = true;
-    console.log(`[Daemon] ${daemon.agentName}'s arc is stagnating (${arc.ticksSinceProgress} ticks without progress)`);
-    return true;
-  }
-
-  return false;
+  const world = daemonWorlds.get(daemon);
+  const state = current ?? (world ? collectAgentState(world, daemon.agentEid) : daemon.lastAgentState);
+  // A due review is not evidence of blockage. Even failure evidence does not
+  // establish that the failure belonged to this narrative arc or goal.
+  arc.needsSelfResolution = !!state?.active && hasRepeatedPhysicalFailures(state.recentAttempts)
+    && arc.ticksSinceProgress >= arc.stagnationThreshold;
+  return arc.needsSelfResolution;
 }
 
 /**
- * Attempt self-resolution when arc is stuck
- * Returns a nudge to push the character toward resolution
+ * Explicit legacy review helper. Native observations use guarded concerns
+ * instead. A review cannot choose an ending or abandon an actor's intention.
  */
 export function attemptSelfResolution(daemon: DaemonState): NarrativeNudge | null {
-  const arc = daemon.narrativeArc;
-
-  if (!arc.needsSelfResolution) return null;
-
-  arc.selfResolutionAttempts++;
-
-  // After too many attempts, abandon the arc
-  if (arc.selfResolutionAttempts > 3) {
-    completeNarrativeArc(daemon, "abandoned");
-    return null;
-  }
-
-  // Generate a resolution nudge based on arc status
-  let nudgeType: NarrativeNudge["type"];
-  let action: string;
-  let reason: string;
-
-  switch (arc.status) {
-    case "setup":
-      nudgeType = "change_goal";
-      action = "Consider whether this path is worth pursuing, or if something else calls to you.";
-      reason = "Arc stuck in setup - needs commitment or abandonment";
-      break;
-    case "rising":
-      nudgeType = "escalate";
-      action = "Push harder toward your goal. The tension must break one way or another.";
-      reason = "Arc stuck in rising action - needs escalation to crisis";
-      break;
-    case "crisis":
-      nudgeType = "resolve";
-      action = "The moment of decision is here. You cannot avoid it any longer.";
-      reason = "Arc stuck in crisis - needs decisive action";
-      break;
-    case "climax":
-      nudgeType = "resolve";
-      action = "This is the turning point. What happens now will define everything.";
-      reason = "Arc stuck in climax - needs resolution";
-      break;
-    case "falling":
-      nudgeType = "reflect";
-      action = "Consider what has happened and what it means for your future.";
-      reason = "Arc stuck in falling action - needs reflection to complete";
-      break;
-    default:
-      nudgeType = "reflect";
-      action = "Take stock of where you are and where you're going.";
-      reason = "Arc needs direction";
-  }
-
-  const nudge: NarrativeNudge = {
-    id: `self_resolve_${Date.now()}`,
-    type: nudgeType,
-    action,
-    reason,
-    source: "god", // Self-resolution acts like divine intervention
+  if (!checkArcStagnation(daemon)) return null;
+  daemon.narrativeArc.selfResolutionAttempts++;
+  return {
+    id: `self_review_${randomUUID()}`,
+    type: "reflect",
+    action: "What have the failed attempts shown you? Does another approach fit what you still want?",
+    reason: "Recent physical attempts failed; their relevance to this arc needs review",
+    source: "god",
     timestamp: Date.now(),
-    priority: "high",
+    priority: "low",
   };
-
-  console.log(`[Daemon] ${daemon.agentName} self-resolution attempt ${arc.selfResolutionAttempts}: ${action}`);
-
-  return nudge;
 }
 
 /**
@@ -1676,6 +1691,7 @@ export function completeNarrativeArc(
   arc.upcomingBeats = [];
   arc.ticksSinceProgress = 0;
   arc.lastProgressTimestamp = Date.now();
+  stampDaemonTime(daemon, "arc.lastProgress", arc.lastProgressTimestamp);
   arc.needsSelfResolution = false;
   arc.selfResolutionAttempts = 0;
 }
@@ -1704,6 +1720,7 @@ export function startNarrativeArc(
   arc.tension = 0.3;
   arc.ticksSinceProgress = 0;
   arc.lastProgressTimestamp = Date.now();
+  stampDaemonTime(daemon, "arc.lastProgress", arc.lastProgressTimestamp);
 
   console.log(`[Daemon] ${daemon.agentName} started new arc: "${theme}" - ${drivingGoal}`);
 }
@@ -1740,7 +1757,7 @@ export function getArcSummary(daemon: DaemonState): string {
   }
 
   if (arc.needsSelfResolution) {
-    lines.push(`** ARC STAGNATING - needs resolution **`);
+    lines.push(`Recent physical attempts failed; review relevance to this arc. No ending is implied.`);
   }
 
   if (arc.previousArcs.length > 0) {
@@ -1777,6 +1794,7 @@ export function observeAgent(
 ): DaemonObservation | null {
   const currentState = collectAgentState(world, daemon.agentEid);
   if (!currentState) return null;
+  const previousState = daemon.lastAgentState;
 
   // Calculate stuck ticks
   if (daemon.lastAgentState) {
@@ -1810,7 +1828,6 @@ export function observeAgent(
   // Update daemon state
   daemon.lastObservation = Date.now();
   daemon.observationCount++;
-  daemon.lastAgentState = currentState;
   daemon.concernLevel = Math.min(1, concerns.reduce((sum, c) =>
     sum + (c.severity === "high" ? 0.3 : c.severity === "medium" ? 0.2 : 0.1), 0
   ));
@@ -1861,22 +1878,17 @@ export function observeAgent(
   // Update growth metrics
   updateGrowthMetrics(daemon, currentState, daemon.lastAgentState);
 
-  // Check narrative arc stagnation
-  const isStagnating = checkArcStagnation(daemon);
-
-  // If stagnating, try self-resolution
-  if (isStagnating) {
-    const selfResolutionNudge = attemptSelfResolution(daemon);
-    if (selfResolutionNudge) {
-      daemon.pendingNudges.push(selfResolutionNudge);
-    }
-  }
+  // Record a review signal only. Actual failed attempts already enter the
+  // normal, guarded concern path; do not add a second timer-driven controller.
+  checkArcStagnation(daemon, currentState);
 
   // Prune memory periodically (every 10 observations)
   if (daemon.observationCount % 10 === 0) {
     pruneMemory(daemon);
   }
 
+  // All comparisons above need the previous observation, not the new snapshot.
+  daemon.lastAgentState = currentState;
   // Record observation event
   recordEvent("daemon_observation", {
     agent: daemon.agentName,
@@ -1892,7 +1904,7 @@ export function observeAgent(
   return {
     agentName: daemon.agentName,
     currentState,
-    previousState: daemon.lastAgentState,
+    previousState,
     concerns,
     growthOpportunities,
     achievements,
@@ -1904,6 +1916,59 @@ export function observeAgent(
 // WHISPERS (Guidance to Agents)
 // =============================================================================
 
+const whisperCycles = new WeakMap<DaemonState, object>();
+function captureWhisperScope(world: World, daemon: DaemonState, observation: DaemonObservation, registry?: DaemonRegistry) {
+  assertSimulationTaskActive();
+  const eid = daemon.agentEid, actor = workingMemoryEntityRef(world, eid), persona = nudgePersona(eid);
+  const room = getRoomForEntity(world, eid), roomRef = room === undefined ? undefined : workingMemoryEntityRef(world, room);
+  const source = getCommittedSource(world), at = readSimulationTime(world), signal = getSimulationTaskSignal();
+  // A real advisory dispatch can precede sim.start(). Capture its first epoch
+  // before inference, not during mailbox admission after the guard was taken.
+  // A stopped source remains stopped; only the host may explicitly restart it.
+  const sourceId = source.sourceId ?? (source.stopped ? null : startCommittedEvents(world));
+  const token = {}; whisperCycles.set(daemon, token);
+  const focus = Mind.focus[eid], x = GridPosition.x[eid], y = GridPosition.y[eid];
+  const current = () => {
+    const live = getCommittedSource(world), now = readSimulationTime(world);
+    return !signal?.aborted && !source.stopped && !live.stopped && sourceId === live.sourceId
+      && Number.isFinite(at) && Number.isFinite(now) && now >= at && !!actor
+      && daemonWorlds.get(daemon) === world && daemon.active && daemon.agentEid === eid
+      && (!registry || registry.daemons.get(eid) === daemon)
+      && entityExists(world, eid) && !hasComponent(world, eid, Removed) && hasComponent(world, eid, Agent) && hasComponent(world, eid, Name) && Agent.active[eid]
+      && hasComponent(world, eid, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[eid] === actor.key
+      && nudgePersona(eid) === persona && daemon.agentName === actor.label && observation.agentName === actor.label
+      && getRoomForEntity(world, eid) === room && (room === undefined || !!roomRef && entityExists(world, room)
+        && !hasComponent(world, room, Removed) && hasComponent(world, room, Room) && hasComponent(world, room, Name) && Name.value[room] === roomRef.label
+        && hasComponent(world, room, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[room] === roomRef.key);
+  };
+  const sameActivity = () => Mind.focus[eid] === focus && GridPosition.x[eid] === x && GridPosition.y[eid] === y;
+  const activeGoals = () => safeGetRelationTargets(world, eid, HasGoal).filter(goal => hasComponent(world, goal, Goal) && Goal.status[goal] === "active").length;
+  const concernCurrent = (type: DaemonConcern["type"]) => {
+    if (type === "stuck") {
+      const attempts = collectAgentState(world, eid)?.recentAttempts;
+      return attempts?.status === "failed" && attempts.consecutiveFailures >= 2;
+    }
+    if (type === "danger") return hasComponent(world, eid, Health) && Health.current[eid] < 30;
+    if (type === "low_arousal") return hasComponent(world, eid, Mind) && Mind.arousal[eid] < 0.2;
+    if (type === "high_arousal") return hasComponent(world, eid, Mind) && Mind.arousal[eid] > 0.9;
+    if (type === "goal_drift") return activeGoals() === 0;
+    return sameActivity(); // Authored confusion/isolation needs richer evidence, not invented predicates.
+  };
+  const opportunityCurrent = (type: GrowthOpportunity["type"]) => {
+    const arousal = Mind.arousal[eid], health = hasComponent(world, eid, Health) ? Health.current[eid] : undefined;
+    if (registry && (registry.simulationTension > 0.85 || registry.simulationTension > 0.7
+      && !observation.growthOpportunities.some(item => item.type === type && item.urgency === "high"))) return false;
+    if (type === "ready_for_challenge") return !!health && health > 80 && arousal > 0.4 && arousal < 0.7 && activeGoals() > 0;
+    if (type === "breakthrough_possible") return !!health && health > 50 && arousal > 0.7 && arousal < 0.85 && activeGoals() > 0;
+    if (type === "skill_plateau" || type === "stagnating") {
+      const attempts = collectAgentState(world, eid)?.recentAttempts;
+      return attempts?.status === "failed" && attempts.consecutiveFailures >= 2 && activeGoals() > 0;
+    }
+    return sameActivity();
+  };
+  return { current, latest: () => whisperCycles.get(daemon) === token, concernCurrent, opportunityCurrent };
+}
+
 /**
  * Generate and send a whisper to an agent
  */
@@ -1911,9 +1976,13 @@ export async function whisperToAgent(
   world: World,
   daemon: DaemonState,
   observation: DaemonObservation,
-  forceWhisper: boolean = false
+  forceWhisper: boolean = false,
+  registry?: DaemonRegistry
 ): Promise<DaemonWhisper | null> {
+  const scope = captureWhisperScope(world, daemon, observation, registry);
+  if (!scope.current()) return null;
   const now = Date.now();
+  let evidenceCurrent = () => true;
 
   // Check cooldown
   if (!forceWhisper && now - daemon.lastWhisper < 30000) { // 30 second cooldown
@@ -1930,10 +1999,13 @@ export async function whisperToAgent(
   let whisperContent = "";
 
   if (observation.concerns.length > 0) {
-    const topConcern = observation.concerns.sort((a, b) => {
+    const topConcern = [...observation.concerns].sort((a, b) => {
       const severityOrder = { high: 0, medium: 1, low: 2 };
       return severityOrder[a.severity] - severityOrder[b.severity];
     })[0];
+    const concernType = topConcern.type;
+    evidenceCurrent = () => scope.concernCurrent(concernType);
+    if (!evidenceCurrent()) return null;
 
     if (topConcern.suggestedWhisper) {
       whisperContent = topConcern.suggestedWhisper;
@@ -1944,18 +2016,16 @@ export async function whisperToAgent(
       try {
         const result = await generateText({
           model: daemonModel,
-          prompt: `You are a daemon (guardian spirit) watching over ${observation.agentName}.
-You've observed a concern: ${topConcern.description}
+          prompt: `You are ${observation.agentName}'s reflective companion.
+Observed concern: ${topConcern.description}
 
-Generate a short, subtle whisper (1 sentence, under 20 words) to gently guide them.
-The whisper should feel like an inner voice or intuition, not a direct command.
-Do not use quotes. Just output the whisper text.`,
+Offer a tentative question or possibility grounded in this observation, as an intuition the character may accept or dismiss. Use one sentence under 20 words. Output only the whisper text, or an empty string if there is nothing useful to add.`,
         });
         whisperContent = result.text.trim().replace(/^["']|["']$/g, '');
         whisperType = "guidance";
       } catch (error) {
-        // Fallback to generic whisper
-        whisperContent = "Something feels off. Perhaps a change is needed.";
+        assertSimulationTaskActive();
+        return null; // Provider failure is not a reason for a new inner suggestion.
       }
     }
   } else if (observation.achievements.length > 0) {
@@ -1963,17 +2033,18 @@ Do not use quotes. Just output the whisper text.`,
     whisperContent = "You're doing well. Keep going.";
   }
 
-  if (!whisperContent) return null;
+  assertSimulationTaskActive();
+  if (!whisperContent || !scope.latest() || !scope.current() || !evidenceCurrent()) return null;
 
   // Send whisper as cognitive stimulus
-  queueStimulus({
+  if (!queueGuardedStimulus(world, {
     targetEid: daemon.agentEid,
     type: "daemon_whisper",
     modality: "cognitive",
     content: whisperContent,
     source: "inner_voice",
     intensity: 0.3,  // Subtle, not overwhelming
-  });
+  }, () => scope.current() && evidenceCurrent())) return null;
 
   daemon.lastWhisper = now;
   daemon.whisperCount++;
@@ -2012,6 +2083,8 @@ export async function whisperChallenge(
   registry: DaemonRegistry,
   forceWhisper: boolean = false
 ): Promise<ChallengeWhisper | null> {
+  const scope = captureWhisperScope(world, daemon, observation, registry);
+  if (!scope.current()) return null;
   const now = Date.now();
 
   // TENSION AWARENESS: Back off when simulation is already tense
@@ -2039,10 +2112,13 @@ export async function whisperChallenge(
   }
 
   // Pick the highest urgency growth opportunity
-  const topOpportunity = observation.growthOpportunities.sort((a, b) => {
+  const topOpportunity = [...observation.growthOpportunities].sort((a, b) => {
     const urgencyOrder = { high: 0, medium: 1, low: 2 };
     return urgencyOrder[a.urgency] - urgencyOrder[b.urgency];
   })[0];
+  const opportunityType = topOpportunity.type;
+  const evidenceCurrent = () => scope.opportunityCurrent(opportunityType);
+  if (!evidenceCurrent()) return null;
 
   // Map opportunity types to challenge types
   const challengeTypeMap: Record<GrowthOpportunity["type"], ChallengeWhisper["challengeType"]> = {
@@ -2062,46 +2138,30 @@ export async function whisperChallenge(
   try {
     const result = await generateText({
       model: daemonModel,
-      prompt: `You are a daemon (guardian spirit) watching over ${observation.agentName}.
-Your role is NOT just to protect, but to push growth, challenge, and development.
+      prompt: `You are ${observation.agentName}'s reflective companion.
+Observed opportunity: ${topOpportunity.description}
+Possible angle: ${challengeType}
 
-You've noticed: ${topOpportunity.description}
-Challenge type you should use: ${challengeType}
-
-Generate a short, provocative whisper (1 sentence, under 20 words) that:
-- If "provocation": Plants doubt, stirs jealousy, or questions their choices
-- If "doubt": Questions their abilities or complacency
-- If "ambition": Whispers of greater things they could achieve
-- If "curiosity": Hints at mysteries or unexplored paths
-- If "restlessness": Makes them feel the need to change or move
-
-The whisper should feel like a nagging inner voice that won't let them rest easy.
-Be subtle but unsettling. Do not use quotes. Just output the whisper text.`,
+Offer a relevant question or possibility grounded in this observation. Treat growth as an option, not a demand or an invented problem; the character can decide whether it fits their interests. Use one sentence under 20 words. Output only the whisper text, or an empty string if there is nothing useful to add.`,
     });
     challengeContent = result.text.trim().replace(/^["']|["']$/g, '');
   } catch (error) {
-    // Fallback challenge whispers by type
-    const fallbackWhispers: Record<ChallengeWhisper["challengeType"], string> = {
-      provocation: "Are you truly content with this? Others achieve so much more.",
-      doubt: "Is this really the best you can do?",
-      ambition: "You were meant for greater things than this.",
-      curiosity: "What lies beyond? You'll never know if you stay here.",
-      restlessness: "Something is wrong. You can feel it. You need to move.",
-    };
-    challengeContent = fallbackWhispers[challengeType];
+    assertSimulationTaskActive();
+    return null;
   }
 
-  if (!challengeContent) return null;
+  assertSimulationTaskActive();
+  if (!challengeContent || !scope.latest() || !scope.current() || !evidenceCurrent()) return null;
 
   // Send challenge whisper as cognitive stimulus (higher intensity than guidance)
-  queueStimulus({
+  if (!queueGuardedStimulus(world, {
     targetEid: daemon.agentEid,
     type: "daemon_challenge",
     modality: "cognitive",
     content: challengeContent,
     source: "inner_voice",
     intensity: 0.5,  // Stronger than guidance whispers
-  });
+  }, () => scope.current() && evidenceCurrent())) return null;
 
   daemon.lastWhisper = now;
   daemon.whisperCount++;
@@ -2204,6 +2264,10 @@ export function reportToSuperiorSpirit(
   lines.push(`- Arousal: ${observation.currentState.arousal.toFixed(2)}`);
   lines.push(`- Focus: ${observation.currentState.focus || "none"}`);
   lines.push(`- Goals: ${observation.currentState.goalCount}`);
+  if (observation.currentState.coordination) {
+    lines.push("- Private coordination account (inspect blockers before proposing world changes):");
+    lines.push(observation.currentState.coordination);
+  }
   if (observation.currentState.health !== undefined) {
     lines.push(`- Health: ${observation.currentState.health}`);
   }
@@ -2235,7 +2299,7 @@ export function reportToSuperiorSpirit(
       lines.push(`- Immediate nudge: ${pendingNudge.type} -> ${pendingNudge.action}`);
     }
     if (daemon.narrativeArc.needsSelfResolution) {
-      lines.push("- Urgency: arc is stagnating and needs a forcing event");
+      lines.push("- Review: recent physical attempts failed; check relevance to this arc before offering help");
     }
   }
 
@@ -2297,6 +2361,7 @@ export async function runDaemonSystem(
   challenges: number;
   reports: number;
 }> {
+  assertSimulationTaskActive();
   const daemonsToRun = getDaemonsNeedingObservation(registry);
 
   let observations = 0;
@@ -2304,12 +2369,31 @@ export async function runDaemonSystem(
   let challenges = 0;
   let reports = 0;
 
+  // Transport already evaluated advice independently of slow observation.
+  // Waiting for a fresh observation could hold valid advice for 30s while its
+  // cited circumstances expire. Ordinary whisper cooldown and per-item scope
+  // checks still apply; no observation or model call is accelerated here.
+  const deliveredThisCycle = new Set<DaemonState>();
+  for (const daemon of registry.daemons.values()) {
+    assertSimulationTaskActive();
+    if (daemon.pendingNudges.length === 0) continue;
+    const delivered = deliverScopedNarrativeNudges(registry, daemon, world);
+    whispers += delivered;
+    if (delivered) deliveredThisCycle.add(daemon);
+    if (getCommittedSource(world).stopped) return { observations, whispers, challenges, reports };
+  }
+
   for (const daemon of daemonsToRun) {
+    assertSimulationTaskActive();
     // Check if agent still exists
     if (!entityExists(world, daemon.agentEid)) {
       removeDaemon(registry, daemon.agentEid);
       continue;
     }
+
+    const deliveredNudges = deliveredThisCycle.has(daemon);
+    assertSimulationTaskActive();
+    if (getCommittedSource(world).stopped) break;
 
     // Observe
     const observation = observeAgent(world, daemon);
@@ -2318,12 +2402,12 @@ export async function runDaemonSystem(
 
     // Priority: concerns get guidance whispers, growth gets challenge whispers
     // If there are concerns, prioritize protective guidance
-    if (observation.concerns.length > 0) {
-      const whisper = await whisperToAgent(world, daemon, observation);
+    if (!deliveredNudges && observation.concerns.length > 0) {
+      const whisper = await whisperToAgent(world, daemon, observation, false, registry);
       if (whisper) whispers++;
     }
     // If no concerns but growth opportunities, push with challenge whispers
-    else if (observation.growthOpportunities.length > 0) {
+    else if (!deliveredNudges && observation.growthOpportunities.length > 0) {
       const challenge = await whisperChallenge(world, daemon, observation, registry);
       if (challenge) challenges++;
     }
@@ -2368,7 +2452,7 @@ export function getDaemonSummary(registry: DaemonRegistry): string {
       lines.push(`   Goal: ${daemon.narrativeArc.drivingGoal}`);
     }
     if (daemon.narrativeArc.needsSelfResolution) {
-      lines.push(`   ⚠ Arc stagnating - needs resolution`);
+      lines.push(`   Recent failed attempts warrant review, not forced resolution`);
     }
     lines.push(`   Memory: ${daemon.memory.recentThoughts.length} thoughts, ${daemon.memory.keyMemories.length} memories, ${daemon.memory.activePlans.length} plans`);
   }
@@ -2407,13 +2491,13 @@ export function getDaemonDetailedSummary(daemon: DaemonState): string {
   // Growth metrics
   lines.push("## Growth Tracking");
   const metrics = daemon.growthMetrics;
-  lines.push(`Stagnation score: ${(metrics.stagnationScore * 100).toFixed(0)}%`);
-  const minutesSinceGoal = Math.round((Date.now() - metrics.lastGoalChange) / 60000);
-  const minutesSinceBelief = Math.round((Date.now() - metrics.lastBeliefChange) / 60000);
-  const minutesSinceRelationship = Math.round((Date.now() - metrics.lastRelationshipChange) / 60000);
-  lines.push(`Last goal change: ${minutesSinceGoal}m ago`);
-  lines.push(`Last belief change: ${minutesSinceBelief}m ago`);
-  lines.push(`Last relationship change: ${minutesSinceRelationship}m ago`);
+  lines.push(`Recent repeated-failure signal: ${(metrics.stagnationScore * 100).toFixed(0)}%`);
+  const minutesSinceGoal = Math.round(daemonAge(daemon, "lastGoalChange", metrics.lastGoalChange) / 60000);
+  const minutesSinceBelief = Math.round(daemonAge(daemon, "lastBeliefChange", metrics.lastBeliefChange) / 60000);
+  const minutesSinceRelationship = Math.round(daemonAge(daemon, "lastRelationshipChange", metrics.lastRelationshipChange) / 60000);
+  lines.push(`Last active goal-count change: ${minutesSinceGoal}m ago`);
+  lines.push(`Last focus change (not a belief measurement): ${minutesSinceBelief}m ago`);
+  lines.push(`Last room change (not a relationship measurement): ${minutesSinceRelationship}m ago`);
   lines.push("");
 
   // Pending nudges
@@ -2475,7 +2559,7 @@ export function buildDaemonPovStory(daemon: DaemonState): DaemonPovStory | null 
   const focus = state?.focus || activePlan?.goal || arc.drivingGoal || "the day ahead";
 
   const lines: string[] = [];
-  lines.push(`${daemon.agentName} moves through ${room} in a ${mood} rhythm, mind fixed on ${focus}.`);
+  lines.push(`The daemon observes ${daemon.agentName} in ${room}, with focus recorded as ${focus} and activation described as ${mood}.`);
 
   if (unresolved) {
     lines.push(`From the daemon's watch, one thread still bites: ${unresolved.content}.`);
@@ -2488,16 +2572,16 @@ export function buildDaemonPovStory(daemon: DaemonState): DaemonPovStory | null 
   }
 
   if (activePlan) {
-    lines.push(`Their next move is clear enough: ${activePlan.goal}.`);
+    lines.push(`The daemon records a plan: ${activePlan.goal}. This is not a completed action.`);
   } else if (arc.drivingGoal) {
     lines.push(`The arc still points toward ${arc.drivingGoal}.`);
   } else {
-    lines.push("No decisive plan has surfaced yet, so this moment reads as setup before the next push.");
+    lines.push("No plan is recorded here; this alone does not call for intervention.");
   }
 
   if (arc.needsSelfResolution || nudge) {
-    const forcingAction = nudge?.action || "choose a decisive action instead of circling the same thought";
-    lines.push(`Pressure is building; the daemon wants a forcing beat: ${forcingAction}.`);
+    const consideration = nudge?.action || "review whether the recent failed attempts affect the current intention";
+    lines.push(`The daemon has an optional consideration, not an actor decision: ${consideration}.`);
   }
 
   const prose = lines.slice(0, 3).join(" ");

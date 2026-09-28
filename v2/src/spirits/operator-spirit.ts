@@ -27,6 +27,8 @@ export interface ExternalCall {
   startedAt: number;
   connectedAt?: number;
   endedAt?: number;
+  /** A rejected notification never becomes an active/ringing call. */
+  notificationError?: string;
   transcript: TranscriptEntry[];
 }
 
@@ -106,15 +108,21 @@ export function initiateIncomingCall(
     transcript: [],
   };
 
-  operatorState.activeCalls.set(call.id, call);
-
   // Create a stimulus for the phone ringing
-  queueStimulus({
+  const accepted = queueStimulus(world, {
     targetEid: phoneEntityId,
     type: "device",
     content: `Phone is ringing. Incoming call from ${from}`,
     source: "phone",
   });
+
+  if (!accepted) {
+    call.status = "ended"; call.endedAt = Date.now();
+    call.notificationError = "Incoming-call stimulus was rejected; no ringing notification was delivered.";
+    console.warn(`[Operator] Call ${call.id} could not be initiated: ${call.notificationError}`);
+    return call;
+  }
+  operatorState.activeCalls.set(call.id, call);
 
   console.log(`[Operator] Incoming call ${call.id} from ${from} to ${toAgentName}`);
 
@@ -144,7 +152,7 @@ export function handleCallerSpeech(
   });
 
   // Create stimulus for agent to perceive
-  queueStimulus({
+  queueStimulus(world, {
     targetEid: agentEntityId,
     type: "speech",
     content: `[On phone] ${call.from} says: "${text}"`,

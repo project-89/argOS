@@ -27,7 +27,12 @@ import { createPlanEntity, type GeneratedPlan } from "../cognition/planning-syst
 import { parseProceduralSkillV1 } from "../cognition/procedural-skills";
 import { registerBuiltinOfficeTools } from "../office-tools/builtin-tools";
 import { setOfficeToolMode } from "../office-tools/tool-registry";
-import { clearMovementTarget, createGoalPursuitSystem, createRoomArrivalSystem } from "../systems/builtin-systems";
+import {
+  clearMovementTarget,
+  createGoalEvaluationSystem,
+  createGoalPursuitSystem,
+  createRoomArrivalSystem,
+} from "../systems/builtin-systems";
 
 function assert(condition: any, message: string): void {
   if (!condition) throw new Error(message);
@@ -42,11 +47,12 @@ function createGoal(world: any, agentEid: number, description: string, priority:
   Goal.status[goalEid] = "active";
   Goal.progress[goalEid] = 0;
   Goal.deadline[goalEid] = 0;
+  Goal.createdAt[goalEid] = Date.now();
   setGoalContract(world, goalEid, {
     version: 1,
-    kind: "custom",
-    params: { objective: "write_note", targetName: "Notepad" },
-    success: { type: "custom", description: "note written" },
+    kind: "use_affordance",
+    params: { affordance: "write_note_34", targetName: "Notepad" },
+    success: { type: "did_interact", targetName: "Notepad", affordance: "write_note_34" },
     description,
   });
   return goalEid;
@@ -89,6 +95,13 @@ async function main() {
   const arrival = createRoomArrivalSystem();
   arrival.frequency = 0;
   registerSystem(registry, arrival);
+
+  // The plan becoming exhausted is not proof that its objective succeeded.
+  // This system closes the loop from the successful ECS action evidence to the
+  // typed goal contract, and only then allows plan -> macro compilation.
+  const goalEvaluation = createGoalEvaluationSystem();
+  goalEvaluation.frequency = 0;
+  registerSystem(registry, goalEvaluation);
 
   const lobby = createRoomEntity(world as any, {
     name: "Lobby",
@@ -159,9 +172,10 @@ async function main() {
   assert(String(Name.value[getRoomForEntity(world as any, agent) as any] || "") === "Office", "expected agent to arrive in Office during Phase 1");
 
   executeActions(world as any, [{ eid: agent, action: { type: "interact", target: "Notepad", content: "write_note_34 standup: blockers, updates, next steps" } as any }], registry as any);
+  runSystems(world as any, registry as any, tick++, 16);
   drainPendingStimuli();
 
-  assert(Goal.status[goal1] === "completed", "expected Phase 1 goal to complete via plan advancement");
+  assert(Goal.status[goal1] === "completed", "expected Phase 1 goal to complete only after typed ECS evidence was evaluated");
 
   const macros = listProceduralMemories(world as any, agent).filter((m) => {
     const sig = String(m.skillSignature || "");

@@ -11,6 +11,10 @@
  *   Architect designs → System Baker generates → World evolves
  */
 
+import type { World } from "../ecs/world";
+import { getCommittedEvents } from "../runtime/committed-events";
+import { readSimulationTime } from "../ecs/simulation-time";
+
 // =============================================================================
 // OBSERVATION TYPES
 // =============================================================================
@@ -74,6 +78,21 @@ let state: AggregatorState = {
 };
 
 let observationIdCounter = 0;
+let worldStates = new WeakMap<World, { sourceId: string | null; state: AggregatorState }>();
+let validity = new WeakMap<GapObservation, () => boolean>();
+function scopedState(world?: World): AggregatorState {
+  if (!world) return state; // Legacy diagnostics never enter a world's synthesis.
+  const sourceId = getCommittedEvents(world).sourceId;
+  let entry = worldStates.get(world);
+  if (!entry || entry.sourceId !== sourceId) {
+    entry = { sourceId, state: { observations: [], aggregated: new Map(), maxObservations: 500, lastSynthesis: 0 } };
+    worldStates.set(world, entry);
+  }
+  return entry.state;
+}
+export function isCurrentGapObservation(obs: GapObservation): boolean {
+  try { return validity.get(obs)?.() ?? false; } catch { return false; }
+}
 
 // =============================================================================
 // REPORTING API
@@ -83,13 +102,24 @@ let observationIdCounter = 0;
  * Report a gap observation from any spirit or system.
  * Call this whenever you notice something missing, broken, or needed.
  */
-export function reportGapObservation(obs: Omit<GapObservation, "id" | "timestamp">): GapObservation {
+export function reportGapObservation(obs: Omit<GapObservation, "id" | "timestamp">, world?: World, dependency: () => boolean = () => true): GapObservation {
+  const state = scopedState(world);
   const observation: GapObservation = {
-    ...obs,
+    ...structuredClone(obs),
     id: `obs_${++observationIdCounter}_${Date.now()}`,
     timestamp: Date.now(),
   };
 
+  const source = world ? getCommittedEvents(world) : undefined;
+  const at = world ? readSimulationTime(world) : Date.now();
+  let revoked = false;
+  validity.set(observation, () => {
+    const now = world ? readSimulationTime(world) : Date.now();
+    const live = world ? getCommittedEvents(world) : undefined;
+    revoked ||= !Number.isFinite(now) || now < at || now - at > 600000 || !dependency()
+      || !!world && (!source?.sourceId || !!source.stopped || !!live?.stopped || live?.sourceId !== source.sourceId || scopedState(world) !== state);
+    return !revoked;
+  });
   state.observations.push(observation);
 
   // Trim if over limit
@@ -98,7 +128,7 @@ export function reportGapObservation(obs: Omit<GapObservation, "id" | "timestamp
   }
 
   // Update aggregation
-  aggregateObservation(observation);
+  aggregateObservation(observation, state);
 
   return observation;
 }
@@ -111,9 +141,10 @@ export function reportGap(
   category: ObservationCategory,
   title: string,
   detail: string,
-  severity: ObservationSeverity = "medium"
+  severity: ObservationSeverity = "medium",
+  world?: World
 ): void {
-  reportGapObservation({ source, category, severity, title, detail });
+  reportGapObservation({ source, category, severity, title, detail }, world);
 }
 
 // =============================================================================
@@ -130,9 +161,12 @@ function observationFingerprint(obs: GapObservation): string {
   return `${obs.category}::${normalizedTitle}`;
 }
 
-function aggregateObservation(obs: GapObservation): void {
+function aggregateObservation(obs: GapObservation, state: AggregatorState): void {
   const key = observationFingerprint(obs);
-  const existing = state.aggregated.get(key);
+  const candidate = state.aggregated.get(key);
+  // New aggregation object: refreshing a report must not renew a previously
+  // delivered message's source/dependency grant.
+  const existing = candidate && isCurrentGapObservation(candidate) ? structuredClone(candidate) : undefined;
 
   if (existing) {
     existing.occurrences++;
@@ -157,6 +191,8 @@ function aggregateObservation(obs: GapObservation): void {
       existing.suggestedFix = obs.suggestedFix;
     }
     existing.priorityScore = computePriority(existing);
+    validity.set(existing, () => isCurrentGapObservation(obs));
+    state.aggregated.set(key, existing);
   } else {
     const aggregated: AggregatedObservation = {
       ...obs,
@@ -169,6 +205,7 @@ function aggregateObservation(obs: GapObservation): void {
     };
     aggregated.priorityScore = computePriority(aggregated);
     state.aggregated.set(key, aggregated);
+    validity.set(aggregated, () => isCurrentGapObservation(obs));
   }
 }
 
@@ -205,13 +242,15 @@ function computePriority(obs: AggregatedObservation): number {
 /**
  * Get all aggregated observations, sorted by priority (highest first)
  */
-export function getTopObservations(limit: number = 20): AggregatedObservation[] {
+export function getTopObservations(limit: number = 20, world?: World): AggregatedObservation[] {
+  const state = scopedState(world);
   // Recompute priorities (accounts for aging)
   for (const obs of state.aggregated.values()) {
     obs.priorityScore = computePriority(obs);
   }
 
   return Array.from(state.aggregated.values())
+    .filter(isCurrentGapObservation)
     .sort((a, b) => b.priorityScore - a.priorityScore)
     .slice(0, limit);
 }
@@ -219,26 +258,29 @@ export function getTopObservations(limit: number = 20): AggregatedObservation[] 
 /**
  * Get observations by category
  */
-export function getObservationsByCategory(category: ObservationCategory): AggregatedObservation[] {
+export function getObservationsByCategory(category: ObservationCategory, world?: World): AggregatedObservation[] {
+  const state = scopedState(world);
   return Array.from(state.aggregated.values())
-    .filter(o => o.category === category)
+    .filter(o => o.category === category && isCurrentGapObservation(o))
     .sort((a, b) => b.priorityScore - a.priorityScore);
 }
 
 /**
  * Get recent raw observations (not aggregated)
  */
-export function getRecentObservations(limit: number = 50): GapObservation[] {
+export function getRecentObservations(limit: number = 50, world?: World): GapObservation[] {
+  const state = scopedState(world);
   return state.observations.slice(-limit);
 }
 
 /**
  * Get a summary string for logging/debugging
  */
-export function getObservationSummary(): string {
+export function getObservationSummary(world?: World): string {
+  const state = scopedState(world);
   const total = state.observations.length;
   const aggregated = state.aggregated.size;
-  const top = getTopObservations(5);
+  const top = getTopObservations(5, world);
 
   const lines = [
     `Observations: ${total} raw, ${aggregated} aggregated`,
@@ -257,7 +299,8 @@ export function getObservationSummary(): string {
 /**
  * Mark an observation as addressed (remove from aggregated)
  */
-export function dismissObservation(key: string): boolean {
+export function dismissObservation(key: string, world?: World): boolean {
+  const state = scopedState(world);
   // Find by title match
   for (const [k, obs] of state.aggregated) {
     if (k === key || obs.title === key || obs.id === key) {
@@ -271,12 +314,13 @@ export function dismissObservation(key: string): boolean {
 /**
  * Clear all observations that are older than maxAgeMs
  */
-export function pruneStaleObservations(maxAgeMs: number = 600000): number {
+export function pruneStaleObservations(maxAgeMs: number = 600000, world?: World): number {
+  const state = scopedState(world);
   const cutoff = Date.now() - maxAgeMs;
   let pruned = 0;
 
   for (const [key, obs] of state.aggregated) {
-    if (obs.lastSeen < cutoff) {
+    if (!isCurrentGapObservation(obs) || !world && obs.lastSeen < cutoff) {
       state.aggregated.delete(key);
       pruned++;
     }
@@ -284,7 +328,7 @@ export function pruneStaleObservations(maxAgeMs: number = 600000): number {
 
   // Also trim raw observations
   const rawBefore = state.observations.length;
-  state.observations = state.observations.filter(o => o.timestamp >= cutoff);
+  state.observations = state.observations.filter(o => isCurrentGapObservation(o) && (world || o.timestamp >= cutoff));
   pruned += rawBefore - state.observations.length;
 
   return pruned;
@@ -293,14 +337,16 @@ export function pruneStaleObservations(maxAgeMs: number = 600000): number {
 /**
  * Get last synthesis timestamp
  */
-export function getLastSynthesisTime(): number {
+export function getLastSynthesisTime(world?: World): number {
+  const state = scopedState(world);
   return state.lastSynthesis;
 }
 
 /**
  * Update last synthesis timestamp
  */
-export function markSynthesisComplete(): void {
+export function markSynthesisComplete(world?: World): void {
+  const state = scopedState(world);
   state.lastSynthesis = Date.now();
 }
 
@@ -308,6 +354,8 @@ export function markSynthesisComplete(): void {
  * Reset aggregator state (for testing)
  */
 export function resetAggregator(): void {
+  worldStates = new WeakMap();
+  validity = new WeakMap();
   state = {
     observations: [],
     aggregated: new Map(),

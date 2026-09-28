@@ -72,6 +72,37 @@ function placeAgentInRoom(world: ReturnType<typeof createArgosWorld>, agentEid: 
 
 describe("Sensory System", () => {
   describe("formatStimuliForPrompt", () => {
+    test("object knowledge is not an auditory event and an empty sample does not claim universal silence", () => {
+      const visual: Stimulus = { modality: "visual", type: "object", source: "sight", timestamp: Date.now(), intensity: 1,
+        content: "A phone that vibrates when notified sits on the desk." };
+      const text = formatStimuliForPrompt([visual]);
+      expect(text).toContain("SIGHT:");
+      expect(text).toContain("SOUND:\n  No auditory events supplied in this sensory sample.");
+      expect(text).not.toMatch(/world is silent|never heard/i);
+      const buzz: Stimulus = { modality: "auditory", type: "sound", source: "phone", timestamp: Date.now() - 5000,
+        intensity: 1, content: "The phone vibrated twice." };
+      const withPastSound = formatStimuliForPrompt([visual, buzz]);
+      expect(withPastSound).toContain("The phone vibrated twice. [phone, 5s ago]");
+      expect(withPastSound).not.toContain("No auditory events supplied");
+    });
+    test("inventory reports possessions without inventing what the hands are doing", () => {
+      const world = createTestWorld();
+      const actor = createTestAgent(world, "Mara");
+      const satchel = addEntity(world);
+      addComponent(world, satchel, Name);
+      addComponent(world, satchel, LocatedIn(actor));
+      Name.value[satchel] = "Satchel";
+      const formatted = formatStimuliForPrompt([], actor, world);
+      expect(formatted).toContain("Possessions: Satchel");
+      expect(formatted).not.toContain("holding");
+      expect(formatted).not.toContain("hands");
+      expect(formatStimuliForPrompt([], actor)).toContain("Inventory unavailable in this snapshot.");
+    });
+
+    test("a zero identifier is not mistaken for an omitted inventory context", () => {
+      expect(formatStimuliForPrompt([], 0)).toContain("Inventory unavailable in this snapshot.");
+    });
+
     test("should show action failures FIRST and prominently", () => {
       const stimuli: Stimulus[] = [
         {
@@ -100,13 +131,14 @@ describe("Sensory System", () => {
       expect(failureIndex).toBeGreaterThan(-1);
       expect(failureIndex).toBeLessThan(visualIndex);
 
-      // Check for prominent failure markers
-      expect(formatted).toContain("🚨");
-      expect(formatted).toContain("FAILED");
-      expect(formatted).toContain("DO NOT proceed as if this action succeeded");
+      // Preserve the legacy failure-reader marker, without repeated instructions.
+      expect(formatted).toContain("🚨 CRITICAL - YOUR LAST ACTION FAILED");
+      expect(formatted).toContain(stimuli[1].content);
+      expect(formatted).not.toContain("DO NOT proceed");
+      expect(formatted).not.toContain("════════");
     });
 
-    test("should show action successes with checkmark", () => {
+    test("should show action successes with a clear heading", () => {
       const stimuli: Stimulus[] = [
         {
           modality: "cognitive",
@@ -119,8 +151,8 @@ describe("Sensory System", () => {
       ];
 
       const formatted = formatStimuliForPrompt(stimuli);
-      expect(formatted).toContain("✅");
-      expect(formatted).toContain("SUCCEEDED");
+      expect(formatted).toContain("YOUR LAST ACTION SUCCEEDED:");
+      expect(formatted).toContain(stimuli[0].content);
     });
 
     test("should show multiple failures prominently", () => {
@@ -146,8 +178,8 @@ describe("Sensory System", () => {
       const formatted = formatStimuliForPrompt(stimuli);
       expect(formatted).toContain("Cannot take key");
       expect(formatted).toContain("Cannot unlock");
-      // Both failures should have the ❌ marker
-      expect((formatted.match(/❌/g) || []).length).toBe(2);
+      for (const stimulus of stimuli) expect(formatted.split(stimulus.content)).toHaveLength(2);
+      expect((formatted.match(/🚨/g) || []).length).toBe(1);
     });
 
     test("should show failure before success when both present", () => {
@@ -268,16 +300,17 @@ describe("Sensory System", () => {
       const allStimuli = generateStimuliForAgent(world, agentEid, [failureStimulus]);
 
       // Format for prompt
-      const perceptionText = formatStimuliForPrompt(allStimuli, agentEid);
+      const perceptionText = formatStimuliForPrompt(allStimuli, agentEid, world);
 
       // Verify failure is prominent
-      expect(perceptionText).toContain("🚨🚨🚨 CRITICAL");
+      expect(perceptionText).toContain("🚨 CRITICAL");
       expect(perceptionText).toContain("YOUR LAST ACTION FAILED");
       expect(perceptionText).toContain("rusty_key");
-      expect(perceptionText).toContain("DO NOT proceed as if this action succeeded");
+      expect(perceptionText).toContain(failureStimulus.content);
 
-      // Verify inventory shows empty hands
-      expect(perceptionText).toContain("NOT holding anything");
+      // An inventory summary does not claim to know hand occupancy.
+      expect(perceptionText).toContain("Inventory is empty.");
+      expect(perceptionText).not.toContain("hands are empty");
     });
 
     test("successful action should show confirmation in prompt", () => {
@@ -297,7 +330,7 @@ describe("Sensory System", () => {
       const allStimuli = generateStimuliForAgent(world, agentEid, [successStimulus]);
       const perceptionText = formatStimuliForPrompt(allStimuli, agentEid);
 
-      expect(perceptionText).toContain("✅ YOUR LAST ACTION SUCCEEDED");
+      expect(perceptionText).toContain("YOUR LAST ACTION SUCCEEDED");
       expect(perceptionText).toContain("stack the crate");
     });
   });
