@@ -286,7 +286,7 @@ describe("EvolutionCoordinator", () => {
     const registry = { spirits: new Map([[local.eid, local], [localOtherName.eid, localOtherName], [crafter.eid, crafter]]) };
     const runArchitect = jest.fn(async (_world: any, _systems: any, _registry: any, _spirit: any) => []);
     const coordinator = createEvolutionCoordinator({ enabledStages: ["architect"], architectInterval: 1,
-      architectNames: ["The Weaver", "The Crafter"] }, { getSpiritsByType: () => globalArchitects, runArchitect } as any);
+      architectNames: ["The Weaver"] }, { getSpiritsByType: () => globalArchitects, runArchitect } as any);
     const context = { world: {} as any, god: { systemRegistry: {} } as any, spirits: registry as any };
     await coordinator.run(1, context);
     expect(runArchitect).toHaveBeenCalledTimes(1); expect(runArchitect.mock.calls[0][3]).toBe(local);
@@ -297,6 +297,19 @@ describe("EvolutionCoordinator", () => {
     globalArchitects = [local, foreignSameId, foreignOtherId, replacement];
     await coordinator.run(3, context);
     expect(runArchitect).toHaveBeenCalledTimes(2); expect(runArchitect.mock.calls[1][3]).toBe(replacement);
+  });
+
+  test("the Crafter designs only when a host names it; unnamed or deactivated builders stay out", async () => {
+    const crafter = { eid: 51, definition: { name: "The Crafter" } } as any, weaver = { eid: 52, definition: { name: "The Weaver" } } as any;
+    const registry = { spirits: new Map([[crafter.eid, crafter], [weaver.eid, weaver]]) };
+    const context = { world: {} as any, god: { systemRegistry: {} } as any, spirits: registry as any };
+    const unnamed = jest.fn(async (..._args: any[]) => []), named = jest.fn(async (..._args: any[]) => []);
+    await createEvolutionCoordinator({ enabledStages: ["architect"], architectInterval: 1, architectNames: ["The Weaver"] },
+      { getSpiritsByType: () => [crafter, weaver], runArchitect: unnamed } as any).run(1, context);
+    expect(unnamed.mock.calls.map(call => call[3])).toEqual([weaver]);
+    await createEvolutionCoordinator({ enabledStages: ["architect"], architectInterval: 1, architectNames: ["The Weaver", "The Crafter"] },
+      { getSpiritsByType: () => [crafter, weaver], runArchitect: named } as any).run(1, context);
+    expect(named.mock.calls.map(call => call[3])).toEqual([crafter, weaver]);
   });
 
   test("the host's input arrays and budgets cannot mutate an existing coordinator grant", async () => {

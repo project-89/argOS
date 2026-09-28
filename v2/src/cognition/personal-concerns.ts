@@ -69,8 +69,8 @@ export function personalConcernContext(world: World, eid: number) {
 }
 export function formatPersonalConcerns(world: World, eid: number): string {
   const rows = personalConcernContext(world, eid).sort((a, b) => b.importance - a.importance || b.appraisedAtSimMs - a.appraisedAtSimMs).slice(0, 3);
-  return rows.length ? `RECENT PERSONAL APPRAISALS (private interpretations, not current facts about others):\n`
+  return rows.length ? `WHAT'S BEEN WEIGHING ON YOU:\n`
     + rows.map(c => JSON.stringify(c)).join("\n")
-    + "\nA paused next step need not settle what this experience means to you. Other people only know what they actually perceived; keeping it private, seeking company, or choosing another response remain your decisions."
+    + "\nOthers only know what they saw or were told. Keep it to yourself, confide in someone or act on it — that's yours to decide."
     : "";
 }

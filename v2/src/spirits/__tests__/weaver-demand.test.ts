@@ -162,7 +162,7 @@ test("state and removed identities are author context, not empty slots or NPC di
   expect(context.setting.unavailableEntities).toContainEqual({ eid: removed, name: "Removed key", reason: "removed" });
   generate.mockResolvedValue({ text: "[]" }); expect(await f.run()).toEqual([]);
   const prompt = generate.mock.calls[0][0].prompt;
-  expect(prompt).toContain("not vacant slots to refill"); expect(prompt).toContain("\"entities\":true");
+  expect(prompt).toContain("rather than a slot to refill"); expect(prompt).toContain("\"entities\":true");
   expect(JSON.stringify(collectEcsSnapshot(f.world, createEntityRegistry()))).not.toContain("Visit an observatory");
   expect(getCommittedEvents(f.world).events).toEqual([]); stopCommittedEvents(f.world);
 });
@@ -199,7 +199,7 @@ test("later evolution cycles correct rejected support, construct it, and observe
       if(attempts===2) {
         expect(request.prompt).toContain('"status":"unavailable"');
         expect(request.prompt).toContain('"reason":"member_unavailable"');
-        expect(request.prompt).toContain("finite consumption are not defects"); sawDepletion=true;
+        expect(request.prompt).toContain("finite consumption and deliberate absence stay as they are"); sawDepletion=true;
         return {text:"[]"}; // Model fixture acknowledges a real consequence, not automatic refill.
       }
       if(attempts===1) {

@@ -42,7 +42,7 @@ test("only committed local audible speech enters recall, never unexecuted JSON o
   expect(getSocialDialogue(f.world, f.deaf)).toEqual([]);
   const context = formatSocialMemoryContext(f.world, f.mara);
   expect(context).not.toContain("UNEXECUTED_QUESTION"); expect(context).not.toContain("PRIVATE_INTENTION");
-  expect(context).toContain("attributed claims");
+  expect(context).toContain("people can be wrong, or lie");
 });
 
 test("an attributed answer survives perception turnover and later bounded dialogue", () => {

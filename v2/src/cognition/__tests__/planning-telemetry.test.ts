@@ -176,7 +176,7 @@ test("planning context distinguishes the assigned intention from competing routi
   expect(request.system).toContain(`GOAL TO PLAN FOR:\n- Goal ID: ${f.goal}`);
   expect(request.system).toContain("COMPETING INTENTIONS (context, not steps of this goal):");
   expect(request.system).toContain(JSON.stringify({ goalId: routine, kind: "scheduled_activity", description: "Write the afternoon report", priority: 9 }));
-  expect(request.prompt).toContain("prerequisite supported by known conditions");
+  expect(request.prompt).toContain("Respect travel, reach and possession");
   expect(request.providerOptions.google.thinkingConfig.thinkingLevel).toBe("medium");
   expect(request.maxOutputTokens).toBe(4096);
   expect(request.maxRetries).toBe(0);

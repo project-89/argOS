@@ -91,9 +91,11 @@ export function nudgeNpc(
   const sourceId = getCommittedSource(world).sourceId;
   const actorKey = workingMemoryEntityRef(world, npcEid)?.key;
   const issuedAtSimMs = readSimulationTime(world);
+  // The resident's own inner voice: a pull, a doubt, a temptation. It moves
+  // them; it is not a fact about the world or an order they must follow.
   const perceptionEid = addPerception(world, npcEid, {
-    type: "intent", source: "narrative suggestion", intensity: 0.3,
-    content: `An optional possibility to consider (${nudge.type}): ${nudge.action}. ${nudge.reason} This is a suggestion, not proof or an obligation; weigh it against your own experiences and priorities.`,
+    type: "intent", source: "inner_voice", intensity: 0.6,
+    content: innerVoice(nudge.action),
   });
   // Transport proof only: this says nothing about whether the NPC considered
   // the suggestion or whether a subsequent action was caused by it.
@@ -104,6 +106,12 @@ export function nudgeNpc(
 
   console.log(`[NLE] Nudged ${npcName} directly: ${nudge.type} — "${nudge.action}"`);
   return true;
+}
+
+/** Keep the author's second-person line as the resident's own thought. */
+export function innerVoice(action: string): string {
+  const line = action.replace(/\s+/g, " ").trim().replace(/^\[[^\]]*\]\s*/, "");
+  return /^(you|your|why|what|maybe|perhaps|if|could|should|don't|do|go|ask|tell|look|find|not)\b/i.test(line) ? line : `You find yourself thinking: ${line}`;
 }
 
 /**

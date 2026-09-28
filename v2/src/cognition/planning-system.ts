@@ -349,13 +349,15 @@ function buildPlanningContext(world: World, agentEid: number, goalEid: number): 
     .map(gid => JSON.stringify({ goalId: gid, kind: Goal.kind[gid], description: Goal.description[gid], priority: Goal.priority[gid] }))
     .slice(0, 3);
 
-  const base = `You are ${agentName}'s background planner for one assigned intention. Prepare its next grounded steps; foreground cognition chooses between intentions and executes actions.
+  // Plans are written in the character's own manner: a suspicious person plans
+  // differently from a trusting one, a proud one differently from a desperate one.
+  const persona = Agent.systemPrompt[agentEid] || "";
+  const base = `You are ${agentName}'s background planner for one intention. Plan the next steps the way ${agentName} would go about it — in character, with their manner, relationships and secrets in mind. The foreground mind chooses and performs the actions.
 
 AGENT:
 - Name: ${agentName}
-- Description: ${agentDesc}
 - Role: ${agentRole}
-- Current Location: ${roomName}
+${agentDesc ? `- Appearance: ${agentDesc}\n` : ""}${persona ? `- Who they are: ${persona.slice(0, 2400)}\n` : ""}- Current Location: ${roomName}
 - Mental State: Arousal ${((Mind.arousal[agentEid] || 0.5) * 100).toFixed(0)}%
 
 GOAL TO PLAN FOR:
@@ -1191,7 +1193,7 @@ ${lastToolErr}` : ""}`.trim()
   else if (hints.requiredWrites.some(isCodeLikePath)) taskRequirements.push('Read existing code before editing; use replace_in_file for minimal changes.');
   const prompt = `Plan how I can work toward: "${goalDesc}".
 
-Use 0-7 concise, first-person steps that advance this goal or satisfy a prerequisite supported by known conditions. Available actions are possibilities, not obligations. Respect travel, reach, possession, and other physical prerequisites. Stop at the next genuine decision or evidence boundary; a partial plan is sufficient.
+Use 0-7 concise, first-person steps, in character, that advance this goal — including the people to seek out and what to ask or tell them. Respect travel, reach and possession. Stop at the next real decision point; a partial plan is fine.
 For a command marked fresh-decision-required, end the steps BEFORE it and add decision: {"purpose":"the choice to consider","target":"known entity","command":"exact advertised command name"}. Steps may be empty for an immediate decision. No command arguments, prewritten message or successors belong in that proposal. If reading unknown information comes first, end at reading; do not preselect a reaction to its contents.
 
 Waiting is an evidence boundary, not elapsed turns. To wait for a response, end with a wait step and waitUntil: {"kind":"heard_evidence","speaker":"known person"}; a new message requires reconsideration, not automatic agreement. For a known physical condition, use waitUntil: {"kind":"physical_fact","subject":"known entity","predicate":"state","slot":"known observed field","equals":"required value"}; only fresh personally observed evidence permits continuation. timeoutMs is optional (1000-60000, default 15000); timeout means reconsider. Without a typed condition, end the plan at uncertainty. Descriptions and estimatedDuration cannot gate actions. Use repeat:true only when an action deliberately needs performing again.

@@ -143,10 +143,11 @@ describe("Goal Deduplication", () => {
     const room = createRoomEntity(world, { name: "Room", description: "A room" });
     const agent = makeAgent(world, "Test", "worker", room);
 
-    // Create 3 active goals (MAX_ACTIVE_GOALS)
+    // Create 4 active goals (MAX_ACTIVE_GOALS)
     createIntentGoal(world, agent, "goal 1", 5);
     createIntentGoal(world, agent, "goal 2", 5);
     createIntentGoal(world, agent, "goal 3", 5);
+    createIntentGoal(world, agent, "goal 4", 5);
 
     for (let i = 0; i < 10; i++) advanceGoalTick();
 

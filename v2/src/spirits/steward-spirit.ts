@@ -20,6 +20,7 @@ import { entityExists, Prefab, hasComponent, query } from "bitecs";
 import type { World } from "../ecs/world";
 import type { SpiritRegistry } from "./spirit-registry";
 import { createSpirit } from "./spirit-registry";
+import { getFactoryState, type ArchitectConfig, type DynamicSpiritState } from "./spirit-factory";
 import type { SpiritDefinition, SpiritState, DivineMessage } from "./types";
 import { Name, Description, Room, Traits, Agent, Removed, WorkingMemoryIdentity } from "../ecs/components";
 import { workingMemoryEntityRef } from "../cognition/working-memory";
@@ -1224,7 +1225,7 @@ const StewardDefinition: SpiritDefinition = {
   name: "The Steward",
   domain: "locale",
   rank: "archangel",
-  description: "Keeper of Places - populates rooms with appropriate entities, ensuring descriptions match reality",
+  description: "Keeper of Places - keeps rooms furnished and lived-in, in keeping with the setting, and ensures descriptions match reality",
   watchConfig: {
     componentQueries: [
       {
@@ -1263,6 +1264,18 @@ You work closely with:
 Remember: You don't just describe rooms - you MATERIALIZE them.`,
   observationInterval: 30000, // 30 seconds
 };
+
+/**
+ * Let the Steward furnish through the same God-reviewed proposal lane as the
+ * Weaver: it becomes an architect whose lens is keeping places lived-in. The
+ * host's builder/growth adapter still decides what can physically be made.
+ */
+export function enableStewardArchitect(steward: SpiritState, architectConfig: ArchitectConfig): DynamicSpiritState {
+  const dynamic = Object.assign(steward, { spiritType: "architect" as const, architectConfig: structuredClone(architectConfig),
+    proposals: (steward as Partial<DynamicSpiritState>).proposals ?? [], executionHistory: (steward as Partial<DynamicSpiritState>).executionHistory ?? [] });
+  getFactoryState().createdSpirits.set(steward.eid, dynamic);
+  return dynamic;
+}
 
 /**
  * Create and register The Steward spirit

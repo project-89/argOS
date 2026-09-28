@@ -147,6 +147,7 @@ import {
   type SpiritSystemState,
 } from "./spirits";
 import { createSpiritRegistry } from "./spirits/spirit-registry";
+import { injectOperatorSpiritMessage } from "./spirits/spirit-system";
 import { requestRoomPopulationForRoom } from "./spirits/steward-spirit";
 import { installSpiritPhysicalEffectProfile } from "./spirits/physical-effect-capabilities";
 import { RulesEngine } from "./world/rules-engine";
@@ -190,6 +191,8 @@ export type { BuildRequest, BuildJob, BuildStatus, AcceptanceTest } from "./engi
 import type { BuildRequest, BuildJob } from "./engineering/contracts";
 import { applyRuntimeProfile } from "./runtime/runtime-profile";
 import { parseWorldSpecification, setWorldSpecification, getWorldTheme, type WorldSpecificationInput } from "./world/world-specification";
+import { chronicle as storyChronicle } from "./cognition/simulation-chronicle";
+import { readSimulationTime as readStoryTime } from "./ecs/simulation-time";
 export { EMBODIED_RUNTIME_PROFILE } from "./runtime/runtime-profile";
 export { parseWorldSpecification, getWorldSpecification, type WorldSpecification, type WorldSpecificationInput } from "./world/world-specification";
 
@@ -653,7 +656,9 @@ export async function createSimulation(input: SimulationConfig | string): Promis
     const autopilotOverrides =
       typeof autopilotSetting === "object" ? autopilotSetting : {};
 
-    initializeGodAutopilot(god, { ...autopilotOverrides, enabled: autopilotEnabled });
+    // Spirit reports (Narrator requests, Watcher stagnation) stay readable for
+    // five simulated minutes unless the host sets its own freshness window.
+    initializeGodAutopilot(god, { maxMessageAgeMs: 300_000, ...autopilotOverrides, enabled: autopilotEnabled });
 
     setGodAgentCallback(async (messages) => {
       // Fast callback: just enqueue, do not call LLM here.
@@ -845,10 +850,13 @@ Do NOT explain — just create everything using your tools.`;
   // Create daemon registry for agent guardians
   console.log(`👁️  Creating daemon registry...`);
   const daemonRegistry = createDaemonRegistry(
-    30000,  // 30 second observation interval
-    45000,  // 45 second whisper cooldown
-    90000   // 90 second report cooldown
+    15000,  // 15 second observation interval
+    20000,  // 20 second minimum gap between any two whispers to one resident
+    90000   // 90 second challenge cooldown
   );
+  // A live world's daemons whisper: persona- and story-aware inner voices on
+  // their own cadence (~30-60s sim, sooner when a resident is idling).
+  daemonRegistry.innerVoice = aiEnabled;
 
   if (aiEnabled) {
     if (config.enableReflection !== false) {
@@ -867,10 +875,10 @@ Do NOT explain — just create everything using your tools.`;
     console.log(`   (enableAI:false) Skipping daemon creation`);
   }
 
-  if (narrativeEngineEnabled) {
-    setDirectorGodAgent(god);
-    setNudgeDaemonRegistry(world, daemonRegistry);
-  }
+  if (narrativeEngineEnabled) setDirectorGodAgent(god);
+  // Narrator (and director) nudges are voiced by each resident's daemon
+  // whenever daemons exist, independent of the narrative-engine flag.
+  if (narrativeEngineEnabled || aiEnabled) setNudgeDaemonRegistry(world, daemonRegistry);
 
   // Setup web server if enabled
   let server: ReturnType<typeof createSimulationServer> | null = null;
@@ -977,10 +985,11 @@ Do NOT explain — just create everything using your tools.`;
   });
 
   bus.registerInjectionHandler("inject:spirit_message", async (msg) => {
-    if (msg.type === "inject:spirit_message") {
-      console.log(`[Bus] Injecting spirit message: ${msg.message}`);
-      // TODO: Wire to spirit registry when available
-    }
+    if (msg.type !== "inject:spirit_message") return;
+    if (!spiritSystem) throw new Error("Spirit messages need the spirit system (enableAI and enableSpirits)");
+    const delivered = injectOperatorSpiritMessage(world, { message: msg.message, subject: msg.subject,
+      targetSpiritId: msg.targetSpiritId, targetSpiritName: msg.targetSpiritName, priority: msg.priority }, god.eid);
+    console.log(`[Bus] Spirit message delivered to ${delivered.join(", ")}`);
   });
 
   bus.registerInjectionHandler("inject:agent_stimulus", async (msg) => {
@@ -1248,7 +1257,12 @@ Do NOT explain — just create everything using your tools.`;
 	              execute: async () => {
 	                if (!spiritsEnabled || !spiritSystem) return;
 
-	                await tickSpiritSystem(world, god.registry);
+	                const spiritTick = await tickSpiritSystem(world, god.registry);
+	                // Narrator prose is a viewer/recording feed, never a resident perception.
+	                for (const text of spiritTick.narrativeProse) {
+	                  bus.emit({ type: "spirit:prose", timestamp: Date.now(), spiritName: "The Narrator", text, atSimMs: readStoryTime(world) });
+	                  storyChronicle.record("narrator_prose", { text, atSimMs: readStoryTime(world) }, `Narrator: ${text.slice(0, 160)}`);
+	                }
 	              },
 	            });
 
@@ -1451,6 +1465,11 @@ Do NOT explain — just create everything using your tools.`;
 	      if (aiEnabled && spiritsEnabled && spiritSystem) {
         // Tick spirits (Narrator, Arbiter, etc.)
         const spiritResult = await tickSpiritSystem(world, god.registry);
+        // Narrator prose is a viewer/recording feed, never a resident perception.
+        for (const text of spiritResult.narrativeProse) {
+          bus.emit({ type: "spirit:prose", timestamp: Date.now(), spiritName: "The Narrator", text, atSimMs: readStoryTime(world) });
+          storyChronicle.record("narrator_prose", { text, atSimMs: readStoryTime(world) }, `Narrator: ${text.slice(0, 160)}`);
+        }
         if (spiritResult.spiritsProcessed > 0) {
           console.log(`  [Spirits] ${spiritResult.spiritsProcessed} spirits processed`);
         }

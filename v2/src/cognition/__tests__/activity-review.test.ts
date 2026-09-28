@@ -38,8 +38,8 @@ test("reviews retain a bounded history of authored expectations without treating
   expect(Object.isFrozen(context.evidence.recentReviews[0])).toBe(true);
   expect(Object.isFrozen(context.evidence.recentReviews[0].evidenceIds)).toBe(true);
   expect(prepareActivityReview(context, proposal(context, { evidenceIds: [firstOwn] }))).toBeUndefined();
-  expect(formatActivityReview(context)).toContain("necessary before your next useful action");
-  expect(formatActivityReview(context)).toContain("earlier interpretations, not current evidence");
+  expect(formatActivityReview(context)).toContain("Is it still worth it?");
+  expect(formatActivityReview(context)).toContain("your own past reads of it");
   expect(formatActivityReview(context)).not.toContain("PRIVATE PEER PURPOSE");
   expect(Goal.progress[f.goal]).toBe(0);
 });
@@ -88,9 +88,9 @@ test("diagnostic readers cannot alter review history, and save data does not tur
 
 test("issued review prompt states the required bounded response contract", () => {
   const f = fixture(); const prompt = formatActivityReview(f.ready());
-  expect(prompt).toContain("requires control.activityReview");
-  expect(prompt).toContain("1–6 unique evidenceIds");
-  expect(prompt).toContain("at most 400 characters");
+  expect(prompt).toContain("must include control.activityReview");
+  expect(prompt).toContain("1–6 IDs from above");
+  expect(prompt).toContain("≤400 chars");
   expect(formatActivityReview(undefined)).toBe("");
 });
 test("rejection diagnostics identify the invalid contract field without copying private values", () => {
@@ -126,7 +126,7 @@ test("reference audits retain source categories and fingerprints without changin
   expect(activityReviewEvidenceDiagnostic(context, { evidenceIds: Array(20).fill("PRIVATE") })?.cited).toHaveLength(6);
 });
 function fixture() {
-  const world = createArgosWorld(); initializePrefabs(world); startCommittedEvents(world);
+  const world = createArgosWorld(); world.meta.activityReviewCadence = "strict"; initializePrefabs(world); startCommittedEvents(world);
   const room = createRoomEntity(world, { name: "Lounge" }), elsewhere = createRoomEntity(world, { name: "Hall" });
   const actor = createAgentEntity(world, { name: "Ada", role: "friend", systemPrompt: "Choose your own purposes.", roomId: room });
   const peer = createAgentEntity(world, { name: "Bo", role: "friend", systemPrompt: "PRIVATE PEER PURPOSE", roomId: room });
@@ -168,7 +168,7 @@ test("a conversational expectation can be met without advancing the organizing i
   expect(row).toMatchObject({ previousOutcome: "met", intentionAssessment: value.intentionAssessment,
     assessedIntention: { id: f.goal, description: Goal.description[f.goal] } });
   expect(Goal.progress[f.goal]).toBe(0); expect(Goal.status[f.goal]).toBe("active");
-  expect(formatActivityReview(next)).toContain("A met conversational expectation does not establish intention progress");
+  expect(formatActivityReview(next)).toContain("isn't the same as progress on your intention");
 });
 
 test.each(["advanced", "sustained", "unchanged", "blocked"] as const)("%s is an actor interpretation, not a forced disposition or goal update", outcome => {
@@ -186,14 +186,9 @@ test.each(["advanced", "sustained", "unchanged", "blocked"] as const)("%s is an 
 test("intention guidance distinguishes ongoing experience from merely continuing an investigation's topic", () => {
   const f = fixture(), context = f.ready(), prompt = formatActivityReview(context);
   expect(context.evidence.goal).toBeDefined();
-  expect(prompt).toContain("maintaining the ongoing state or experience this intention seeks");
-  expect(prompt).toContain("Continuing the same topic is not itself sustaining an intention");
-  expect(prompt).toContain("An investigation can remain unchanged while you enjoy the conversation");
-  expect(prompt).toContain("uncertainty can remain while you choose an available way to seek information");
-  expect(prompt).toContain("This is your interpretation, not a goal update");
-  expect(prompt).toContain("compared with an available alternative");
-  expect(prompt).toContain("Choosing company, listening or venting is valid");
-  expect(prompt).toContain("Proposals are options, not completed evidence or obligations");
+  expect(prompt).toContain("keeping up something it wants");
+  expect(prompt).toContain("isn't the same as progress on your intention");
+  expect(prompt).toContain("simply company you want");
 });
 
 test.each([undefined, null, {}, { outcome: "complete", reason: "Done" },
@@ -391,7 +386,7 @@ test("reading and silent elapsed time never open or reset an encounter; real rec
   expect(context.evidence.contributions).toHaveLength(2); expect(context.evidence.elapsedSimMs).toBe(20_000);
   for (let i = 0; i < 5; i++) captureActivityReview(f.world, f.actor);
   expect(snapshotActivityReview(f.world, f.actor)).toEqual(before);
-  expect(formatActivityReview(context)).toContain("NOT A VERDICT THAT YOU MUST STOP");
+  expect(formatActivityReview(context)).toContain("Is it still worth it?");
 });
 test("goal/null flips retain encounter, completed outcomes and the prior expectation until an actual review commits", () => {
   const f = fixture(), context = f.ready(), initial = snapshotActivityReview(f.world, f.actor)!;
@@ -526,7 +521,7 @@ test("an unresolved exchange can pause while another concern becomes the organiz
   // Capture again after authoring the competing concern; neither that goal
   // nor the review authors a physical action or resolves the original desire.
   const fresh = captureActivityReview(f.world, f.actor)!;
-  expect(formatActivityReview(fresh)).toContain("what still depends on someone else's choice");
+  expect(formatActivityReview(fresh)).toContain("something else matters more now");
   expect(formatActivityReview(fresh)).toContain("leave the concern unresolved");
   expect(prepareActivityReview(fresh, proposal(fresh, { disposition: "pause",
     reason: "I have asked clearly. Returning it depends on Bo; I can check my work now.",

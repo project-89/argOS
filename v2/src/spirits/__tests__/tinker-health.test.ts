@@ -72,3 +72,14 @@ test("multi-step maintenance reports retain earlier queued receipts without call
   const report=await runArtificerWithTools(f.world,f.registry,f.spirits,f.tinker);
   expect(report.repairsAttempted).toEqual([expect.objectContaining({success:false,jobId:"job",stage:"queued",systemName:f.system.name})]);
 });
+test("with no generated or managed systems in scope the Tinker makes no model call", async () => {
+  const f = fixture(false);
+  f.tinker.artificerConfig = { ...(f.tinker.artificerConfig ?? {}), ignoreSystems: [f.system.name] } as any;
+  const report = await runArtificerWithTools(f.world, f.registry, f.spirits, f.tinker);
+  expect(generate).not.toHaveBeenCalled();
+  expect(report).toMatchObject({ systemsInspected: 0, repairsAttempted: [], criticalSystems: 0 });
+  f.tinker.artificerConfig = { ...(f.tinker.artificerConfig as any), ignoreSystems: [] };
+  generate.mockResolvedValue({ text: "", toolResults: [] });
+  await runArtificerWithTools(f.world, f.registry, f.spirits, f.tinker);
+  expect(generate).toHaveBeenCalledTimes(1); // a system in scope is still inspected by the model
+});

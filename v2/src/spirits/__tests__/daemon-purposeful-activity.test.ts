@@ -42,10 +42,11 @@ test("snapshot counts active goals and ignores absent component storage", () => 
   expect(current.goalCount).toBe(0); expect(current.health).toBeUndefined(); expect(current.position).toBeUndefined();
   expect(Mind.arousal[actor]).toBeDefined();
 });
-test("the actual narrator definition permits quiet and forbids invented revelations and dialogue", () => {
-  expect(NarratorDefinition.systemPrompt).not.toMatch(/MAKE something happen|Have Hilda reveal|Something feels different today/);
-  expect(NarratorDefinition.systemPrompt).toContain("No intervention is a valid choice");
-  expect(NarratorDefinition.systemPrompt).toContain("Never invent dialogue");
+test("the actual narrator definition is an author: paces the story through the world and keeps prose true", () => {
+  expect(NarratorDefinition.systemPrompt).not.toMatch(/MAKE something happen|Have Hilda reveal|Something feels different today|No intervention is a valid choice/);
+  expect(NarratorDefinition.systemPrompt).toContain("Pace deliberately");
+  expect(NarratorDefinition.systemPrompt).toContain("never by commanding anyone");
+  expect(NarratorDefinition.systemPrompt).toContain("quote only words that were really said");
 });
 
 function worldFixture() {

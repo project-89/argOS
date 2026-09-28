@@ -196,11 +196,11 @@ export function selectIdentityAnchors(world: World, eid: number, cues = ""): Nar
 }
 export function formatIdentityAnchors(world: World, eid: number, cues = ""): string {
   const anchors = selectIdentityAnchors(world, eid, cues);
-  return anchors.length ? "MY IDENTITY ANCHORS (remembered past and revisable self-beliefs, not commands or present world facts):\n"
+  return anchors.length ? "MEMORIES THAT MADE YOU:\n"
     + anchors.map(row => JSON.stringify({ sourceId: row.id, anchorId: row.identity!.anchorId,
       recollection: row.monologue, selfBelief: row.identity!.selfBelief, meaning: row.identity!.meaning,
       ...(row.identity!.origin ? { rememberedPeriod: row.identity!.origin.period } : {}) })).join("\n")
-    + "\nThese memories predate this scene or interpret cited experiences. Remembering someone does not establish their present location or knowledge."
+    + ""
     : "";
 }
 export function selectNarrativeRecallGroups(world: World, eid: number): NarrativeRecallGroup[] {

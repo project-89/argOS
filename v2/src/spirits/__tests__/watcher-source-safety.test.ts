@@ -43,11 +43,19 @@ test.each(["stop", "restart", "expiry", "rewind"])("queued report is invalid aft
   expect(getTopObservations(10, f.world)).toEqual([]);
   if (mode !== "restart") expect(getRecentObservations(10, f.world)).toHaveLength(1);
 });
-test.each(["examine", "wait", "speak"])("successful repeated %s and quiet time do not manufacture work", action => {
+test.each(["examine", "speak"])("successful repeated %s and quiet time do not manufacture work", action => {
   const f = fixture(); setAgentBehaviorPolicy(f.world, f.actor, { type: "action", action: { type: "wait" } }, true);
   for (let n = 0; n < 24; n++) { recordAgentAction(f.actor, action, f.world); receipt(f, String(n), "succeeded", action); run(f); }
   advanceSimulationTime(f.world, 1, 360000); run(f);
   expect(f.weaver.inbox).toEqual([]); expect(evolve).not.toHaveBeenCalled();
+});
+test("a resident stuck waiting is stagnation to answer, not a failure to repair", () => {
+  const f = fixture(); setAgentBehaviorPolicy(f.world, f.actor, { type: "action", action: { type: "wait" } }, true);
+  for (let n = 0; n < 24; n++) { recordAgentAction(f.actor, "wait", f.world); receipt(f, String(n), "succeeded", "wait"); run(f); }
+  expect(f.weaver.inbox).toHaveLength(1); // one persisting observation, not a report per cycle
+  expect(f.weaver.inbox[0].content).toContain("Ari is mostly waiting");
+  expect(f.weaver.inbox[0].content).not.toContain("My private life");
+  expect(evolve).not.toHaveBeenCalled(); // policy repair stays bound to native failures
 });
 test("three distinct failed attempts report once; success invalidates queued advice", () => {
   const f = fixture(); for (let n = 0; n < 3; n++) receipt(f, String(n));

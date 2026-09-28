@@ -1,7 +1,6 @@
 import { entityExists, hasComponent, query } from "bitecs";
 import type { World } from "../ecs/world";
 import { Agent, Name, Room, Removed, WorkingMemoryIdentity } from "../ecs/components";
-import { getRoomForEntity } from "../ecs/location";
 import { workingMemoryEntityRef } from "../cognition/working-memory";
 import { captureSpiritSourceScope } from "./spirit-cycle-scope";
 import type { SpiritRegistry } from "./spirit-registry";
@@ -19,13 +18,13 @@ export function captureSpiritInterventionScope(world: World, spirit: SpiritState
       if (hasComponent(world, eid, Removed) || kind === "agent" && !Agent.active[eid]) continue;
       const own = identity(world, eid); if (!own) continue;
       const name = Name.value[eid], persona = kind === "agent" ? Agent.systemPrompt[eid] : undefined;
-      const room = kind === "agent" ? getRoomForEntity(world, eid) : undefined;
-      const roomIdentity = room === undefined ? undefined : identity(world, room);
       const current = () => {
         if (!sourceCurrent() || !own()) return false;
         if (!hasComponent(world, eid, kind === "agent" ? Agent : Room)) return false;
-        if (kind === "agent" && (!Agent.active[eid] || Agent.systemPrompt[eid] !== persona || getRoomForEntity(world, eid) !== room
-          || room !== undefined && (!roomIdentity?.() || !hasComponent(world, room, Room)))) return false;
+        // A whisper is an inner voice: it follows the person, so walking into
+        // another room while the spirit thinks does not void it. Identity and
+        // persona still bind it to the same individual.
+        if (kind === "agent" && (!Agent.active[eid] || Agent.systemPrompt[eid] !== persona)) return false;
         // A new same-name entity must not make the target ambiguous after capture.
         return [...query(world, [kind === "agent" ? Agent : Room, Name])].filter(id => Name.value[id] === name
           && !hasComponent(world, id, Removed) && (kind !== "agent" || Agent.active[id])).length === 1;

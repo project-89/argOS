@@ -20,19 +20,19 @@ async function fixture(live = false) {
   const demo = await SpatialDemo.create({ scenario: "town", evolving: true, story: "coastal-mystery", live,
     development: { directory }, automaticClock: false, seconds: 1800 }); demos.push(demo); return demo;
 }
-test("development activates managed engineering and five existing spirits without starting a model", async () => {
+test("development activates managed engineering and seven existing spirits without starting a model", async () => {
   const demo = await fixture(true), view = demo.snapshot(), daemon = getCodingDaemon(demo.sim.world)!;
   expect(view.development).toMatchObject({ enabled: true, available: false, busy: false, jobs: [], messages: [], limits: { maxBuildJobs: 8, maxRequests: 32 } });
   expect(view.limits.seconds).toBe(1800); expect(view.running).toBe(false);
   expect(daemon.getStatus().admissionBudget).toMatchObject({ limit: 8, used: 0, remaining: 8 });
   expect(getActiveSpirits(getSpiritSystemState(demo.sim.world)!.registry).map(s => s.definition.name).sort())
-    .toEqual(["The Arbiter", "The Narrator", "The Tinker", "The Watcher", "The Weaver"]);
+    .toEqual(["The Arbiter", "The Crafter", "The Narrator", "The Steward", "The Tinker", "The Watcher", "The Weaver"]);
   expect(DEVELOPMENT_EVOLUTION_CONFIG).toMatchObject({ enabledStages: ["architect", "proposals", "artificer"], allowedProposalTypes: ["entity", "system"] });
   const spirits = getSpiritSystemState(demo.sim.world)!;
   const tinker = [...spirits.registry.spirits.values()].find(s => s.definition.name === "The Tinker")! as any;
   expect(tinker.artificerConfig.autoFixEnabled).toBe(true);
   expect(tinker.artificerConfig.ignoreSystems).toContain("SpatialEmbodiment");
-  expect(demo.townLife!.weather.view().remainingChanges).toBe(24);
+  expect(demo.townLife!.weather.view().remainingChanges).toBe(36);
 });
 test("no unrequested generic phone agenda is seeded into authored residents", async () => {
   const demo = await fixture();
@@ -59,7 +59,7 @@ test("expanded weather still commits through its native source, timing and room 
   expect(weather.set("rain", outside).status).toBe("applied");
   expect(weather.set("clear", outside).status).toBe("rejected");
   demo.advance(30_000); expect(weather.set("clear", outside).status).toBe("applied");
-  expect(weather.view().remainingChanges).toBe(22);
+  expect(weather.view().remainingChanges).toBe(34);
   expect(demo.snapshot().weather?.condition).toBe("cloudy"); // Other outdoor room retained its initial weather.
   demo.stop(); expect(weather.set("rain", outside).status).toBe("rejected");
 });

@@ -53,8 +53,9 @@ test("current advice uses the guarded daemon channel, not an unbound stimulus", 
   expect(processPendingNudges(f.daemon, f.world)).toEqual([]);
 });
 
-const changes = ["owner", "persona", "name", "inactive", "removed", "room", "roomOwner", "source", "stopped", "rewind", "invalidClock", "producer", "producerPrompt", "ambiguous"] as const;
-function change(f: ReturnType<typeof fixture>, kind: typeof changes[number]) {
+const changes = ["owner", "persona", "name", "inactive", "removed", "source", "stopped", "rewind", "invalidClock", "producer", "producerPrompt", "ambiguous"] as const;
+type Change = typeof changes[number] | "room" | "roomOwner";
+function change(f: ReturnType<typeof fixture>, kind: Change) {
   if (kind === "owner") WorkingMemoryIdentity.id[f.actor] = "replacement";
   if (kind === "persona") Agent.systemPrompt[f.actor] = "A different person.";
   if (kind === "name") Name.value[f.actor] = "Renamed";
@@ -88,6 +89,12 @@ test.each(["room", "source", "producer"] as const)("%s change after queueing inv
   expect(processPendingNudges(f.daemon, f.world)).toEqual([]);
   expect(f.daemon.pendingNudges).toEqual([]);
   expect(drainPendingStimuli()).toEqual([]);
+});
+
+test.each(["room", "roomOwner"] as const)("a whisper follows its person: %s change during inference keeps the advice", async kind => {
+  const f = fixture(), pending = f.run(); change(f, kind); f.complete();
+  const output = await pending;
+  expect(output.interventions[0].result).not.toBe("stale_or_invalid_target");
 });
 
 test("unrelated actor movement does not invalidate current advice", async () => {
@@ -168,19 +175,24 @@ test("a cited description change does invalidate advice depending on that descri
   expect(processPendingNudges(f.daemon, f.world)).toEqual([]);
 });
 
-test("duplicate citations cannot authorize a suggestion", async () => {
+test("duplicate citations collapse to one live guard", async () => {
   const f = fixture(), pending = f.run(), [id] = f.ids();
   f.complete({ narrativeDirectives: [{ type: "nudge_character", target: "Mara", action: "Consider this", evidenceIds: [id, id] }] });
-  expect((await pending).interventions[0].result).toBe("stale_or_invalid_evidence");
-  expect(f.daemon.pendingNudges).toEqual([]);
+  expect((await pending).interventions[0].result).toBe("accepted");
+  expect(f.daemon.pendingNudges).toHaveLength(1);
+  setLocatedIn(f.world, f.actor, f.otherRoom); // the cited presence changed
+  expect(processPendingNudges(f.daemon, f.world)).toEqual([]);
 });
 
-test("unchanged observations are issued as new citations each cycle", async () => {
+test("citations from an earlier cycle are not honored; the whisper rests on its resident alone", async () => {
   const f = fixture(), pending = f.run(), oldIds = f.ids(); f.complete(); await pending;
   processPendingNudges(f.daemon, f.world);
   generate.mockResolvedValueOnce({ text: JSON.stringify({ narrativeDirectives: [{ type: "nudge_character", target: "Mara", action: "Consider this", evidenceIds: oldIds }] }) });
-  expect((await f.run()).interventions[0].result).toBe("stale_or_invalid_evidence");
-  expect(f.daemon.pendingNudges).toEqual([]);
+  const output = await f.run();
+  expect(output.interventions[0].result).toBe("accepted");
+  // The old IDs grant nothing and bind nothing: moving within guards is unaffected.
+  expect(output.interventions[0].evidenceIds).toEqual(oldIds);
+  expect(f.daemon.pendingNudges).toHaveLength(1);
 });
 
 test("a newer inference does not cancel already accepted advice with unchanged evidence", async () => {
@@ -213,7 +225,10 @@ test("a large observation catalog is bounded and states its omissions", async ()
     Name.value[eid] = `Fixture ${i}`; setLocatedIn(f.world, eid, f.room);
   }
   const pending = f.run(), catalog = f.evidence() as ReturnType<typeof f.evidence> & { omittedRecords: number };
-  expect(catalog.records).toHaveLength(192); expect(catalog.omittedRecords).toBeGreaterThan(0);
+  // The author sees a compact catalog: places, whereabouts and notable objects.
+  expect(catalog.records.length).toBeLessThanOrEqual(48); expect(catalog.omittedRecords).toBeGreaterThan(0);
+  expect(catalog.records.some(row => row.subject === "Irrigation tap")).toBe(true);
+  expect(catalog.records.some(row => row.subject.startsWith("Fixture"))).toBe(false);
   f.complete(); expect((await pending).interventions[0].result).toBe("accepted");
 });
 
@@ -238,11 +253,19 @@ test("an attributed received report survives acknowledgement without becoming a 
   expect(ObjectState.current[f.prop]).toBe("open");
 });
 
-test.each([undefined, [], ["invented-observation"], [42]])("unissued evidence %j cannot authorize a suggestion", async evidenceIds => {
+test.each([undefined, [], ["invented-observation"], [42]])("a whisper needs only a present resident; unissued evidence %j is ignored", async evidenceIds => {
   const f = fixture(), pending = f.run();
   f.complete({ narrativeDirectives: [{ type: "nudge_character", target: "Mara", action: "Inspect the controls", evidenceIds }] });
   const output = await pending;
-  expect(output.interventions[0].result).toBe("stale_or_invalid_evidence");
+  expect(output.interventions[0].result).toBe("accepted");
+  expect(f.daemon.pendingNudges).toHaveLength(1);
+  expect(drainPendingStimuli()).toEqual([]); // delivered only through the resident's daemon
+});
+
+test.each(["Nobody", "Mar", ""])("a whisper to a resident who is not there (%j) is rejected", async target => {
+  const f = fixture(), pending = f.run();
+  f.complete({ whispers: [{ resident: target, impulse: "You should look again.", kind: "reflect" }] });
+  const output = await pending;
+  expect(output.interventions.every(row => row.result !== "accepted")).toBe(true);
   expect(f.daemon.pendingNudges).toEqual([]);
-  expect(drainPendingStimuli()).toEqual([]);
 });

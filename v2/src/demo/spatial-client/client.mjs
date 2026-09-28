@@ -153,8 +153,10 @@ function fallback(entity) {
   } else group.add(box([size.x, size.y, size.z], color, [0, size.y / 2, 0]));
   return group;
 }
-function loadAsset(id) {
-  const file = assetFiles[id]; if (!file) return Promise.resolve(null);
+function loadAsset(id, model) {
+  // The server's catalog names the model for registered kinds; the built-in
+  // table remains for older snapshots. Unknown kinds fall back to primitives.
+  const file = model ?? assetFiles[id]; if (!file) return Promise.resolve(null);
   if (!assets.has(file)) assets.set(file, loader.loadAsync(`/assets/${file}`).catch(error => { console.warn('Asset fallback:', file, error.message); return null; }));
   return assets.get(file);
 }
@@ -219,13 +221,13 @@ function ensureEntity(entity) {
       const label = document.createElement('div'); label.className = 'prop-state-label';
       el('scene-labels').append(label); propStateLabels.set(entity.key, label);
     }
-    if (entity.asset === 'lamp') {
+    if (entity.asset === 'lamp' || entity.light) {
       node.lampLight = new THREE.PointLight('#ffc36e', 0, 7, 2);
       node.lampLight.position.y = (entity.size?.y ?? 1.8) * .82;
       root.add(node.lampLight);
     }
     const generation = node;
-    void loadAsset(entity.asset).then(gltf => {
+    void loadAsset(entity.asset, entity.model).then(gltf => {
       if (!gltf || nodes.get(entity.key) !== generation) return;
       const loaded = cloneAsset(gltf, generation.entity); generation.root.remove(generation.view); disposeTree(generation.view);
       generation.root.add(loaded.group); generation.view = loaded.group; generation.mixer = loaded.mixer; generation.clips = loaded.clips; generation.handAnchor = loaded.handAnchor; generation.loaded = true;
@@ -405,7 +407,7 @@ function syncScenarioView(snapshot) {
   for (const row of rooms.values()) tint(row.group, lighting.dim && row.room.id === apartmentId, null, theme && row.room.environment === 'outdoor' ? theme : null);
   for (const node of nodes.values()) {
     tint(node.view, lighting.dim && node.entity.roomId === apartmentId, wetnessPresentation(node.entity));
-    if (node.lampLight) node.lampLight.intensity = lighting.lampOn && node.entity.roomId === apartmentId ? 22 : 0;
+    if (node.lampLight) node.lampLight.intensity = node.entity.light ? 14 : lighting.lampOn && node.entity.roomId === apartmentId ? 22 : 0;
   }
 }
 function fitWorldLighting() {
@@ -475,7 +477,7 @@ function selectActor(key, open = false) {
   selectedKey = key; syncPanel(); syncTownVisibility();
   if (open && innerWidth < 760) el('app').classList.add('panel-open');
 }
-let panelSignature = '', messagesSignature = '', eventSignature = '';
+let panelSignature = '', messagesSignature = '', eventSignature = '', storySignature = '';
 function syncPanel() {
   if (!state) return;
   const actor = state.actors.find(a => a.key === selectedKey), view = state.entities.find(e => e.key === selectedKey);
@@ -544,6 +546,7 @@ function syncPanel() {
   el('growth-kind').textContent = townLifeView ? 'BEHIND THE SCENES' : 'WORLD BUILDING';
   el('growth-detail').textContent = townLifeView?.summary || presentation.growth;
   syncTownLifePanel();
+  syncStoryFeed();
   el('grow').querySelector('span:nth-child(2)').firstChild.textContent = state.growth.status === 'built' ? 'The café is part of the world' : 'Add the neighborhood café';
   el('world-stats').textContent = `${state.rooms.length} connected places · ${state.entities.length} visible entities\n${state.mode === 'live' ? 'Live decisions' : 'Operator test actions'} · ${state.tick} committed ticks\nSource ${state.sourceId.slice(0, 12)}\nView interpolates confirmed positions only.\n${authoredCafe ? 'Growth is an explicit authored test, not autonomous.' : state.growth.summary}`;
   el('action-content').placeholder = state.scenario?.id === 'blackout' ? 'Operation, e.g. inspect' : 'Operation, e.g. sit';
@@ -565,6 +568,23 @@ function syncPanel() {
   syncHouseSpirit();
   syncGodControl();
   syncGeneratedDetails();
+}
+/** The Narrator's prose: a story feed for the viewer, newest first. */
+function syncStoryFeed() {
+  const feed = Array.isArray(state.storyFeed) ? state.storyFeed : null;
+  el('story-section').hidden = !feed;
+  if (!feed) return;
+  const recent = feed.slice(-12).reverse(), signature = JSON.stringify([state.sourceId, recent.map(entry => entry.id)]);
+  if (signature === storySignature) return;
+  storySignature = signature;
+  const list = el('story-feed'); list.replaceChildren();
+  el('story-empty').hidden = recent.length > 0;
+  for (const entry of recent) {
+    const row = safeText(list, 'li', '', 'story-entry');
+    safeText(row, 'p', entry.text);
+    const seconds = Math.max(0, Math.floor(entry.atSimMs / 1000));
+    safeText(row, 'small', `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')} · ${entry.spirit}${entry.phase ? ` · ${entry.phase}` : ''}`);
+  }
 }
 function syncTownLifePanel() {
   const section = el('town-life'); section.hidden = !townLifeView;

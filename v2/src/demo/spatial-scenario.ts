@@ -2,6 +2,7 @@
  * what to do with them. This is not a controller or a construction permission. */
 import type { AgentConfig } from "../index";
 import type { CharacterAppearanceConfig } from "../rendering/character-appearance";
+import type { ScheduledActivity } from "../cognition/schedule-system";
 import { SPATIAL_ASSETS, validateSpatialBlueprint, type SpatialBlueprint, type SpatialBounds } from "./spatial-catalog";
 import { createSpatialGeometry, findSpatialPath } from "../world/spatial-path";
 
@@ -18,6 +19,9 @@ export interface SpatialResident extends AgentConfig {
   phoneId?: string;
   phoneContact?: { name: string; description: string; memory: string };
   initialObservation?: string;
+  /** This person's own daily rhythm (livelihood, evening habits). Installed in
+   * place of the generic baseline; it is context and intention, not a script. */
+  schedule?: ScheduledActivity[];
 }
 
 export interface SpatialScenarioDefinition {
@@ -69,6 +73,13 @@ export function validateSpatialScenario(input: SpatialScenarioDefinition): Spati
       || !Array.isArray(r.aspirations) || !r.aspirations.length || r.aspirations.length > 12
       || r.aspirations.some(a => typeof a !== "string" || !a.trim() || a.length > 500))
       throw Error("Resident needs, aspirations and opening intention must be bounded and explicit");
+    if (r.schedule !== undefined && (!Array.isArray(r.schedule) || !r.schedule.length || r.schedule.length > 12
+      || r.schedule.some(a => !a || typeof a.name !== "string" || !a.name.trim() || a.name.length > 80
+        || !Number.isInteger(a.startHour) || a.startHour < 0 || a.startHour > 23 || !Number.isFinite(a.duration) || a.duration <= 0 || a.duration > 24
+        || !Number.isInteger(a.priority) || a.priority < 1 || a.priority > 10 || typeof a.interruptible !== "boolean"
+        || a.location !== undefined && !blueprint.rooms.some(room => room.name === a.location)
+        || a.description !== undefined && (typeof a.description !== "string" || a.description.length > 300))))
+      throw Error("Resident schedules must be bounded and name installed places");
     if (r.phoneContact && (!r.phoneId || !r.phoneContact.name.trim() || !r.phoneContact.description.trim() || !r.phoneContact.memory.trim()))
       throw Error("A phone relationship requires a bound physical phone and authored context");
     if (r.phoneId) {

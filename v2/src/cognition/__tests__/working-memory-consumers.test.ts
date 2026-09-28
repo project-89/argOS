@@ -121,14 +121,13 @@ test.each(["planning", "goals", "reflection", "foreground"])("%s receives recent
   const request = generate.mock.calls[0][0];
   const context = [request.system || "", ...(request.messages?.map((message: any) => message.content) || [])].join("\n");
   if (consumer === "foreground") {
-    expect(context).toContain("Unspecified details remain unknown");
-    expect(context).toContain("For a known-answer test");
-    expect(context).toContain("open question or inspect first");
-    expect(context).toContain("Your own new claim does not establish a past event");
+    expect(context).toContain("Asked something you don't know?");
+        expect(context).toContain("ask or inspect first");
+    expect(context).toContain("Saying something happened doesn't make it so");
   }
   expect(context).toContain('"Spare fuse" possession: "Mara"');
   expect(context).toContain("RECENT ACTION RECEIPTS");
-  expect(context.indexOf("PHYSICAL WORKING MEMORY")).toBeLessThan(context.indexOf("OLD_RECOLLECTION"));
+  expect(context.indexOf("WHAT YOU'VE SEEN AND DONE")).toBeLessThan(context.indexOf("OLD_RECOLLECTION"));
   expect(Goal.status[f.goal]).toBe("active");
 });
 
@@ -137,8 +136,8 @@ test("foreground context prioritizes source evidence before both old perceptions
   addThought(f.world, f.actor, { content: "OLD_THOUGHT: Ivo may have the fuse." });
   addPerception(f.world, f.actor, { content: "OLD_PERCEPTION: Ivo picked up the fuse.", source: "past experience", type: "visual" });
   const context = buildAgentContext(f.world, f.actor);
-  expect(context.indexOf("PHYSICAL WORKING MEMORY")).toBeLessThan(context.indexOf("OLD_THOUGHT"));
-  expect(context.indexOf("PHYSICAL WORKING MEMORY")).toBeLessThan(context.indexOf("OLD_PERCEPTION"));
+  expect(context.indexOf("WHAT YOU'VE SEEN AND DONE")).toBeLessThan(context.indexOf("OLD_THOUGHT"));
+  expect(context.indexOf("WHAT YOU'VE SEEN AND DONE")).toBeLessThan(context.indexOf("OLD_PERCEPTION"));
 });
 
 test("a handoff arriving during foreground cognition cannot admit its stale question, thought or goal", async () => {

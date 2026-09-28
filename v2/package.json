@@ -35,6 +35,7 @@
     "eval:cognition:live": "tsx src/evals/cognition-run.ts --live",
     "eval:cognition:sustained:live": "tsx src/evals/sustained-cognition-run.ts --live",
     "eval:world:live": "tsx src/evals/living-world-soak.ts --live",
+    "eval:liveliness": "tsx src/evals/liveliness-score.ts",
     "sandbox": "tsx src/run-sandbox.ts",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPattern=__tests__",

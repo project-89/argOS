@@ -16,21 +16,32 @@ import { LOVECRAFT_TOWN_STYLE, LOVECRAFT_TOWN_NARRATOR_PROMPT } from "./spatial-
 import { HOUSEHOLD_STORY_STYLE } from "./spatial-household";
 import { HOUSEHOLD_CHALLENGE_STORY_STYLE } from "./spatial-household-challenge";
 import type { createSpatialStoryEvents, SpatialStoryReceipt } from "./spatial-story-events";
+import type { createSpatialNarrativeEvents, SpatialNarrativeReceipt } from "./spatial-narrative-events";
 import { getSpiritPublicEventReviewStatus, recordSpiritPublicEnvironmentReceipt } from "../spirits/spirit-public-event-review";
 import type { SpatialWeatherMechanicReceipt } from "./spatial-weather-mechanic";
 import { SPATIAL_DEVELOPMENT_BUILDER_CONTEXT } from "./spatial-development-policy";
 import { createArtificerConfig } from "../spirits/artificer-spirit";
+import { enableStewardArchitect } from "../spirits/steward-spirit";
 
+/** Builders with a design lens in the live town: the Weaver grows the world,
+ * the Steward keeps places lived-in, the Crafter makes what residents reach
+ * for. All three propose; God approves; the host growth adapter builds. */
+export const TOWN_BUILDER_SPIRITS = ["The Weaver", "The Steward", "The Crafter"] as const;
 export const TOWN_EVOLUTION_CONFIG: Partial<EvolutionCoordinatorConfig> = {
-  enabledStages: ["architect", "proposals"], stageRunLimits: { architect: 4 },
-  architectNames: ["The Weaver"], architectInterval: 600, proposalInterval: 50,
+  enabledStages: ["architect", "proposals"], stageRunLimits: { architect: 8 },
+  architectNames: [...TOWN_BUILDER_SPIRITS], architectInterval: 600, proposalInterval: 50,
   autoApproveProposals: false, maxProposalExecutions: 1,
   requireObservedProposals: true, allowedProposalTypes: ["entity"],
 };
+/** Design reviews (each one pass by every builder) for a story session. */
+export const TOWN_STORY_ARCHITECT_REVIEWS = 24;
+export function townEvolutionConfig(story: boolean): Partial<EvolutionCoordinatorConfig> {
+  return { ...TOWN_EVOLUTION_CONFIG, ...(story ? { stageRunLimits: { architect: TOWN_STORY_ARCHITECT_REVIEWS } } : {}) };
+}
 export const DEVELOPMENT_EVOLUTION_CONFIG: Partial<EvolutionCoordinatorConfig> = {
   enabledStages: ["architect", "proposals", "artificer"],
   stageRunLimits: { architect: 60, artificer: 30 },
-  architectNames: ["The Weaver"], architectInterval: 300, artificerInterval: 600, proposalInterval: 50,
+  architectNames: [...TOWN_BUILDER_SPIRITS], architectInterval: 300, artificerInterval: 600, proposalInterval: 50,
   autoApproveProposals: false, maxProposalExecutions: 1,
   requireObservedProposals: true, allowedProposalTypes: ["entity", "system"],
 };
@@ -40,6 +51,8 @@ export function createSpatialTownLife(options: {
   outdoorRooms: Array<{ id: number; key: string }>;
   growth: ReturnType<typeof createSpatialTownGrowth>;
   story?: "community-drama" | "household" | "coastal-mystery"; storyEvents?: ReturnType<typeof createSpatialStoryEvents>;
+  /** Sounds, arrivals, lights and phone texts for the Narrator and God. */
+  narrativeEvents?: ReturnType<typeof createSpatialNarrativeEvents>;
   householdChallenge?: boolean;
   growthSiteCount?: number;
   reviewMechanics?: boolean;
@@ -58,7 +71,8 @@ export function createSpatialTownLife(options: {
     if (changes.length > 64) changes.shift();
   };
   const weather = createSpatialWeather({ world, outdoorRooms: options.outdoorRooms, running: options.running,
-    ...(options.development ? { limits: { maxChanges: 24, cooldownMs: 30_000 } } : {}),
+    // A living session needs weather that can turn more than twice.
+    ...(options.development ? { limits: { maxChanges: 36, cooldownMs: 30_000 } } : options.story ? { limits: { maxChanges: 12, cooldownMs: 45_000 } } : {}),
     ...(options.story === "coastal-mystery" ? { initialCondition: "cloudy" as const } : {}),
     record: r => {
       const id = `weather:${r.roomId}:${r.revision}`;
@@ -67,6 +81,9 @@ export function createSpatialTownLife(options: {
     } });
   const state = getSpiritSystemState(world), active = new Set(["The Watcher", "The Narrator", "The Arbiter", "The Weaver"]);
   if (options.development) active.add("The Tinker");
+  // The town furnishes and makes things in theme; the one-chair household does not.
+  const builders = options.story !== "household";
+  if (builders) { active.add("The Steward"); active.add("The Crafter"); }
   if (state) {
     for (const spirit of state.registry.spirits.values()) {
       // Definitions may originate in shared templates. Never mutate another world.
@@ -88,17 +105,28 @@ export function createSpatialTownLife(options: {
         (spirit as DynamicSpiritState).architectConfig = { canProposeSystems: options.reviewMechanics === true, canProposeComponents: false,
           canProposeEntities: true, canProposeRules: false, canExecuteDirectly: false,
           proposalApproval: "godai", maxProposalsPerCycle: 1 };
+      } else if (spirit.definition.name === "The Steward" || spirit.definition.name === "The Crafter") {
+        // Same design lane as the Weaver, different lens. Their legacy direct
+        // executors bypass spatial placement, so here they create only through
+        // God-approved proposals built by the host growth adapter (bounded budget).
+        spirit.definition.observationInterval = Number.MAX_SAFE_INTEGER;
+        const config = { canProposeSystems: false, canProposeComponents: false, canProposeEntities: true, canProposeRules: false,
+          canExecuteDirectly: false, proposalApproval: "godai" as const, maxProposalsPerCycle: 1 };
+        if (spirit.definition.name === "The Steward") enableStewardArchitect(spirit, config);
+        else (spirit as DynamicSpiritState).architectConfig = config;
       } else {
         spirit.definition.observationInterval = spirit.definition.name === "The Watcher" ? 10_000
-          : spirit.definition.name === "The Narrator" ? options.story ? 25_000 : 45_000 : 90_000;
+          : spirit.definition.name === "The Narrator" ? options.story ? 20_000 : 45_000 : 90_000;
         if (spirit.definition.name === "The Narrator") {
           if (options.story) spirit.definition.systemPrompt = options.story === "coastal-mystery" ? LOVECRAFT_TOWN_NARRATOR_PROMPT : STORY_TOWN_NARRATOR_PROMPT;
+          spirit.definition.canInjectEvents = true;
           weather.registerNarrator(state.registry, spirit, options.storyEvents);
+          options.narrativeEvents?.grantNarrator(spirit);
         }
       }
     }
-    const context = options.story ? `${style.narratorContext}\n${style.premise}\nThis is a physically embodied world. Public committed outcomes, not narrative interpretations, establish what happened. The Narrator may introduce prospective complications only through its native grants; residents independently decide what to do. The Weaver proposes catalog furnishings for evidenced needs and God reviews them. Do not replenish consumed food or undo operator changes. Private recollections do not become other residents' knowledge.${options.storyEvents ? " Native branch damage stays within the existing tree footprint; it does not block routes." : ""}`
-      : "This is a physically embodied town, not a scripted episode. Watch actual public activity and consequences. Quiet periods and useful repetition are legitimate. Offer grounded opportunities or optional suggestions, not completed actions or compulsory emotions. Weather changes require the granted native world_effect. Buildings, inventory and characters cannot be created by narrative prose. The Weaver proposes catalog furnishings for a current evidenced need; God reviews them. Do not replenish consumed food or undo an operator's changes. No quota of drama or construction is required.";
+    const context = options.story ? `${style.narratorContext}\n${style.premise}\nThis is a physically embodied world: what residents do, find and say is real and has consequences. The Narrator shapes the story through the world — sounds, arrivals, lights, weather, messages and whispers — and residents decide what it means. The Weaver, the Steward and the Crafter furnish the place for these people; God turns good requests into world. Consumed food stays eaten; what an operator changed stays changed.${options.storyEvents ? " A snapped branch stays within its tree's footprint and can be cleared." : ""}`
+      : "This is a physically embodied town, not a scripted episode. Watch actual public activity and consequences. Quiet periods and useful repetition are legitimate. Offer grounded opportunities or optional suggestions, not completed actions or compulsory emotions. Weather changes require the granted native world_effect. Buildings, inventory and characters cannot be created by narrative prose. The Weaver, Steward and Crafter propose catalog furnishings for these residents; God reviews them. Do not replenish consumed food or undo an operator's changes. No quota of drama or construction is required.";
     setGlobalContext(context + (options.development ? ` The host has enabled broader world development: the Weaver can design grounded deterministic mechanics, God can approve them, and the coding daemons build/test/load them. The Tinker reviews and repairs managed systems. ${SPATIAL_DEVELOPMENT_BUILDER_CONTEXT}` : options.reviewMechanics ? " The operator has separately authorized one bounded wetting/drying build on existing residents and furniture. Its confirmed physical outcomes may inform the Weaver's grounded mechanic proposals, but additional systems remain review-only in this session. A proposed mechanism is not an installed mechanism." : ""), world);
   }
   const narrator = state && [...state.registry.spirits.values()].find(s => s.definition.name === "The Narrator");
@@ -147,8 +175,10 @@ export function createSpatialTownLife(options: {
       weather: weatherView(), spirits: [
         { name: "The Watcher", status: enabled ? "Observes public activity and needs" : "Offline" },
         { name: "The Arbiter", status: enabled ? "Checks consistency; cannot replace missing props" : "Offline" },
-        { name: "The Narrator", status: enabled ? `${options.story ? style.name : "Optional suggestions"} · ${weather.view().remainingChanges} weather changes left${options.storyEvents ? ` · ${options.storyEvents.view().remainingEvents} branch events left` : ""}` : "Offline" },
-        { name: "The Weaver", status: enabled ? `${Math.max(0, (options.development ? 60 : options.story ? 10 : 4) - evolution.stageRuns.architect)} design reviews left · ${options.development ? "mechanics and furnishings" : "furnishings"} · God approval required` : "Offline" },
+        { name: "The Narrator", status: enabled ? `${options.story ? style.name : "Optional suggestions"} · ${weather.view().remainingChanges} weather changes left${options.narrativeEvents ? ` · ${options.narrativeEvents.view().remainingEvents} story events left` : ""}${options.storyEvents ? ` · ${options.storyEvents.view().remainingEvents} branch events left` : ""}` : "Offline" },
+        { name: "The Weaver", status: enabled ? `${Math.max(0, (options.development ? 60 : options.story ? TOWN_STORY_ARCHITECT_REVIEWS : 8) - evolution.stageRuns.architect)} design reviews left · ${options.development ? "mechanics and furnishings" : "furnishings"} · God approval required` : "Offline" },
+        ...(builders ? [{ name: "The Steward", status: enabled ? "Keeps places furnished and lived-in · God approval required" : "Offline" },
+          { name: "The Crafter", status: enabled ? "Makes what residents keep reaching for · God approval required" : "Offline" }] : []),
         ...(options.development ? [{ name: "The Tinker", status: enabled ? "Managed-system inspection and tested repairs" : "Offline" }] : []),
       ].map(row => closed ? { ...row, status: "Stopped" } : row), changes: structuredClone(changes),
       ...(options.story ? { story: { style: style.name, premise: style.premise,
@@ -156,15 +186,15 @@ export function createSpatialTownLife(options: {
         ...(review ? { lastReviewAtSimMs: review.atSimMs, observedEvents: review.receiptIdsObserved.length,
           interventions: review.interventionsRequested, phase: review.phase, tension: review.tension } : {}) } } : {}),
       ...(options.mechanicStatus ? { mechanic: options.mechanicStatus() } : {}),
-      growth: { remaining: Math.max(0, Math.min(4, options.growthSiteCount ?? 4) - inspection.attempts), summary: options.development
-        ? "God/operator-directed development · eight shared code jobs including repairs · new scalar mechanics may execute. Four validated furnishing sites. New rooms, models and actions still need native adapters."
+      growth: { remaining: Math.max(0, Math.min(inspection.limit, options.growthSiteCount ?? inspection.limit) - inspection.attempts), summary: options.development
+        ? "God/operator-directed development · eight shared code jobs including repairs · new scalar mechanics may execute. Eleven validated furnishing sites. New rooms, models and actions still need native adapters."
         : options.story === "household"
         ? options.reviewMechanics
           ? "One indoor chair site · needs evidence and God approval. One approved wetting/drying build; further mechanics review-only. No additional food, rooms or residents."
           : "One indoor chair site · needs evidence and God approval. No additional food, rooms, residents or systems."
         : options.reviewMechanics
-        ? "Four furnishing attempts. Further mechanics may be proposed for review; only the operator-approved wetness build may execute."
-        : "Four furnishing attempts · chairs, tables, plants, lamps. Houses, food production and new systems remain gated." } };
+        ? `${inspection.limit} furnishing builds. Further mechanics may be proposed for review; only the operator-approved wetness build may execute.`
+        : `${inspection.limit} furnishing builds · seats, tables, lamps, plants and lidded boxes · Weaver, Steward and Crafter propose; God approves.` } };
   }
   // Read-only operator evidence, not another mutation or NPC knowledge path.
   return { weather, view, weatherView, inspectGrowth: () => growth.inspect(),
@@ -180,5 +210,11 @@ export function createSpatialTownLife(options: {
         receipt.status === "applied" ? "applied" : "rejected", detail);
       if (receipt.status === "applied") recordSpiritPublicEnvironmentReceipt(world, { id, atSimMs: receipt.atSimMs, roomId: receipt.roomId, detail });
     },
-    close() { if (closed) return; collect(); closed = true; options.storyEvents?.close(); weather.close(); growth.dispose(); } };
+    recordNarrativeReceipt(receipt: SpatialNarrativeReceipt) {
+      record(receipt.id, receipt.atSimMs, receipt.origin === "god" ? "God" : receipt.origin === "operator" ? "God · operator request" : "The Narrator",
+        receipt.status === "applied" ? "applied" : "rejected", receipt.publicDetail);
+      if (receipt.status === "applied" && receipt.roomId !== undefined)
+        recordSpiritPublicEnvironmentReceipt(world, { id: receipt.id, atSimMs: receipt.atSimMs, roomId: receipt.roomId, detail: receipt.publicDetail });
+    },
+    close() { if (closed) return; collect(); closed = true; options.storyEvents?.close(); options.narrativeEvents?.close(); weather.close(); growth.dispose(); } };
 }

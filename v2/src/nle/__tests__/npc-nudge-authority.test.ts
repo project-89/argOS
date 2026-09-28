@@ -27,7 +27,10 @@ test.each(["arrive", "interact", "resolve", "escalate", "reflect", "change_goal"
   expect(nudgeNpc(f.world, "Ada", { ...proposal, type })).toBe(true);
   const p = getAgentPerceptions(f.world, f.actor);
   expect(p).toHaveLength(1); expect(Perception.type[p[0]]).toBe("intent");
-  expect(Perception.content[p[0]]).toContain("not proof or an obligation");
+  // A vivid inner voice, not a hedged memo, and still no goal/action/memory.
+  expect(Perception.content[p[0]]).toBe("You find yourself thinking: Consider a walk");
+  expect(Perception.content[p[0]]).not.toMatch(/not proof|obligation|suggestion/);
+  expect(Perception.source[p[0]]).toBe("inner_voice"); expect(Perception.intensity[p[0]]).toBeGreaterThanOrEqual(0.5);
   expect([Goal, Memory, Thought].map(c => [...query(f.world, [c])])).toEqual(before);
   expect(getRoomForEntity(f.world, f.actor)).toBe(f.room);
 });

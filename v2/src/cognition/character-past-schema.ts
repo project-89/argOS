@@ -15,6 +15,12 @@ export const characterPastSchema = z.object({
     recollection: prose(1200), emotionalTone: prose(80), importance: z.number().finite().min(0).max(1),
     ...identityMeaningSchema.shape, ...formativeOriginSchema.shape,
   }).strict()).min(1).max(6),
+  /** Optional private pressure: what this person hides and what they fear if it
+   * comes out. Belongs to the character (and an omniscient author), never to
+   * other residents except through the world. */
+  secret: prose(1200).optional(),
+  /** Optional speech direction: how this person sounds when they talk. */
+  voice: prose(400).optional(),
 }).strict();
 export type CharacterPast = z.infer<typeof characterPastSchema>;
 export const narrativeIdentitySchema = z.object({

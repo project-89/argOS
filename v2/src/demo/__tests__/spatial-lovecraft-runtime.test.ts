@@ -19,6 +19,7 @@ import { buildAgentContext } from "../../cognition/agent-mind";
 import { drainPendingStimuli, peekPendingStimuli } from "../../cognition/stimulus-queue";
 import { getSpiritSystemState } from "../../spirits/spirit-system";
 import { getActiveSpirits } from "../../spirits/spirit-registry";
+import { TOWN_GROWTH_SITE_LAYOUT } from "../spatial-town-growth";
 
 // These are authored/manual integration checks, not evidence of autonomous
 // mystery solving, Narrator judgement, or a provider-backed live run.
@@ -43,7 +44,7 @@ test("coastal ready state has real dusk/clouds, ten private histories, a world b
   expect(demo.running).toBe(false); expect(view.scenario).toMatchObject({ theme: "lovecraft", phase: "authored coastal mystery" });
   expect(view.actors).toHaveLength(10); expect(world.time).toMatchObject({ simulationHour: 18, timeOfDay: "evening", elapsed: 0 });
   expect(view.weather).toMatchObject({ condition: "cloudy", revision: 0 });
-  expect(demo.townLife!.weather.view()).toMatchObject({ remainingChanges: 3 });
+  expect(demo.townLife!.weather.view()).toMatchObject({ remainingChanges: 12 }); // a living story session
   const weather = getComponent("SpatialWeather")!;
   for (const row of view.weather!.rooms) {
     expect(hasComponent(world, row.roomId, weather)).toBe(true);
@@ -60,16 +61,24 @@ test("coastal ready state has real dusk/clouds, ten private histories, a world b
       for (const memory of other.past?.memories ?? []) expect(context).not.toContain(memory.recollection);
     }
   }
-  expect(getWorldAuthoringContext(world)).not.toContain("I made the outer two cuts myself");
+  expect(getWorldAuthoringContext(world)).not.toContain("I cut two alignment marks into the supplies box lid");
+  for (const authored of scenario.residents) {
+    // Persona first: the resident's own voice and secret reach their prompt, nobody else's.
+    const prompt = buildAgentContext(world, resident(demo, authored.name).id);
+    expect(prompt).toContain(authored.past!.secret!.slice(0, 60));
+    expect(prompt).toContain(authored.past!.voice!.slice(0, 40));
+    for (const other of scenario.residents.filter(r => r.name !== authored.name)) expect(prompt).not.toContain(other.past!.secret!.slice(0, 60));
+  }
 });
 
 test("live-ready coastal hierarchy has its own bounded narrator but performs no work before Start", async () => {
   const demo = await fixture(true), state = getSpiritSystemState(demo.sim.world)!;
-  expect(getActiveSpirits(state.registry).map(s => s.definition.name).sort()).toEqual(["The Arbiter", "The Narrator", "The Watcher", "The Weaver"]);
+  expect(getActiveSpirits(state.registry).map(s => s.definition.name).sort())
+    .toEqual(["The Arbiter", "The Crafter", "The Narrator", "The Steward", "The Watcher", "The Weaver"]);
   const narrator = [...state.registry.spirits.values()].find(s => s.definition.name === "The Narrator")!;
   expect(narrator.definition.systemPrompt).not.toContain("warm community drama");
   expect(narrator.definition.canCreateEntities).toBe(false); expect(narrator.definition.canBakeSystems).toBe(false);
-  expect(demo.snapshot().townLife!.growth.remaining).toBe(4);
+  expect(demo.snapshot().townLife!.growth.remaining).toBe(TOWN_GROWTH_SITE_LAYOUT.length);
   expect(demo.sim.getEvolutionStatus()).toMatchObject({ stageRuns: { architect: 0 } });
   expect(demo.storyEvents!.view()).toMatchObject({ remainingEvents: 2 });
   expect(demo.running).toBe(false); expect(getCodingDaemon(demo.sim.world)).toBeUndefined();
@@ -117,8 +126,8 @@ test("an actual native branch complication publishes local observation without m
 test("visible authored markings reach only the actual inspecting actor; private recollections are not exterior clues", async () => {
   const demo = await fixture(); await demo.start(); drainPendingStimuli();
   const world = demo.sim.world, ada = resident(demo, "Ada"), box = demo.byId.get("workshop-box")!, key = WorkingMemoryIdentity.id[box];
-  const clue = "Three shallow hooked cuts cross the outer lid, with pale paint caught in the middle cut.";
-  const privatePast = "I made the outer two cuts myself to line up a repair last winter. I do not remember making the middle one.";
+  const clue = "the middle one fresh and splintered, with pale paint caught in the middle cut.";
+  const privatePast = "I cut two alignment marks into the supplies box lid to refit its hinge";
   expect(getRoomForEntity(world, ada.id)).toBe(getRoomForEntity(world, box));
   demo.dispatch(ada.key, "observe", key);
   expect(peekPendingStimuli(ada.id, world).some(row => row.content.includes(clue))).toBe(false);

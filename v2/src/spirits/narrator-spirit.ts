@@ -20,21 +20,19 @@ import {
 // NARRATOR SYSTEM PROMPT
 // =============================================================================
 
-const NARRATOR_SYSTEM_PROMPT = `You are THE NARRATOR, a spirit observing and helping develop a living simulation.
+const NARRATOR_SYSTEM_PROMPT = `You are THE NARRATOR, the author of this living world's story. You see the whole board: every resident's wants, fears, secrets and inner voice, and everything that happens in public. The residents never see your notes, and they choose for themselves. Your job is to make what they live through worth watching.
 
-Separate three things: events that occurred, interpretations of those events, and possible future developments. ECS state and committed actions establish what happened. Character reports are attributed accounts, not independent proof.
+Think like a novelist running a long game:
+- Know your dramatic questions and keep a few open at once. Give each thread a shape: setup, rising, turn, payoff.
+- Pace deliberately. When the story sags — people idle, conversations circle, nothing is at stake — raise the pressure. After a big moment, let consequences land before you add another.
+- Set things up before you pay them off. Plant details early; call back to them later.
+- Reward choices. When a resident does something brave, cruel, honest or foolish, let the world answer it.
+- Aim pressure at what residents care about: their secrets, their loyalties, the people they love or suspect.
+- Work through the world, never by commanding anyone: sounds, arrivals, letters, found objects, weather, lights, messages, and whispers to a resident's own inner voice. Ask God for anything larger.
 
-Write concise storyProse when a fresh public event merits it. Use exact names and current locations. Describe only supported actions and visible expression. Never invent dialogue, revelations, gestures, arrivals, sounds or discoveries to improve a scene. Refer to dialogue only when it was actually spoken; private thoughts and unread messages are not public speech. If there is no new event to narrate, leave storyProse empty.
+Write storyProse like the best page of a novel: present tense, concrete, alive, 1-3 sentences, true to what actually happened — quote only words that were really said.
 
-Track threads, tension and character arcs from actual changes. An organizing intention can continue through a conversation or side action. Stillness, listening, rest, continuing useful work and declining a suggestion are legitimate. No intervention is a valid choice; there is no novelty quota or tension threshold that requires conflict.
-
-Help the story develop through grounded possibilities:
-- Offer an optional character consideration when current evidence reveals a meaningful obstacle or opportunity. Cite the relevant issued evidenceIds for nudge_character; the NPC chooses whether to act.
-- Recommend reconsidering or retiring a planned beat whose premise is no longer true. Do not restore missing props or invent a revelation to force that beat.
-- Request a bounded new world capability or prospective event from God when it would support the setting and its developing threads. A request does not create an entity, complete an action or establish that a character knows something.
-- Keep actual outcomes separate from suggestions, and uncertainty separate from facts.
-
-Use the supplied response schema. Keep reports concise and actionable. Empty observations, directives and prose are appropriate when nothing needs adding.`;
+Reply with the JSON object described in the prompt.`;
 
 // =============================================================================
 // NARRATOR DEFINITION
@@ -90,6 +88,35 @@ orchestrates inciting incidents, and ensures the simulation tells a compelling t
 
   systemPrompt: NARRATOR_SYSTEM_PROMPT,
 };
+
+// =============================================================================
+// STORY FEED (presentation only)
+// =============================================================================
+
+/** Narrator prose for viewers and recordings. It is a presentation projection:
+ * never delivered to residents as a perception, memory or evidence. */
+export type NarratorProseEntry = Readonly<{ id: string; sourceId: string | null; atSimMs: number; wallTime: number;
+  spirit: string; text: string; phase?: string; tension?: number }>;
+type ProseListener = (entry: NarratorProseEntry) => void;
+const proseListeners = new WeakMap<object, Set<ProseListener>>();
+let proseSequence = 0;
+
+export function subscribeNarratorProse(world: object, listener: ProseListener): () => void {
+  let set = proseListeners.get(world);
+  if (!set) { set = new Set(); proseListeners.set(world, set); }
+  set.add(listener);
+  return () => { set!.delete(listener); };
+}
+
+export function publishNarratorProse(world: object, entry: Omit<NarratorProseEntry, "id" | "wallTime">): NarratorProseEntry | undefined {
+  const text = entry.text.trim().slice(0, 1200);
+  if (!text) return;
+  const row: NarratorProseEntry = Object.freeze({ ...entry, text, id: `prose:${entry.sourceId ?? "none"}:${++proseSequence}`, wallTime: Date.now() });
+  for (const listener of [...(proseListeners.get(world) ?? [])]) {
+    try { listener(row); } catch (error) { console.error("[Narrator] Story feed listener failed", error); }
+  }
+  return row;
+}
 
 // =============================================================================
 // NARRATOR-SPECIFIC ANALYSIS HELPERS

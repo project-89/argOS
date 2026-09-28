@@ -26,7 +26,7 @@ afterEach(() => {
 async function fixture(read = true, controller: "priority" | "situated" = "priority", priority = 10, selfDirected = false) {
   bed = await ApartmentSitcom.create({ live: false, scenario: "duet", outsideTextAtMs: null, cognitionController: controller });
   const t = bed; await t.start(); t.dispatch("Elaine", { type: "move", target: "Kitchen" }); t.advance(3000);
-  const world = t.sim.world, actor = t.ids.Elaine, message = t.text("Can you call tomorrow?"); t.advance(500);
+  const world = t.sim.world, actor = t.ids.Elaine; world.meta.activityReviewCadence = "strict"; const message = t.text("Can you call tomorrow?"); t.advance(500);
   t.dispatch("Elaine", { type: "pickup", target: "Elaine's phone" }); t.advance(2000);
   if (read) { t.dispatch("Elaine", { type: "interact", target: "Elaine's phone", content: "read_phone" }); t.advance(2000); }
   const { createGeneratedIntention } = await import("../goal-lifecycle");
@@ -54,7 +54,7 @@ test.each(["omitted", "chosen", "invalid"])("operator trace captures offered fol
   const issued = trace.find(e => e.stage === "issued")!, returned = trace.find(e => e.stage === "returned")!;
   expect(issued.detail.contractOffered).toBe(true);
   expect(issued.detail.eligibleNextPurposeGoalIds).toContain(f.goal);
-  expect(issued.detail.contract).toContain("wait/listening interval");
+  expect(issued.detail.contract).toContain("comes back for review when this step ends");
   expect(JSON.stringify(generate.mock.calls[0][0])).toContain("record control.nextPurpose:");
   expect(generate.mock.calls[0][0].messages[0].content).not.toContain('"disposition": "<take or cancel>"');
   expect(JSON.stringify(generate.mock.calls[0][0])).not.toContain("contractOffered");
@@ -72,10 +72,10 @@ test("foreground frames action selection before speech and keeps proposals insid
   const action = await agentThink(f.world, f.actor);
   expect(isDiscardedForegroundDecision(action)).toBe(false);
   const prompt = generate.mock.calls[0][0].messages[0].content as string;
-  expect(prompt.startsWith("Choose the next useful action across your current intentions")).toBe(true);
-  expect(prompt).toContain("Choose what to do before composing anything to say");
-  expect(prompt).toContain("If you choose to speak");
-  expect(prompt).toContain("Listening is a separate choice");
+  expect(prompt.startsWith("It's your move")).toBe(true);
+  expect(prompt).toContain("Stay in character");
+  expect(prompt).toContain("- Speaking:");
+  expect(prompt).toContain("- Listening:");
   expect(prompt).not.toContain("leave space to hear a response");
   expect(prompt.indexOf("NEXT-ACTION CHOICE:")).toBeLessThan(prompt.indexOf("PROPOSED NEXT DECISIONS"));
   expect(getPrivateCommunications(f.world, f.actor).filter(r => r.own)).toHaveLength(0);
@@ -429,8 +429,8 @@ test("closing the evidenced conversation can coexist with old-goal release and f
   expect(snapshotActivityReview(f.world, f.actor)?.status).toBe("closed");
   const issuedPrompt = generate.mock.calls[0][0].messages[0].content as string;
   expect(issuedPrompt.indexOf("PROPOSED NEXT DECISIONS")).toBeGreaterThan(issuedPrompt.indexOf("NEXT-ACTION CHOICE:"));
-  expect(issuedPrompt.indexOf("ACTIVITY REVIEW —")).toBeGreaterThan(issuedPrompt.indexOf("PROPOSED NEXT DECISIONS"));
-  expect(issuedPrompt).toContain("compared with an available alternative");
+  expect(issuedPrompt.indexOf("CONVERSATION CHECK-IN —")).toBeGreaterThan(issuedPrompt.indexOf("PROPOSED NEXT DECISIONS"));
+  expect(issuedPrompt).toContain("something else matters more now");
   expect(Goal.status[cookie]).toBe("retired"); expect(Goal.progress[cookie]).toBe(0);
   expect(JSON.parse(PlanningDecision.reviewJson[plan])).toMatchObject({ disposition: "select" });
   f.t.dispatch("Elaine", action); f.world.meta.aiEnabled = false; f.t.advance(15000);

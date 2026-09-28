@@ -46,6 +46,9 @@ export interface WorldContext {
     experienceReconsideration?: boolean;
     experienceAppraisalEnabled?: boolean;
     narrativeMind?: boolean;
+    /** How often a running conversation must justify itself. "relaxed" (default)
+     * lets lively exchanges run; "strict" restores the earlier every-few-turns check. */
+    activityReviewCadence?: "relaxed" | "strict";
     /** Whether schedules should be LLM-generated (vs. deterministic defaults) */
     generateSchedules?: boolean;
     /** Model utterances as finite in-world actions (enabled by the library). */

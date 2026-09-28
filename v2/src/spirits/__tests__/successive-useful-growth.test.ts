@@ -66,7 +66,7 @@ test("two sequential distinct purposes build useful places, execute natively, an
       if (stage !== "food") {
         expect(request.prompt).toContain('"name":"Diner"');
         expect(request.prompt).toContain('"reason":"member_unavailable"');
-        expect(request.prompt).toContain("finite consumption are not defects");
+        expect(request.prompt).toContain("finite consumption and deliberate absence stay as they are");
         expect(receipts).toEqual(expect.arrayContaining([expect.objectContaining({ event: expect.objectContaining({
           targetName: "Supper", operation: "eating", status: "succeeded",
         }) })]));

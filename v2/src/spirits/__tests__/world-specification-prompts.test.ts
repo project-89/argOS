@@ -5,7 +5,7 @@ jest.unstable_mockModule("ai", () => ({ ...ai, generateText: generate }));
 const { createArgosWorld } = await import("../../ecs/world");
 const { initializePrefabs, createRoomEntity, createAgentEntity } = await import("../../ecs/prefabs");
 const { createEntityRegistry } = await import("../../ecs/tools");
-const { createSystemRegistry } = await import("../../ecs/dynamic-systems");
+const { createSystemRegistry, registerSystem } = await import("../../ecs/dynamic-systems");
 const { startCommittedEvents, stopCommittedEvents } = await import("../../runtime/committed-events");
 const { setWorldSpecification, getWorldAuthoringContext, getWorldTheme } = await import("../../world/world-specification");
 const { createSpiritRegistry, createSpirit } = await import("../spirit-registry");
@@ -53,7 +53,11 @@ test("generic spirit context follows its own world, not a prior world's global t
       model: "flash", systemPrompt: "Observe actual events", observationInterval: 1000 });
     generate.mockResolvedValueOnce({ text: JSON.stringify({ thoughts: "Observe", observations: [], interventions: [] }) });
     await runSpiritCognition(spirit, f.world, createEntityRegistry(), f.spirits);
-    const prompt = generate.mock.calls.at(-1)![0].prompt; publicContext(prompt, f); captured.push(prompt);
+    // The Narrator is the author: it gets a compact setting brief (its own
+    // system prompt carries the story), still world-local and without seeds.
+    const prompt = generate.mock.calls.at(-1)![0].prompt; captured.push(prompt);
+    expect(prompt).toContain(`SETTING: ${name} · coastal mystery`); expect(prompt).toContain("Tensions: An uncertain shared account");
+    expect(prompt).not.toContain("PRIVATE_UNCREATED_RESIDENT"); expect(prompt).not.toContain("PRIVATE_AUTHOR_HISTORY");
   }
   expect(captured[0]).not.toContain("Orbital refuge"); expect(captured[1]).not.toContain("Harbor mystery");
 });
@@ -108,6 +112,8 @@ test("Lawgiver receives world guidance through its existing grant and stale sour
 
 test("Tinker sees setting guidance without changing its native fault/repair tools", async () => {
   const f = fixture(), tinker = createDynamicSpirit(f.spirits, { name: "Tinker", type: "artificer", rank: "archangel", domain: "guardian" })!;
+  // A system in scope: with none, the Tinker now skips its model call entirely.
+  registerSystem(f.systems, { name: "FixtureTide", description: "Fixture", pseudocode: "Noop", code: "fixture", frequency: 0, active: true, lastRun: 0, compiledFn: () => {} });
   generate.mockResolvedValue({ text: "", steps: [], toolResults: [] });
   const report = await runArtificerWithTools(f.world, f.systems, f.spirits, tinker);
   publicContext(generate.mock.calls[0][0].system, f); expect(report.repairsAttempted).toEqual([]);

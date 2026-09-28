@@ -305,14 +305,34 @@ Hours are 0-23. Duration is in hours. Priority is 1-10.`;
   }
 }
 
+/** Livelihood rhythms recognized from an explicit role. Each replaces the
+ * generic "leisure" evening with the kind of evening this person actually has.
+ * Locations are omitted: a role names a way of life, not a room in this world. */
+const LIVELIHOODS: Array<{ pattern: RegExp; day: ScheduledActivity; evening: ScheduledActivity }> = [
+  { pattern: /\b(cafe|café|tavern|inn|bar|barkeep|host|baker|cook|innkeeper)\b/i,
+    day: { name: "cafe work", startHour: 9, duration: 5, priority: 6, interruptible: true, description: "Opening up, baking, serving and keeping the place going" },
+    evening: { name: "evening service", startHour: 17, duration: 4, priority: 6, interruptible: true, description: "Serving the evening crowd, hearing everyone's news and keeping the room lively" } },
+  { pattern: /\b(garden|gardener|farmer|grower|groundskeeper)\b/i,
+    day: { name: "garden work", startHour: 9, duration: 4, priority: 5, interruptible: true, description: "Weeding, planting and tending the beds" },
+    evening: { name: "evening garden rounds", startHour: 17, duration: 3, priority: 5, interruptible: true, description: "Walking the beds at dusk, checking on plants and whoever is sitting among them" } },
+  { pattern: /\b(nurse|doctor|healer|medic|carer)\b/i,
+    day: { name: "shift work", startHour: 9, duration: 5, priority: 7, interruptible: false, description: "A demanding care shift" },
+    evening: { name: "off-duty evening", startHour: 17, duration: 4, priority: 4, interruptible: true, description: "Off duty: seeing friends, eating properly and refusing to be anyone's nurse unless it matters" } },
+  { pattern: /\b(historian|scholar|librarian|archivist|storyteller)\b/i,
+    day: { name: "writing work", startHour: 9, duration: 4, priority: 5, interruptible: true, description: "Writing, sorting papers and old notes" },
+    evening: { name: "evening visiting and storytelling", startHour: 17, duration: 4, priority: 5, interruptible: true, description: "Calling on people, trading stories and old news" } },
+  { pattern: /\b(repairer|mechanic|smith|carpenter|craftsman|craftswoman|maker|fixer|caretaker)\b/i,
+    day: { name: "repair work", startHour: 9, duration: 4, priority: 5, interruptible: true, description: "Fixing what neighbours bring in" },
+    evening: { name: "evening tinkering and errands", startHour: 17, duration: 4, priority: 5, interruptible: true, description: "Small jobs, errands and dropping in on people" } },
+];
+
 /**
- * Baseline daily rhythms, not an invented job or a fully prescribed agenda.
- * Unscheduled hours belong to the actor's own purposes. Employment, shifts and
- * preferred places come from an authored/generated schedule, not a role keyword
- * or the room where the actor happened to spawn. Keep the role argument for API
- * compatibility; a label alone cannot establish a particular obligation.
+ * Baseline daily rhythms. A recognized livelihood role (cafe host, gardener,
+ * nurse, writer, repairer...) receives its own working day and evening habit;
+ * any other role keeps the generic rhythm, leaving daytime to its own purposes.
+ * Authored/generated schedules still outrank this baseline.
  */
-export function createDefaultSchedule(_agentRole: string): ScheduledActivity[] {
+export function createDefaultSchedule(agentRole: string): ScheduledActivity[] {
   const baseSchedule: ScheduledActivity[] = [
     {
       name: "sleep",
@@ -372,7 +392,12 @@ export function createDefaultSchedule(_agentRole: string): ScheduledActivity[] {
     },
   ];
 
-  return baseSchedule;
+  const livelihood = LIVELIHOODS.find(row => row.pattern.test(String(agentRole || "")));
+  if (!livelihood) return baseSchedule;
+  // The evening habit runs through dinner time; the meal remains a separate
+  // need-driven choice rather than an interrupting routine slot.
+  return [...baseSchedule.filter(a => !["leisure", "dinner"].includes(a.name)), { ...livelihood.day }, { ...livelihood.evening }]
+    .sort((a, b) => a.startHour - b.startHour);
 }
 
 /**

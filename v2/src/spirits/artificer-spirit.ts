@@ -961,6 +961,13 @@ export async function runArtificerWithTools(
     healthScores: [],
   };
 
+  // Nothing in scope (e.g. no generated/managed systems yet): the deterministic
+  // inspection above is the whole cycle. No model call for an empty workshop.
+  if (diagnoses.length === 0) {
+    recordEvent("artificer_inspection", { systemsInspected: 0, healthy: 0, warning: 0, critical: 0, repairsAttempted: 0, mode: "idle" }, "The Tinkerer");
+    return report;
+  }
+
   // Get current system state for context
   const systemHealth = getSystemHealthSummary(systemRegistry);
   const telemetry = getSystemTelemetrySnapshot(systemRegistry);

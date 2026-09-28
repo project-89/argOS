@@ -21,6 +21,7 @@ import {
   getSpiritSummary,
   forwardSpiritMessage,
   restoreMessagesForGodAI,
+  sendMessage,
 } from "./spirit-registry";
 import { runSpiritCognition, getSpiritSummary as getCognitionSummary } from "./spirit-cognition";
 import { NarratorDefinition } from "./narrator-spirit";
@@ -316,6 +317,36 @@ function findBestSpiritForMessage(registry: SpiritRegistry, msg: DivineMessage):
   }
 
   return undefined;
+}
+
+/**
+ * Operator/host message into the spirit hierarchy. A named or numbered target
+ * receives it in its inbox (God's own id reaches God's review queue); with no
+ * target it is broadcast to every active spirit. Delivery is source-scoped like
+ * any other spirit message. Returns the recipients' names.
+ */
+export function injectOperatorSpiritMessage(world: World, input: {
+  message: string; subject?: string; targetSpiritId?: number; targetSpiritName?: string;
+  priority?: DivineMessage["priority"];
+}, fromEid: number): string[] {
+  const state = getSpiritSystemState(world);
+  if (!state || retired.has(state)) throw new Error("Spirit system is not running for this world");
+  if (getCommittedEvents(world).stopped) throw new Error("Cannot message spirits of a stopped world");
+  const text = typeof input.message === "string" ? input.message.trim() : "";
+  if (!text || text.length > 4000) throw new Error("Spirit message must be non-empty and at most 4000 characters");
+  const registry = state.registry, priority = input.priority ?? "normal";
+  const subject = (input.subject?.trim() || "Operator message").slice(0, 200);
+  const named = input.targetSpiritName !== undefined ? registry.byName.get(input.targetSpiritName) : input.targetSpiritId;
+  if ((input.targetSpiritName !== undefined || input.targetSpiritId !== undefined) && named === undefined)
+    throw new Error(`Unknown spirit: ${input.targetSpiritName ?? input.targetSpiritId}`);
+  const targets = named === undefined ? getActiveSpirits(registry).map(spirit => spirit.eid) : [named];
+  if (named !== undefined && named !== registry.godAgentEid && !registry.spirits.has(named)) throw new Error(`Unknown spirit: ${named}`);
+  const names: string[] = [];
+  for (const target of targets) {
+    sendMessage(registry, fromEid, target, named === undefined ? "broadcast" : "directive", subject, text, { priority });
+    names.push(target === registry.godAgentEid ? "God" : registry.spirits.get(target)?.definition.name ?? `spirit:${target}`);
+  }
+  return names;
 }
 
 /**

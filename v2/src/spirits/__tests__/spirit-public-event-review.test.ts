@@ -20,7 +20,9 @@ function fixture(label = "Town") {
   const room = ecs.createRoom({ name: `${label} square` }).result.entityId;
   const actor = ecs.createAgent({ name: `${label} resident`, role: "neighbor", systemPrompt: "Private identity", roomName: `${label} square` }).result.entityId;
   const registry = createSpiritRegistry(world);
-  const definition = { name: "The Narrator", domain: "narrative" as const, rank: "archangel" as const,
+  // Receipt acknowledgement is shared by every spirit. A supervisory domain
+  // shows the raw receipt JSON; the Narrator's readable summary is tested below.
+  const definition = { name: "Public observer", domain: "social" as const, rank: "archangel" as const,
     model: "flash" as const, systemPrompt: "Observe actual events.", observationInterval: 1000 };
   const spirit = createSpirit(registry, definition), other = createSpirit(registry, { ...definition, name: "Other observer" });
   const receipt = (id: string, action = "interact", status: "pending" | "succeeded" | "failed" = "succeeded") =>
@@ -188,6 +190,19 @@ test("actual in-flight cognition acknowledges its snapshot, not events received 
   const pending = f.run(); expect(promptHistory().records[0].receiptIds).toEqual([first.id]);
   const later = f.receipt("during"); release({ text: "{}" }); await pending;
   await f.run(); expect(promptHistory().records[0].receiptIds).toEqual([later.id]);
+});
+
+test("the Narrator reads public events as a story summary and acknowledges them once", async () => {
+  const f = fixture(), narrator = createSpirit(f.registry, { name: "The Narrator", domain: "narrative", rank: "archangel",
+    model: "flash", systemPrompt: "Tell the story.", observationInterval: 1000 });
+  f.say("spoken", "Somebody forced that box."); f.receipt("looked", "examine");
+  await runSpiritCognition(narrator, f.world, f.entities, f.registry);
+  const first = generate.mock.calls.at(-1)![0].prompt as string;
+  expect(first).toContain('Town resident (Town square) says: "Somebody forced that box."');
+  expect(first).toContain("Town resident examine in Town square — succeeded");
+  expect(first).not.toContain("COMMITTED_PUBLIC_EVENTS_SINCE_REVIEW");
+  await runSpiritCognition(narrator, f.world, f.entities, f.registry);
+  expect(generate.mock.calls.at(-1)![0].prompt).toContain("(Nothing public happened since your last review.)");
 });
 
 test("actual overlapping cycles cannot acknowledge or replace newer review diagnostics", async () => {

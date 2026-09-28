@@ -12,7 +12,9 @@ export interface SpatialAsset {
   objectType?: string; initialState?: string; affordances: readonly string[];
   collider?: { halfWidth: number; halfDepth: number };
 }
-export const SPATIAL_ASSETS: Readonly<Record<string, SpatialAsset>> = {
+// Built-in kinds. The data-driven registry (spatial-asset-registry.ts) extends
+// this same table at runtime, so every existing reader sees registered kinds.
+const assetTable: Record<string, SpatialAsset> = {
   sofa: { id: "sofa", size: { x: 2.5, y: 1, z: 1 }, color: "#657e6d", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: 1.25, halfDepth: .5 } },
   table: { id: "table", size: { x: 1.5, y: .75, z: 1 }, color: "#aa7955", objectType: "table", initialState: "normal", affordances: ["examine"], collider: { halfWidth: .75, halfDepth: .5 } },
   chair: { id: "chair", size: { x: .6, y: .95, z: .65 }, color: "#b28d66", objectType: "chair", initialState: "empty", affordances: ["sit"], collider: { halfWidth: .3, halfDepth: .325 } },
@@ -31,12 +33,26 @@ export const SPATIAL_ASSETS: Readonly<Record<string, SpatialAsset>> = {
   "power-panel": { id: "power-panel", size: { x: .65, y: 1.1, z: .4 }, color: "#596b72", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: .325, halfDepth: .2 } },
   "supply-box": { id: "supply-box", size: { x: .9, y: .45, z: .65 }, color: "#ae8052", objectType: "chest", initialState: "closed", affordances: ["open", "close", "examine"], collider: { halfWidth: .45, halfDepth: .325 } },
   "repair-part": { id: "repair-part", size: { x: .18, y: .12, z: .3 }, color: "#e2ba63", objectType: "object", initialState: "normal", affordances: ["examine"] },
+  // Small generic story objects. They render as simple boxes; carrying,
+  // reading, giving, showing and hiding are installed by the spatial executor
+  // from the prop's authored item data, not by these visual entries.
+  book: { id: "book", size: { x: .24, y: .06, z: .32 }, color: "#4d3b2a", objectType: "object", initialState: "normal", affordances: ["examine"] },
+  paper: { id: "paper", size: { x: .21, y: .012, z: .28 }, color: "#e6dcc2", objectType: "object", initialState: "normal", affordances: ["examine"] },
+  trinket: { id: "trinket", size: { x: .14, y: .05, z: .08 }, color: "#8a8d84", objectType: "object", initialState: "normal", affordances: ["examine"] },
+  // A door knocker on a cottage's front post: the audible way to call on a house.
+  knocker: { id: "knocker", size: { x: .16, y: .2, z: .06 }, color: "#4f544e", objectType: "object", initialState: "normal", affordances: ["examine"] },
   "actor-mara": { id: "actor-mara", size: { x: .5, y: 1.7, z: .5 }, color: "#d3a74d", affordances: [] },
   "actor-ivo": { id: "actor-ivo", size: { x: .5, y: 1.8, z: .5 }, color: "#6c9daf", affordances: [] },
   "actor-a": { id: "actor-a", size: { x: .5, y: 1.7, z: .5 }, color: "#7fa990", affordances: [] },
   "actor-b": { id: "actor-b", size: { x: .5, y: 1.8, z: .5 }, color: "#cc876f", affordances: [] },
   "actor-f": { id: "actor-f", size: { x: .5, y: 1.75, z: .5 }, color: "#8d93bb", affordances: [] },
 };
+export const SPATIAL_ASSETS: Readonly<Record<string, SpatialAsset>> = assetTable;
+/** Registry-only extension point. Callers must validate first; ids are never replaced. */
+export function installSpatialAsset(asset: SpatialAsset): void {
+  if (Object.hasOwn(assetTable, asset.id)) throw new Error(`Spatial asset ${asset.id} is already registered`);
+  assetTable[asset.id] = Object.freeze({ ...asset, affordances: Object.freeze([...asset.affordances]) });
+}
 
 const id = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const number = z.number().finite().min(-128).max(128);
@@ -52,7 +68,20 @@ const roomSchema = z.object({ id, name: z.string().min(1).max(120), description:
 const propSchema = z.object({ id, roomId: id, assetId: id, name: z.string().min(1).max(120), description: z.string().max(2000), position: point,
   elevation: z.number().finite().min(0).max(3).default(0), rotationY: z.number().finite().default(0),
   interactionAnchors: z.array(point).min(1).max(8), reach: z.number().finite().positive().max(3).default(1.1),
-  supportedBy: id.optional(), state: z.string().min(1).max(40).optional() }).strict();
+  supportedBy: id.optional(), state: z.string().min(1).max(40).optional(),
+  // Story-object data. Document text is private to whoever reads it; the
+  // excerpt is the page someone sees when it is shown to them.
+  item: z.object({
+    portable: z.boolean().optional(),
+    text: z.string().trim().min(1).max(2000).optional(),
+    excerpt: z.string().trim().min(1).max(400).optional(),
+    /** Starts inside this chest-type prop in the same room (hidden while closed). */
+    containedBy: id.optional(),
+    /** Starts in this resident spawn's possession (pocketed, not in hand). */
+    carriedBy: id.optional(),
+    /** A knocker announces knocks to the people inside this room. */
+    knockFor: id.optional(),
+  }).strict().optional() }).strict();
 const wallSchema = z.object({ id, roomId: id, position: point, halfWidth: z.number().finite().positive().max(16), halfDepth: z.number().finite().positive().max(16), height: z.number().finite().positive().max(4) }).strict();
 // Bounded authored neighborhoods, not permission for unbounded model output.
 // Native construction authority and lifetime entity budgets remain separate.
@@ -203,6 +232,20 @@ export function validateSpatialBlueprint(input: unknown, existingRooms: readonly
       const c = { position: p.position, ...asset.collider };
       if (!inside({ x: p.position.x - c.halfWidth, y: p.position.y - c.halfDepth }, room.bounds) || !inside({ x: p.position.x + c.halfWidth, y: p.position.y + c.halfDepth }, room.bounds)) throw new Error("Prop collider leaves room");
       colliders.push(c);
+    }
+    if (p.item) {
+      const item = p.item;
+      if (item.excerpt && !item.text) throw new Error("A document excerpt requires document text");
+      if (item.containedBy) {
+        const holder = value.props.find(s => s.id === item.containedBy);
+        if (!holder || holder.roomId !== p.roomId || SPATIAL_ASSETS[holder.assetId]?.objectType !== "chest" || p.supportedBy || item.carriedBy)
+          throw new Error("Contained story objects need a chest in the same room");
+      }
+      if (item.carriedBy) {
+        const spawn = value.spawns.find(s => s.id === item.carriedBy);
+        if (!spawn || spawn.roomId !== p.roomId || p.supportedBy || asset.collider) throw new Error("Carried story objects need their holder's spawn room");
+      }
+      if (item.knockFor && (item.knockFor === p.roomId || !roomMap.has(item.knockFor))) throw new Error("A knocker must announce to another installed room");
     }
     if (p.supportedBy) {
       const support = value.props.find(s => s.id === p.supportedBy), surface = support && SPATIAL_ASSETS[support.assetId];

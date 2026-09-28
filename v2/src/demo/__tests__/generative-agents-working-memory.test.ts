@@ -65,7 +65,7 @@ test("a committed handoff remains in the giver, busy recipient and local witness
       const working = formatWorkingMemoryContext(world, house.ids[actor]);
       expect(working).toContain("Spare fuse");
       expect(working).toContain("Mara");
-      expect(buildAgentContext(world, house.ids[actor])).toContain("PHYSICAL WORKING MEMORY");
+      expect(buildAgentContext(world, house.ids[actor])).toContain("WHAT YOU'VE SEEN AND DONE");
     }
     expect(house.activity.phase[house.ids.Mara]).toBe("holding_panel");
   });

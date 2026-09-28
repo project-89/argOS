@@ -55,7 +55,7 @@ test("live-ready story profile installs a bounded existing Narrator before any m
   expect(demo.storyEvents!.damage("Common tree 3", demo.byId.get("common-square")!).status).toBe("rejected");
   const state = getSpiritSystemState(demo.sim.world)!;
   const narrator = [...state.registry.spirits.values()].find(s => s.definition.name === "The Narrator")!;
-  expect(narrator.definition.observationInterval).toBe(25_000);
+  expect(narrator.definition.observationInterval).toBe(20_000);
   expect(narrator.definition.systemPrompt).toBe(STORY_TOWN_NARRATOR_PROMPT);
   expect(narrator.definition.systemPrompt).toContain("active director");
   expect(demo.sim.god.systemRegistry.systems.get("NarrativeEvents")?.active).toBe(false);

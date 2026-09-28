@@ -914,45 +914,30 @@ export function buildAgentContext(world: World, eid: number): string {
     return descriptions.length > 0 ? descriptions.join(", ") : "balanced temperament";
   };
 
-  return `You are ${name}.
+  // Persona leads. The engine, not this prose, decides what actually happened:
+  // admission fences, native receipts and privacy projection enforce truth, so
+  // the character is told who they are and what is in front of them, not
+  // reminded at every heading what does not count as proof.
+  const appearance = description && !/^An adult resident in a simple everyday outfit\.?$/i.test(description.trim()) ? description : "";
+  return `You are ${name}${role ? `, ${role}` : ""}.
 
-IDENTITY:
-${description}
-
-ROLE: ${role}
-
-BEHAVIORAL GUIDELINES:
+WHO YOU ARE:
 ${systemPrompt}
+${appearance ? `How you look: ${appearance}\n` : ""}${personalityTraits ? `Temperament: ${formatPersonality(personalityTraits)}\n` : ""}
+${formatCharacterMotivations(world, eid)}
 
-CURRENT STATE:
-- Location: ${roomContext}${roomDescription ? ` — ${roomDescription}` : ""}
-- Known available objects/possessions: ${objectsInRoom.length > 0 ? objectsInRoom.join(", ") : canSee ? "nothing notable" : "none established through sight"}
-- Others Present: ${othersInRoom.length > 0 ? othersInRoom.join(", ") : canSee ? "no one else visible" : "not established through sight"}
-- Ambience: ${roomAmbience || "see admitted sensory perceptions"}
-- Mental Mode: ${mode}
-- Arousal Level: ${(arousal * 100).toFixed(0)}%
-- Current Focus: ${focus || "nothing specific"}
-${personalityTraits ? `- Temperament: ${formatPersonality(personalityTraits)}` : ""}
-
-SOCIAL AWARENESS:
-${buildSocialContext(world, eid, othersInRoom)}
-
-${formatAffectContext(world, eid)}
-${formatEmotionalLife(world, eid)}
-${formatNarrativeMemory(world, eid)}
 ${formatIdentityAnchors(world, eid, [roomContext, focus, ...recentPerceptions.map(id => Perception.content[id])].join(" "))}
+${formatNarrativeMemory(world, eid)}
+${formatEmotionalLife(world, eid)}
+${formatAffectContext(world, eid)}
 
 ${formatPersonalConcerns(world, eid)}
 
 ${formatReflectionQuestions(world, eid)}
 
-${formatAttentionSignals(world, eid)}
-
-PURPOSE, APPROACH AND RESULTS:
-${ACTIVITY_SITUATION_GUIDANCE}
-
-DESIRED OUTCOMES / STANDING CONCERNS (priorities are advisory):
+WHAT YOU WANT RIGHT NOW:
 ${formatActiveIntentions(world, eid)}
+${ACTIVITY_SITUATION_GUIDANCE}
 
 ${formatOngoingActivity(world, eid)}
 ${formatActorContinuation(world, eid)}
@@ -961,22 +946,31 @@ ${formatWaitExperience(world, eid)}
 
 ${formatActorWait(world, eid)}
 
-ACTUAL RESULTS AND LAST-KNOWN FACTS:
+${formatAttentionSignals(world, eid)}
+
+WHERE YOU ARE:
+- ${roomContext}${roomDescription ? ` — ${roomDescription}` : ""}
+- With you: ${othersInRoom.length > 0 ? othersInRoom.join(", ") : canSee ? "no one" : "you can't see who is here"}
+- Around you: ${objectsInRoom.length > 0 ? objectsInRoom.join(", ") : canSee ? "nothing notable" : "you can't see what is here"}
+${roomAmbience ? `- Atmosphere: ${roomAmbience}\n` : ""}- Your state of mind: ${mode}, ${arousal > 0.7 ? "keyed up" : arousal > 0.4 ? "alert" : "calm"} (${(arousal * 100).toFixed(0)}%)${focus ? `; on your mind: ${focus}` : ""}
+
+THE PEOPLE AROUND YOU:
+${buildSocialContext(world, eid, othersInRoom)}
+
+WHAT YOU'VE DONE AND KNOW FOR SURE:
 ${formatWorkingMemoryContext(world, eid, Date.now(), { fullReceiptIds: true })}
+
+WHAT YOU'VE JUST SENSED:
+${formatContextPerceptions(world, eid, recentPerceptions)}
 
 ${formatSocialMemoryContext(world, eid)}
 
-${formatCoordinationContext(world, eid, { actionReceiptsShown: shownActionReceipts })}
-
-RECENT PERCEPTIONS:
-Familiar properties and remembered routines describe what could happen, not evidence that it just happened.
-${formatContextPerceptions(world, eid, recentPerceptions)}
-
-RECENT THOUGHTS (historical interpretations and intentions, NOT evidence that an action succeeded):
-Earlier interpretations are not new sensory observations.
+YOUR RECENT THOUGHTS:
 ${recentThoughts.length > 0
-  ? recentThoughts.map(eid => `- ${Math.round(simulationAge(world, eid, "Thought.timestamp", Thought.timestamp[eid]) / 1000)}s ago${Thought.observedAtSimMs[eid] >= 0 ? ` (interpreting observations at source ${Thought.observedAtSimMs[eid]}ms)` : ""}: ${Thought.content[eid]}`).join("\n")
-  : "Mind is clear."}
+  ? recentThoughts.map(eid => `- ${Math.round(simulationAge(world, eid, "Thought.timestamp", Thought.timestamp[eid]) / 1000)}s ago: ${Thought.content[eid]}`).join("\n")
+  : "Nothing yet."}
+
+${formatCoordinationContext(world, eid, { actionReceiptsShown: shownActionReceipts })}
 
 ${buildKnowledgeContext(world, eid, othersInRoom)}
 
@@ -987,8 +981,6 @@ ${formatPlansForContext(world, eid)}
 ${formatScheduleForContext(world, eid)}
 
 ${formatInsightsForContext(world, eid)}
-
-${formatCharacterMotivations(world, eid)}
 
 ${formatSkillsForContext(eid)}
 
@@ -1359,8 +1351,8 @@ export async function agentThink(world: World, eid: number, guard: CognitionGuar
   const priority = currentGoals.length ? (Goal.priority[currentGoals[0]] || 0) : undefined;
   const currentPriorities = currentGoals.filter(gid => Goal.priority[gid] === priority);
   const coordinationGoalRefs = currentPriorities.map(gid => getCoordinationGoalRef(world, eid, gid));
-  const decisionSnapshot = `CURRENT DECISION EVIDENCE (supersedes past thoughts and earlier outcomes):
-Latest action bookkeeping (can be speech or pending work; use physical working-memory receipts for completed physical outcomes): ${hasComponent(world, eid, LastAction) ? JSON.stringify({ type: LastAction.type[eid], target: LastAction.target[eid], content: LastAction.content[eid], success: LastAction.success[eid], timestamp: LastAction.timestamp[eid] }) : "No processed action yet."}`;
+  const decisionSnapshot = `CURRENT DECISION EVIDENCE:
+Your last action (may still be in progress): ${hasComponent(world, eid, LastAction) ? JSON.stringify({ type: LastAction.type[eid], target: LastAction.target[eid], content: LastAction.content[eid], success: LastAction.success[eid], timestamp: LastAction.timestamp[eid] }) : "No processed action yet."}`;
 
   // Get dynamic actions based on agent's components, location, and environment
   const actionsContext = formatActionsForPrompt(world, eid);
@@ -1368,83 +1360,61 @@ Latest action bookkeeping (can be speech or pending work; use physical working-m
   const listeningActivities = getListeningActivities(world, eid).map(row => ({ executionId: row.executionId, speaker: Name.value[row.speakerId] }));
   const chosenNextPurpose = snapshotActorContinuation(world, eid)?.nextPurpose;
 
-  const prompt = `Choose the next useful action across your current intentions, then express it as this character.
-Choose what to do before composing anything to say. An available conversational
-turn is one opportunity alongside your other actions, not a request to take it.
+  const prompt = `It's your move, ${name}. What do you do next?
+
+Stay in character. Act from what you want, fear, suspect, love and are hiding —
+not from politeness. The people here have history with you; let it show. When
+something matters, pursue it: go to someone, ask the hard question, press,
+dodge, confide, tease, lie, confront, apologize, investigate, take or keep
+something back. Stillness is a choice too — make it only when this character
+genuinely would, and let your innerThought say why.
 
 ${formatDueAttentionReview(world, eid)}
 
 ${actionsContext}
 
-Use current observations, inventory and executor outcomes to check your beliefs.
-An attempted or planned action is not a completed one. After failure, address the
-missing prerequisite or choose another approach. Speech, memories and whispers
-are attributed experiences or claims; they can be mistaken, questioned or declined.
-Unspecified details remain unknown. For a known-answer test, choose an answer
-already supported by your observations or supplied memories; otherwise ask an
-open question or inspect first. Your own new claim does not establish a past event.
-
-${situated ? SITUATED_SELECTION : `Attend to immediate hazards and urgent needs. Then reconsider what you want in
-light of your important experiences, not just the latest conversational topic.
-Keep useful goals, release a listed eligible intention you no longer want to pursue,
-or form a new intention when circumstances change. A valid plan provides
-continuity, not a script to follow after its
-purpose has ceased to matter. While planning runs in the background, choose a
-useful next step yourself.
-When further progress depends on someone else, the concern can remain unresolved
-while you attend to something else. You do not need their agreement to change
-your approach. Use goalReview to defer an eligible intention if you choose to
-put it on hold; switching attention does not require giving up the concern.`}
+${situated ? SITUATED_SELECTION : `Tend to anything urgent first — danger, hunger, exhaustion. Otherwise follow
+what matters most to you right now, weighing what's just happened against what
+you already wanted. Keep a goal while you still care about it; drop it, park
+it, or take on a new one when your feelings or the situation change. Plans in
+progress are there to help you, not to bind you. When something depends on
+someone else, you can let it ride and turn to something else meanwhile.`}
+Priorities are context, not a requirement to choose the highest-ranked goal.
 ${narrative ? NARRATIVE_SELECTION_INSTRUCTION : ""}
 
-Let speech express what you want, feel or are trying to learn now. A reply can
-serve an intention, offer company or be a side response without replacing what
-you were doing. Listening, other work and letting a topic end are also choices.
-Your inner thought is private, not speech or a world event.
-If you choose to turn to an existing goal after this speech, physical step, or wait/listening interval,
-record control.nextPurpose:{"goalId":listed active goal ID,"purpose":"what I intend to do next"}.
-This preserves your choice, not an executable action. A deferral reason saying
-"after this" alone does not schedule a switch. Omit nextPurpose if you are only
-considering it; use nextPurposeReview to take or cancel a previously chosen one.
-A wait brings that later purpose back for review when evidence, an interruption or its deadline makes you reconsider; it does not guarantee an answer.
-If you choose to speak, use one short conversational beat, usually one sentence
-of 6–18 words. Ending your utterance frees the speaking turn; choose your next
-action from your intentions. Listening is a separate choice. An explanation
-can unfold over several turns while you continue other work.
-Conversation now: ${speechOpportunity.available ? "a normal speaking turn is available" : `the speaking turn is temporarily occupied (${speechOpportunity.reason})`}.
-If you want the next turn, propose speak now. The controller retains your place
-while you revise stale wording for the same audience; it never speaks stale words.
-Choosing wait or observe instead means you have not requested a speaking turn.
-Observe is a visual inspection, not sustained listening. To keep listening to an
-already heard voice, choose wait with listeningTo set to its executionId from
-${JSON.stringify(listeningActivities)}. The controller keeps listening through
-ordinary word progress; a coherent sentence, turn ending, or new event can bring
-you back to a decision. Omit listeningTo for an ordinary wait.
-For a particular observed condition, optionally choose action.waitUntil using an exact physical_fact contract below, or {"kind":"heard_evidence","timeoutMs":15000} for new heard evidence. Use waitUntil only on wait, not together with listeningTo. timeoutMs (1000–60000 simulated milliseconds) is when to reconsider, not a prediction or promise that the event will happen. Omit it for an ordinary wait; do not borrow a plan's condition unless that is actually what you choose to wait for.
+HOW THINGS WORK
+- Use the listed action types and the exact names of people, places and objects.
+  An action only counts once it completes; if it fails, find another way.
+- What others say is their claim. Believe it, doubt it, test it — as you would.
+- Asked something you don't know? Say so, speculate out loud, or ask or inspect first.
+  Saying something happened doesn't make it so — lying on purpose is a different matter.
+- Speaking: say what ${name} would really say, in your own voice — usually 1 to 3
+  sentences. Subtext, evasion, humor, heat and tenderness all belong. You don't
+  need to wrap up politely; you can walk off, change the subject or keep pushing.
+  Conversation now: ${speechOpportunity.available ? "you can speak" : `someone else has the floor (${speechOpportunity.reason})`}.
+  To cut in anyway, set speechMode:"interrupt" on speak.${speakingAtRequest ? `
+  You are mid-sentence; said so far: ${JSON.stringify(speakingAtRequest.spokenText)}. Set action.stopSpeaking=true to break off if something changes what you'd say.` : ""}
+- Listening: to keep listening to a voice, choose wait with action.listeningTo set to its
+  executionId from ${JSON.stringify(listeningActivities)} (omit target/content).
+- Waiting for something specific: wait with action.waitUntil =
+  {"kind":"heard_evidence","timeoutMs":15000} or an exact physical_fact contract below
+  (timeoutMs 1000–60000 simulated ms is when you'll reconsider). Not together with listeningTo.
 ${formatObservableConditions(world, eid)}
-${speakingAtRequest ? `You are currently speaking. Already spoken so far: ${JSON.stringify(speakingAtRequest.spokenText)}.
-If new evidence changes what you are saying, set action.stopSpeaking=true to stop your unfinished utterance and choose your next action (including a correction). Otherwise leave it to finish.` : ""}
-To deliberately interrupt rather than wait, set speechMode="interrupt" on speak.
-Choose whether what matters to you warrants cutting in; ordinary replies take turns.
-Keep track of work you have actually undertaken with others. If your progress or
-ability to help changes, consider who is relying on you and what they have heard.
-Deciding to report something is not the same as having said it.
+- A quick physical sequence toward a listed goal: motorPlan = 2–4 {type,target,content?}
+  steps starting with this action, using objects you can see, ending at the first new
+  information (e.g. reading something).
+- Returning to a goal afterwards: record control.nextPurpose:{"goalId":listed goal ID,"purpose":"what I'll do next"}.
+  It comes back for review when this step ends. Use nextPurposeReview to take or cancel a ready one.
+- Promises: if someone is relying on you and things change, think about telling them.
 
-Use the available actions and exact target names. Action type: ${validTypes.join(", ")}.
-For a short physical sequence you have already chosen toward a listed control.goalId,
-use motorPlan: an array of 2–4 {type,target,content?} steps, including your
-current action first. Use only currently observed local objects, with pickup/drop
-preparations and an optional final interact or observe. End at the first new
-information: reading something cannot include a reaction to its unread contents.
-This chosen sequence may replace an untouched background draft, not work already
-underway or an evidence barrier. Omit it when the next step needs a decision.
+Action types: ${validTypes.join(", ")}.
 
 ${formatNextPurpose(world, eid)}
-Respond with JSON only (include any required review from the chosen-next-purpose block above):
+Respond with JSON only:
 {
   "control": {
     "version": 2,
-    "purpose": "The continuing purpose behind my next step",
+    "purpose": "why I'm doing this",
     "goalId": null,
     "localDependencies": []${chosenNextPurpose?.status === "ready" ? `,
     "nextPurposeReview": {
@@ -1455,73 +1425,37 @@ Respond with JSON only (include any required review from the chosen-next-purpose
   },
   "action": {
     "type": "<action_type>",
-    "target": "optional - exact name of who/what from the lists above",
-    "content": "optional - what you say/think/do"
-  }
+    "target": "exact name of who/what, when needed",
+    "content": "what you say / do"
+  },
+  "innerThought": "optional — a private first-person moment in your own voice"
 }
-${listeningActivities[0] ? `Listening action example for an offered voice: ${JSON.stringify({ type: "wait", listeningTo: listeningActivities[0].executionId })}.
-listeningTo belongs directly inside action, alongside type; never put it in target or content.
-Use the chosen voice's exact listed executionId, and omit target/content for this listening wait.` : ""}
-Optional innerThought: a private first-person thought in your own voice. Include
-it when you want to express something of your inner life; omit it when choosing
-an action needs no monologue. control.purpose tracks intent either way.
+${listeningActivities[0] ? `Listening example: ${JSON.stringify({ type: "wait", listeningTo: listeningActivities[0].executionId })} — listeningTo sits inside action; never put it in target or content.\n` : ""}
+control.goalId: the listed goal this serves, "new" for a goalUpdate in this reply, or null
+for something spontaneous. Optional: control.switchReason when you change purpose;
+control.activityDisposition "continue" | "pause" | "replace" (with a listed goal) | "end".
+control.localDependencies: usually []; list exact IDs from this catalog only for local
+facts your action relies on staying true: ${JSON.stringify(getLocalDependencyCatalog(localView))}.
+When a physical action serves one of your listed goals, set action.goalId (its ID, or
+"new"); for a promise you made, also action.undertakingId.
 
-The control block separates your continuing intention from its next action.
-An ongoing activity can survive a conversational side action. Optionally set control.activityDisposition to "continue" to retain/resume it, "pause" to suspend it, "replace" with a listed goal to choose a different organizing activity, or "end" to stop it without claiming success.
-An expressed thought interprets the observations supplied at this request; it does not
-certify that the room remained unchanged or that your action has happened.
-List localDependencies only for current facts your immediate action or words
-depend on remaining true (for example, a display still being dark). Use exact
-IDs from this catalog: ${JSON.stringify(getLocalDependencyCatalog(localView))}.
-Use [] when no additional current local fact is required. Actor identity,
-location, target access and relevant new speech are always checked by the engine.
-Your purpose survives a blocked action. Revise it when warranted, rather than
-repeating a failed action or forgetting why you were doing it.
-Set control.goalId to the listed goal this purpose serves, "new" for your
-goalUpdate, or null for an independent response. Gathering information can serve
-that same purpose; a goal is not tied to one action or conversational topic.
-Priorities are context, not a requirement to choose the highest-ranked goal.
-You may choose any listed goal or an independent response. Optionally include control.switchReason
-to explain a change of purpose. Keeping a concern does not require keeping the same approach.
-An independent response does not erase your existing intentions; a thought is not completion.
-
-When a physical action pursues a listed own intention, include action.goalId (its numeric ID, or "new" for this decision's goalUpdate). When it advances a particular undertaking, also include action.undertakingId (the commitment ID, or your prior speechId being undertaken in this decision). Omit these for independent action. A shared goal does not make every action part of every promise.
-
-Optional top-level fields (omit when unnecessary):
+OPTIONAL (include only when they apply):
 ${heardAppraisalContext.prompt}
-${issuedAttentionSignals.length ? `- attentionReview: {"signalId":one listed signal ID,"disposition":"consider" or "defer","reason":"your choice"}. For defer, include afterSeconds:5..120; optionally wake:{"kind":"heard_evidence"} to revisit after new completed dialogue you hear, or the timeout, whichever comes first. Checking a cue can be a temporary interruption without abandoning your activity or agreeing to a request. This records your consideration, not a resolved event or performed action.\n` : ""}
-- goalReview: {"goalId":listed eligible intention ID,"disposition":"defer","reason":"why I cannot usefully advance it now","afterSeconds":10..60,"wake":one exact listed wake condition}.
-  Every disposition requires goalId and a nonblank reason (up to 400 characters), including retain, release and withdraw.
-  For an intention awaiting reconsideration, disposition:"retain" means you still
-  want it. Retain changes only its lifecycle: choose any action for it in a later
-  decision after checking current prerequisites. Omit wake/afterSeconds for retain.
-  Defer when progress depends on someone else or you need to reconsider later;
-  this frees attention without claiming success. New evidence on that channel
-  or the simulation-time deadline brings the goal back for review. To deliberately
-  relinquish an episodic intention, use disposition:"release". For a standing
-  desire, use disposition:"withdraw" only if you no longer want to maintain it;
-  completing one task does not end that desire. Omit wake/afterSeconds for either.
-  Only listed self-directed desires are eligible; assigned
-  objectives and physical success contracts cannot be retired here.
-  You may set aside one goal while selecting a plan or action for an independent goal.
-  Review detaches the reviewed goal from subsequent control. If you also select a physical action explicitly credited to that same active purpose, release/withdraw is kept as a pending review instead: the goal stays active for this step, and you reconsider from actual outcomes in a fresh decision. This does not queue an action or automatically retire the goal. Retain/defer do not grant same-turn work authority. Otherwise a closing action must be uncredited and must not add a plan or continue the activity being set aside. Normal action prerequisites always apply.
-- affectUpdate: {"feeling":"brief private feeling","valence":-1..1,"arousal":0..1,"reason":"What in your experience matters to you","expression":"optional visible facial expression"}.
-  Use when your appraisal changes. Feelings may be mixed and need not be shown. Omit expression to keep your current face; to change it choose ${FACIAL_EXPRESSIONS.map(expression => JSON.stringify(expression)).join(", ")}. A private feeling or suspicion is not proof about anyone else. Choose any changed priorities separately through your own goals and actions.
-- goalUpdate: {"description":"A new intention grounded in experience","priority":1..10,"kind":"custom or social","completionId":"optional listed criterion","supportsGoalId":optional active goal ID}. For a listed completionId use the outcome's exact description as the goal; arriving somewhere is not proof a broader investigation succeeded. Omit completionId for broader exploratory intentions.
-  A new intention can organize future actions without erasing your other concerns. Creating a goal does not prove completion or itself replace your ongoing activity.
-- socialGoalReview: {"goalId":<listed personal social goal>,"disposition":"satisfied_for_now",
-  "reason":"How the exchange met this desire","evidenceIds":[<own spoken turn id>,<heard turn id>]}.
-  Only listed subjective social goals are eligible. Physical goals require world proof.
-  Do not also claim satisfaction for a goal you release/withdraw; if both are supplied, relinquishment takes precedence and no completion is credited.
-- coordinationReviews: up to 3 updates to your own coordination record, using listed evidence IDs:
-  {"kind":"undertake","speechId":"listed source ID of your already-spoken or sent undertaking","task":"what you undertook","goalId":optional own goal ID or "new" for this decision's goalUpdate},
-  {"kind":"link","id":"listed commitment ID","goalId":optional own goal ID or "new"},
-  {"kind":"blocked","id":"listed commitment ID","reason":"what prevents progress","evidenceIds":["listed physical evidence ID"]},
-  {"kind":"release","id":"listed commitment ID","reason":"why you no longer intend to do it"}, or
-  {"kind":"report","id":"listed commitment ID","speechId":"listed source ID of your already-spoken or sent update","status":"not_started|in_progress|blocked|completed|released"}.
-  These record your interpretation of actual prior speech and your own evidence;
-  they neither execute work nor inform anyone. A proposed speech action is not evidence yet.
-  Undertake/link may specify completion: {"type":"action","actionType":"exact action type","target":"known target name","content":"exact command or arguments, when relevant"} for a concrete terminal step. It is a future criterion, not proof that it happened. A linked goal normally only supports the undertaking; use goalRelation:"fulfills" only when that goal's entire completion criterion is exactly what you promised.
+${issuedAttentionSignals.length ? `- attentionReview: {"signalId":listed signal ID,"disposition":"consider"|"defer","reason":"..."}; defer takes afterSeconds 5..120 and optional wake:{"kind":"heard_evidence"}.\n` : ""}- goalUpdate: {"description":"a new intention","priority":1..10,"kind":"custom"|"social","completionId":optional listed criterion (use its exact description),"supportsGoalId":optional goal ID}.
+- goalReview: {"goalId":listed eligible ID,"disposition":"retain"|"defer"|"release"|"withdraw","reason":"required, ≤400 chars"}.
+  defer also takes "afterSeconds":10..60 and "wake": one listed wake condition. release drops an
+  episodic intention; withdraw drops a standing desire; retain keeps one under review.
+  Only goals listed as eligible can be reviewed.
+- affectUpdate: {"feeling":"...","valence":-1..1,"arousal":0..1,"reason":"...","expression":one of ${FACIAL_EXPRESSIONS.map(expression => JSON.stringify(expression)).join(", ")}}.
+  Omit expression to keep your current face; what you show needn't match what you feel.
+- socialGoalReview: {"goalId":listed social goal,"disposition":"satisfied_for_now","reason":"...","evidenceIds":[your turn id, their turn id]}.
+- coordinationReviews: up to 3 of
+  {"kind":"undertake","speechId":"your spoken/sent source ID","task":"...","goalId":optional ID or "new"},
+  {"kind":"link","id":"commitment ID","goalId":optional},
+  {"kind":"blocked","id":"commitment ID","reason":"...","evidenceIds":["physical evidence ID"]},
+  {"kind":"release","id":"commitment ID","reason":"..."},
+  {"kind":"report","id":"commitment ID","speechId":"source ID of your update","status":"not_started|in_progress|blocked|completed|released"}.
+  undertake/link may add completion:{"type":"action","actionType":"...","target":"...","content":optional} and goalRelation:"fulfills".
 
 ${localView ? formatCognitiveLocalView(localView) : ""}
 
@@ -1531,7 +1465,6 @@ ${formatPlanDecisions(planDecisionContext)}
 ${formatActivityReview(activityReviewContext)}
 
 `;
-
 
   const mm = buildUserContentWithImages(world, eid, prompt);
   const userContent = mm.content;
@@ -1545,7 +1478,7 @@ ${formatActivityReview(activityReviewContext)}
   const providerStarted = performance.now();
   recordControlLoopDiagnostic(world, () => ({ lane: "foreground", actorId: eid,
     requestId: foregroundFence!.requestId, stage: "issued", detail: {
-      controller, contract: prompt.match(/If you choose to turn to an existing goal[\s\S]*?it does not guarantee an answer\./)?.[0],
+      controller, contract: prompt.match(/- Returning to a goal afterwards:[\s\S]*?take or cancel a ready one\./)?.[0],
       contractOffered: prompt.includes("record control.nextPurpose:"),
       eligibleNextPurposeGoalIds: [...listedGoalRefs.keys()], omittedGoals: Math.max(0, currentGoals.length - 24),
       goals: currentGoals.slice(0, 24).map(id => ({ id, description: Goal.description[id]?.slice(0, 400), status: Goal.status[id] })),

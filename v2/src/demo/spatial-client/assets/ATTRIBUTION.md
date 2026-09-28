@@ -16,3 +16,7 @@ Official pages and included licenses verified 2026-09-25. Models are unmodified 
 Simple floor, wall, phone and fallback geometry are authored for this testbed. These cosmetic representations do not add unrecorded entities or mechanics to the world.
 
 CC0: https://creativecommons.org/publicdomain/zero/1.0/
+
+## Argos-authored generated props (CC0)
+
+`generated/coastal/*.glb` contains ten original coastal props for the Saltmere town: barrel, fish-crate, harbour-bench, lantern-post, net-rack, ship-bell, rope-coil, lobster-pot, driftwood-table and sea-chest. They were **authored by Argos**, entirely procedurally, in headless Blender by [`scripts/blender/coastal_props.py`](../../../../scripts/blender/coastal_props.py). No third-party meshes, textures or scans are used, and the models are only primitives, modifiers and flat base-colour materials. They are dedicated to the public domain under **CC0 1.0**. The script is deterministic, so rerunning it reproduces the files byte for byte. Their catalog manifests are in [catalog/coastal.json](catalog/coastal.json). The sizes there are measured from the exported bounds, and behaviour comes only from the native `objectType` and affordances listed.

@@ -3,7 +3,9 @@
 export interface SpatialViewEntity {
   id: number; key: string; name: string; kind: "actor" | "prop"; roomId: number;
   position: { x: number; y: number; z: number }; rotationY?: number;
-  asset: string; size?: { x: number; y: number; z: number }; color?: string;
+  asset: string; /** Catalog model path under /assets/, when the kind has one. */ model?: string;
+  /** Presentation hint: the kind gives off light (tagged "light" in the catalog). */ light?: boolean;
+  size?: { x: number; y: number; z: number }; color?: string;
   state?: string; heldBy?: number;
   /** Confirmed public physical state from the admitted generated mechanic. */
   wetness?: number;
@@ -71,6 +73,8 @@ export interface SpatialViewState {
   actors: SpatialOperatorActor[];
   cues: SpatialSceneCue[];
   events: Array<{ id: number; atSimMs: number; text: string; kind: string }>;
+  /** The Narrator's story prose: a presentation feed, never resident knowledge. */
+  storyFeed?: Array<{ id: string; atSimMs: number; text: string; spirit: string; phase?: string; tension?: number }>;
   growth: { status: "available" | "built" | "gated"; summary: string };
   limits: { seconds: number; ai: boolean; autonomousGrowth: boolean };
 }

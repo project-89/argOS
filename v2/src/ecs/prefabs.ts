@@ -193,7 +193,8 @@ export function initializeAgentEntity(world: World, eid: number, config: AgentEn
   Name.value[eid] = config.name;
   Description.value[eid] = config.description ?? "";
   Agent.role[eid] = config.role;
-  Agent.systemPrompt[eid] = config.systemPrompt + (past ? `\nPRIVATE LIFE BEFORE THIS SCENE:\n${past.background}` : "");
+  Agent.systemPrompt[eid] = config.systemPrompt + (past ? `\nPRIVATE LIFE BEFORE THIS SCENE:\n${past.background}` : "")
+    + (past?.voice ? `\nHOW YOU TALK: ${past.voice}` : "") + (past?.secret ? `\nWHAT YOU HIDE: ${past.secret}` : "");
   Agent.active[eid] = true;
   Mind.mode[eid] = "reactive";
   Mind.arousal[eid] = 0.5;

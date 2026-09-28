@@ -97,7 +97,15 @@ export interface SpiritInterventionEvent extends BusEvent {
   reason: string;
 }
 
-export type SpiritEvent = SpiritObserveEvent | SpiritMessageEvent | SpiritInterventionEvent;
+/** Narrator story prose for viewers: a presentation feed, never resident knowledge. */
+export interface SpiritProseEvent extends BusEvent {
+  type: "spirit:prose";
+  spiritName: string;
+  text: string;
+  atSimMs: number;
+}
+
+export type SpiritEvent = SpiritObserveEvent | SpiritMessageEvent | SpiritInterventionEvent | SpiritProseEvent;
 
 // --- Agent Events ---
 

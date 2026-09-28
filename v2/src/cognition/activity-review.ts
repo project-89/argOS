@@ -92,7 +92,10 @@ function evidenceWindow(world: World, eid: number, state: ActivityState) {
     ...(purposes.has(turn.id) ? { purpose: purposes.get(turn.id)! } : {}) }));
   return { turns, fresh, contributions };
 }
-const due = (state: ActivityState, n: number, elapsed: number) => state.status === "active" && n >= 2 && (n >= 4 || elapsed >= 20_000);
+// A lively exchange should be allowed to run. Check in occasionally so a
+// conversation that has stopped serving anyone can end, not every few turns.
+const due = (world: World, state: ActivityState, n: number, elapsed: number) => state.status === "active"
+  && (world.meta.activityReviewCadence === "strict" ? n >= 2 && (n >= 4 || elapsed >= 20_000) : n >= 5 && (n >= 8 || elapsed >= 75_000));
 type Evidence = { episodeId: string; elapsedSimMs: number; encounterElapsedSimMs: number; reviewCount: number; purpose?: string; previousExpectedProgress?: string;
   situation: ActivitySituation;
   recentReviews: ReviewRecord[];
@@ -118,7 +121,7 @@ export function captureActivityReview(world: World, eid: number): ActivityReview
   const current = basis(world, eid), state = states.get(world)?.get(eid), now = readSimulationTime(world);
   if (!state || !matches(state, current) || now < state.sinceSimMs) return;
   const window = evidenceWindow(world, eid, state), elapsed = now - state.sinceSimMs;
-  if (!due(state, window.contributions.length, elapsed)) return;
+  if (!due(world, state, window.contributions.length, elapsed)) return;
   // Exact completed receipts only: never inferred replies, private thoughts,
   // partial words, or the utterance currently being proposed.
   const selectedIds = new Set([...window.fresh.filter(turn => turn.own).slice(-6), ...window.fresh.filter(turn => !turn.own).slice(-6)].map(turn => turn.id));
@@ -149,13 +152,11 @@ export function captureActivityReview(world: World, eid: number): ActivityReview
   return context;
 }
 export function formatActivityReview(context: ActivityReviewContext | undefined): string {
-  return context ? `ACTIVITY REVIEW — COMPLETED EVIDENCE, NOT A VERDICT THAT YOU MUST STOP:
-This request requires control.activityReview. Use 1–6 unique evidenceIds from the evidence below, including at least one of your own completed speech contributions. Each prose field is a single line of at most 400 characters. Choose one disposition value, not the pipe-separated list of alternatives. Omit fields that do not apply; do not send null for them.
+  return context ? `CONVERSATION CHECK-IN — you've been at this exchange a while. Is it still worth it?
+This reply must include control.activityReview. Evidence you can cite:
 ${JSON.stringify(context.evidence)}
-Choose between continuing this exchange and the useful next steps available for your other intentions, including any proposed decisions above. In reason, explain why your chosen approach is worth doing now compared with an available alternative. Distinguish what you can do now from what still depends on someone else's choice. If waiting for an answer, explain what information is necessary before your next useful action and whether this person can supply it. A reaction, opinion or agreement need not be a prerequisite. You may leave the concern unresolved and act on another one. Choosing company, listening or venting is valid; name that benefit directly. If no useful alternative is available, say so. Proposals are options, not completed evidence or obligations.
-recentReviews are your earlier interpretations, not current evidence. Compare their expectations with the completed receipts: did you learn what you needed, is a real dependency still open, or are you choosing more conversation? Saying "hear their reaction" again does not by itself explain why the next action should wait.
-${context.evidence.goal ? `Separately assess the issued intention: ${JSON.stringify(context.evidence.goal.description)}. Include intentionAssessment with outcome "advanced" (closer to that intention), "sustained" (maintaining the ongoing state or experience this intention seeks), "unchanged", or "blocked" (a specific prerequisite is missing), and a reason grounded in the listed receipts. Continuing the same topic is not itself sustaining an intention. An investigation can remain unchanged while you enjoy the conversation; uncertainty can remain while you choose an available way to seek information. A met conversational expectation does not establish intention progress. This is your interpretation, not a goal update.\n` : "There is no current owned intention to assess; omit intentionAssessment.\n"}Include control.activityReview: {"disposition":"continue|pause|close","reason":"why to act, await needed information, or choose conversation now","evidenceIds":["listed completed speech or physical-outcome IDs"],${context.evidence.goal ? '"intentionAssessment":{"outcome":"advanced|sustained|unchanged|blocked","reason":"what the receipts changed or left unresolved for the issued intention"},' : ""}${context.evidence.previousExpectedProgress ? '"previousOutcome":"met|sustained|unresolved|changed","previousAssessment":"what the new evidence established or left unanswered about the previous expectation",' : ""}"expectedProgress":"what my chosen approach can accomplish or sustain; another person's cooperation is uncertain"}.
-${context.evidence.previousExpectedProgress ? "Assess the PREVIOUS expectation separately from your reason to continue now: met = the requested result was obtained; sustained = the same desired ongoing experience continues; unresolved = that result is still missing; changed = new evidence altered its premise. A reply can sustain conversation without answering the question. You may continue for a different benefit while the earlier expectation remains unresolved.\n" : ""}Cite at least one own completed contribution and any heard outcomes relevant to your assessment. Speech establishes words, not physical success, another person's feelings or agreement. Pause/close are your choices, not a completed goal; omit expectedProgress for close. Changing goals does not erase the exchange.` : "";
+Keep going if it's getting you somewhere — information, closeness, a fight worth having, a secret coming out, simply company you want. Pause or close it if it has gone flat or something else matters more now; you can leave the concern unresolved and turn to another. Earlier check-ins (recentReviews) are your own past reads of it.
+${context.evidence.goal ? `Also say how it's going for your intention ${JSON.stringify(context.evidence.goal.description)} with intentionAssessment: outcome "advanced" (closer to it) | "sustained" (keeping up something it wants) | "unchanged" | "blocked" (missing something specific) and a reason. Getting the answer you wanted in conversation isn't the same as progress on your intention.\n` : "You have no current intention to assess; omit intentionAssessment.\n"}Shape: control.activityReview = {"disposition":"continue|pause|close" (pick one),"reason":"one line, ≤400 chars","evidenceIds":[1–6 IDs from above, including at least one of your own completed lines]${context.evidence.goal ? ',"intentionAssessment":{"outcome":"...","reason":"..."}' : ""}${context.evidence.previousExpectedProgress ? ',"previousOutcome":"met|sustained|unresolved|changed","previousAssessment":"did you get what you hoped for last time?"' : ""},"expectedProgress":"what continuing can get you (omit for close)"}. Omit fields that don't apply rather than sending null.` : "";
 }
 /** Operator-only reference audit. Fingerprints preserve repeated invalid IDs
  * without storing arbitrary model strings, speech, private reasons or prompts.
@@ -286,5 +287,5 @@ export function snapshotActivityReview(world: World, eid: number) {
     previousOutcome: state.previousOutcome, previousAssessment: state.previousAssessment, assessedExpectation: state.assessedExpectation,
     evidenceIds: [...state.evidenceIds || []],
     recentReviews: state.recentReviews.map(copyReview),
-    elapsedSimMs, completedContributions, due: due(state, completedContributions, elapsedSimMs) };
+    elapsedSimMs, completedContributions, due: due(world, state, completedContributions, elapsedSimMs) };
 }

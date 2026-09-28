@@ -70,10 +70,12 @@ export function formatForegroundRejectionRecovery(world: World, eid: number): st
     : row.field === "control.nextPurpose"
       ? "For a ready chosen next purpose, include control.nextPurposeReview with its exact listed id, your disposition (take or cancel), and a nonblank reason. Taking it also requires its goalId, even if your proposed action already serves that goal. A new nextPurpose cannot replace an existing one. Reconsider using the current chosen-next-purpose block; no follow-up was consumed."
     : row.issue ? actorWaitIssueFeedback(row.issue) : activityReviewIssueFeedback(row.field) ?? "Use the offered action types and fields; omit optional fields that do not apply.";
-  return `PREVIOUS PROPOSAL WAS NOT ADMITTED (controller feedback, not an experienced world event): ${row.reason}${row.field ? ` at ${row.field}` : ""}.\nNo thought, action or attention acknowledgement from that rejected proposal was committed. ${feedback}`;
+  return `YOUR LAST REPLY COULD NOT BE USED: ${row.reason}${row.field ? ` at ${row.field}` : ""}.\nNothing from it took effect. ${feedback}`;
 }
 
-const QUIET_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 30_000] as const;
+// Quiet choices back off, but a still character is revisited soon enough to
+// notice the room changing around them.
+const QUIET_DELAYS_MS = [2_000, 4_000, 7_000, 12_000, 20_000] as const;
 const QUIET_ACTIONS = new Set(["wait", "rest", "observe", "think", "reflect"]);
 type ListeningActivity = { executionIds: string[]; untilSimMs: number; explicit?: boolean };
 type IdleState = { signature: string; quietDecisions: number; nextCheckAtMs: number; lastRecordedAtMs: number; listening?: ListeningActivity;

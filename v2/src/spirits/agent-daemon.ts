@@ -17,12 +17,17 @@ import { query, entityExists, hasComponent } from "bitecs";
 import type { World } from "../ecs/world";
 import { readSimulationTime } from "../ecs/simulation-time";
 import { legacySimulationTimestamp } from "../ecs/temporal-age";
-import { Name, Description, Agent, Mind, Goal, GridPosition, Health, Inventory, WorkingMemoryIdentity, Removed, Room } from "../ecs/components";
+import { Name, Description, Agent, Mind, Goal, GridPosition, Health, Inventory, WorkingMemoryIdentity, Removed, Room, Perception } from "../ecs/components";
 import { HasGoal, HasMemory, HasThought } from "../ecs/relations";
 import { getRoomForEntity } from "../ecs/location";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
 import { queueGuardedStimulus } from "../cognition/stimulus-queue";
-import { addPerception } from "../cognition/agent-mind";
+import { addPerception, getAgentPerceptions } from "../cognition/agent-mind";
+import { getCharacterContext, getLocalOpportunityContext } from "../cognition/character-context";
+import { snapshotAffect } from "../cognition/affect-state";
+import { getRecentActions } from "../cognition/agent-action-history";
+import { getWorldCharacterSeed } from "../world/world-specification";
+import type { NarrativeState } from "./types";
 import { chronicle } from "../cognition/simulation-chronicle";
 import { workingMemoryEntityRef } from "../cognition/working-memory";
 import { getCommittedSource, startCommittedEvents } from "../runtime/committed-events";
@@ -42,155 +47,13 @@ import {
 } from "./spirit-messaging";
 
 // =============================================================================
-// DYNAMIC WHISPER GENERATION
+// INNER VOICE CONSTANTS
 // =============================================================================
 
-/**
- * Contextual whisper variations for different concern types.
- * Each array provides variety; a random one is selected each time.
- */
-const WHISPER_VARIATIONS = {
-  stuck: [
-    "The world is vast. Perhaps a new corner awaits your attention?",
-    "Stillness has its place, but so does motion. What draws your curiosity?",
-    "Have you noticed what's happening around you? Others move with purpose.",
-    "Sometimes a change of scenery reveals new possibilities.",
-    "The mind stagnates in repetition. What if you tried something unexpected?",
-    "Your feet know the way, even when your mind wanders. Perhaps let them lead?",
-    "There's more to discover beyond this moment. What haven't you explored?",
-    "A restless feeling stirs within you. Where might it lead?",
-  ],
-  low_arousal: [
-    "A sound catches the edge of your attention...",
-    "Something shifts in your peripheral vision.",
-    "The air seems to carry a faint whisper of change.",
-    "Your thoughts drift to someone you haven't spoken with recently.",
-    "A distant noise piques your curiosity.",
-    "There's an itch at the back of your mind, urging you forward.",
-    "The world continues its dance. Do you hear its rhythm?",
-    "Others seem engaged in something. What might it be?",
-  ],
-  high_arousal: [
-    "Breathe. Let the moment settle before acting.",
-    "The world can wait for your thoughts to collect.",
-    "Haste invites mistakes. Consider your options carefully.",
-    "Your heart races, but your mind need not follow blindly.",
-    "Step back from the chaos. What truly matters here?",
-    "Even storms pass. Find the still center within.",
-    "Not everything demands immediate response. Choose wisely.",
-    "Overwhelm clouds judgment. Seek clarity first.",
-  ],
-  danger: [
-    "Your wounds demand attention. Safety should come first.",
-    "The body speaks louder than pride. Rest is not retreat.",
-    "You are more valuable alive than injured. Seek shelter.",
-    "Even the brave know when to withdraw and recover.",
-    "Pain is a messenger. What does it tell you to do?",
-    "There is no shame in preserving oneself for another day.",
-    "Tend to your wounds before the world takes more from you.",
-    "Life is precious. Do not spend it carelessly.",
-  ],
-  goal_drift: [
-    "Purpose gives strength. What do you wish to achieve?",
-    "The aimless wander; the purposeful arrive. Which will you be?",
-    "Others pursue their goals with fervor. What drives you?",
-    "A mind without direction is like a ship without wind.",
-    "Consider: what would make this day meaningful?",
-    "Goals are stars by which we navigate. Find yours.",
-    "Even small intentions can grow into great achievements.",
-    "The question is not what you can do, but what you will do.",
-  ],
-  isolation: [
-    "The presence of others enriches the soul. Seek company.",
-    "Solitude has its place, but so does fellowship.",
-    "Someone nearby might welcome a friendly word.",
-    "Connection makes the journey lighter. Who might you speak with?",
-  ],
-  confusion: [
-    "Clarity comes to those who seek it. Take time to understand.",
-    "The fog of confusion lifts with patience and attention.",
-    "When lost, any direction brings new information.",
-    "Uncertainty is the beginning of discovery.",
-  ],
-};
-
-/**
- * Contextual challenge variations for growth opportunities.
- */
-const CHALLENGE_VARIATIONS = {
-  too_comfortable: [
-    "Comfort breeds complacency. Introduce a mild inconvenience.",
-    "Shake the routine. Present an unexpected request.",
-    "The unchallenged mind dulls. Create a small obstacle.",
-    "Growth requires friction. Add a gentle complication.",
-  ],
-  ready_for_challenge: [
-    "This one is ready. Present a worthy obstacle.",
-    "Strength unused is strength wasted. Test their limits.",
-    "The time for challenge has come. What will test them?",
-    "They have prepared themselves. Now let them prove it.",
-  ],
-  stagnating: [
-    "Stagnation is slow death. Disrupt the pattern.",
-    "Force a choice. Present competing priorities.",
-    "The rut deepens daily. Something must change.",
-    "Introduce an element they cannot ignore.",
-  ],
-  needs_conflict: [
-    "Harmony without conflict breeds weakness. Create tension.",
-    "A clash of wills sharpens both parties.",
-    "Disagreement reveals true character. Present one.",
-    "Not all peace is healthy. Some conflicts are necessary.",
-  ],
-  breakthrough_possible: [
-    "The moment crystallizes. Push them toward insight.",
-    "Greatness hovers just beyond reach. Provide the catalyst.",
-    "They stand at a threshold. Help them step through.",
-    "This energy can transform. Direct it wisely.",
-  ],
-  skill_plateau: [
-    "Mastery requires new challenges. Raise the bar.",
-    "Competence can become a prison. Break the pattern.",
-    "They've learned what they can here. Time for harder lessons.",
-    "Introduce a mentor, rival, or technique to stretch them.",
-  ],
-  relationship_test: [
-    "Bonds untested are bonds unproven. Create a challenge.",
-    "Loyalty, jealousy, or passion—which will you test?",
-    "Relationships grow through adversity. Provide it.",
-    "The easy friendship may hide shallow roots. Probe deeper.",
-  ],
-};
-
-/**
- * Get a contextual whisper for a concern type
- */
-function getContextualWhisper(
-  type: DaemonConcern["type"],
-  agentName: string,
-  context?: { focus?: string; room?: string; stuckTicks?: number }
-): string {
-  const variations = WHISPER_VARIATIONS[type] || WHISPER_VARIATIONS.stuck;
-  let whisper = variations[Math.floor(Math.random() * variations.length)];
-
-  // Add contextual flavor for specific situations
-  if (context?.room && Math.random() < 0.3) {
-    whisper += ` Perhaps ${context.room} holds answers.`;
-  }
-
-  return whisper;
-}
-
-/**
- * Get a contextual challenge for a growth opportunity type
- */
-function getContextualChallenge(
-  type: GrowthOpportunity["type"],
-  agentName: string
-): string {
-  const variations = CHALLENGE_VARIATIONS[type] || CHALLENGE_VARIATIONS.ready_for_challenge;
-  return variations[Math.floor(Math.random() * variations.length)];
-}
+/** Private perception strength of a daemon's whisper: felt, not shouted. */
+export const INNER_VOICE_INTENSITY = 0.6;
+/** Actions that read as waiting rather than living. */
+const IDLE_ACTIONS = new Set(["wait", "rest", "sleep", "idle", "pause"]);
 
 // =============================================================================
 // DAEMON STATE
@@ -245,6 +108,10 @@ export interface DaemonState {
   // Arc cognition - last time we thought about the arc
   lastArcCognition: number;
   arcCognitionInterval: number;  // ms between arc reflections
+
+  /** Inner-voice pacing in simulation time, plus the last few whispers so the
+   * voice keeps finding something new to say. Private to this daemon. */
+  innerVoice?: { lastAtSimMs?: number; count: number; recent: string[] };
 }
 
 export interface NarrativeNudge {
@@ -489,6 +356,16 @@ export interface DaemonRegistry {
   reportCooldown: number;
   superiorSpiritEid?: number;  // Usually ConsistencySpirit or GodAI
   simulationTension: number;          // 0-1, set by Narrator/GodAI for tension awareness
+  /** Live worlds turn this on: each daemon whispers persona- and story-aware
+   * impulses on its own cadence, and voices Narrator nudges in the person's
+   * inner voice. Off by default so standalone registries stay inert. */
+  innerVoice: boolean;
+  /** False keeps whispers deterministic (no model call), e.g. when AI is off. */
+  useModel: boolean;
+  /** Simulation-time spacing between inner-voice whispers per resident. */
+  innerVoiceCadenceMs: { idle: number; active: number };
+  /** Bound on model-voiced whispers started in one daemon cycle. */
+  innerVoiceMaxPerCycle: number;
 }
 
 /**
@@ -507,6 +384,10 @@ export function createDaemonRegistry(
     challengeCooldown,
     reportCooldown,
     simulationTension: 0.3,  // Default tension - can be updated by Narrator
+    innerVoice: false,
+    useModel: true,
+    innerVoiceCadenceMs: { idle: 25_000, active: 45_000 },
+    innerVoiceMaxPerCycle: 3,
   };
 }
 
@@ -796,9 +677,11 @@ function currentNudgeRecipient(registry: DaemonRegistry, daemon: DaemonState, wo
     && daemonWorlds.get(daemon) === world && entityExists(world, eid) && hasComponent(world, eid, Agent)
     && Agent.active[eid] && hasComponent(world, eid, Name) && Name.value[eid] === daemon.agentName;
 }
-function scopedNudgeCurrent(daemon: DaemonState, world: World, nudge: NarrativeNudge, registry?: DaemonRegistry): boolean {
+/** `inFlight` rechecks a receipt this daemon already took for voicing: it is
+ * consumed (no second delivery) but must still be current to be delivered. */
+function scopedNudgeCurrent(daemon: DaemonState, world: World, nudge: NarrativeNudge, registry?: DaemonRegistry, inFlight = false): boolean {
   const receipt = scopedNudges.get(nudge), source = getCommittedSource(world);
-  return !!receipt && !receipt.consumed && receipt.daemon === daemon && receipt.world === world
+  return !!receipt && receipt.consumed === inFlight && receipt.daemon === daemon && receipt.world === world
     && (!registry || receipt.registry === registry)
     && currentNudgeRecipient(receipt.registry, daemon, world, receipt.agentEid)
     && hasComponent(world, receipt.agentEid, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[receipt.agentEid] === receipt.owner
@@ -888,8 +771,8 @@ function consumePendingNudges(daemon: DaemonState, world: World, scopedOnly: boo
     return priorityOrder[a.priority] - priorityOrder[b.priority];
   });
 
-  // Process up to 2 nudges per cycle
-  const toProcess = sortedNudges.slice(0, 2);
+  // Process up to 3 nudges per cycle
+  const toProcess = sortedNudges.slice(0, 3);
 
   for (const nudge of toProcess) {
     assertSimulationTaskActive();
@@ -941,7 +824,7 @@ function deliverScopedNarrativeNudges(registry: DaemonRegistry, daemon: DaemonSt
   discardInvalidScopedNudges(daemon, world, registry);
   if (daemon.lastWhisper && daemonAge(daemon, "lastWhisper", daemon.lastWhisper) < registry.whisperCooldown) return 0;
   return consumePendingNudges(daemon, world, true, whisper => {
-    const perceptionEid = addPerception(world, daemon.agentEid, { type: "daemon_whisper", content: whisper.content, source: "inner_voice", intensity: 0.3 });
+    const perceptionEid = addPerception(world, daemon.agentEid, { type: "daemon_whisper", content: whisper.content, source: "inner_voice", intensity: INNER_VOICE_INTENSITY });
     assertSimulationTaskActive();
     daemon.lastWhisper = Date.now();
     stampDaemonTime(daemon, "lastWhisper", daemon.lastWhisper);
@@ -984,27 +867,27 @@ function convertNudgeToWhisper(daemon: DaemonState, nudge: NarrativeNudge): Daem
 
   switch (nudge.type) {
     case "arrive":
-      content = `A possibility for your journey: ${nudge.action}`;
+      content = `Something keeps pulling you that way: ${nudge.action}`;
       type = "guidance";
       break;
     case "interact":
-      content = `A possible interaction to consider: ${nudge.action}`;
+      content = `You keep thinking you should: ${nudge.action}`;
       type = "encouragement";
       break;
     case "resolve":
-      content = `A possible way forward, if it fits: ${nudge.action}`;
+      content = `Maybe this is how it settles: ${nudge.action}`;
       type = "guidance";
       break;
     case "escalate":
-      content = `One option to weigh: ${nudge.action}`;
+      content = `Part of you wants to push it: ${nudge.action}`;
       type = "observation";
       break;
     case "reflect":
-      content = `A question worth considering: ${nudge.action}`;
+      content = `It keeps coming back to you: ${nudge.action}`;
       type = "reminder";
       break;
     case "change_goal":
-      content = `Consider whether this fits your priorities: ${nudge.action}`;
+      content = `What if, instead, you did this: ${nudge.action}`;
       type = "guidance";
       break;
     default:
@@ -1132,7 +1015,8 @@ export function detectConcerns(
   agentName: string
 ): DaemonConcern[] {
   const concerns: DaemonConcern[] = [];
-  const context = { focus: current.focus, room: current.room, stuckTicks: previous?.stuckTicks };
+  // Concerns carry no canned text: the daemon voices them in the person's own
+  // inner voice (see buildDaemonWhisperPrompt), grounded in their life.
 
   // Stationary work, listening and rest are not evidence of failure. Repeated
   // executor failures warrant reconsidering an approach, not abandoning a goal.
@@ -1141,7 +1025,6 @@ export function detectConcerns(
       type: "stuck",
       severity: "medium",
       description: `${agentName}'s last ${current.recentAttempts.consecutiveFailures} physical attempts failed.`,
-      suggestedWhisper: "What blocked that attempt? Is there another approach that still serves your purpose?",
     });
   }
 
@@ -1151,7 +1034,6 @@ export function detectConcerns(
       type: "high_arousal",
       severity: "medium",
       description: `${agentName}'s activation is high (arousal: ${current.arousal.toFixed(2)}); its meaning depends on the situation.`,
-      suggestedWhisper: "Would slowing down help, or does this pace suit what matters to you?",
     });
   }
 
@@ -1161,7 +1043,6 @@ export function detectConcerns(
       type: "danger",
       severity: current.health < 10 ? "high" : "medium",
       description: `${agentName} is injured (health: ${current.health})`,
-      suggestedWhisper: getContextualWhisper("danger", agentName, context),
     });
   }
 
@@ -1174,7 +1055,6 @@ export function detectConcerns(
       type: "confusion",
       severity: "high",
       description: `${agentName} has become inactive`,
-      suggestedWhisper: getContextualWhisper("confusion", agentName, context),
     });
   }
 
@@ -1913,6 +1793,320 @@ export function observeAgent(
 }
 
 // =============================================================================
+// INNER VOICE (persona- and story-aware whispers)
+// =============================================================================
+
+/** Author-side story rows relevant to one resident. The resident never sees
+ * this ledger; the daemon uses it only to feel which way the pressure runs. */
+export interface DaemonStoryLedger {
+  phase?: string;
+  tension?: number;
+  tensionTarget?: number;
+  threads: { name: string; description: string; status?: string }[];
+  questions: string[];
+  arc?: string;
+  foreshadowing: string[];
+}
+
+/** The person this daemon belongs to, read from their own mind and history. */
+export interface DaemonPersona {
+  name: string;
+  role?: string;
+  character?: string;
+  background?: string;
+  drives: string[];
+  aspirations: string[];
+  privateHistory: string[];
+  beliefs: string[];
+  goals: string[];
+  focus?: string;
+  feeling?: string;
+  body: string[];
+  place?: string;
+  company: string[];
+  recentExperiences: string[];
+}
+
+export interface DaemonWhisperInput {
+  persona: DaemonPersona;
+  ledger?: DaemonStoryLedger;
+  /** Something the daemon itself noticed (injury, repeated failure...). */
+  pressing?: string;
+  /** The Narrator's current pull on this person, to voice as their own impulse. */
+  pull?: string;
+  idle?: boolean;
+  recentWhispers: readonly string[];
+}
+
+const clip = (value: unknown, limit: number) => {
+  const text = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+};
+function attempt<T>(read: () => T): T | undefined { try { return read(); } catch { return undefined; } }
+const unique = (rows: readonly string[], limit: number) => [...new Set(rows.map(row => row.trim()).filter(Boolean))].slice(0, limit);
+
+/** Everything here is the resident's own: their authored past, live goals,
+ * feelings, memories and what they have perceived. No one else's private mind. */
+export function buildDaemonPersona(world: World, agentEid: number): DaemonPersona {
+  const name = Name.value[agentEid] || `Agent_${agentEid}`;
+  const seed = attempt(() => getWorldCharacterSeed(world, name));
+  const context = attempt(() => getCharacterContext(world, agentEid));
+  const local = attempt(() => getLocalOpportunityContext(world, agentEid));
+  const affect = attempt(() => snapshotAffect(world, agentEid));
+  const room = getRoomForEntity(world, agentEid);
+  const goals = safeGetRelationTargets(world, agentEid, HasGoal)
+    .filter(goal => hasComponent(world, goal, Goal) && Goal.status[goal] === "active")
+    .sort((a, b) => (Goal.priority[b] ?? 0) - (Goal.priority[a] ?? 0))
+    .map(goal => clip(Goal.description[goal], 200));
+  const needs = context?.needs, body: string[] = [];
+  if (needs) {
+    if (needs.hunger >= 60) body.push(needs.hunger >= 80 ? "very hungry" : "hungry");
+    if (needs.energy <= 40) body.push(needs.energy <= 20 ? "exhausted" : "tired");
+    if (needs.social <= 35) body.push("lonely");
+    if (needs.comfort <= 30) body.push("uncomfortable");
+  }
+  const recent = getAgentPerceptions(world, agentEid)
+    .filter(id => !["daemon_whisper", "daemon_challenge"].includes(Perception.type[id]) && Perception.content[id])
+    .sort((a, b) => (Perception.timestamp[a] ?? 0) - (Perception.timestamp[b] ?? 0))
+    .slice(-6).map(id => clip(Perception.content[id], 220));
+  const past = seed?.past;
+  return {
+    name,
+    role: clip(Agent.role[agentEid] || seed?.role, 200) || undefined,
+    character: clip(Agent.systemPrompt[agentEid] || seed?.systemPrompt, 900) || undefined,
+    background: clip(past?.background ?? Description.value[agentEid], 1400) || undefined,
+    drives: unique([...(past?.drives ?? []), ...(context?.coreDrives ?? []).map(String)].map(row => clip(row, 180)), 5),
+    aspirations: unique((context?.aspirations ?? []).map(row => clip(String(row), 180)), 4),
+    privateHistory: unique([
+      ...(context?.identityAnchors ?? []).map(row => clip(`${row.recollection} (${row.meaning})`, 360)),
+      ...[...(past?.memories ?? [])].sort((a, b) => b.importance - a.importance).map(row => clip(`${row.recollection} (${row.meaning})`, 360)),
+    ], 4),
+    beliefs: unique((context?.beliefs ?? []).map(row => clip(`${row.subject} ${row.predicate} ${row.object}`, 200)), 4),
+    goals: unique(goals, 3),
+    focus: clip(Mind.focus[agentEid], 200) || undefined,
+    feeling: affect ? clip(`${affect.feeling}${affect.reason ? ` — ${affect.reason}` : ""}`, 240) : undefined,
+    body,
+    place: room === undefined ? undefined : clip(Name.value[room], 120),
+    company: unique((local?.visiblePeople ?? []).map(row => String(row.name ?? "")), 6),
+    recentExperiences: recent,
+  };
+}
+
+/** Read the Narrator's ledger (duck-typed: newer ledgers may add dramatic
+ * questions, foreshadowing or a tension target). Absent fields degrade quietly. */
+export function readDaemonStoryLedger(spiritRegistry: SpiritRegistry | undefined, agentName: string): DaemonStoryLedger | undefined {
+  const eid = spiritRegistry?.byName.get("The Narrator");
+  const state = eid === undefined ? undefined : spiritRegistry!.spirits.get(eid)?.narrativeState as (NarrativeState & Record<string, unknown>) | undefined;
+  if (!state) return undefined;
+  const lower = agentName.toLowerCase();
+  const pattern = new RegExp(`\\b${agentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+  const named = (list: unknown) => Array.isArray(list) && list.some(item => typeof item === "string" && item.toLowerCase() === lower);
+  const involves = (row: any) => typeof row === "string" ? pattern.test(row)
+    : !!row && (named(row.participants) || named(row.characters) || named(row.residents) || named(row.involves)
+      || [row.name, row.title, row.description, row.question, row.text, row.summary].some(value => typeof value === "string" && pattern.test(value)));
+  const open = (row: any) => !row || typeof row === "string" || !["resolved", "abandoned", "answered", "closed", "paid_off"].includes(String(row.status ?? ""));
+  const text = (row: any) => typeof row === "string" ? row : row?.question ?? row?.text ?? row?.description ?? row?.summary ?? row?.name ?? "";
+  const list = (value: unknown) => Array.isArray(value) ? value : [];
+  const threads = [...list(state.plotThreads), ...list(state.threads)].filter(row => open(row) && involves(row)).slice(0, 4)
+    .map((row: any) => ({ name: clip(row.name ?? row.title ?? "", 120), description: clip(row.description ?? row.summary ?? "", 400),
+      ...(row.status ? { status: String(row.status) } : {}) }));
+  const questions = list(state.dramaticQuestions).filter(row => open(row) && involves(row)).map(row => clip(text(row), 240)).filter(Boolean).slice(0, 3);
+  const foreshadowing = list(state.foreshadowing).filter(row => open(row) && involves(row)).map(row => clip(text(row), 240)).filter(Boolean).slice(0, 3);
+  const arcRow = list(state.characterArcs).find((row: any) => typeof row?.entityName === "string" && row.entityName.toLowerCase() === lower) as any;
+  const arc = arcRow ? clip(`${arcRow.arcType ?? "arc"}: ${arcRow.currentState ?? ""}${arcRow.desiredEndState ? ` → ${arcRow.desiredEndState}` : ""}`, 300) : undefined;
+  const target = typeof state.tensionTarget === "number" && Number.isFinite(state.tensionTarget) ? state.tensionTarget : undefined;
+  return { ...(state.currentPhase ? { phase: String(state.currentPhase) } : {}),
+    ...(Number.isFinite(state.tension) ? { tension: state.tension } : {}), ...(target !== undefined ? { tensionTarget: target } : {}),
+    threads, questions, foreshadowing, ...(arc ? { arc } : {}) };
+}
+
+/** The daemon's whisper prompt: persona first, story pressure second, one line
+ * of how to answer. Privacy between residents is stated once, positively. */
+export function buildDaemonWhisperPrompt(input: DaemonWhisperInput): string {
+  const p = input.persona, n = p.name, lines: string[] = [];
+  const row = (label: string, value: string | undefined) => { if (value) lines.push(`- ${label}: ${value}`); };
+  lines.push(`You are ${n}'s daemon: the voice inside ${n}'s own head. Not a guide, not a narrator. You are the private part of ${n} that notices, wants, dreads, remembers and tempts.`, "", `WHO ${n.toUpperCase()} IS`);
+  row("Character", p.character);
+  row("Role", p.role);
+  row("Background", p.background);
+  row("What drives them", p.drives.join("; "));
+  row("What they hope for", p.aspirations.join("; "));
+  row("Carried privately", p.privateHistory.join(" | "));
+  row("What they believe", p.beliefs.join("; "));
+  row("What they want right now", p.goals.join("; "));
+  row("On their mind", p.focus);
+  row("Feeling", [p.feeling, p.body.length ? `body: ${p.body.join(", ")}` : ""].filter(Boolean).join("; "));
+  row("Where", p.place ? `${p.place}${p.company.length ? `, with ${p.company.join(", ")} in sight` : ", no one else in sight"}` : undefined);
+  row("Lately", p.recentExperiences.join(" | "));
+  const ledger = input.ledger;
+  if (ledger || input.pull || input.pressing || input.idle) {
+    lines.push("", `THE STORY PRESSING ON ${n.toUpperCase()} (the author's ledger. ${n} does not know it, but can feel its pull)`);
+    if (ledger) {
+      row("Story", [ledger.phase, ledger.tension !== undefined ? `tension ${ledger.tension.toFixed(2)}${ledger.tensionTarget !== undefined ? ` (aiming for ${ledger.tensionTarget.toFixed(2)})` : ""}` : ""].filter(Boolean).join(", "));
+      row("Threads through their life", ledger.threads.map(t => `${t.name}${t.description ? `: ${t.description}` : ""}`).join(" | "));
+      row("Open questions", ledger.questions.join(" | "));
+      row("Their arc", ledger.arc);
+      row("Foreshadowing", ledger.foreshadowing.join(" | "));
+    }
+    if (input.pull) lines.push(`- The story is leaning ${n} toward this: "${clip(input.pull, 500)}". Voice it as ${n}'s own impulse, a want or an itch or a dare, felt from inside their life.`);
+    if (input.pressing) lines.push(`- Pressing right now: ${clip(input.pressing, 300)}`);
+    if (input.idle) lines.push(`- ${n} has been waiting and idling. Stir something: a reason to move, to speak, to look closer, to act.`);
+  }
+  if (input.recentWhispers.length) lines.push("", `Already whispered (find something new): ${input.recentWhispers.map(w => `"${w}"`).join(" ")}`);
+  lines.push("",
+    `Whisper one thing now: an impulse, a doubt, a temptation, a half-memory, a flicker of dread or of courage. Second person, present tense, in ${n}'s own inner voice, specific to their people, objects, wants and fears. It can needle, tempt, comfort or accuse. The register, not the content: "You could tell her about the box. You won't, will you."`,
+    "",
+    `Whispers come from ${n}'s own life and feelings: what ${n} remembers, wants, suspects and fears. Other people's secrets stay theirs; a hunch about someone is welcome, their private facts are not. Speak of the world as ${n} has seen, heard or remembered it.`,
+    "",
+    "Answer with the whisper only: one or two short sentences, under 30 words.");
+  return lines.join("\n");
+}
+
+const lowerFirst = (text: string) => text ? text[0].toLowerCase() + text.slice(1) : text;
+/** Deterministic inner voice when no model is available. It speaks only from
+ * the person's own goals, drives and remembered meanings (never the ledger). */
+export function composeFallbackWhisper(input: DaemonWhisperInput, turn = 0): string {
+  const p = input.persona, goal = p.goals[0], drive = p.drives[turn % Math.max(1, p.drives.length)];
+  const memory = p.privateHistory[turn % Math.max(1, p.privateHistory.length)];
+  const options: string[] = [];
+  if (input.pull) options.push(`Something in you keeps turning toward it: ${clip(input.pull, 200)}`);
+  if (input.idle && goal) options.push(`You have been standing still too long. ${clip(goal, 160)}. It will not happen by itself.`);
+  if (goal) options.push(`You still have not done it: ${lowerFirst(clip(goal, 160))}. What are you waiting for?`);
+  if (drive) options.push(`${clip(drive, 160)}. Is that still true tonight?`);
+  if (memory) options.push(`You remember it again, whether you want to or not: ${clip(memory, 200)}`);
+  if (input.idle) options.push("Too long in one place. Go and find someone. Say the thing.");
+  if (!options.length) options.push("Something is waiting for you to notice it.");
+  return options[turn % options.length];
+}
+
+function sanitizeWhisper(raw: string): string {
+  const text = raw.replace(/\s+/g, " ").trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  if (!text || /^(none|nothing|empty|n\/a)\.?$/i.test(text)) return "";
+  return text.length > 320 ? `${text.slice(0, 319)}…` : text;
+}
+
+async function generateWhisperText(input: DaemonWhisperInput, registry: DaemonRegistry | undefined, turn: number): Promise<string> {
+  if (registry && !registry.useModel) return composeFallbackWhisper(input, turn);
+  const result = await generateText({ model: daemonModel, prompt: buildDaemonWhisperPrompt(input), temperature: 0.9 });
+  return sanitizeWhisper(result.text);
+}
+
+function innerVoiceState(daemon: DaemonState) {
+  daemon.innerVoice ??= { count: 0, recent: [] };
+  return daemon.innerVoice;
+}
+
+/** Waiting/resting share of recent choices, or an explicitly waiting mind. */
+export function isDaemonAgentIdle(world: World, agentEid: number): boolean {
+  const recent = getRecentActions(agentEid, world).slice(-8);
+  const idleShare = recent.length ? recent.filter(action => IDLE_ACTIONS.has(action)).length / recent.length : 0;
+  return recent.length >= 3 && idleShare >= 0.5 || ["waiting", "idle"].includes(Mind.mode[agentEid] ?? "");
+}
+
+/** Simulation-time pacing: roughly every 30-60s when active, sooner when idle.
+ * First whispers are staggered so a cast does not all hear voices at once. */
+export function isInnerVoiceDue(world: World, daemon: DaemonState, registry: DaemonRegistry): boolean {
+  if (!registry.innerVoice || !daemon.active) return false;
+  const now = readSimulationTime(world);
+  if (!Number.isFinite(now) || now < 0) return false;
+  if (daemon.lastWhisper && daemonAge(daemon, "lastWhisper", daemon.lastWhisper) < registry.whisperCooldown) return false;
+  const state = innerVoiceState(daemon), idle = isDaemonAgentIdle(world, daemon.agentEid);
+  const cadence = (idle ? registry.innerVoiceCadenceMs.idle : registry.innerVoiceCadenceMs.active)
+    + ((daemon.agentEid * 7 + state.count * 13) % 5) * 3_000;
+  // First voice lands 6-27s into the run (staggered by resident), or at once
+  // for a daemon that joins later; a rewound clock restarts the stagger.
+  if (state.lastAtSimMs === undefined || state.lastAtSimMs > now)
+    state.lastAtSimMs = 6_000 + (daemon.agentEid % 8) * 3_000 - cadence;
+  return now - state.lastAtSimMs >= cadence;
+}
+
+function whisperObservation(daemon: DaemonState): DaemonObservation {
+  return { agentName: daemon.agentName, currentState: daemon.lastAgentState ?? { timestamp: Date.now(), arousal: 0.5, focus: "", mode: "",
+    active: true, goalCount: 0, thoughtCount: 0, stuckTicks: 0 }, previousState: null, concerns: [], growthOpportunities: [], achievements: [], timestamp: Date.now() };
+}
+
+function recordInnerVoice(world: World, daemon: DaemonState, content: string, details: { idle: boolean; story: boolean; pulled: boolean }): void {
+  const state = innerVoiceState(daemon);
+  state.count++; state.lastAtSimMs = readSimulationTime(world);
+  state.recent = [...state.recent, content].slice(-4);
+  daemon.lastWhisper = Date.now();
+  stampDaemonTime(daemon, "lastWhisper", daemon.lastWhisper);
+  daemon.whisperCount++;
+  // Transport diagnostics only: no whisper text (private cognition) is recorded.
+  chronicle.record("daemon_inner_voice", { agent: daemon.agentName, actorKey: workingMemoryEntityRef(world, daemon.agentEid)?.key,
+    sourceId: getCommittedSource(world).sourceId, atSimMs: readSimulationTime(world), ...details }, "Daemon inner voice delivered");
+}
+
+/**
+ * The daemon's own whisper: persona- and story-aware, delivered as a private
+ * perception. A whisper is an impulse the resident may follow or ignore; it
+ * never selects an action, creates a goal or publishes anything.
+ */
+export async function whisperInnerVoice(
+  world: World,
+  daemon: DaemonState,
+  registry: DaemonRegistry,
+  spiritRegistry?: SpiritRegistry,
+  options: { pressing?: string } = {}
+): Promise<DaemonWhisper | null> {
+  assertSimulationTaskActive();
+  const scope = captureWhisperScope(world, daemon, whisperObservation(daemon), registry);
+  if (!scope.current()) return null;
+  const idle = isDaemonAgentIdle(world, daemon.agentEid), ledger = readDaemonStoryLedger(spiritRegistry, daemon.agentName);
+  const state = innerVoiceState(daemon);
+  const input: DaemonWhisperInput = { persona: buildDaemonPersona(world, daemon.agentEid), ledger, idle,
+    ...(options.pressing ? { pressing: options.pressing } : {}), recentWhispers: [...state.recent] };
+  // Reserve this turn before awaiting, so a slow provider cannot start a duplicate.
+  state.lastAtSimMs = readSimulationTime(world);
+  let content: string;
+  try { content = await generateWhisperText(input, registry, state.count); }
+  catch { assertSimulationTaskActive(); return null; } // Provider failure is silence, not a canned line.
+  assertSimulationTaskActive();
+  if (!content || state.recent.includes(content) || !scope.latest() || !scope.current()) return null;
+  if (!queueGuardedStimulus(world, { targetEid: daemon.agentEid, type: "daemon_whisper", modality: "cognitive", content,
+    source: "inner_voice", intensity: INNER_VOICE_INTENSITY }, () => scope.current())) return null;
+  recordInnerVoice(world, daemon, content, { idle, story: !!ledger && (ledger.threads.length + ledger.questions.length) > 0, pulled: false });
+  return { agentEid: daemon.agentEid, content, type: "observation", timestamp: Date.now() };
+}
+
+/**
+ * Voice one scoped Narrator nudge in the resident's inner voice. The nudge's
+ * receipt is taken before inference (no double delivery) and rechecked before
+ * delivery; if the model has nothing, the nudge's own wording is delivered.
+ */
+async function voiceScopedNarrativeNudge(registry: DaemonRegistry, daemon: DaemonState, world: World,
+  spiritRegistry?: SpiritRegistry): Promise<number> {
+  assertSimulationTaskActive();
+  discardInvalidScopedNudges(daemon, world, registry);
+  if (daemon.lastWhisper && daemonAge(daemon, "lastWhisper", daemon.lastWhisper) < registry.whisperCooldown) return 0;
+  const rank = { high: 0, normal: 1, low: 2 };
+  const nudge = daemon.pendingNudges.filter(row => isScopedNudge(row) && shouldApplyNudge(daemon, row))
+    .sort((a, b) => rank[a.priority] - rank[b.priority])[0];
+  const receipt = nudge && scopedNudges.get(nudge);
+  if (!nudge || !receipt) return 0;
+  daemon.pendingNudges = daemon.pendingNudges.filter(row => row !== nudge);
+  if (!scopedNudgeCurrent(daemon, world, nudge, registry)) { recordScopedNudgeLifecycle(nudge, "dropped"); return 0; }
+  receipt.consumed = true;
+  const state = innerVoiceState(daemon), idle = isDaemonAgentIdle(world, daemon.agentEid);
+  const ledger = readDaemonStoryLedger(spiritRegistry, daemon.agentName);
+  const input: DaemonWhisperInput = { persona: buildDaemonPersona(world, daemon.agentEid), ledger, idle,
+    pull: nudge.reason ? `${nudge.action} (${nudge.reason})` : nudge.action, recentWhispers: [...state.recent] };
+  state.lastAtSimMs = readSimulationTime(world);
+  let content = "";
+  try { content = await generateWhisperText(input, registry, state.count); }
+  catch { /* The nudge itself was already evaluated advice; deliver its wording. */ }
+  assertSimulationTaskActive();
+  if (!scopedNudgeCurrent(daemon, world, nudge, registry, true)) { recordScopedNudgeLifecycle(nudge, "dropped"); return 0; }
+  content ||= convertNudgeToWhisper(daemon, nudge)!.content;
+  const perceptionEid = addPerception(world, daemon.agentEid, { type: "daemon_whisper", content, source: "inner_voice", intensity: INNER_VOICE_INTENSITY });
+  assertSimulationTaskActive();
+  if (perceptionEid >= 0) recordInnerVoice(world, daemon, content, { idle, story: !!ledger && (ledger.threads.length + ledger.questions.length) > 0, pulled: true });
+  recordScopedNudgeLifecycle(nudge, "converted");
+  recordScopedNudgeLifecycle(nudge, perceptionEid >= 0 ? "perception_delivered" : "dropped", perceptionEid >= 0 ? perceptionEid : undefined);
+  return perceptionEid >= 0 ? 1 : 0;
+}
+
+// =============================================================================
 // WHISPERS (Guidance to Agents)
 // =============================================================================
 
@@ -1920,7 +2114,6 @@ const whisperCycles = new WeakMap<DaemonState, object>();
 function captureWhisperScope(world: World, daemon: DaemonState, observation: DaemonObservation, registry?: DaemonRegistry) {
   assertSimulationTaskActive();
   const eid = daemon.agentEid, actor = workingMemoryEntityRef(world, eid), persona = nudgePersona(eid);
-  const room = getRoomForEntity(world, eid), roomRef = room === undefined ? undefined : workingMemoryEntityRef(world, room);
   const source = getCommittedSource(world), at = readSimulationTime(world), signal = getSimulationTaskSignal();
   // A real advisory dispatch can precede sim.start(). Capture its first epoch
   // before inference, not during mailbox admission after the guard was taken.
@@ -1936,10 +2129,9 @@ function captureWhisperScope(world: World, daemon: DaemonState, observation: Dae
       && (!registry || registry.daemons.get(eid) === daemon)
       && entityExists(world, eid) && !hasComponent(world, eid, Removed) && hasComponent(world, eid, Agent) && hasComponent(world, eid, Name) && Agent.active[eid]
       && hasComponent(world, eid, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[eid] === actor.key
-      && nudgePersona(eid) === persona && daemon.agentName === actor.label && observation.agentName === actor.label
-      && getRoomForEntity(world, eid) === room && (room === undefined || !!roomRef && entityExists(world, room)
-        && !hasComponent(world, room, Removed) && hasComponent(world, room, Room) && hasComponent(world, room, Name) && Name.value[room] === roomRef.label
-        && hasComponent(world, room, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[room] === roomRef.key);
+      && nudgePersona(eid) === persona && daemon.agentName === actor.label && observation.agentName === actor.label;
+    // The inner voice travels with its person; changing rooms mid-thought does
+    // not silence it. Concern-specific whispers keep their own evidence checks.
   };
   const sameActivity = () => Mind.focus[eid] === focus && GridPosition.x[eid] === x && GridPosition.y[eid] === y;
   const activeGoals = () => safeGetRelationTargets(world, eid, HasGoal).filter(goal => hasComponent(world, goal, Goal) && Goal.status[goal] === "active").length;
@@ -1977,7 +2169,8 @@ export async function whisperToAgent(
   daemon: DaemonState,
   observation: DaemonObservation,
   forceWhisper: boolean = false,
-  registry?: DaemonRegistry
+  registry?: DaemonRegistry,
+  spiritRegistry?: SpiritRegistry
 ): Promise<DaemonWhisper | null> {
   const scope = captureWhisperScope(world, daemon, observation, registry);
   if (!scope.current()) return null;
@@ -2012,16 +2205,12 @@ export async function whisperToAgent(
       whisperType = topConcern.type === "danger" ? "warning" :
                     topConcern.type === "stuck" ? "guidance" : "observation";
     } else {
-      // Generate whisper with LLM
+      // The person's own inner voice, with the concern as what is pressing.
       try {
-        const result = await generateText({
-          model: daemonModel,
-          prompt: `You are ${observation.agentName}'s reflective companion.
-Observed concern: ${topConcern.description}
-
-Offer a tentative question or possibility grounded in this observation, as an intuition the character may accept or dismiss. Use one sentence under 20 words. Output only the whisper text, or an empty string if there is nothing useful to add.`,
-        });
-        whisperContent = result.text.trim().replace(/^["']|["']$/g, '');
+        const state = innerVoiceState(daemon);
+        whisperContent = await generateWhisperText({ persona: buildDaemonPersona(world, daemon.agentEid),
+          ledger: readDaemonStoryLedger(spiritRegistry, daemon.agentName), pressing: topConcern.description,
+          recentWhispers: [...state.recent] }, registry, state.count);
         whisperType = "guidance";
       } catch (error) {
         assertSimulationTaskActive();
@@ -2043,7 +2232,7 @@ Offer a tentative question or possibility grounded in this observation, as an in
     modality: "cognitive",
     content: whisperContent,
     source: "inner_voice",
-    intensity: 0.3,  // Subtle, not overwhelming
+    intensity: INNER_VOICE_INTENSITY,
   }, () => scope.current() && evidenceCurrent())) return null;
 
   daemon.lastWhisper = now;
@@ -2081,7 +2270,8 @@ export async function whisperChallenge(
   daemon: DaemonState,
   observation: DaemonObservation,
   registry: DaemonRegistry,
-  forceWhisper: boolean = false
+  forceWhisper: boolean = false,
+  spiritRegistry?: SpiritRegistry
 ): Promise<ChallengeWhisper | null> {
   const scope = captureWhisperScope(world, daemon, observation, registry);
   if (!scope.current()) return null;
@@ -2136,15 +2326,11 @@ export async function whisperChallenge(
   // Generate challenge whisper with LLM
   let challengeContent = "";
   try {
-    const result = await generateText({
-      model: daemonModel,
-      prompt: `You are ${observation.agentName}'s reflective companion.
-Observed opportunity: ${topOpportunity.description}
-Possible angle: ${challengeType}
-
-Offer a relevant question or possibility grounded in this observation. Treat growth as an option, not a demand or an invented problem; the character can decide whether it fits their interests. Use one sentence under 20 words. Output only the whisper text, or an empty string if there is nothing useful to add.`,
-    });
-    challengeContent = result.text.trim().replace(/^["']|["']$/g, '');
+    const state = innerVoiceState(daemon);
+    challengeContent = await generateWhisperText({ persona: buildDaemonPersona(world, daemon.agentEid),
+      ledger: readDaemonStoryLedger(spiritRegistry, daemon.agentName),
+      pressing: `${topOpportunity.description} The angle is ${challengeType}: dare them.`,
+      recentWhispers: [...state.recent] }, registry, state.count);
   } catch (error) {
     assertSimulationTaskActive();
     return null;
@@ -2374,10 +2560,14 @@ export async function runDaemonSystem(
   // cited circumstances expire. Ordinary whisper cooldown and per-item scope
   // checks still apply; no observation or model call is accelerated here.
   const deliveredThisCycle = new Set<DaemonState>();
-  for (const daemon of registry.daemons.values()) {
+  for (const daemon of [...registry.daemons.values()]) {
     assertSimulationTaskActive();
     if (daemon.pendingNudges.length === 0) continue;
-    const delivered = deliverScopedNarrativeNudges(registry, daemon, world);
+    // A living world voices the Narrator's pull in the person's inner voice;
+    // otherwise the already evaluated wording is delivered synchronously.
+    const delivered = registry.innerVoice && registry.useModel
+      ? await voiceScopedNarrativeNudge(registry, daemon, world, spiritRegistry)
+      : deliverScopedNarrativeNudges(registry, daemon, world);
     whispers += delivered;
     if (delivered) deliveredThisCycle.add(daemon);
     if (getCommittedSource(world).stopped) return { observations, whispers, challenges, reports };
@@ -2403,19 +2593,34 @@ export async function runDaemonSystem(
     // Priority: concerns get guidance whispers, growth gets challenge whispers
     // If there are concerns, prioritize protective guidance
     if (!deliveredNudges && observation.concerns.length > 0) {
-      const whisper = await whisperToAgent(world, daemon, observation, false, registry);
-      if (whisper) whispers++;
+      const whisper = await whisperToAgent(world, daemon, observation, false, registry, spiritRegistry);
+      if (whisper) { whispers++; deliveredThisCycle.add(daemon); }
     }
     // If no concerns but growth opportunities, push with challenge whispers
     else if (!deliveredNudges && observation.growthOpportunities.length > 0) {
-      const challenge = await whisperChallenge(world, daemon, observation, registry);
-      if (challenge) challenges++;
+      const challenge = await whisperChallenge(world, daemon, observation, registry, false, spiritRegistry);
+      if (challenge) { challenges++; deliveredThisCycle.add(daemon); }
     }
 
     // Maybe report (includes both concerns AND growth opportunities for GodAI)
     if (spiritRegistry) {
       const report = reportToSuperiorSpirit(registry, spiritRegistry, daemon, observation);
       if (report) reports++;
+    }
+  }
+
+  // The inner voice: each resident's daemon whispers on its own cadence,
+  // sooner when the person has been waiting. Most overdue first, bounded.
+  if (registry.innerVoice) {
+    const now = readSimulationTime(world);
+    const due = [...registry.daemons.values()].filter(daemon => !deliveredThisCycle.has(daemon)
+      && entityExists(world, daemon.agentEid) && isInnerVoiceDue(world, daemon, registry))
+      .sort((a, b) => (a.innerVoice?.lastAtSimMs ?? now) - (b.innerVoice?.lastAtSimMs ?? now))
+      .slice(0, Math.max(0, registry.innerVoiceMaxPerCycle));
+    for (const daemon of due) {
+      assertSimulationTaskActive();
+      if (getCommittedSource(world).stopped) break;
+      if (await whisperInnerVoice(world, daemon, registry, spiritRegistry)) whispers++;
     }
   }
 

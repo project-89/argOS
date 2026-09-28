@@ -3,196 +3,183 @@ import { characterPastSchema } from "../../cognition/character-past-schema";
 import { getWorldAuthoringContext, getWorldCharacterSeed, getWorldSpecification, parseWorldSpecification, setWorldSpecification } from "../../world/world-specification";
 import { SPATIAL_ASSETS, type SpatialRoom } from "../spatial-catalog";
 import { createTownScenario } from "../spatial-town-fixtures";
-import { createLovecraftTownScenario, createLovecraftWorldSpecification, LOVECRAFT_TOWN_NARRATOR_PROMPT, LOVECRAFT_TOWN_STYLE } from "../spatial-lovecraft-town";
+import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSaltmereAuthorCast, LOVECRAFT_TOWN_STYLE } from "../spatial-lovecraft-town";
 import { spatialAgentConfig, validateSpatialScenario } from "../spatial-scenario";
 
 const geometry = ({ name: _name, description: _description, floor: _floor, building, ...room }: SpatialRoom) => ({
   ...room, ...(building ? { building: { style: building.style, front: building.front } } : {}),
 });
+const STORY_PROPS = ["willow-house-knocker", "brick-house-knocker", "blue-house-knocker", "sun-house-knocker",
+  "gull-house-chest", "marrow-star-logbook", "maras-letter", "agnes-diary", "otis-pocketknife", "leons-heart-pills"];
 
-test("Saltmere preflights on the unchanged bounded town geometry and exact native identities", () => {
+test("Saltmere preflights on the unchanged town geometry, adding only its story objects", () => {
   const base = createTownScenario(), scenario = createLovecraftTownScenario();
   expect(validateSpatialScenario(scenario)).toEqual(scenario);
-  expect(scenario.id).toBe("saltmere-coastal-mystery-v1");
+  expect(scenario.id).toBe("saltmere-what-the-sea-was-paid-v2");
   expect(scenario.blueprint.id).toBe(scenario.id);
-  expect(scenario.blueprint.author).toBe("operator");
   expect(scenario.navigationCellSize).toBe(.5);
   expect(scenario.bounds).toEqual(base.bounds);
-  expect(scenario.maxWorldEntities).toBe(base.maxWorldEntities);
   expect(scenario.blueprint.rooms.map(geometry)).toEqual(base.blueprint.rooms.map(geometry));
   expect(scenario.blueprint.walls).toEqual(base.blueprint.walls);
   expect(scenario.blueprint.doors).toEqual(base.blueprint.doors);
   expect(scenario.blueprint.spawns).toEqual(base.blueprint.spawns);
-  expect(scenario.blueprint.props.map(({ name, description, ...p }) => p)).toEqual(base.blueprint.props.map(({ name, description, ...p }) => p));
-  expect(scenario.blueprint.props.filter(p => p.assetId === "tree")).toEqual(base.blueprint.props.filter(p => p.assetId === "tree"));
+  const kept = scenario.blueprint.props.filter(p => !STORY_PROPS.includes(p.id));
+  expect(kept.map(({ name, description, ...p }) => p)).toEqual(base.blueprint.props.map(({ name, description, ...p }) => p));
+  expect(scenario.blueprint.props.map(p => p.id)).toEqual(expect.arrayContaining(STORY_PROPS));
   expect(scenario.blueprint.rooms.map(r => r.name)).toEqual([
     "Lantern House", "Rook House", "Tidemark House", "Gull House", "Saltmere Common", "The Waking Gull Cafe", "The Net House", "Widow's Garden",
   ]);
   for (const resident of scenario.residents) {
     const before = base.residents.find(r => r.id === resident.id)!;
-    expect({ id: resident.id, name: resident.name, phoneId: resident.phoneId, home: resident.homeRoomId,
-      start: resident.startRoomId, assetId: resident.assetId, appearance: resident.appearance }).toEqual({
-      id: before.id, name: before.name, phoneId: before.phoneId, home: before.homeRoomId,
-      start: before.startRoomId, assetId: before.assetId, appearance: before.appearance,
-    });
-    expect(resident.startRoom).toBe(scenario.blueprint.rooms.find(r => r.id === resident.startRoomId)!.name);
+    expect({ id: resident.id, name: resident.name, phoneId: resident.phoneId, home: resident.homeRoomId, start: resident.startRoomId, assetId: resident.assetId })
+      .toEqual({ id: before.id, name: before.name, phoneId: before.phoneId, home: before.homeRoomId, start: before.startRoomId, assetId: before.assetId });
   }
 });
 
-test("factories return detached scenarios and specification histories without changing the ordinary town", () => {
+test("factories return detached scenarios, specifications and author cast sheets", () => {
   const base = createTownScenario(), first = createLovecraftTownScenario(), second = createLovecraftTownScenario();
-  const spec = createLovecraftWorldSpecification();
+  const spec = createLovecraftWorldSpecification(), cast = getSaltmereAuthorCast();
   first.residents[0].past!.memories[0].recollection = "caller mutation";
-  first.residents[0].aspirations.length = 0;
-  first.blueprint.props[0].description = "caller mutation";
-  first.blueprint.rooms[0].building!.roofColor = "#ffffff";
-  spec.inhabitants![0].past!.memories[0].recollection = "spec mutation";
+  first.residents[0].schedule![0].name = "caller mutation";
+  first.blueprint.props.find(p => p.id === "maras-letter")!.item!.text = "caller mutation";
+  spec.inhabitants![0].past!.secret = "spec mutation";
+  cast[0].secret = "cast mutation";
   expect(createLovecraftTownScenario()).toEqual(second);
   expect(createTownScenario()).toEqual(base);
-  expect(JSON.stringify(createLovecraftWorldSpecification())).not.toMatch(/caller mutation|spec mutation/);
+  expect(JSON.stringify([createLovecraftWorldSpecification(), getSaltmereAuthorCast()])).not.toMatch(/caller mutation|spec mutation|cast mutation/);
 });
 
-test("ten distinct residents carry private formative and recent memories, core drives and actionable concerns", () => {
-  const scenario = createLovecraftTownScenario(), names = scenario.residents.map(r => r.name);
+test("ten residents with a voice, a secret, charged memories and a goal that puts them in someone's way", () => {
+  const scenario = createLovecraftTownScenario();
   expect(scenario.residents).toHaveLength(10);
   expect(new Set(scenario.residents.map(r => r.role)).size).toBe(10);
   expect(new Set(scenario.residents.map(r => r.initialGoal.description)).size).toBe(10);
+  const names = scenario.residents.map(r => r.name);
   for (const resident of scenario.residents) {
     const past = characterPastSchema.parse(resident.past);
-    expect(past.memories).toHaveLength(3);
-    expect(past.memories.every(m => m.provenance === "authored-history")).toBe(true);
-    expect(past.memories.some(m => /childhood|school years|teenage years|apprenticeship|training/.test(m.period))).toBe(true);
-    expect(past.memories.some(m => /yesterday|last week|last month/.test(m.period))).toBe(true);
-    expect(past.drives).toHaveLength(3);
+    expect(past.secret!.length).toBeGreaterThan(200);
+    expect(past.voice!.length).toBeGreaterThan(40);
+    expect(past.memories.length).toBeGreaterThanOrEqual(3);
+    expect(past.memories.length).toBeLessThanOrEqual(4);
+    expect(past.drives.length).toBeGreaterThanOrEqual(3);
     expect(resident.aspirations).toHaveLength(3);
-    expect(past.drives).not.toEqual(resident.aspirations);
-    expect(names.filter(name => name !== resident.name && past.background.includes(name)).length).toBeGreaterThanOrEqual(2);
-    expect(past.background).toContain("Privately");
-    expect(resident.initialGoal).toMatchObject({ kind: "custom", priority: 6 });
+    // Relationships crisscross: every history names at least three neighbours.
+    expect(names.filter(name => name !== resident.name && past.background.includes(name)).length).toBeGreaterThanOrEqual(3);
+    expect(resident.initialGoal).toMatchObject({ kind: "custom", priority: 7 });
     expect(resident.initialGoal.description.length).toBeLessThanOrEqual(300);
-    expect(resident.systemPrompt).toContain("Your memories are your own recollections");
     expect(spatialAgentConfig(resident).past).toEqual(past);
-    expect(resident.initialGoal.description).not.toMatch(/\b(cook|harvest|buy|sell|pay|farm|craft|repair|unlock|activate|cast|summon)\b/i);
-    expect(JSON.stringify(resident)).not.toMatch(/SpatialPlacement|Weaver|godCommand|must confess|must believe|must cooperate/);
+    // Persona first; no engine disclaimers in the character's own prompt.
+    expect(resident.systemPrompt!.startsWith(`You are ${resident.name}, ${resident.role}.`)).toBe(true);
+    expect(resident.systemPrompt).not.toMatch(/not other people's private knowledge|proof of the present state|valid to do nothing/);
+    expect(JSON.stringify(resident)).not.toMatch(/must confess|must believe|SpatialPlacement|godCommand/);
   }
-  expect(scenario.residents.find(r => r.id === "ivo")!.initialGoal.description).toContain("have an available pastry");
-  expect(scenario.residents.find(r => r.id === "noor")!.initialGoal.description).toContain("seated break");
+  const goal = (id: string) => scenario.residents.find(r => r.id === id)!.initialGoal.description;
+  expect(goal("mara")).toMatch(/Leon/); expect(goal("ada")).toMatch(/Eli/); expect(goal("ivo")).toMatch(/Otis/);
+  expect(goal("tess")).toMatch(/Bea/); expect(goal("bea")).toMatch(/Tess/); expect(goal("otis")).toMatch(/logbook/);
+  expect(goal("sera")).toMatch(/diary/); expect(goal("leon")).toMatch(/Noor/); expect(goal("noor")).toMatch(/Mara/);
   expect(scenario.residents.find(r => r.id === "noor")!.needs.energy).toBe(42);
 });
 
-test("public inspectable detail has no private answer or hidden content and adds no affordance", () => {
-  const scenario = createLovecraftTownScenario();
-  const get = (id: string) => scenario.blueprint.props.find(p => p.id === id)!;
-  expect(get("workshop-box").description).toContain("Three shallow hooked cuts cross the outer lid, with pale paint caught in the middle cut.");
-  expect(get("cafe-table-1").description).toContain("Three curved scratches interrupt an old circular stain");
-  expect(get("garden-plant-1").description).toContain("A crooked pale stripe crosses three older hooked lines");
-  for (const id of ["workshop-box", "cafe-table-1", "garden-plant-1"]) {
-    expect(SPATIAL_ASSETS[get(id).assetId].affordances).toContain("examine");
-    expect(get(id).description).not.toMatch(/Ada|Otis|Bea|secret|inside is|contains a|proof of|unlock/i);
-  }
-  expect(SPATIAL_ASSETS[get("workshop-box").assetId].initialState).toBe("closed");
-  expect(scenario.blueprint.props.some(p => p.supportedBy === "workshop-box")).toBe(false);
-  expect(scenario.blueprint.props.filter(p => p.assetId === "food")).toHaveLength(4);
-  expect(scenario.blueprint.props.filter(p => p.assetId === "food").every(p => p.description.includes("does not replenish itself"))).toBe(true);
-  expect(scenario.blueprint.props.filter(p => p.assetId === "phone")).toHaveLength(10);
-  expect(SPATIAL_ASSETS.sofa.affordances).toEqual(["examine"]);
-  expect(SPATIAL_ASSETS.chair.affordances).toContain("sit");
-  for (const room of scenario.blueprint.rooms) {
-    expect(room.description).not.toMatch(/four pastries|box is empty|currently raining|Ada made|Otis lied|Bea painted/);
-  }
-});
-
-test("different accounts are limited to their owners, not delivered as town knowledge", () => {
+test("each secret belongs to its owner; witnesses remember what they saw, not what it means to others", () => {
   const scenario = createLovecraftTownScenario(), get = (id: string) => scenario.residents.find(r => r.id === id)!;
-  const adaMemory = "I made the outer two cuts myself to line up a repair last winter. I do not remember making the middle one.";
-  expect(JSON.stringify(get("ada").past)).toContain(adaMemory);
-  expect(JSON.stringify(get("ivo").past)).not.toContain(adaMemory);
-  expect(get("mara").initialObservation).toContain("not a personal inspection");
-  expect(get("eli").past!.background).toContain("did not see what he did inside");
-  expect(get("otis").past!.background).toContain("I do not know whether anyone noticed");
-  expect(get("leon").past!.background).toContain("Otis told me he spent yesterday afternoon outside");
-  expect(get("leon").past!.background).not.toContain("closed the supplies box");
-  const publicData = JSON.stringify([scenario.blueprint, LOVECRAFT_TOWN_STYLE, LOVECRAFT_TOWN_NARRATOR_PROMPT]);
+  expect(get("mara").past!.secret).toContain("Ask Leon what the sea was paid");
+  expect(get("ivo").past!.secret).toContain("forcing the old supplies box");
+  expect(get("tess").past!.secret).toContain("I scratched the three curves into Cafe table 1 myself");
+  expect(get("ada").past!.secret).toContain("three knocks");
+  expect(get("leon").past!.secret).toContain("smuggling run");
+  expect(get("eli").past!.secret).toContain("Ruben Voss");
+  expect(get("sera").past!.secret).toContain("L. knows. He tells the sea story so no one asks about the cargo.");
+  expect(get("noor").past!.secret).toContain("I let them go out");
+  expect(get("bea").past!.secret).toContain("Keep the sea from counting");
+  expect(get("otis").past!.secret).toContain("logbook");
   for (const resident of scenario.residents) {
-    expect(publicData).not.toContain(resident.past!.background);
-    for (const m of resident.past!.memories) {
-      expect(publicData).not.toContain(m.recollection);
-      for (const other of scenario.residents.filter(r => r.id !== resident.id)) {
-        expect(JSON.stringify([other.past, other.initialObservation, other.systemPrompt])).not.toContain(m.recollection);
-      }
+    for (const other of scenario.residents.filter(r => r.id !== resident.id)) {
+      expect(JSON.stringify([other.past, other.systemPrompt, other.initialObservation])).not.toContain(resident.past!.secret!);
     }
   }
+  const publicData = JSON.stringify([scenario.blueprint.rooms, scenario.blueprint.props.map(({ item: _item, ...p }) => p), LOVECRAFT_TOWN_STYLE]);
+  for (const resident of scenario.residents) {
+    expect(publicData).not.toContain(resident.past!.secret!);
+    expect(publicData).not.toContain(resident.past!.background);
+  }
 });
 
-test("specification matches the authored cast while the public builder brief excludes all private character data", () => {
+test("story objects: private text lives in item data, never in the inspectable description", () => {
+  const scenario = createLovecraftTownScenario(), get = (id: string) => scenario.blueprint.props.find(p => p.id === id)!;
+  expect(get("marrow-star-logbook")).toMatchObject({ roomId: "sun-house", assetId: "book", item: { containedBy: "gull-house-chest" } });
+  expect(get("gull-house-chest")).toMatchObject({ roomId: "sun-house", assetId: "supply-box" });
+  expect(get("maras-letter")).toMatchObject({ roomId: "willow-house", assetId: "paper", item: { carriedBy: "mara" } });
+  expect(get("agnes-diary")).toMatchObject({ roomId: "blue-house", supportedBy: "blue-house-table" });
+  expect(get("otis-pocketknife")).toMatchObject({ roomId: "sun-house", supportedBy: "sun-house-table", item: { portable: true } });
+  expect(get("leons-heart-pills")).toMatchObject({ roomId: "brick-house", supportedBy: "brick-house-table" });
+  expect(get("otis-pocketknife").description).toContain("Pale paint");
+  for (const id of ["marrow-star-logbook", "maras-letter", "agnes-diary"]) {
+    const prop = get(id);
+    expect(prop.item!.text!.length).toBeGreaterThan(200);
+    expect(prop.item!.text).toContain(prop.item!.excerpt!.slice(0, 40));
+    expect(prop.description).not.toContain(prop.item!.text!.slice(0, 40));
+  }
+  expect(get("maras-letter").item!.text).toContain("Ask Leon what the sea was paid");
+  expect(get("agnes-diary").item!.text).toContain("L. knows. He tells the sea story so no one asks about the cargo.");
+  expect(get("marrow-star-logbook").item!.text).toMatch(/C\. Brand.*Three Hooks/s);
+  for (const house of ["willow-house", "brick-house", "blue-house", "sun-house"])
+    expect(get(`${house}-knocker`)).toMatchObject({ roomId: "common-square", assetId: "knocker", item: { knockFor: house } });
+  for (const asset of ["book", "paper", "trinket", "knocker"]) expect(SPATIAL_ASSETS[asset].affordances).toEqual(["examine"]);
+});
+
+test("the marks carry their human explanations in plain sight for anyone who looks closely", () => {
+  const scenario = createLovecraftTownScenario(), get = (id: string) => scenario.blueprint.props.find(p => p.id === id)!;
+  expect(get("workshop-box").description).toContain("the middle one fresh and splintered");
+  expect(get("workshop-box").description).toContain("pale paint caught in the middle cut");
+  expect(get("cafe-table-1").description).toContain("spaced almost too evenly");
+  expect(get("garden-plant-1").description).toContain("three old hooked lines cut long ago show through");
+  for (const id of ["workshop-box", "cafe-table-1", "garden-plant-1"]) expect(get(id).description).not.toMatch(/Ada|Otis|Bea|Tess|Agnes/);
+  expect(scenario.blueprint.props.filter(p => p.assetId === "food")).toHaveLength(4);
+  expect(scenario.blueprint.props.filter(p => p.assetId === "phone")).toHaveLength(10);
+});
+
+test("residents carry their own evening rhythms at real Saltmere places", () => {
+  const scenario = createLovecraftTownScenario(), rooms = new Set(scenario.blueprint.rooms.map(r => r.name));
+  const at18 = scenario.residents.map(r => r.schedule!.find(a => (18 - a.startHour + 24) % 24 < a.duration)!);
+  expect(at18.every(Boolean)).toBe(true);
+  expect(new Set(at18.map(a => a.name)).size).toBe(10);
+  for (const activity of scenario.residents.flatMap(r => r.schedule!)) if (activity.location) expect(rooms.has(activity.location)).toBe(true);
+  expect(scenario.residents.flatMap(r => r.schedule!).some(a => /leisure|relax/.test(a.name))).toBe(false);
+});
+
+test("the specification gives the author the whole cast, including secrets, while the builder brief stays public", () => {
   const scenario = createLovecraftTownScenario(), input = createLovecraftWorldSpecification();
   const spec = parseWorldSpecification(input);
   expect(spec.setting.name).toBe("Saltmere");
   expect(spec.inhabitants).toEqual(scenario.residents.map(({ name, role, description, systemPrompt, startRoom, past }) => ({
-    name, role, description, systemPrompt, startRoom, past,
-  })));
-  const world = createWorld(), otherWorld = createWorld();
+    name, role, description, systemPrompt, startRoom, past })));
+  expect(spec.inhabitants!.every(i => i.past?.secret)).toBe(true);
+  expect(JSON.stringify([spec.story, spec.opportunities, spec.discovery, spec.constraints])).not.toMatch(/clue-combination|No forced confession|public design intent only/);
+  expect(spec.discovery!.join(" ")).toContain("Combining clues");
+  const world = createWorld(), other = createWorld();
   setWorldSpecification(world, input);
-  const publicBrief = getWorldAuthoringContext(world);
-  expect(publicBrief).toContain("not observed facts or permission");
-  expect(publicBrief).toContain("inspectable text");
-  expect(publicBrief).toContain("not newly installed 3D decals");
-  expect(publicBrief).toContain("No forced confession");
-  expect(getWorldAuthoringContext(otherWorld)).toBe("");
+  const brief = getWorldAuthoringContext(world);
+  expect(getWorldAuthoringContext(other)).toBe("");
   for (const resident of scenario.residents) {
     expect(getWorldCharacterSeed(world, resident.name)?.past).toEqual(resident.past);
-    expect(publicBrief).not.toContain(resident.past!.background);
-    expect(publicBrief).not.toContain(resident.systemPrompt!);
-    for (const m of resident.past!.memories) expect(publicBrief).not.toContain(m.recollection);
+    expect(brief).not.toContain(resident.past!.secret!);
   }
-  const { inhabitants: _private, ...publicSpec } = spec;
-  expect(JSON.stringify(publicSpec)).not.toMatch(/Privately|I made the outer two cuts|closed the supplies box lid/);
   expect(getWorldSpecification(world)).toEqual(spec);
-  expect(Object.keys(spec).sort()).toEqual(["version", "setting", "story", "inhabitants", "opportunities", "discovery", "constraints"].sort());
+  const cast = getSaltmereAuthorCast();
+  expect(cast.map(c => c.name)).toEqual(scenario.residents.map(r => r.name));
+  expect(cast.find(c => c.name === "Otis")).toMatchObject({ home: "Gull House", secret: expect.stringContaining("logbook"), voice: expect.stringContaining("friend") });
 });
 
-test("renaming leaves no stale place references in resident or object authorship and preserves phone relationships", () => {
+test("phones keep their owners; the collector reaches both people he is courting", () => {
   const scenario = createLovecraftTownScenario();
-  const prose = JSON.stringify([scenario.residents, scenario.blueprint.rooms, scenario.blueprint.props]);
-  for (const old of createTownScenario().blueprint.rooms.map(r => r.name)) expect(prose).not.toContain(old);
   expect(scenario.residents.filter(r => r.phoneContact).map(r => [r.name, r.phoneContact!.name])).toEqual([
-    ["Mara", "Alex"], ["Ivo", "Nadia"], ["Noor", "Anika"],
+    ["Mara", "Alex"], ["Ivo", "Nadia"], ["Tess", "Harlan Pryce"], ["Noor", "Anika"], ["Otis", "Harlan Pryce"],
   ]);
   for (const resident of scenario.residents) {
     const phone = scenario.blueprint.props.find(p => p.id === resident.phoneId)!;
     expect(phone).toMatchObject({ roomId: resident.homeRoomId, assetId: "phone", supportedBy: `${resident.homeRoomId}-table` });
-    expect(phone.description).toContain("screen contents are private");
     if (resident.phoneContact) expect(resident.phoneContact.memory).toContain(scenario.blueprint.rooms.find(r => r.id === resident.homeRoomId)!.name);
   }
-});
-
-test("Narrator directs future grounded opportunities without an event timer or execution privilege", () => {
-  expect(Object.isFrozen(LOVECRAFT_TOWN_STYLE)).toBe(true);
-  const prompt = LOVECRAFT_TOWN_NARRATOR_PROMPT;
-  expect(prompt.trim().split(/\s+/).length).toBeLessThanOrEqual(190);
-  expect(prompt).toContain("intervention with needed:true and type:world_effect");
-  expect(prompt).toContain("Available operations and remaining budgets define your authority");
-  expect(prompt).toContain("Observe the consequences before adding another complication");
-  expect(prompt).toContain("only after a successful native receipt");
-  expect(prompt).toContain("private memories and unread messages remain private");
-  expect(prompt).toContain("There is no required confession, discovery or ending");
-  expect(LOVECRAFT_TOWN_STYLE.narratorContext).toContain("no supernatural explanation or guilty resident is predetermined");
-  expect(LOVECRAFT_TOWN_STYLE.scope).toContain("existing host grants");
-});
-
-test("evening fiction allows imperfect motives without placing engine disclaimers in personal histories", () => {
-  const scenario = createLovecraftTownScenario(), get = (id: string) => scenario.residents.find(r => r.id === id)!;
-  expect(LOVECRAFT_TOWN_STYLE.premise).toContain("An evening");
-  expect(get("tess").past!.background).toContain("this evening");
-  expect(get("ivo").past!.background).toContain("normal evening");
-  expect(get("mara").phoneContact!.description).toContain("evening");
-  const fiction = JSON.stringify([scenario.residents.map(r => r.past), scenario.blueprint.rooms, scenario.blueprint.props]);
-  expect(fiction).not.toMatch(/installed in|tools promised|grants no|crop system|no harvest|not a traversable|bounded neighborhood|does not establish/);
-  expect(get("leon").past!.drives).toContain("Be taken seriously by people whose respect matters to me");
-  expect(get("leon").initialGoal.description).toContain("decide how much of the old story to tell");
-  expect(get("sera").past!.background).toContain("my grandmother died last year");
-  expect(get("sera").personality).toContain("mistakes a cherished possibility for the most likely one");
-  expect(get("otis").initialGoal.description).toContain("decide how much I want to explain");
-  expect(get("otis").initialGoal.description).not.toMatch(/confess|correct|apologize/);
-  expect(get("otis").past!.memories[2].emotionalTone).toContain("defensiveness");
+  const prose = JSON.stringify([scenario.residents, scenario.blueprint.rooms, scenario.blueprint.props]);
+  for (const old of createTownScenario().blueprint.rooms.map(r => r.name)) expect(prose).not.toContain(old);
 });

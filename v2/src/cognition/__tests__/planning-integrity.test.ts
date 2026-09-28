@@ -153,7 +153,7 @@ describe("Planning integrity under changing world state", () => {
     expect(request).toMatchObject({ maxOutputTokens: 4096, maxRetries: 0, providerOptions: { google: { thinkingConfig: { thinkingLevel: "medium" } } } });
     expect(request.abortSignal).toBeInstanceOf(AbortSignal);
     expect(request.abortSignal.aborted).toBe(false);
-    expect(request.prompt).toContain("travel, reach, possession");
+    expect(request.prompt).toContain("travel, reach and possession");
     expect(request.prompt).not.toContain("replace_in_file"); expect(request.system).not.toContain("CLI-only");
   });
 

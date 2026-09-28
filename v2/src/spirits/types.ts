@@ -244,6 +244,27 @@ export interface NarrativeState {
 
   // Recent prose for deduplication (last 10 summaries)
   recentProse: string[];
+
+  /** The author's own working notes, fed back each review. Interpretation and
+   * intent only: never evidence of what happened or authority to change it. */
+  ledger?: StoryLedger;
+}
+
+export type StoryThreadStatus = "setup" | "rising" | "turn" | "payoff" | "dormant";
+export interface StoryLedger {
+  /** Sim-time the author began this session's arc; drives the tension curve. */
+  startedAtSimMs: number;
+  tensionNow: number;
+  tensionTarget: number;
+  questions: Array<{ question: string; status: "open" | "answered"; answer?: string }>;
+  threads: Array<{ name: string; status: StoryThreadStatus; participants: string[]; next?: string }>;
+  foreshadowing: Array<{ detail: string; status: "planted" | "paid" }>;
+  /** The next beats the author is building toward. */
+  plan?: string;
+  /** Last accepted review's reasoning, fed back verbatim. */
+  lastReasoning?: string;
+  /** What the author actually attempted, with the host's receipt. */
+  moves: Array<{ atSimMs: number; kind: string; target: string; summary: string; result: string }>;
 }
 
 export type NarrativePhase =
@@ -372,6 +393,10 @@ export interface Intervention {
   content: string;
   reason: string;
   result?: string;
+  /** Host receipt text for the attempted effect (what actually happened). */
+  detail?: string;
+  /** For a whisper: the kind of impulse (reflect, interact, escalate...). */
+  nudgeKind?: "arrive" | "interact" | "resolve" | "escalate" | "reflect" | "change_goal";
   /** Untrusted model citations, validated against this inference's issued records. */
   evidenceIds?: unknown;
 }

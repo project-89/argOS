@@ -1,0 +1,359 @@
+{
+  "assets": [
+    {
+      "id": "barrel",
+      "name": "Oak barrel",
+      "description": "A salt-stained oak barrel bound with two iron hoops.",
+      "tags": [
+        "coastal",
+        "storage",
+        "harbour",
+        "outdoor",
+        "indoor"
+      ],
+      "model": "generated/coastal/barrel.glb",
+      "size": {
+        "x": 0.61,
+        "y": 0.9,
+        "z": 0.61
+      },
+      "color": "#9b6a3c",
+      "objectType": "object",
+      "initialState": "normal",
+      "affordances": [
+        "examine"
+      ],
+      "solid": true,
+      "portable": false,
+      "placement": {
+        "indoor": true,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    },
+    {
+      "id": "fish-crate",
+      "name": "Fish crate",
+      "description": "A slatted pine fish crate with a loose plank lid and rope grab handles.",
+      "tags": [
+        "coastal",
+        "storage",
+        "fishing",
+        "harbour",
+        "container"
+      ],
+      "model": "generated/coastal/fish-crate.glb",
+      "size": {
+        "x": 0.79,
+        "y": 0.383,
+        "z": 0.512
+      },
+      "color": "#c9a46e",
+      "objectType": "chest",
+      "initialState": "closed",
+      "affordances": [
+        "open",
+        "close",
+        "examine"
+      ],
+      "solid": true,
+      "portable": false,
+      "placement": {
+        "indoor": true,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    },
+    {
+      "id": "harbour-bench",
+      "name": "Harbour bench",
+      "description": "A weathered plank bench, backless, long enough for one or two to sit.",
+      "tags": [
+        "coastal",
+        "seat",
+        "gathering",
+        "outdoor",
+        "harbour"
+      ],
+      "model": "generated/coastal/harbour-bench.glb",
+      "size": {
+        "x": 1.513,
+        "y": 0.46,
+        "z": 0.447
+      },
+      "color": "#a89d89",
+      "objectType": "chair",
+      "initialState": "empty",
+      "affordances": [
+        "sit"
+      ],
+      "solid": true,
+      "portable": false,
+      "placement": {
+        "indoor": true,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    },
+    {
+      "id": "lantern-post",
+      "name": "Lantern post",
+      "description": "A slim iron post with a warm lantern hanging from its arm.",
+      "tags": [
+        "coastal",
+        "light",
+        "street",
+        "outdoor",
+        "harbour"
+      ],
+      "model": "generated/coastal/lantern-post.glb",
+      "size": {
+        "x": 0.555,
+        "y": 2.1,
+        "z": 0.22
+      },
+      "color": "#4a4f54",
+      "objectType": "object",
+      "initialState": "normal",
+      "affordances": [
+        "examine"
+      ],
+      "solid": true,
+      "portable": false,
+      "placement": {
+        "indoor": false,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    },
+    {
+      "id": "net-rack",
+      "name": "Net drying rack",
+      "description": "Two weathered posts and a crossbar with a fishing net hung out to dry, cork floats on its hem.",
+      "tags": [
+        "coastal",
+        "fishing",
+        "outdoor",
+        "harbour",
+        "work"
+      ],
+      "model": "generated/coastal/net-rack.glb",
+      "size": {
+        "x": 2.04,
+        "y": 1.8,
+        "z": 0.46
+      },
+      "color": "#5c7d74",
+      "objectType": "object",
+      "initialState": "normal",
+      "affordances": [
+        "examine"
+      ],
+      "solid": true,
+      "portable": false,
+      "placement": {
+        "indoor": false,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    },
+    {
+      "id": "ship-bell",
+      "name": "Ship's bell",
+      "description": "A brass ship's bell hung in a small oak frame, a rope lanyard on its clapper.",
+      "tags": [
+        "coastal",
+        "signal",
+        "harbour",
+        "gathering",
+        "outdoor",
+        "indoor"
+      ],
+      "model": "generated/coastal/ship-bell.glb",
+      "size": {
+        "x": 0.72,
+        "y": 0.94,
+        "z": 0.38
+      },
+      "color": "#c9a14a",
+      "objectType": "object",
+      "initialState": "normal",
+      "affordances": [
+        "examine"
+      ],
+      "solid": true,
+      "portable": false,
+      "placement": {
+        "indoor": true,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    },
+    {
+      "id": "rope-coil",
+      "name": "Coil of rope",
+      "description": "A heavy mooring rope coiled flat on the ground, its end trailing loose.",
+      "tags": [
+        "coastal",
+        "fishing",
+        "harbour",
+        "outdoor",
+        "clutter"
+      ],
+      "model": "generated/coastal/rope-coil.glb",
+      "size": {
+        "x": 0.612,
+        "y": 0.095,
+        "z": 0.606
+      },
+      "color": "#cdb485",
+      "objectType": "object",
+      "initialState": "normal",
+      "affordances": [
+        "examine"
+      ],
+      "solid": false,
+      "portable": false,
+      "placement": {
+        "indoor": true,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    },
+    {
+      "id": "lobster-pot",
+      "name": "Lobster pot",
+      "description": "A bent-wood lobster trap with netted ends and a funnel entrance.",
+      "tags": [
+        "coastal",
+        "fishing",
+        "harbour",
+        "outdoor",
+        "clutter"
+      ],
+      "model": "generated/coastal/lobster-pot.glb",
+      "size": {
+        "x": 0.62,
+        "y": 0.36,
+        "z": 0.452
+      },
+      "color": "#8c6a4a",
+      "objectType": "object",
+      "initialState": "normal",
+      "affordances": [
+        "examine"
+      ],
+      "solid": true,
+      "portable": false,
+      "placement": {
+        "indoor": true,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    },
+    {
+      "id": "driftwood-table",
+      "name": "Driftwood table",
+      "description": "A rough outdoor table of bleached, uneven driftwood planks on splayed log legs.",
+      "tags": [
+        "coastal",
+        "table",
+        "gathering",
+        "outdoor",
+        "surface"
+      ],
+      "model": "generated/coastal/driftwood-table.glb",
+      "size": {
+        "x": 1.434,
+        "y": 0.766,
+        "z": 0.828
+      },
+      "color": "#bab09c",
+      "objectType": "table",
+      "initialState": "normal",
+      "affordances": [
+        "examine"
+      ],
+      "solid": true,
+      "portable": false,
+      "placement": {
+        "indoor": true,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    },
+    {
+      "id": "sea-chest",
+      "name": "Sea chest",
+      "description": "A painted sailor's chest bound in iron, with rope beckets and a brass lock plate.",
+      "tags": [
+        "coastal",
+        "storage",
+        "indoor",
+        "container",
+        "sailor"
+      ],
+      "model": "generated/coastal/sea-chest.glb",
+      "size": {
+        "x": 0.927,
+        "y": 0.552,
+        "z": 0.558
+      },
+      "color": "#44707a",
+      "objectType": "chest",
+      "initialState": "closed",
+      "affordances": [
+        "open",
+        "close",
+        "examine"
+      ],
+      "solid": true,
+      "portable": false,
+      "placement": {
+        "indoor": true,
+        "outdoor": true
+      },
+      "growable": true,
+      "license": {
+        "source": "Argos-authored (Blender procedural, scripts/blender/coastal_props.py)",
+        "license": "CC0-1.0"
+      }
+    }
+  ]
+}

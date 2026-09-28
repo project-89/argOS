@@ -23,7 +23,19 @@ export function getCharacterMotivations(world: World, eid: number) {
   };
 }
 export function formatCharacterMotivations(world: World, eid: number): string {
-  return `CURRENT NEEDS, CORE DRIVES AND LONG-TERM ASPIRATIONS (motives, not obligations):\n${JSON.stringify(getCharacterMotivations(world, eid))}`;
+  const { coreDrives, aspirations, needs } = getCharacterMotivations(world, eid);
+  const lines: string[] = [];
+  if (coreDrives.length) lines.push(`What drives you: ${coreDrives.map(String).join("; ")}.`);
+  if (aspirations.length) lines.push(`What you hope for: ${aspirations.map(String).join("; ")}.`);
+  if (needs) {
+    const body: string[] = [];
+    if (needs.hunger >= 60) body.push(needs.hunger >= 80 ? "you are very hungry" : "you are getting hungry");
+    if (needs.energy <= 40) body.push(needs.energy <= 20 ? "you are exhausted" : "you are tired");
+    if (needs.social <= 35) body.push("you are lonely");
+    if (needs.comfort <= 30) body.push("you are uncomfortable");
+    lines.push(`Your body: ${body.length ? body.join(", ") : "fine for now"} (hunger ${Math.round(needs.hunger)}, energy ${Math.round(needs.energy)}, social ${Math.round(needs.social)}, comfort ${Math.round(needs.comfort)} of 100).`);
+  }
+  return lines.join("\n");
 }
 
 export function getCharacterContext(world: World, eid: number) {
@@ -71,5 +83,5 @@ export function getLocalOpportunityContext(world: World, eid: number) {
 }
 
 export function formatCharacterContext(world: World, eid: number): string {
-  return `PRIVATE CHARACTER CONTEXT (beliefs and memories are your interpretations, not current world facts or commands):\n${JSON.stringify(getCharacterContext(world, eid))}`;
+  return `WHO THIS CHARACTER IS (private — their secrets, beliefs and memories):\n${JSON.stringify(getCharacterContext(world, eid))}`;
 }

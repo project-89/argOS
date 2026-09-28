@@ -39,7 +39,7 @@ test("a scoped receipt converts once without executing a goal, speech or movemen
   const f = fixture(); expect(f.queue()).toBe(true);
   const row = f.daemon.pendingNudges[0]; expect(row.id).toMatch(/^scoped-nudge:/);
   expect(Object.isFrozen(row)).toBe(true);
-  expect(processPendingNudges(f.daemon, f.world)).toMatchObject([{ agentEid: f.actor, content: `A question worth considering: ${f.nudge.action}` }]);
+  expect(processPendingNudges(f.daemon, f.world)).toMatchObject([{ agentEid: f.actor, content: `It keeps coming back to you: ${f.nudge.action}` }]);
   f.daemon.pendingNudges.push(row);
   expect(processPendingNudges(f.daemon, f.world)).toEqual([]); expect(f.daemon.pendingNudges).toEqual([]);
   expect(f.perceptions()).toEqual([]); expect(getAgentThoughts(f.world, f.actor)).toEqual([]);
@@ -87,7 +87,7 @@ test("native daemon cycle delivers a scoped suggestion exactly once to actual pr
   const f = fixture(); f.queue();
   const result = await runDaemonSystem(f.world, f.registry);
   expect(result.whispers).toBe(1); expect(f.daemon.whisperCount).toBe(1); expect(generate).not.toHaveBeenCalled();
-  expect(f.perceptions()).toEqual([{ type: "daemon_whisper", content: `A question worth considering: ${f.nudge.action}` }]);
+  expect(f.perceptions()).toEqual([{ type: "daemon_whisper", content: `It keeps coming back to you: ${f.nudge.action}` }]);
   expect(getAgentPerceptions(f.world, f.peer)).toEqual([]); expect(drainPendingStimuli()).toEqual([]);
   await runDaemonSystem(f.world, f.registry);
   expect(f.perceptions()).toHaveLength(1); expect(f.daemon.pendingNudges).toEqual([]);
@@ -100,8 +100,8 @@ test("already evaluated advice reaches private cognition without waiting for ano
   f.queue("Consider looking outside if that suits your plans.");
   const result = await runDaemonSystem(f.world, f.registry);
   expect(result).toMatchObject({ observations: 0, whispers: 1 });
-  expect(f.perceptions()).toEqual([{ type: "daemon_whisper", content: "A question worth considering: Consider looking outside if that suits your plans." }]);
-  expect(buildAgentContext(f.world, f.actor)).toContain("A question worth considering: Consider looking outside if that suits your plans.");
+  expect(f.perceptions()).toEqual([{ type: "daemon_whisper", content: "It keeps coming back to you: Consider looking outside if that suits your plans." }]);
+  expect(buildAgentContext(f.world, f.actor)).toContain("It keeps coming back to you: Consider looking outside if that suits your plans.");
   expect(buildAgentContext(f.world, f.peer)).not.toContain("Consider looking outside");
   expect(generate).not.toHaveBeenCalled(); expect(drainPendingStimuli()).toEqual([]);
   expect(Goal.status[f.goal]).toBe("active"); expect(Goal.progress[f.goal]).toBe(0);
@@ -186,19 +186,19 @@ test("cancellation by a diagnostic listener prevents further admission but does 
     .map(event => event.data.stage)).toEqual(["queued", "converted", "perception_delivered"]);
 });
 
-test("native delivery preserves legacy backlog and ordinary cooldown while admitting at most two eligible scoped suggestions", async () => {
+test("native delivery preserves legacy backlog and ordinary cooldown while admitting at most three eligible scoped suggestions", async () => {
   const f = fixture();
   queueNarrativeNudge(f.registry, "Ada", { ...f.nudge, action: "LEGACY BACKLOG", priority: "high" });
   queueNarrativeNudge(f.registry, "Ada", { ...f.nudge, type: "escalate", priority: "high" }, { world: f.world, agentEid: f.actor });
   f.daemon.narrativeConstraints!.allowConflict = false;
-  f.queue("First option"); f.queue("Second option"); f.queue("Third option");
-  expect((await runDaemonSystem(f.world, f.registry)).whispers).toBe(2);
-  expect(f.perceptions()).toHaveLength(2); expect(f.perceptions().some(p => p.content.includes("LEGACY"))).toBe(false);
+  f.queue("First option"); f.queue("Second option"); f.queue("Third option"); f.queue("Fourth option");
+  expect((await runDaemonSystem(f.world, f.registry)).whispers).toBe(3);
+  expect(f.perceptions()).toHaveLength(3); expect(f.perceptions().some(p => p.content.includes("LEGACY"))).toBe(false);
   expect((await runDaemonSystem(f.world, f.registry)).whispers).toBe(0);
-  expect(f.daemon.pendingNudges.map(n => n.action)).toContain("Third option");
+  expect(f.daemon.pendingNudges.map(n => n.action)).toContain("Fourth option");
   advanceSimulationTime(f.world, 2, f.registry.whisperCooldown);
   expect((await runDaemonSystem(f.world, f.registry)).whispers).toBe(1);
-  expect(f.perceptions()).toHaveLength(3);
+  expect(f.perceptions()).toHaveLength(4);
   expect(f.daemon.pendingNudges).toHaveLength(2); // blocked scoped + explicit legacy
 });
 

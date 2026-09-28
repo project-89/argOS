@@ -58,12 +58,14 @@ export function createSpatialGodConsole(options: {
         execute: async p => once(`weather:${JSON.stringify(p)}`, () => {
           const result = options.weather(p.condition, p.roomId); return { success: result.status !== "rejected", result };
         }) }),
-      addFurnishing: tool({ description: "Build a real catalog furnishing at an available site from inspectWorld. Native collision, navigation and action registration validate it. Does not create arbitrary buildings or force use.",
-        inputSchema: z.object({ siteId: z.string().max(64), roomId: z.number().int().nonnegative(),
-          asset: z.enum(["chair", "table", "plant", "lamp"]), name: z.string().min(1).max(120), description: z.string().max(2000) }).strict(),
+      addFurnishing: tool({ description: "Build a real object from the construction catalog (see inspectWorld) in a room. The host finds free, reachable floor space, optionally beside a named object; native collision, navigation and action registration validate it. Does not create buildings or force anyone to use it.",
+        inputSchema: z.object({ roomId: z.number().int().nonnegative(), asset: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+          near: z.string().trim().min(1).max(120).optional(), siteId: z.string().max(64).optional(),
+          name: z.string().min(1).max(120), description: z.string().max(2000) }).strict(),
         execute: async p => once(`furnishing:${JSON.stringify(p)}`, () => {
           const id = materializeApprovedEntity(world, { type: "object", name: p.name, description: p.description,
-            roomEid: p.roomId, components: [{ name: "SpatialPlacement", values: { siteId: p.siteId, assetId: p.asset } }] });
+            roomEid: p.roomId, components: [{ name: "SpatialPlacement", values: { assetId: p.asset,
+              ...(p.siteId ? { siteId: p.siteId } : {}), ...(p.near ? { near: p.near } : {}) } }] });
           return { success: true, result: { status: "applied", entityId: id, name: p.name } };
         }) }),
       requestMechanic: tool({ description: "Queue one tested generated ECS mechanic using the current mechanism contract. Queueing is not activation. Inspect jobs afterward; no native movement, private cognition, inventory or phone writes.",

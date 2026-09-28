@@ -60,10 +60,10 @@ test("desired outcomes, a side-turn approach and actual evidence have separate f
     goalId: f.conversation, goalKey: WorkingMemoryIdentity.id[f.conversation] });
   integrateActorContinuation(f.world, f.actor, { purpose: "Answer Bo's joke", actionType: "speak", observedAtSimMs: 0 });
   const prompt = buildAgentContext(f.world, f.actor);
-  expect(prompt).toContain("DESIRED OUTCOMES / STANDING CONCERNS");
+  expect(prompt).toContain("WHAT YOU WANT RIGHT NOW");
   expect(prompt).toContain("LATEST CHOSEN APPROACH");
-  expect(prompt).toContain("ACTUAL RESULTS AND LAST-KNOWN FACTS");
-  expect(prompt.indexOf("DESIRED OUTCOMES / STANDING CONCERNS")).toBeLessThan(prompt.indexOf("LATEST CHOSEN APPROACH"));
+  expect(prompt).toContain("WHAT YOU'VE DONE AND KNOW FOR SURE");
+  expect(prompt.indexOf("WHAT YOU WANT RIGHT NOW")).toBeLessThan(prompt.indexOf("LATEST CHOSEN APPROACH"));
   expect(prompt).not.toContain("CONTINUING INTENTION (");
   expect(prompt).toContain("PRIVATE dinner invitation");
   const situation = snapshotActivitySituation(f.world, f.actor) as any;

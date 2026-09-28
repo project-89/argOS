@@ -29,7 +29,9 @@ function fixture() {
   const systems = createSystemRegistry(), spirits = createSpiritRegistry(world);
   const architect = createDynamicSpirit(spirits, { name: "Weaver", type: "architect", rank: "archangel", domain: "narrative",
     architectConfig: { canProposeSystems: false, canProposeComponents: false, canProposeEntities: true,
-      canProposeRules: false, canExecuteDirectly: false, proposalApproval: "superior", maxProposalsPerCycle: 3 } })!;
+      canProposeRules: false, canExecuteDirectly: false, proposalApproval: "superior", maxProposalsPerCycle: 3,
+      // These fixtures exercise the demand-bound recovery path used by mechanics/places.
+      bindFurnishingMotivation: true } })!;
   return { world, room, actor, durable, brief, systems, spirits, architect };
 }
 const records = (prompt: string): any[] => JSON.parse(prompt.split("- Actor intentions (author-only evidence, not other NPCs' knowledge): ")[1].split("\n")[0]);
@@ -208,4 +210,38 @@ test("re-observed proposal still passes the host's construction/site authority",
   await executeAllApprovedProposals(f.world, f.systems);
   expect(materialize).toHaveBeenCalledTimes(1); expect(proposals[0].status).toBe("failed");
   expect([...query(f.world, [Name])].some(id => Name.value[id] === "Indoor chair")).toBe(false);
+});
+
+describe("default: a furnishing is not bound to the motivation that suggested it", () => {
+  const unbound = () => { const f = fixture(); f.architect.architectConfig!.bindFurnishingMotivation = false; return f; };
+
+  test("a resident changing their mind during design still yields a buildable proposal", async () => {
+    const f = unbound(); let needCalls = 0;
+    generate.mockImplementation(async input => {
+      if (!input.prompt.includes("identify 0-3")) return design(f.room);
+      needCalls++;
+      const rows = records(input.prompt), goal = rows.find(r => r.goalKey === WorkingMemoryIdentity.id[f.durable] && r.kind === "goal");
+      const brief = rows.find(r => r.goalKey === WorkingMemoryIdentity.id[f.brief]);
+      Goal.status[f.brief] = "retired"; // the cited intention ends while the Weaver works
+      return { text: JSON.stringify([need([goal.ref, brief.ref, `entity:${f.room}`])]) };
+    });
+    const proposals = await runArchitectCognition(f.world, f.systems, f.spirits, f.architect);
+    expect(needCalls).toBe(1); expect(proposals).toHaveLength(1);
+    expect(getArchitectDiagnostics(f.world).entries.filter(e => e.reason === "stale_observation")).toEqual([]);
+    Goal.status[f.durable] = "paused"; // and the other cited purpose pauses before construction
+    approveProposal(proposals[0].id);
+    await executeAllApprovedProposals(f.world, f.systems);
+    expect(proposals[0].status).toBe("executed");
+    expect([...query(f.world, [Name])].some(id => Name.value[id] === "Indoor chair")).toBe(true);
+  });
+
+  test("authority still binds: a stopped source rejects the design", async () => {
+    const f = unbound();
+    generate.mockImplementation(async input => {
+      if (!input.prompt.includes("identify 0-3")) { stopCommittedEvents(f.world); return design(f.room); }
+      const rows = records(input.prompt), goal = rows.find(r => r.goalKey === WorkingMemoryIdentity.id[f.durable] && r.kind === "goal");
+      return { text: JSON.stringify([need([goal.ref, `entity:${f.room}`])]) };
+    });
+    expect(await runArchitectCognition(f.world, f.systems, f.spirits, f.architect)).toEqual([]);
+  });
 });

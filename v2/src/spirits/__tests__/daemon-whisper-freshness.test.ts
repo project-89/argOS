@@ -65,8 +65,9 @@ test.each(["guidance", "challenge"] as const)("%s provider failure does not inve
   expect(await f.run()).toBeNull(); expect(drainPendingStimuli()).toEqual([]); expect(f.daemon.whisperCount).toBe(0);
 });
 
-const changes = ["source", "owner", "persona", "room", "inactive", "removed", "condition", "daemon"] as const;
-function change(f: ReturnType<typeof fixture>, kind: typeof changes[number], channel: string) {
+const changes = ["source", "owner", "persona", "inactive", "removed", "condition", "daemon"] as const;
+type Change = typeof changes[number] | "room";
+function change(f: ReturnType<typeof fixture>, kind: Change, channel: string) {
   if (kind === "source") { stopCommittedEvents(f.world); startCommittedEvents(f.world); }
   if (kind === "owner") WorkingMemoryIdentity.id[f.actor] = "replacement";
   if (kind === "persona") Agent.systemPrompt[f.actor] = "Another person.";
@@ -87,6 +88,12 @@ describe.each(["guidance", "challenge"] as const)("%s", channel => {
     const f = fixture(channel); generate.mockResolvedValueOnce({ text: "Would a moment to rest help?" });
     expect(await f.run()).not.toBeNull(); change(f, kind, channel);
     expect(drainPendingStimuli()).toEqual([]);
+  });
+  test("the inner voice follows its person: a room change during inference still delivers", async () => {
+    const f = fixture(channel); let complete!: (value: { text: string }) => void;
+    generate.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const pending = f.run(); change(f, "room", channel); complete({ text: "Would a moment to rest help?" });
+    expect(await pending).not.toBeNull(); expect(drainPendingStimuli()).toHaveLength(1);
   });
   test("current evidence delivers without executing a physical action", async () => {
     const f = fixture(channel), health = Health.current[f.actor]; generate.mockResolvedValueOnce({ text: "Would a moment to rest help?" });

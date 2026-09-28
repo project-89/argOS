@@ -58,7 +58,7 @@ test("David's past is known before a notification, but its message is learned on
   await propose(t, { type: "wait" }, "I care about David, and I am still annoyed with George.");
   const before = JSON.stringify(generate.mock.calls.at(-1)?.[0]);
   expect(before).toContain(createElaineDavidPast().background);
-  expect(before).toContain("MY IDENTITY ANCHORS");
+  expect(before).toContain("MEMORIES THAT MADE YOU");
   expect(before).not.toContain(body);
   expect(before).not.toContain("currently at work"); // A remembered person is not knowledge of today's unread update.
   for (const step of [

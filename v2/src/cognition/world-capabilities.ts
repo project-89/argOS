@@ -150,11 +150,20 @@ export function getAgentWorldCapabilityGeneration(world: World, eid: number): ob
     return routedCapabilities(world, eid)?.generation ?? packageGenerations.get(world)?.get(eid);
 }
 
-function publicTraits(world: World, eid: number): string[] {
+// Parsing is a pure function of the stored string, so memoizing by that exact
+// string cannot go stale: a trait change is a different key. Local callers only read.
+const parsedTraits = new Map<string, readonly string[]>();
+function publicTraits(world: World, eid: number): readonly string[] {
     if (!hasComponent(world, eid, Traits)) return [];
-    try { const values = JSON.parse(Traits.active[eid] || "[]"); return Array.isArray(values)
-        ? values.filter(v => typeof v === "string").map(v => v.trim().toLowerCase()) : []; }
-    catch { return []; }
+    const raw = Traits.active[eid] || "[]";
+    const cached = parsedTraits.get(raw); if (cached) return cached;
+    let parsed: readonly string[] = [];
+    try { const values = JSON.parse(raw); parsed = Object.freeze(Array.isArray(values)
+        ? values.filter(v => typeof v === "string").map(v => v.trim().toLowerCase()) : []); }
+    catch { parsed = Object.freeze([]); }
+    if (parsedTraits.size >= 4096) parsedTraits.clear();
+    parsedTraits.set(raw, parsed);
+    return parsed;
 }
 function concealed(world: World, eid: number): boolean {
     return !isEntityPresent(world,eid) || publicTraits(world, eid).some(trait => ["hidden", "invisible", "concealed"].includes(trait));

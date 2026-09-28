@@ -118,7 +118,7 @@ test("native timed observation preserves its committed quiet backoff through cle
   expect(runActorControlStep(f.world, f.actor, f.registry)).toBe(false);
   f.advance(1000); expect(getForegroundCognitionReadiness(f.world, f.actor).reason).toBe("idle_deadline");
   observe(); f.advance(1000);
-  expect(getForegroundCognitionReadiness(f.world, f.actor)).toMatchObject({ ready: false, quietDecisions: 2, nextCheckAtMs: 8000 });
+  expect(getForegroundCognitionReadiness(f.world, f.actor)).toMatchObject({ ready: false, quietDecisions: 2, nextCheckAtMs: 7000 });
   ObjectState.current[f.item] = "broken";
   expect(getForegroundCognitionReadiness(f.world, f.actor)).toMatchObject({ ready: true, reason: "state_changed" });
 });

@@ -87,7 +87,7 @@ test("quiet choices back off progressively but always retain a bounded reconside
   const f = fixture();
   expect(getForegroundCognitionReadiness(f.world, f.actor, { now: 0 }).reason).toBe("first_decision");
   let now = 0;
-  for (const delay of [2_000, 5_000, 10_000, 20_000, 30_000, 30_000]) {
+  for (const delay of [2_000, 4_000, 7_000, 12_000, 20_000, 20_000]) {
     quiet(f, now);
     const before = getForegroundCognitionReadiness(f.world, f.actor, { now: now + delay - 1 });
     expect(before.ready).toBe(false); expect(before.nextCheckAtMs).toBe(now + delay);
@@ -101,9 +101,9 @@ test("unchanged observation yields briefly, then shares the quiet backoff instea
   expect(isForegroundCognitionReady(f.world, f.actor, { now: 999 })).toBe(false);
   expect(isForegroundCognitionReady(f.world, f.actor, { now: 1000 })).toBe(true);
   quiet(f, 1000, "observe");
-  expect(getForegroundCognitionReadiness(f.world, f.actor, { now: 1000 }).nextCheckAtMs).toBe(6000);
-  quiet(f, 6000, "rest");
-  expect(getForegroundCognitionReadiness(f.world, f.actor, { now: 6000 }).nextCheckAtMs).toBe(16000);
+  expect(getForegroundCognitionReadiness(f.world, f.actor, { now: 1000 }).nextCheckAtMs).toBe(5000);
+  quiet(f, 5000, "rest");
+  expect(getForegroundCognitionReadiness(f.world, f.actor, { now: 5000 }).nextCheckAtMs).toBe(12000);
 });
 
 test("native observation feedback is retained without waking the idle actor into a self-triggered loop", () => {

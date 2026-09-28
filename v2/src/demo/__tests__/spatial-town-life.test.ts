@@ -2,6 +2,8 @@ import { jest } from "@jest/globals";
 import { hasComponent, query } from "bitecs";
 import { SpatialDemo } from "../spatial-demo";
 import { TOWN_EVOLUTION_CONFIG } from "../spatial-town-life";
+import { TOWN_GROWTH_SITE_LAYOUT } from "../spatial-town-growth";
+import { nudgeNpc } from "../../nle/npc-nudge";
 import { materializeApprovedEntity } from "../../engineering/entity-materialization";
 import { describeWorldMaterialization } from "../../engineering/world-materialization-adapter";
 import { Name, ObjectType, PhysicalObject, Position, Surface } from "../../ecs/components";
@@ -23,42 +25,53 @@ const spec = (demo: SpatialDemo, siteId = "cafe-extra-seat", room = "town-cafe",
 test("opt-in manual profile is honest, grants no AI, and does not broaden other worlds", async () => {
   await expect(SpatialDemo.create({ evolving: true })).rejects.toThrow("authored town");
   const demo = await fixture(), view = demo.snapshot();
-  expect(view.townLife).toMatchObject({ enabled: false, growth: { remaining: 4 }, weather: { condition: "clear", revision: 0 } });
+  expect(view.townLife).toMatchObject({ enabled: false, growth: { remaining: TOWN_GROWTH_SITE_LAYOUT.length }, weather: { condition: "clear", revision: 0 } });
   expect(view.limits.autonomousGrowth).toBe(false);
   expect(view.weather?.rooms).toHaveLength(2);
   expect(demo.sim.getEvolutionStatus().enabled).toBe(false);
-  expect(TOWN_EVOLUTION_CONFIG).toMatchObject({ enabledStages: ["architect", "proposals"], stageRunLimits: { architect: 4 },
-    architectNames: ["The Weaver"], autoApproveProposals: false, maxProposalExecutions: 1 });
+  expect(TOWN_EVOLUTION_CONFIG).toMatchObject({ enabledStages: ["architect", "proposals"], stageRunLimits: { architect: 8 },
+    architectNames: ["The Weaver", "The Steward", "The Crafter"], autoApproveProposals: false, maxProposalExecutions: 1 });
   expect(describeWorldMaterialization(demo.sim.world)).toContain("cafe-extra-seat");
   expect(() => materializeApprovedEntity(demo.sim.world, spec(demo))).toThrow("no longer ready");
   beginArchitectDiagnostics(demo.sim.world, 0)({ stage: "needs", outcome: "completed", candidates: 2, admitted: 0 });
   const reviewed = demo.snapshot().townLife!;
   expect(reviewed.changes).toEqual([expect.objectContaining({ spirit: "The Weaver", status: "observed", summary: expect.stringContaining("2 suggestions, 0 admitted") })]);
-  expect(reviewed.growth.remaining).toBe(4);
+  expect(reviewed.growth.remaining).toBe(TOWN_GROWTH_SITE_LAYOUT.length);
 });
 
 test("live-ready profile installs the existing hierarchy with only bounded grants, before any provider call", async () => {
   const demo = await SpatialDemo.create({ scenario: "town", evolving: true, live: true, automaticClock: false }); demos.push(demo);
   const system = getSpiritSystemState(demo.sim.world)!;
-  expect(getActiveSpirits(system.registry).map(s => s.definition.name).sort()).toEqual(["The Arbiter", "The Narrator", "The Watcher", "The Weaver"]);
-  const weaver = system.registry.spirits.get(system.registry.byName.get("The Weaver")!) as DynamicSpiritState;
-  expect(weaver.definition.observationInterval).toBe(Number.MAX_SAFE_INTEGER);
-  expect(weaver.architectConfig).toMatchObject({ canProposeSystems: false, canProposeComponents: false,
-    canExecuteDirectly: false, proposalApproval: "godai", maxProposalsPerCycle: 1 });
+  expect(getActiveSpirits(system.registry).map(s => s.definition.name).sort())
+    .toEqual(["The Arbiter", "The Crafter", "The Narrator", "The Steward", "The Watcher", "The Weaver"]);
+  // Weaver, Steward and Crafter share one God-reviewed lane through the host growth adapter.
+  for (const name of ["The Weaver", "The Steward", "The Crafter"]) {
+    const builder = system.registry.spirits.get(system.registry.byName.get(name)!) as DynamicSpiritState;
+    expect(builder.definition.observationInterval).toBe(Number.MAX_SAFE_INTEGER);
+    expect(builder.spiritType).toBe("architect");
+    expect(builder.architectConfig).toMatchObject({ canProposeSystems: false, canProposeComponents: false, canProposeEntities: true,
+      canExecuteDirectly: false, proposalApproval: "godai", maxProposalsPerCycle: 1 });
+  }
+  // Residents' daemons whisper, and the Narrator's nudges are voiced by them
+  // even though the narrative-engine flag is off in the town.
+  expect(demo.sim.daemons.innerVoice).toBe(true);
+  expect(demo.sim.daemons.whisperCooldown).toBe(20_000);
+  const mara = [...demo.sim.daemons.daemons.values()].find(d => d.agentName === "Mara")!;
+  expect(nudgeNpc(demo.sim.world, "Mara", { type: "reflect", action: "The letter is still in your coat.", reason: "Story pressure" })).toBe(true);
+  expect(mara.pendingNudges).toEqual([expect.objectContaining({ action: "The letter is still in your coat.", source: "narrator" })]);
   expect(demo.snapshot().townLife?.enabled).toBe(true);
   expect(demo.sim.getEvolutionStatus()).toMatchObject({ enabled: true, stageRuns: { architect: 0 } });
 });
 
-test("real full-town geometry admits all four additions through the existing native constructor", async () => {
+test("real full-town geometry admits every site's addition through the existing native constructor", async () => {
   const demo = await fixture(); await demo.start();
   const before = demo.snapshot(), actorsBefore = before.entities.filter(e => e.kind === "actor").map(e => e.position);
-  const cases = [
-    ["cafe-extra-seat", "town-cafe", "chair"], ["workshop-corner", "town-workshop", "lamp"],
-    ["park-gathering", "common-square", "table"], ["garden-detail", "town-garden", "plant"],
-  ];
+  // Every authored site admits a build in the real town geometry.
+  const cases = TOWN_GROWTH_SITE_LAYOUT.map(site => [site.id, site.roomId,
+    site.id === "workshop-corner" ? "lamp" : site.id === "park-gathering" ? "table" : site.id === "garden-detail" ? "plant" : site.allowedAssets.at(-1)!]);
   const times: number[] = [];
   for (const [site, room, asset] of cases) {
-    const began = performance.now(), eid = materializeApprovedEntity(demo.sim.world, spec(demo, site, room, asset, `New ${asset}`));
+    const began = performance.now(), eid = materializeApprovedEntity(demo.sim.world, spec(demo, site, room, asset, site === "cafe-extra-seat" ? "New chair" : `New ${asset} (${site})`));
     times.push(performance.now() - began);
     expect(hasComponent(demo.sim.world, eid, PhysicalObject)).toBe(true);
     expect(demo.snapshot().entities.find(e => e.id === eid)).toMatchObject({ asset, roomId: demo.byId.get(room) });
@@ -69,10 +82,10 @@ test("real full-town geometry admits all four additions through the existing nat
   }
   console.log("Full-town validated build milliseconds", times);
   const after = demo.snapshot();
-  expect(after.entities.length).toBe(before.entities.length + 4);
+  expect(after.entities.length).toBe(before.entities.length + cases.length);
   expect(after.entities.filter(e => e.kind === "actor").map(e => e.position)).toEqual(actorsBefore);
   expect(after.townLife?.growth.remaining).toBe(0);
-  expect(after.townLife?.changes.filter(e => e.status === "applied")).toHaveLength(4);
+  expect(after.townLife?.changes.filter(e => e.status === "applied")).toHaveLength(cases.length);
   expect(after.townLife?.changes.some(e => e.status === "used")).toBe(false);
   const tess = after.actors.find(a => a.name === "Tess")!, chair = after.entities.find(e => e.name === "New chair")!;
   // A receipt-classification fixture is not credited as autonomous NPC use.

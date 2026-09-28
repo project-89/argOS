@@ -126,7 +126,7 @@ test("appointment variant authors mutual date knowledge privately without simula
 
 test("authored recollections reach Elaine, not her friends, public appearance, or scene snapshots", async () => {
   const t = await fixture({ cookieHistory: "david" }), w = t.sim.world, past = createElaineDavidPast();
-  expect(buildAgentContext(w, t.ids.Elaine)).toContain("MY IDENTITY ANCHORS");
+  expect(buildAgentContext(w, t.ids.Elaine)).toContain("MEMORIES THAT MADE YOU");
   expect(buildAgentContext(w, t.ids.Elaine)).toContain("David");
   for (const friend of ["Jerry", "George", "Kramer"]) {
     expect(getIdentityAnchors(w, t.ids[friend])).toEqual([]);

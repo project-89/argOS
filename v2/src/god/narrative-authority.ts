@@ -19,12 +19,36 @@ export const NARRATIVE_READ_TOOLS = [
 
 type ToolSet = Record<string, any>;
 
+/** A host-installed catalogue of real narrative events (sounds, arrivals,
+ * lights, phone messages...). The Narrator and God share one budget. The host
+ * owns resolution, native effects and receipts; callers only describe intent. */
+export type NarrativeEventOrigin = "narrator" | "god" | "operator";
+export type NarrativeEventReceipt = { status: "applied" | "rejected"; operation: string; detail: string; atSimMs: number;
+  roomId?: number; entityId?: number; origin: NarrativeEventOrigin };
+export interface NarrativeHost {
+  /** The one spirit entitled to stage events directly, by identity. */
+  narrator?: object;
+  /** Short catalogue with exact target names, budget and cooldown. */
+  describe(): string;
+  stage(command: unknown, origin: NarrativeEventOrigin): NarrativeEventReceipt;
+  /** Operations this host implements (e.g. "sound", "arrival"). */
+  operations: readonly string[];
+  /** Builder context for requested mechanics, when coding daemons exist. */
+  mechanicGuidance?: string;
+}
+const narrativeHosts = new WeakMap<World, NarrativeHost>();
+export function registerNarrativeHost(world: World, host: NarrativeHost): () => void {
+  narrativeHosts.set(world, host);
+  return () => { if (narrativeHosts.get(world) === host) narrativeHosts.delete(world); };
+}
+export function getNarrativeHost(world: World): NarrativeHost | undefined { return narrativeHosts.get(world); }
+
 function normalizedName(name: string): string {
   return name.normalize("NFKC").toLowerCase().replace(/[’']/g, "")
     .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-function nameConflict(world: World, proposed: string): string | undefined {
+export function nameConflict(world: World, proposed: string): string | undefined {
   const candidate = normalizedName(proposed);
   if (!candidate) return "A nonempty unique name is required";
   for (const eid of query(world, [Name])) {

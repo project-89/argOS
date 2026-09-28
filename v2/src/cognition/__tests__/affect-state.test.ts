@@ -67,7 +67,7 @@ test("private changes need not alter a composed face; no emotion-to-expression r
   expect(commitPreparedAffectUpdate(f.world, f.actor, prepareAffectUpdate(f.world, f.actor, hidden)!)).toBe(true);
   expect(snapshotAffect(f.world, f.actor)).toMatchObject({ feeling: hidden.feeling, expression: "composed" });
   expect(publicFacialExpression(f.world, f.actor)).toBe("composed");
-  expect(formatAffectContext(f.world, f.actor)).toContain("It need not reveal what you feel");
+  expect(formatAffectContext(f.world, f.actor)).toContain("doesn't have to match what you feel");
 });
 
 test.each([null, [], {}, { ...appraisal, valence: 2 }, { ...appraisal, arousal: NaN }, { ...appraisal, reason: "" },

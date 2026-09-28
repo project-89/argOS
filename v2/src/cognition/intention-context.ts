@@ -37,6 +37,6 @@ export function formatIntentionTiming(world: World, intention: IntentionContext 
 export function formatActiveIntentions(world: World, actor: number): string {
   const active = snapshotIntentionContext(world, actor).filter(row => ["active", "in_progress"].includes(row.status));
   return active.length ? active.map(row => `- [ID ${row.id}, Priority ${row.priority || 5}] ${row.description} (${row.persistence === "standing"
-    ? "standing desire; not a task with a completion percentage" : `progress estimate ${row.progressEstimate}%; not success proof`}; ${formatIntentionTiming(world, row)})`).join("\n")
+    ? "a standing desire" : `about ${row.progressEstimate}% there`}; ${formatIntentionTiming(world, row)})`).join("\n")
     : "No specific goals right now.";
 }

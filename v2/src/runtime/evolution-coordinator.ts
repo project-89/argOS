@@ -217,9 +217,12 @@ export class EvolutionCoordinator {
         // observations, not automatic provisioning. Active architects read
         // that shared channel; a second design loop would duplicate their work.
         const architects = this.deps.getSpiritsByType("architect")
-          .filter((spirit) => spirit.definition.name !== "The Crafter")
+          // A host may name the Crafter explicitly to give it a design lens.
+          .filter((spirit) => spirit.definition.name !== "The Crafter" || this.config.architectNames?.includes("The Crafter") === true)
           .filter(spirit => !this.config.architectNames || this.config.architectNames.includes(spirit.definition.name)
-            && context.spirits.spirits.get(spirit.eid) === spirit);
+            && context.spirits.spirits.get(spirit.eid) === spirit
+            // A host-deactivated spirit does not design, even when named.
+            && getDynamicComponentValues("Spirit", spirit.eid)?.active !== 0);
         for (const architect of architects) {
           // The coordinator's explicit God-review policy must also govern
           // submission. Legacy architects otherwise auto-approve and execute

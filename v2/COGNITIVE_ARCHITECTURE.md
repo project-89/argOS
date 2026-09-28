@@ -6,6 +6,13 @@ This document describes:
 
 North star: **one substrate** (ECS world state + canonical relations + events) and **many projections** (text/perception, affordance lists, plans, policies, org artifacts, UI views). Agents should **do** things in the world deterministically whenever possible, and fall back to LLM reasoning only when needed.
 
+Alive-world pass: **2026-09-28**. Persona-first character prompts (procedure
+moved into code), a Saltmere cast with secrets and stakes, an authoring Narrator
+with real world events and a visible story feed, God tools that act on spirit
+requests, story-aware daemon whispers and stagnation-watching spirits. See the
+[pass record](src/architecture/ALIVE-WORLD-2026-09-28.md) for the design,
+one bounded live result and its limits.
+
 Bounded agency consolidation: **2026-09-27**. See the
 [pass record](src/architecture/COHERENT-AGENCY-PASS-2026-09-27.md) for retained core
 drives, shared background character context, concurrent agenda review, queue

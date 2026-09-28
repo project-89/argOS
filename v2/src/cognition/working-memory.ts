@@ -213,7 +213,7 @@ export function recentWorkingMemoryActions(memory: ActorWorkingMemory): WorkingM
 /** Last known is deliberately distinct from an omniscient current-state query. */
 export function formatWorkingMemoryContext(world: World, eid: number, now = Date.now(), options: { fullReceiptIds?: boolean } = {}): string {
   const memory = getWorkingMemory(world, eid), { facts, receipts } = memory;
-  if (!facts.length && !receipts.length) return "PHYSICAL WORKING MEMORY: No sourced observation or action receipt recorded yet.";
+  if (!facts.length && !receipts.length) return "WHAT YOU'VE SEEN AND DONE: nothing recorded yet.";
   const age = (at: number) => `${Math.max(0, Math.round((now - at) / 1000))}s ago`;
   const shortSource = (id: string) => {
     const uuid = /[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/i.exec(id);
@@ -229,7 +229,7 @@ export function formatWorkingMemoryContext(world: World, eid: number, now = Date
   const selected = facts.filter(f => !["Inspection.basis", "Inspection.question"].includes(f.slot || ""))
     .sort((a, b) => priority(b) - priority(a) || factOrder(b, a)).slice(0, 32);
   const actions = recentWorkingMemoryActions(memory);
-  return `PHYSICAL WORKING MEMORY (your last-known evidence, not fresh remote world truth; newer evidence supersedes older recollections):
+  return `WHAT YOU'VE SEEN AND DONE (newest first wins; things may have changed where you can't see):
 ${selected.map(describeFact).join("\n") || "No physical facts recorded."}
 RECENT ACTION RECEIPTS (past events, not current possession):
 ${actions.map(r => `[${options.fullReceiptIds ? r.id : shortSource(r.id)}; ${age(r.atMs)}; ${r.provenance}; ${r.succeeded ? "committed" : "failed"}] ${JSON.stringify(r.summary)}${r.executionContext ? ` Attempted purpose: ${JSON.stringify(r.executionContext.purpose)}${r.executionContext.intention ? `; then serving: ${JSON.stringify(r.executionContext.intention.description)}` : ""}. This outcome is not whole-goal success.` : ""}`).join("\n") || "No recent action receipts."}`;

@@ -121,7 +121,7 @@ function spirit() {
   startCommittedEvents(world);
   const registry = createSystemRegistry(), spirits = createSpiritRegistry(world);
   const architect = createDynamicSpirit(spirits, { name: "Weaver", type: "architect", rank: "archangel", domain: "ecology",
-    architectConfig: { canProposeSystems: true, canProposeEntities: true, canProposeComponents: true, canProposeRules: true, canExecuteDirectly: true, proposalApproval: "auto", maxProposalsPerCycle: 3 } })!;
+    architectConfig: { canProposeSystems: true, canProposeEntities: true, canProposeComponents: true, canProposeRules: true, canExecuteDirectly: true, proposalApproval: "auto", maxProposalsPerCycle: 3, bindFurnishingMotivation: true } })!;
   return { world, registry, architect, spirits };
 }
 
@@ -909,7 +909,9 @@ test("healthy [] and provider failure both abstain instead of inventing fallback
   expect(await identifyNeeds(f.architect, c)).toEqual([]); expect(await identifyNeeds(f.architect, c)).toEqual([]);
   const prompt = generate.mock.calls[0][0].prompt;
   expect(prompt).toContain("identify 0-3"); expect(prompt).toContain("Apartment"); expect(prompt).toContain("Valve does not stop flow");
-  expect(prompt).toContain("No change is a successful observation"); expect(prompt).toContain("No event emission, relation queries");
+  // Generative framing: returning nothing is no longer described as success.
+  expect(prompt).not.toContain("No change is a successful observation"); expect(prompt).not.toContain("Do not manufacture novelty");
+  expect(prompt).toContain("give these residents more to do, want and discover"); expect(prompt).toContain("No event emission, relation queries");
 });
 
 test("operator diagnostics distinguish model abstention from rejected contract without entering future context", async () => {

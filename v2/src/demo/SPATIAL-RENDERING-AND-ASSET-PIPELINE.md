@@ -20,6 +20,34 @@ The present coding release format validates text systems/components, not binary
 GLBs or Blender projects. A typed asset-release service would reuse its design
 principles, not silently pass binary content through that text-only interface.
 
+## Implemented — 2026-09-28: data-driven catalog and a procedural workshop seed
+
+- **Catalog as data.** `spatial-asset-registry.ts` loads `spatial-client/assets/catalog/*.json`
+  manifests (format in that folder's README). Each binds a GLB to a registered native
+  object type and verbs the spatial host executes (examine, sit, open, close, eat, take);
+  meshes never confer behaviour. Invalid manifests (unknown type, verb the type cannot
+  do, non-glTF or out-of-root model) are reported and skipped, never half-registered.
+  Four shipped Kenney models that were never registered (round table, bookcase, cabinet,
+  rug) are now catalogued. The snapshot carries each entity's `model`, and the viewer
+  loads it; kinds tagged `light` glow.
+- **Free placement.** Growth accepts any growable kind with `SpatialPlacement {assetId,
+  near?}`; the host searches the room for free, reachable floor space nearest the named
+  landmark, and every candidate still passes the full native preflight (collider inside
+  the room, no overlap, rooms connected, existing anchors reachable, nobody trapped).
+  Fixed sites remain as optional hints. Indoor/outdoor suitability is enforced. God's
+  `addFurnishing` takes any catalog kind and a `near` hint.
+- **Blender workshop seed.** `scripts/blender/coastal_props.py` builds ten original CC0
+  coastal props (barrel, fish crate, harbour bench, lantern post, net rack, ship bell,
+  rope coil, lobster pot, driftwood table, sea chest) headless in Blender 3.0,
+  deterministically, from a restricted helper kit, and writes their manifests with
+  measured sizes. This is a hand-run generator, not yet a daemon-driven service.
+- **Evidence.** `spatial-asset-catalog.test.ts` (validation, loading, free placement,
+  budgets); `catalog-growth-preview.ts` boots Saltmere offline, builds eight pieces
+  through the native growth path and serves the viewer — all eight built and rendered.
+
+Still design-only: daemon-authored Blender jobs, a shadow-world rehearsal gate before
+publication, new verbs/executors for new kinds, and new rooms/buildings.
+
 ## What belongs where
 
 | Concern | Owner | Examples |

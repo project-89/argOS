@@ -42,7 +42,7 @@ test("a confirmed handoff replaces older possession without querying a later hid
   expect(getWorkingMemory(f.world, f.mara).facts).toMatchObject([{ valueLabel: "Mara" }]);
   expect(getWorkingMemory(f.world, f.sera).facts).toEqual([]);
   expect(formatWorkingMemoryContext(f.world, f.ivo, 10_000)).not.toContain("Locked Store");
-  expect(formatWorkingMemoryContext(f.world, f.ivo, 10_000)).toContain("last-known evidence");
+  expect(formatWorkingMemoryContext(f.world, f.ivo, 10_000)).toContain("things may have changed where you can't see");
   expect(formatWorkingMemoryContext(f.world, f.ivo, 10_000)).toContain("8s ago");
   recordWorkingMemoryEvidence(f.world, f.ivo, f.evidence("actually-saw-it", 11_000, f.remote, {
     kind: "observation", provenance: "visible_observation", succeeded: undefined,

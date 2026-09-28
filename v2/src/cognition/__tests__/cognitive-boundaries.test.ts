@@ -249,7 +249,7 @@ describe("cognitive evidence boundaries", () => {
     expect(context).toContain("My phone is now on the landing floor.");
     expect(context).not.toContain("moon-key");
     expect(context).toContain("LONG-TERM KNOWLEDGE:");
-    expect(context).toContain("RECENT PERCEPTIONS:");
+    expect(context).toContain("WHAT YOU'VE JUST SENSED:");
     const newMemory = addMemory(world, actor, {
       type: "episodic", content: "My phone is now on the landing floor.", importance: 0.9,
       emotionalValence: 0, timestamp: Date.now(),

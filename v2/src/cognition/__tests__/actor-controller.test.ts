@@ -52,7 +52,7 @@ afterEach(() => {
   if (oldKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY; else process.env.GOOGLE_GENERATIVE_AI_API_KEY = oldKey;
 });
 function fixture() {
-  const world = createArgosWorld("Noisy room controller"); initializePrefabs(world); worlds.push(world); world.meta.aiEnabled = true;
+  const world = createArgosWorld("Noisy room controller"); initializePrefabs(world); worlds.push(world); world.meta.aiEnabled = true; world.meta.activityReviewCadence = "strict";
   const room = createRoomEntity(world, { name: "Hall" }), elsewhere = createRoomEntity(world, { name: "Kitchen" });
   const person = (name: string) => createAgentEntity(world, { name, role: "resident", systemPrompt: "Act on your own motives and observations.", roomId: room });
   const ada = person("Ada"), bo = person("Bo"), cy = person("Cy");
@@ -325,7 +325,7 @@ test("the existing version2 controller reviews completed contributions before co
   const action = await agentThink(f.world, f.ada); f.dispatch(action);
   expect(isDiscardedForegroundDecision(action)).toBe(false);
   expect(snapshotActivityReview(f.world, f.ada)).toMatchObject({ reviewCount: 1, expectedProgress: "Stay present while Bo takes their time." });
-  expect(JSON.stringify(generate.mock.calls[1][0])).toContain("ACTIVITY REVIEW");
+  expect(JSON.stringify(generate.mock.calls[1][0])).toContain("CONVERSATION CHECK-IN");
   expect(snapshotActorContinuation(f.world, f.ada)?.purpose).toBe("Keep Bo company");
 });
 
@@ -811,7 +811,7 @@ test.each(["priority", "situated"] as const)("%s prompt treats ranks as context 
   await agentThink(f.world, f.ada);
   const prompt = generate.mock.calls[0][0].messages[0].content;
   expect(prompt).toContain("Priorities are context, not a requirement to choose the highest-ranked goal.");
-  expect(prompt).toContain("Optionally include control.switchReason");
+  expect(prompt).toContain("Optional: control.switchReason when you change purpose");
   expect(prompt).not.toContain("Pursue the highest remaining");
   expect(prompt).not.toContain("When choosing a lower-ranked goal");
   expect(prompt).not.toContain("A higher-priority goal interrupts");
@@ -849,7 +849,7 @@ test("situated policy chooses a lower-ranked purpose without changing goal facts
   expect(snapshotActorContinuation(f.world, f.ada)).toMatchObject({ goalId: minor, status: "dispatched" });
   expect(Goal.status[important]).toBe("active"); expect(Goal.priority[important]).toBe(9);
   const request = generate.mock.calls[0][0];
-  expect(request.messages[0].content).toContain("Consider your situation as a whole");
+  expect(request.messages[0].content).toContain("Take in your situation as a whole");
   expect(request.messages[0].content).not.toContain("Pursue the highest remaining");
   expect(request.system).not.toContain("Do not fall back to lower-priority work");
   expect(request.system).not.toContain("Only plans at this priority");

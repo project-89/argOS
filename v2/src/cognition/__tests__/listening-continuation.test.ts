@@ -186,7 +186,7 @@ test("listening catalog and model selection are heard/local only and exact actio
   const action = await agentThink(f.world, f.bo);
   expect(isDiscardedForegroundDecision(action)).toBe(false); expect(action.listeningTo).toBe(f.executionId);
   const sent = JSON.stringify(generate.mock.calls[0][0]);
-  expect(sent).toContain("Observe is a visual inspection");
+  expect(sent).toContain("choose wait with action.listeningTo");
   expect(sent).not.toContain(words);
   expect(generate.mock.calls[0][0].messages[0].content).toContain(JSON.stringify({ type: "wait", listeningTo: f.executionId }));
   expect(generate.mock.calls[0][0].messages[0].content).toContain("never put it in target or content");

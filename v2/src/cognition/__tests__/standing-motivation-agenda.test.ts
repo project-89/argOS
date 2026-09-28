@@ -65,7 +65,7 @@ test("choosing nothing new retains the existing quiet review interval", async ()
 
 test("standing motivations still count toward the existing bounded goal capacity", () => {
   const f = fixture();
-  for (let n = 0; n < 2; n++) {
+  for (let n = 0; n < 3; n++) {
     const desire = createGeneratedIntention(f.world, f.actor, { description: `Care about long-term relationship ${n}`, kind: "social", priority: 4 }, "personal")!;
     markStandingIntention(f.world, desire);
   }

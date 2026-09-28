@@ -172,6 +172,14 @@ function ensureMoveToRoomGoal(world: World, ctx: SystemContext, agentEid: number
   bindSupportingGoal(world, agentEid, goalEid, parentGoal);
 }
 
+/** An active self-owned intention (authored, foreground or autonomous), as
+ * opposed to a routine slot or its movement subgoal. */
+function hasPersonaGoal(world: World, agentEid: number): boolean {
+  return (getRelationTargets(world as any, agentEid, HasGoal as any) as number[]).some(gid => entityExists(world as any, gid)
+    && hasComponent(world as any, gid, Goal as any) && String(Goal.status[gid] || "") === "active"
+    && hasComponent(world, gid, GoalLifecycle) && ["foreground", "autonomous", "personal"].includes(String(GoalLifecycle.source[gid] || "")));
+}
+
 function hasGoalMacroForSignature(world: World, agentEid: number, goalEid: number): boolean {
   const sig = ensureGoalSignature(world as any, goalEid);
   if (!sig) return false;
@@ -693,6 +701,10 @@ FOR EACH agent WITH active scheduled_activity goal:
           // or endlessly inspect oneself. Content and task selection belong to
           // cognition/planning; only their admitted operations earn work time.
           if (activityType === "work_block") continue;
+          // A person with their own live purpose chooses how to spend free or
+          // social time. The canned "observe a chair -> sit" / "say Hello."
+          // micro-plans remain only a fallback for residents with no purpose.
+          if ((activityType === "leisure_block" || activityType === "socialize_block") && hasPersonaGoal(world, agentEid)) continue;
 
           const targetRoomEid = roomByName.get(normalize(roomName));
           if (targetRoomEid === undefined) continue;

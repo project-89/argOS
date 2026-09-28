@@ -576,13 +576,13 @@ export function formatCoordinationContext(world: World, eid: number, options: { 
     ? ` Completion criterion: successful ${i.completion.actionType} on ${JSON.stringify(i.completion.target)}${i.completion.content === undefined ? "" : ` with exact content ${JSON.stringify(i.completion.content)}`}.`
     : i.goal && i.goalRelation === "fulfills" ? " Completion criterion: the explicitly fulfilling goal, verified by your own evidence."
     : i.goal ? " The linked goal supports this undertaking; finishing that broader goal does not establish this work is complete." : "";
-  return `COORDINATION MEMORY (interpreted undertakings, not proof that promised work happened):
+  return `PROMISES AND SHARED PLANS:
 YOUR UNDERTAKINGS:
-${own.map(i => `- [${i.id}] ${JSON.stringify(i.task)}: ${i.localStatus === "not_started" ? "no matched execution recorded (not proof that no work occurred)" : i.localStatus}. ${i.localReason}${criterion(i)}${i.goalTracking && i.localStatus !== "verified_done" && i.localStatus !== "released" ? " The linked intention is no longer active; its tracking ending does not establish success or your withdrawal. The undertaking remains yours unless you release it; you can link another intention." : ""}\n  ${originalWords(i)}\n  Last told others: ${report(i)}.${hasCoordinationCommunicationGap(i) ? " COMMUNICATION GAP: your private account differs from the account you last communicated. You may clarify, ask for help, renegotiate or continue independently." : ""}`).join("\n") || "None recorded."}
+${own.map(i => `- [${i.id}] ${JSON.stringify(i.task)}: ${i.localStatus === "not_started" ? "not started as far as you know" : i.localStatus}. ${i.localReason}${criterion(i)}${i.goalTracking && i.localStatus !== "verified_done" && i.localStatus !== "released" ? " The linked intention is no longer active; its tracking ending does not establish success or your withdrawal. The undertaking remains yours unless you release it; you can link another intention." : ""}\n  ${originalWords(i)}\n  Last told others: ${report(i)}.${hasCoordinationCommunicationGap(i) ? " COMMUNICATION GAP: your private account differs from the account you last communicated. You may clarify, ask for help, renegotiate or continue independently." : ""}`).join("\n") || "None recorded."}
 HEARD UNDERTAKINGS (attributed words, not private progress or physical proof):
 ${heard.map(i => `- ${i.speaker}: ${JSON.stringify(i.task)}. Last reported ${report(i)}: ${JSON.stringify(i.lastReported.speech.content)}`).join("\n") || "None recorded."}
 OWN COMMUNICATION SOURCES FOR OPTIONAL REVIEWS (already spoken or personally sent; texts are not audible):
-${sources.map(t => `[${t.id}] ${"medium" in t ? `private text to ${JSON.stringify(t.target)}; sent, not proof of delivery/read: ` : "spoken: "}${JSON.stringify(t.content)}`).join("\n") || "None."}
+${sources.map(t => `[${t.id}] ${"medium" in t ? `text to ${JSON.stringify(t.target)} (sent): ` : "spoken: "}${JSON.stringify(t.content)}`).join("\n") || "None."}
 OWN PHYSICAL EVIDENCE SOURCES FOR OPTIONAL BLOCKER REVIEWS:
 ${receipts.map(r => r.kind === "action" && shown.has(r.id) ? `[${r.id}] See RECENT ACTION RECEIPTS above.`
   : `[${r.id}] ${r.provenance}${r.kind === "action" ? r.succeeded ? "; committed" : "; failed" : ""}: ${JSON.stringify(r.summary)}`).join("\n") || "None."}`;

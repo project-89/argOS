@@ -39,7 +39,8 @@ afterEach(() => { expect(globalThis.fetch).not.toHaveBeenCalled(); jest.restoreA
 
 test("actual spirit output invokes an issued, grounded native operation", async () => {
   const f = fixture(), pending = f.run();
-  expect(generate.mock.calls[0][0].prompt).toContain("PHYSICAL EFFECT POLICY");
+  expect(generate.mock.calls[0][0].prompt).toContain("=== WHAT YOU CAN DO ===");
+  expect(generate.mock.calls[0][0].prompt).toContain("Optional native world_effect");
   f.complete(); const output = await pending;
   expect(output.interventions[0].result).toBe("applied"); expect(f.weather.view().rooms[0].condition).toBe("rain");
   expect(f.receipts).toHaveLength(1);

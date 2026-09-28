@@ -1,0 +1,1461 @@
+{
+  "generatedAt": "2026-09-28T19:11:20.965Z",
+  "weights": {
+    "activity": 20,
+    "speech": 10,
+    "language": 10,
+    "freshness": 5,
+    "exchanges": 10,
+    "drama": 20,
+    "goals": 10,
+    "world": 15
+  },
+  "deflationPenalty": 15,
+  "scores": [
+    {
+      "name": "town-crisis-live-of3NLe",
+      "dir": "recordings/town-crisis-live-of3NLe",
+      "coverage": "full",
+      "sources": {
+        "feed": "operator-events.jsonl",
+        "chronicle": "chronicle.jsonl",
+        "actions": "operator-events.jsonl",
+        "speech": "chronicle.jsonl conversation",
+        "thoughts": "thoughts.jsonl",
+        "goals": "chronicle.jsonl",
+        "narrator": "narrator-reviews.jsonl",
+        "world": "world-changes.jsonl",
+        "operator": "injections.jsonl"
+      },
+      "notes": [],
+      "residents": 10,
+      "simMinutes": 4.08,
+      "runMinutes": 4.08,
+      "actions": {
+        "chosen": 210,
+        "waitRest": 107,
+        "waitRestShare": 0.51,
+        "failures": 2,
+        "histogram": {
+          "pickup": 4,
+          "examine": 8,
+          "move": 19,
+          "think": 5,
+          "read_phone": 3,
+          "sit": 9,
+          "reflect": 3,
+          "reply": 3,
+          "wait": 98,
+          "rest": 9,
+          "eat": 2,
+          "open": 1,
+          "close": 1,
+          "observe": 2,
+          "clear_branches": 1,
+          "speak": 42
+        },
+        "decisionHistogram": {
+          "pickup": 4,
+          "examine": 8,
+          "move": 20,
+          "interact": 23,
+          "think": 2,
+          "reflect": 3,
+          "wait": 97,
+          "rest": 9,
+          "speak": 42
+        },
+        "decisionWaitRestShare": 0.51
+      },
+      "speech": {
+        "lines": 42,
+        "perResidentMinute": 1.03,
+        "meanWordsPerLine": 12.93,
+        "distinctLineRatio": 1,
+        "lexicalDiversityTTR": 0.494,
+        "lexicalDiversityMATTR": 0.891,
+        "topicEcho": 0.066,
+        "speakers": 10
+      },
+      "exchanges": {
+        "turnPairs": 32,
+        "distinctPairs": 9,
+        "perResidentMinute": 0.785
+      },
+      "thoughts": {
+        "count": 46
+      },
+      "drama": {
+        "conflict": {
+          "speech": 0,
+          "thoughts": 1,
+          "total": 1,
+          "examples": [
+            "Mara: Nothing has buzzed back yet. The text claims it isn't Alex, promises rain and a falling..."
+          ]
+        },
+        "disclosure": {
+          "speech": 0,
+          "thoughts": 2,
+          "total": 2,
+          "examples": [
+            "Ivo: Nadia's worried someone is using Alex's number to scare Mara and point fingers at me. I..."
+          ]
+        },
+        "fear": {
+          "speech": 0,
+          "thoughts": 4,
+          "total": 4,
+          "examples": [
+            "Sera: There it is—the pale crooked line cutting right across those three hooks on the pot."
+          ]
+        },
+        "deflation": {
+          "speech": 8,
+          "thoughts": 13,
+          "total": 21,
+          "examples": [
+            "Ivo: That's true enough. No sense turning an old nick into an omen."
+          ]
+        },
+        "dramaDensity": 0.068,
+        "deflationDensity": 0.239
+      },
+      "goals": {
+        "created": 22,
+        "completed": 5,
+        "completedNative": 0,
+        "completedSubjective": 5,
+        "completedOther": 0,
+        "source": "chronicle.jsonl"
+      },
+      "narrator": {
+        "reviews": 7,
+        "reviewsAccepted": 7,
+        "interventionsRequested": 1,
+        "interventionsAccepted": 1,
+        "interventionsCommitted": 0,
+        "proseProduced": 0,
+        "proseShown": 0,
+        "tensionStart": 0.25,
+        "tensionEnd": 0.45,
+        "tensionMax": 0.48,
+        "tensionTrajectory": [
+          {
+            "tSimMs": 14600,
+            "tension": 0.25,
+            "phase": "exposition"
+          },
+          {
+            "tSimMs": 46100,
+            "tension": 0.35,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 84200,
+            "tension": 0.4,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 119300,
+            "tension": 0.45,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 156200,
+            "tension": 0.45,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 187600,
+            "tension": 0.48,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 221100,
+            "tension": 0.45,
+            "phase": "rising"
+          }
+        ]
+      },
+      "world": {
+        "committedBy": {
+          "operator": 8,
+          "residents": 1
+        },
+        "nonOperatorCommitted": 0,
+        "operatorCommitted": 8,
+        "builds": 0,
+        "buildProposals": 0,
+        "buildRejections": 0,
+        "whispersDelivered": 0,
+        "operatorWhispers": 0,
+        "phoneRepliesSent": 3,
+        "godReviews": 7,
+        "rejections": 13
+      },
+      "alivenessIndex": 37.9,
+      "composite": {
+        "activity": {
+          "weight": 20,
+          "value": 0.49,
+          "points": 9.81,
+          "available": true,
+          "note": "1 − waitRestShare"
+        },
+        "speech": {
+          "weight": 10,
+          "value": 0.687,
+          "points": 6.87,
+          "available": true,
+          "note": "lines/resident-min ÷ 1.5"
+        },
+        "language": {
+          "weight": 10,
+          "value": 0.946,
+          "points": 9.46,
+          "available": true,
+          "note": "½ distinct-line ratio + ½ MATTR"
+        },
+        "freshness": {
+          "weight": 5,
+          "value": 0.835,
+          "points": 4.17,
+          "available": true,
+          "note": "1 − echo ÷ 0.4"
+        },
+        "exchanges": {
+          "weight": 10,
+          "value": 0.95,
+          "points": 9.5,
+          "available": true,
+          "note": "½ pairs/resident-min ÷ 0.5 + ½ distinct pairs ÷ residents"
+        },
+        "drama": {
+          "weight": 20,
+          "value": 0.227,
+          "points": 4.55,
+          "available": true,
+          "note": "drama lines ÷ text lines ÷ 0.3"
+        },
+        "goals": {
+          "weight": 10,
+          "value": 0.25,
+          "points": 2.5,
+          "available": true,
+          "note": "completed/residents × (½ + ½ native share)"
+        },
+        "world": {
+          "weight": 15,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "authority commits + builds + whispers per run-min ÷ 1"
+        },
+        "deflationPenalty": {
+          "weight": -15,
+          "value": 0.597,
+          "points": -8.95,
+          "available": true,
+          "note": "deflation lines ÷ text lines ÷ 0.4"
+        }
+      }
+    },
+    {
+      "name": "town-crisis-live-wVJTYc",
+      "dir": "recordings/town-crisis-live-wVJTYc",
+      "coverage": "full",
+      "sources": {
+        "feed": "operator-events.jsonl",
+        "actions": "operator-events.jsonl",
+        "speech": "receipts.jsonl (reassembled chunks)",
+        "thoughts": "thoughts.jsonl",
+        "goals": "samples.jsonl (new goal keys; completion not observable)",
+        "narrator": "narrator-reviews.jsonl",
+        "world": "world-changes.jsonl",
+        "operator": "injections.jsonl"
+      },
+      "notes": [],
+      "residents": 10,
+      "simMinutes": 4.24,
+      "runMinutes": 4.24,
+      "actions": {
+        "chosen": 220,
+        "waitRest": 113,
+        "waitRestShare": 0.514,
+        "failures": 1,
+        "histogram": {
+          "move": 15,
+          "examine": 14,
+          "pickup": 3,
+          "open": 2,
+          "sit": 10,
+          "think": 5,
+          "wait": 101,
+          "close": 1,
+          "rest": 12,
+          "eat": 1,
+          "observe": 6,
+          "reflect": 1,
+          "read_phone": 1,
+          "clear_branches": 2,
+          "reply": 1,
+          "speak": 45
+        }
+      },
+      "speech": {
+        "lines": 45,
+        "perResidentMinute": 1.062,
+        "meanWordsPerLine": 11.98,
+        "distinctLineRatio": 1,
+        "lexicalDiversityTTR": 0.506,
+        "lexicalDiversityMATTR": 0.87,
+        "topicEcho": 0.042,
+        "speakers": 10
+      },
+      "exchanges": {
+        "turnPairs": 34,
+        "distinctPairs": 10,
+        "perResidentMinute": 0.803
+      },
+      "thoughts": {
+        "count": 39
+      },
+      "drama": {
+        "conflict": {
+          "speech": 0,
+          "thoughts": 1,
+          "total": 1,
+          "examples": [
+            "Leon: Ada knows the box well enough to spot an intruder's mark. Let us see if she has a suspe..."
+          ]
+        },
+        "disclosure": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "fear": {
+          "speech": 1,
+          "thoughts": 2,
+          "total": 3,
+          "examples": [
+            "Sera: It really is. The fog was rolling across the grass out there."
+          ]
+        },
+        "deflation": {
+          "speech": 2,
+          "thoughts": 8,
+          "total": 10,
+          "examples": [
+            "Ivo: Fair enough. Wood takes all sorts of scrapes over time without needing a mystery."
+          ]
+        },
+        "dramaDensity": 0.048,
+        "deflationDensity": 0.119
+      },
+      "goals": {
+        "created": 31,
+        "completed": null,
+        "completedNative": null,
+        "completedSubjective": null,
+        "completedOther": null,
+        "source": "samples.jsonl (new goal keys; completion not observable)"
+      },
+      "narrator": {
+        "reviews": 8,
+        "reviewsAccepted": 8,
+        "interventionsRequested": 0,
+        "interventionsAccepted": 0,
+        "interventionsCommitted": 0,
+        "proseProduced": 0,
+        "proseShown": 0,
+        "tensionStart": 0.25,
+        "tensionEnd": 0.45,
+        "tensionMax": 0.45,
+        "tensionTrajectory": [
+          {
+            "tSimMs": 17500,
+            "tension": 0.25,
+            "phase": "exposition"
+          },
+          {
+            "tSimMs": 49900,
+            "tension": 0.35,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 83600,
+            "tension": 0.35,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 113000,
+            "tension": 0.38,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 145600,
+            "tension": 0.36,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 179000,
+            "tension": 0.38,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 215600,
+            "tension": 0.42,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 249000,
+            "tension": 0.45,
+            "phase": "rising"
+          }
+        ]
+      },
+      "world": {
+        "committedBy": {
+          "operator": 8,
+          "residents": 1
+        },
+        "nonOperatorCommitted": 0,
+        "operatorCommitted": 8,
+        "builds": 0,
+        "buildProposals": 1,
+        "buildRejections": 1,
+        "whispersDelivered": 0,
+        "operatorWhispers": 0,
+        "phoneRepliesSent": 1,
+        "godReviews": 8,
+        "rejections": 3
+      },
+      "alivenessIndex": 44.2,
+      "composite": {
+        "activity": {
+          "weight": 20,
+          "value": 0.486,
+          "points": 10.81,
+          "available": true,
+          "note": "1 − waitRestShare"
+        },
+        "speech": {
+          "weight": 10,
+          "value": 0.708,
+          "points": 7.87,
+          "available": true,
+          "note": "lines/resident-min ÷ 1.5"
+        },
+        "language": {
+          "weight": 10,
+          "value": 0.935,
+          "points": 10.39,
+          "available": true,
+          "note": "½ distinct-line ratio + ½ MATTR"
+        },
+        "freshness": {
+          "weight": 5,
+          "value": 0.896,
+          "points": 4.98,
+          "available": true,
+          "note": "1 − echo ÷ 0.4"
+        },
+        "exchanges": {
+          "weight": 10,
+          "value": 1,
+          "points": 11.11,
+          "available": true,
+          "note": "½ pairs/resident-min ÷ 0.5 + ½ distinct pairs ÷ residents"
+        },
+        "drama": {
+          "weight": 20,
+          "value": 0.159,
+          "points": 3.53,
+          "available": true,
+          "note": "drama lines ÷ text lines ÷ 0.3"
+        },
+        "goals": {
+          "weight": 10,
+          "value": null,
+          "points": 0,
+          "available": false,
+          "note": "completed/residents × (½ + ½ native share)"
+        },
+        "world": {
+          "weight": 15,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "authority commits + builds + whispers per run-min ÷ 1"
+        },
+        "deflationPenalty": {
+          "weight": -15,
+          "value": 0.298,
+          "points": -4.46,
+          "available": true,
+          "note": "deflation lines ÷ text lines ÷ 0.4"
+        }
+      }
+    },
+    {
+      "name": "spatial-CyN3yn",
+      "dir": "recordings/spatial-CyN3yn",
+      "coverage": "session-window",
+      "sources": {
+        "feed": "session.json events (bounded window)",
+        "actions": "session.json events (bounded window)",
+        "speech": "session.json events (bounded window)",
+        "thoughts": "session.json actors[].thought (latest only)",
+        "world": "session.json townLife.changes (bounded)",
+        "narrator": "session.json townLife.changes (bounded) narrator-review summaries"
+      },
+      "notes": [
+        "Only the spatial session's bounded event window (last ~100 feed entries) is recorded; rates use the window span."
+      ],
+      "residents": 10,
+      "simMinutes": 1.26,
+      "runMinutes": 4.67,
+      "actions": {
+        "chosen": 96,
+        "waitRest": 76,
+        "waitRestShare": 0.792,
+        "failures": 0,
+        "histogram": {
+          "wait": 73,
+          "sit": 1,
+          "pickup": 1,
+          "think": 1,
+          "observe": 2,
+          "rest": 3,
+          "examine": 1,
+          "speak": 14
+        }
+      },
+      "speech": {
+        "lines": 14,
+        "perResidentMinute": 1.108,
+        "meanWordsPerLine": 10.57,
+        "distinctLineRatio": 1,
+        "lexicalDiversityTTR": 0.669,
+        "lexicalDiversityMATTR": 0.841,
+        "topicEcho": 0.009,
+        "speakers": 4
+      },
+      "exchanges": {
+        "turnPairs": 11,
+        "distinctPairs": 6,
+        "perResidentMinute": 0.871
+      },
+      "thoughts": {
+        "count": 10
+      },
+      "drama": {
+        "conflict": {
+          "speech": 0,
+          "thoughts": 1,
+          "total": 1,
+          "examples": [
+            "Otis: Ada's words hang in the air—Leon was talking about the supplies box right before steppi..."
+          ]
+        },
+        "disclosure": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "fear": {
+          "speech": 0,
+          "thoughts": 1,
+          "total": 1,
+          "examples": [
+            "Sera: Noor called it a relief, and it truly is. She didn't interrogate whether Gran was ever ..."
+          ]
+        },
+        "deflation": {
+          "speech": 2,
+          "thoughts": 2,
+          "total": 4,
+          "examples": [
+            "Ivo: That matches what Tess said too. Good to know it's nothing to worry over."
+          ]
+        },
+        "dramaDensity": 0.083,
+        "deflationDensity": 0.167
+      },
+      "goals": {
+        "created": null,
+        "completed": null,
+        "completedNative": null,
+        "completedSubjective": null,
+        "completedOther": null,
+        "source": "not recorded"
+      },
+      "narrator": {
+        "reviews": 8,
+        "reviewsAccepted": 8,
+        "interventionsRequested": 1,
+        "interventionsAccepted": 1,
+        "interventionsCommitted": 0,
+        "proseProduced": 0,
+        "proseShown": 0,
+        "tensionStart": 0.44,
+        "tensionEnd": 0.44,
+        "tensionMax": 0.44,
+        "tensionTrajectory": [
+          {
+            "tSimMs": 260000,
+            "tension": 0.44,
+            "phase": "exposition"
+          }
+        ]
+      },
+      "world": {
+        "committedBy": {},
+        "nonOperatorCommitted": 0,
+        "operatorCommitted": 0,
+        "builds": 0,
+        "buildProposals": 0,
+        "buildRejections": 0,
+        "whispersDelivered": 0,
+        "operatorWhispers": 0,
+        "phoneRepliesSent": 0,
+        "godReviews": 0,
+        "rejections": 0
+      },
+      "alivenessIndex": 37.3,
+      "composite": {
+        "activity": {
+          "weight": 20,
+          "value": 0.208,
+          "points": 4.63,
+          "available": true,
+          "note": "1 − waitRestShare"
+        },
+        "speech": {
+          "weight": 10,
+          "value": 0.739,
+          "points": 8.21,
+          "available": true,
+          "note": "lines/resident-min ÷ 1.5"
+        },
+        "language": {
+          "weight": 10,
+          "value": 0.92,
+          "points": 10.23,
+          "available": true,
+          "note": "½ distinct-line ratio + ½ MATTR"
+        },
+        "freshness": {
+          "weight": 5,
+          "value": 0.979,
+          "points": 5.44,
+          "available": true,
+          "note": "1 − echo ÷ 0.4"
+        },
+        "exchanges": {
+          "weight": 10,
+          "value": 0.8,
+          "points": 8.89,
+          "available": true,
+          "note": "½ pairs/resident-min ÷ 0.5 + ½ distinct pairs ÷ residents"
+        },
+        "drama": {
+          "weight": 20,
+          "value": 0.278,
+          "points": 6.17,
+          "available": true,
+          "note": "drama lines ÷ text lines ÷ 0.3"
+        },
+        "goals": {
+          "weight": 10,
+          "value": null,
+          "points": 0,
+          "available": false,
+          "note": "completed/residents × (½ + ½ native share)"
+        },
+        "world": {
+          "weight": 15,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "authority commits + builds + whispers per run-min ÷ 1"
+        },
+        "deflationPenalty": {
+          "weight": -15,
+          "value": 0.417,
+          "points": -6.25,
+          "available": true,
+          "note": "deflation lines ÷ text lines ÷ 0.4"
+        }
+      }
+    },
+    {
+      "name": "household-check-729eHG",
+      "dir": "recordings/household-check-729eHG",
+      "coverage": "full",
+      "sources": {
+        "feed": "operator-events.jsonl",
+        "actions": "operator-events.jsonl",
+        "speech": "receipts.jsonl (reassembled chunks)",
+        "thoughts": "session.json actors[].thought (latest only)",
+        "narrator": "narrator-reviews.jsonl",
+        "world": "world-changes.jsonl"
+      },
+      "notes": [],
+      "residents": 4,
+      "simMinutes": 2.37,
+      "runMinutes": 2.37,
+      "actions": {
+        "chosen": 106,
+        "waitRest": 45,
+        "waitRestShare": 0.425,
+        "failures": 1,
+        "histogram": {
+          "move": 11,
+          "pickup": 1,
+          "examine": 5,
+          "sit": 3,
+          "eat": 1,
+          "wait": 36,
+          "close": 2,
+          "reflect": 9,
+          "think": 5,
+          "rest": 9,
+          "open": 1,
+          "observe": 1,
+          "speak": 22
+        }
+      },
+      "speech": {
+        "lines": 22,
+        "perResidentMinute": 2.322,
+        "meanWordsPerLine": 11.23,
+        "distinctLineRatio": 1,
+        "lexicalDiversityTTR": 0.619,
+        "lexicalDiversityMATTR": 0.866,
+        "topicEcho": 0.025,
+        "speakers": 4
+      },
+      "exchanges": {
+        "turnPairs": 16,
+        "distinctPairs": 5,
+        "perResidentMinute": 1.689
+      },
+      "thoughts": {
+        "count": 4
+      },
+      "drama": {
+        "conflict": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "disclosure": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "fear": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "deflation": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "dramaDensity": 0,
+        "deflationDensity": 0
+      },
+      "goals": {
+        "created": null,
+        "completed": null,
+        "completedNative": null,
+        "completedSubjective": null,
+        "completedOther": null,
+        "source": "not recorded"
+      },
+      "narrator": {
+        "reviews": 4,
+        "reviewsAccepted": 3,
+        "interventionsRequested": 1,
+        "interventionsAccepted": 1,
+        "interventionsCommitted": 1,
+        "proseProduced": 0,
+        "proseShown": 0,
+        "tensionStart": 0.35,
+        "tensionEnd": 0.48,
+        "tensionMax": 0.48,
+        "tensionTrajectory": [
+          {
+            "tSimMs": 27100,
+            "tension": 0.35,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 60200,
+            "tension": 0.45,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 99800,
+            "tension": 0.48,
+            "phase": "rising"
+          },
+          {
+            "tSimMs": 142100,
+            "tension": 0.48,
+            "phase": "rising"
+          }
+        ]
+      },
+      "world": {
+        "committedBy": {
+          "narrator": 1,
+          "system": 5,
+          "residents": 1
+        },
+        "nonOperatorCommitted": 1,
+        "operatorCommitted": 0,
+        "builds": 1,
+        "buildProposals": 1,
+        "buildRejections": 1,
+        "whispersDelivered": 0,
+        "operatorWhispers": 0,
+        "phoneRepliesSent": 0,
+        "godReviews": 4,
+        "rejections": 1
+      },
+      "alivenessIndex": 64.7,
+      "composite": {
+        "activity": {
+          "weight": 20,
+          "value": 0.575,
+          "points": 12.79,
+          "available": true,
+          "note": "1 − waitRestShare"
+        },
+        "speech": {
+          "weight": 10,
+          "value": 1,
+          "points": 11.11,
+          "available": true,
+          "note": "lines/resident-min ÷ 1.5"
+        },
+        "language": {
+          "weight": 10,
+          "value": 0.933,
+          "points": 10.37,
+          "available": true,
+          "note": "½ distinct-line ratio + ½ MATTR"
+        },
+        "freshness": {
+          "weight": 5,
+          "value": 0.938,
+          "points": 5.21,
+          "available": true,
+          "note": "1 − echo ÷ 0.4"
+        },
+        "exchanges": {
+          "weight": 10,
+          "value": 1,
+          "points": 11.11,
+          "available": true,
+          "note": "½ pairs/resident-min ÷ 0.5 + ½ distinct pairs ÷ residents"
+        },
+        "drama": {
+          "weight": 20,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "drama lines ÷ text lines ÷ 0.3"
+        },
+        "goals": {
+          "weight": 10,
+          "value": null,
+          "points": 0,
+          "available": false,
+          "note": "completed/residents × (½ + ½ native share)"
+        },
+        "world": {
+          "weight": 15,
+          "value": 0.844,
+          "points": 14.07,
+          "available": true,
+          "note": "authority commits + builds + whispers per run-min ÷ 1"
+        },
+        "deflationPenalty": {
+          "weight": -15,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "deflation lines ÷ text lines ÷ 0.4"
+        }
+      }
+    },
+    {
+      "name": "spatial-ezhJW9",
+      "dir": "recordings/spatial-ezhJW9",
+      "coverage": "session-window",
+      "sources": {
+        "feed": "session.json events (bounded window)",
+        "actions": "session.json events (bounded window)",
+        "speech": "session.json events (bounded window)",
+        "thoughts": "session.json actors[].thought (latest only)",
+        "world": "session.json townLife.changes (bounded)",
+        "narrator": "session.json townLife.changes (bounded) narrator-review summaries"
+      },
+      "notes": [
+        "Only the spatial session's bounded event window (last ~100 feed entries) is recorded; rates use the window span."
+      ],
+      "residents": 10,
+      "simMinutes": 2.1,
+      "runMinutes": 3.09,
+      "actions": {
+        "chosen": 87,
+        "waitRest": 62,
+        "waitRestShare": 0.713,
+        "failures": 0,
+        "histogram": {
+          "think": 1,
+          "observe": 1,
+          "wait": 62,
+          "move": 1,
+          "sit": 2,
+          "eat": 1,
+          "speak": 19
+        }
+      },
+      "speech": {
+        "lines": 19,
+        "perResidentMinute": 0.904,
+        "meanWordsPerLine": 11.58,
+        "distinctLineRatio": 1,
+        "lexicalDiversityTTR": 0.509,
+        "lexicalDiversityMATTR": 0.807,
+        "topicEcho": 0.089,
+        "speakers": 9
+      },
+      "exchanges": {
+        "turnPairs": 7,
+        "distinctPairs": 6,
+        "perResidentMinute": 0.333
+      },
+      "thoughts": {
+        "count": 8
+      },
+      "drama": {
+        "conflict": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "disclosure": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "fear": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "deflation": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "dramaDensity": 0,
+        "deflationDensity": 0
+      },
+      "goals": {
+        "created": null,
+        "completed": null,
+        "completedNative": null,
+        "completedSubjective": null,
+        "completedOther": null,
+        "source": "not recorded"
+      },
+      "narrator": {
+        "reviews": 6,
+        "reviewsAccepted": 6,
+        "interventionsRequested": 2,
+        "interventionsAccepted": 2,
+        "interventionsCommitted": 1,
+        "proseProduced": 0,
+        "proseShown": 0,
+        "tensionStart": 0.45,
+        "tensionEnd": 0.45,
+        "tensionMax": 0.45,
+        "tensionTrajectory": [
+          {
+            "tSimMs": 177300,
+            "tension": 0.45,
+            "phase": "rising"
+          }
+        ]
+      },
+      "world": {
+        "committedBy": {
+          "narrator": 1,
+          "operator": 1
+        },
+        "nonOperatorCommitted": 1,
+        "operatorCommitted": 1,
+        "builds": 0,
+        "buildProposals": 0,
+        "buildRejections": 0,
+        "whispersDelivered": 0,
+        "operatorWhispers": 0,
+        "phoneRepliesSent": 0,
+        "godReviews": 0,
+        "rejections": 0
+      },
+      "alivenessIndex": 39.9,
+      "composite": {
+        "activity": {
+          "weight": 20,
+          "value": 0.287,
+          "points": 6.39,
+          "available": true,
+          "note": "1 − waitRestShare"
+        },
+        "speech": {
+          "weight": 10,
+          "value": 0.603,
+          "points": 6.7,
+          "available": true,
+          "note": "lines/resident-min ÷ 1.5"
+        },
+        "language": {
+          "weight": 10,
+          "value": 0.904,
+          "points": 10.04,
+          "available": true,
+          "note": "½ distinct-line ratio + ½ MATTR"
+        },
+        "freshness": {
+          "weight": 5,
+          "value": 0.778,
+          "points": 4.32,
+          "available": true,
+          "note": "1 − echo ÷ 0.4"
+        },
+        "exchanges": {
+          "weight": 10,
+          "value": 0.633,
+          "points": 7.03,
+          "available": true,
+          "note": "½ pairs/resident-min ÷ 0.5 + ½ distinct pairs ÷ residents"
+        },
+        "drama": {
+          "weight": 20,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "drama lines ÷ text lines ÷ 0.3"
+        },
+        "goals": {
+          "weight": 10,
+          "value": null,
+          "points": 0,
+          "available": false,
+          "note": "completed/residents × (½ + ½ native share)"
+        },
+        "world": {
+          "weight": 15,
+          "value": 0.323,
+          "points": 5.39,
+          "available": true,
+          "note": "authority commits + builds + whispers per run-min ÷ 1"
+        },
+        "deflationPenalty": {
+          "weight": -15,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "deflation lines ÷ text lines ÷ 0.4"
+        }
+      }
+    },
+    {
+      "name": "spatial-FvDERL",
+      "dir": "recordings/spatial-FvDERL",
+      "coverage": "session-window",
+      "sources": {
+        "feed": "session.json events (bounded window)",
+        "actions": "session.json events (bounded window)",
+        "speech": "session.json events (bounded window)",
+        "thoughts": "session.json actors[].thought (latest only)",
+        "world": "session.json townLife.changes (bounded)",
+        "narrator": "session.json townLife.changes (bounded) narrator-review summaries"
+      },
+      "notes": [
+        "Only the spatial session's bounded event window (last ~100 feed entries) is recorded; rates use the window span."
+      ],
+      "residents": 10,
+      "simMinutes": 1.64,
+      "runMinutes": 1.86,
+      "actions": {
+        "chosen": 82,
+        "waitRest": 56,
+        "waitRestShare": 0.683,
+        "failures": 0,
+        "histogram": {
+          "move": 10,
+          "sit": 2,
+          "wait": 56,
+          "examine": 1,
+          "open": 1,
+          "observe": 1,
+          "speak": 11
+        }
+      },
+      "speech": {
+        "lines": 11,
+        "perResidentMinute": 0.672,
+        "meanWordsPerLine": 13,
+        "distinctLineRatio": 1,
+        "lexicalDiversityTTR": 0.65,
+        "lexicalDiversityMATTR": 0.824,
+        "topicEcho": 0.055,
+        "speakers": 8
+      },
+      "exchanges": {
+        "turnPairs": 2,
+        "distinctPairs": 2,
+        "perResidentMinute": 0.122
+      },
+      "thoughts": {
+        "count": 5
+      },
+      "drama": {
+        "conflict": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "disclosure": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "fear": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "deflation": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "dramaDensity": 0,
+        "deflationDensity": 0
+      },
+      "goals": {
+        "created": null,
+        "completed": null,
+        "completedNative": null,
+        "completedSubjective": null,
+        "completedOther": null,
+        "source": "not recorded"
+      },
+      "narrator": {
+        "reviews": 3,
+        "reviewsAccepted": 3,
+        "interventionsRequested": 0,
+        "interventionsAccepted": 0,
+        "interventionsCommitted": 0,
+        "proseProduced": 0,
+        "proseShown": 0,
+        "tensionStart": 0.35,
+        "tensionEnd": 0.35,
+        "tensionMax": 0.35,
+        "tensionTrajectory": [
+          {
+            "tSimMs": 82000,
+            "tension": 0.35,
+            "phase": "rising"
+          }
+        ]
+      },
+      "world": {
+        "committedBy": {},
+        "nonOperatorCommitted": 0,
+        "operatorCommitted": 0,
+        "builds": 0,
+        "buildProposals": 0,
+        "buildRejections": 0,
+        "whispersDelivered": 0,
+        "operatorWhispers": 0,
+        "phoneRepliesSent": 0,
+        "godReviews": 0,
+        "rejections": 0
+      },
+      "alivenessIndex": 29.4,
+      "composite": {
+        "activity": {
+          "weight": 20,
+          "value": 0.317,
+          "points": 7.05,
+          "available": true,
+          "note": "1 − waitRestShare"
+        },
+        "speech": {
+          "weight": 10,
+          "value": 0.448,
+          "points": 4.98,
+          "available": true,
+          "note": "lines/resident-min ÷ 1.5"
+        },
+        "language": {
+          "weight": 10,
+          "value": 0.912,
+          "points": 10.13,
+          "available": true,
+          "note": "½ distinct-line ratio + ½ MATTR"
+        },
+        "freshness": {
+          "weight": 5,
+          "value": 0.863,
+          "points": 4.79,
+          "available": true,
+          "note": "1 − echo ÷ 0.4"
+        },
+        "exchanges": {
+          "weight": 10,
+          "value": 0.222,
+          "points": 2.47,
+          "available": true,
+          "note": "½ pairs/resident-min ÷ 0.5 + ½ distinct pairs ÷ residents"
+        },
+        "drama": {
+          "weight": 20,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "drama lines ÷ text lines ÷ 0.3"
+        },
+        "goals": {
+          "weight": 10,
+          "value": null,
+          "points": 0,
+          "available": false,
+          "note": "completed/residents × (½ + ½ native share)"
+        },
+        "world": {
+          "weight": 15,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "authority commits + builds + whispers per run-min ÷ 1"
+        },
+        "deflationPenalty": {
+          "weight": -15,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "deflation lines ÷ text lines ÷ 0.4"
+        }
+      }
+    },
+    {
+      "name": "spatial-J5GmEp",
+      "dir": "recordings/spatial-J5GmEp",
+      "coverage": "session-window",
+      "sources": {
+        "feed": "session.json events (bounded window)",
+        "actions": "session.json events (bounded window)",
+        "speech": "session.json events (bounded window)",
+        "thoughts": "session.json actors[].thought (latest only)"
+      },
+      "notes": [
+        "Only the spatial session's bounded event window (last ~100 feed entries) is recorded; rates use the window span."
+      ],
+      "residents": 10,
+      "simMinutes": 1.25,
+      "runMinutes": 6.61,
+      "actions": {
+        "chosen": 87,
+        "waitRest": 50,
+        "waitRestShare": 0.575,
+        "failures": 1,
+        "histogram": {
+          "wait": 43,
+          "examine": 4,
+          "think": 10,
+          "sit": 9,
+          "open": 1,
+          "rest": 7,
+          "observe": 5,
+          "reflect": 1,
+          "speak": 7
+        }
+      },
+      "speech": {
+        "lines": 7,
+        "perResidentMinute": 0.559,
+        "meanWordsPerLine": 11,
+        "distinctLineRatio": 1,
+        "lexicalDiversityTTR": 0.766,
+        "lexicalDiversityMATTR": 0.821,
+        "topicEcho": 0.012,
+        "speakers": 4
+      },
+      "exchanges": {
+        "turnPairs": 5,
+        "distinctPairs": 2,
+        "perResidentMinute": 0.399
+      },
+      "thoughts": {
+        "count": 9
+      },
+      "drama": {
+        "conflict": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "disclosure": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "fear": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "deflation": {
+          "speech": 0,
+          "thoughts": 0,
+          "total": 0,
+          "examples": []
+        },
+        "dramaDensity": 0,
+        "deflationDensity": 0
+      },
+      "goals": {
+        "created": null,
+        "completed": null,
+        "completedNative": null,
+        "completedSubjective": null,
+        "completedOther": null,
+        "source": "not recorded"
+      },
+      "narrator": {
+        "reviews": 0,
+        "reviewsAccepted": 0,
+        "interventionsRequested": 0,
+        "interventionsAccepted": 0,
+        "interventionsCommitted": 0,
+        "proseProduced": 0,
+        "proseShown": 0,
+        "tensionStart": null,
+        "tensionEnd": null,
+        "tensionMax": null,
+        "tensionTrajectory": []
+      },
+      "world": {
+        "committedBy": {},
+        "nonOperatorCommitted": 0,
+        "operatorCommitted": 0,
+        "builds": 0,
+        "buildProposals": 0,
+        "buildRejections": 0,
+        "whispersDelivered": 0,
+        "operatorWhispers": 0,
+        "phoneRepliesSent": 0,
+        "godReviews": 0,
+        "rejections": 0
+      },
+      "alivenessIndex": 41.6,
+      "composite": {
+        "activity": {
+          "weight": 20,
+          "value": 0.425,
+          "points": 11.34,
+          "available": true,
+          "note": "1 − waitRestShare"
+        },
+        "speech": {
+          "weight": 10,
+          "value": 0.373,
+          "points": 4.97,
+          "available": true,
+          "note": "lines/resident-min ÷ 1.5"
+        },
+        "language": {
+          "weight": 10,
+          "value": 0.91,
+          "points": 12.14,
+          "available": true,
+          "note": "½ distinct-line ratio + ½ MATTR"
+        },
+        "freshness": {
+          "weight": 5,
+          "value": 0.97,
+          "points": 6.47,
+          "available": true,
+          "note": "1 − echo ÷ 0.4"
+        },
+        "exchanges": {
+          "weight": 10,
+          "value": 0.499,
+          "points": 6.66,
+          "available": true,
+          "note": "½ pairs/resident-min ÷ 0.5 + ½ distinct pairs ÷ residents"
+        },
+        "drama": {
+          "weight": 20,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "drama lines ÷ text lines ÷ 0.3"
+        },
+        "goals": {
+          "weight": 10,
+          "value": null,
+          "points": 0,
+          "available": false,
+          "note": "completed/residents × (½ + ½ native share)"
+        },
+        "world": {
+          "weight": 15,
+          "value": null,
+          "points": 0,
+          "available": false,
+          "note": "authority commits + builds + whispers per run-min ÷ 1"
+        },
+        "deflationPenalty": {
+          "weight": -15,
+          "value": 0,
+          "points": 0,
+          "available": true,
+          "note": "deflation lines ÷ text lines ÷ 0.4"
+        }
+      }
+    }
+  ]
+}

@@ -80,6 +80,10 @@ export interface ArchitectConfig {
   canExecuteDirectly: boolean;    // Can execute without approval (dangerous!)
   proposalApproval: "auto" | "superior" | "godai";  // Who approves proposals
   maxProposalsPerCycle: number;   // Rate limiting
+  /** Reject a simple furnishing when the resident intention that suggested it
+   * changes mid-design. Off by default: the object remains useful to the place.
+   * Mechanics and contracted places always keep their demand binding. */
+  bindFurnishingMotivation?: boolean;
 }
 
 export interface CoordinatorConfig {

@@ -17,17 +17,12 @@ export function cognitionController(world: World): CognitionController {
   return parseCognitionController(world.meta.cognitionController ?? "priority");
 }
 
-export const SITUATED_SELECTION = `Consider your situation as a whole: who you are,
-what you have actually experienced, your relationships, feelings, commitments,
-and what you can do now. Decide whether to continue your purpose or change it.
-Stored goal priorities describe earlier intentions; they do not choose for you.
-A blocked strategy need not end the concern behind it. You may find another
-approach, revise your plans, or deliberately turn to something else. Neither
-the newest stimulus nor an old plan automatically deserves your attention.
-Choose one useful next action. Keep a purpose while it still makes sense;
-change it when experience warrants. Use goalUpdate for a genuinely new lasting
-intention, not a duplicate of one you already have. Review personal intentions
-using their listed operations, without claiming they succeeded.`;
+export const SITUATED_SELECTION = `Take in your situation as a whole: who you are, what has happened to
+you, the people here and what is between you, what you want and what you are
+hiding. Then act. Keep a purpose while it still matters to you; change it the
+moment something changes your mind. A blocked approach just means finding
+another way. Use goalUpdate for a genuinely new intention, not a copy of one you
+already hold, and review your intentions with their listed operations.`;
 
 /** Only a recently chosen purpose may recruit a stored plan. No highest-goal
  * fallback. Reconsider at least every ten simulated seconds, and immediately

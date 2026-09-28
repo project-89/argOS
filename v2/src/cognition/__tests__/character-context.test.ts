@@ -60,7 +60,7 @@ test("prefab core drives survive later ambition setup, without becoming tasks or
   expect(getCommittedEvents(f.world).events).toEqual([]);
   const foreground = buildAgentContext(f.world, f.actor);
   expect(foreground).toContain("PRIVATE_DRIVE: Keep promises");
-  expect(foreground).toContain('"hunger":76'); expect(foreground).toContain('"energy":88');
+  expect(foreground).toContain('hunger 76'); expect(foreground).toContain('energy 88');
 });
 
 test.each([false, true])("both background paths receive owned character context and actual opportunities (personal=%s)", async personal => {

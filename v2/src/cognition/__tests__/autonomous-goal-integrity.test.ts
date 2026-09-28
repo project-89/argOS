@@ -45,12 +45,12 @@ describe("Background autonomous goal validity", () => {
     recordPersonalConcern(f.world, f.agent, { channel: "message:friend", evidenceIds: [receipt], appraisal: "An important plan changed", significance: "I value time with friends", importance: .9, appraisedAtSimMs: 0 });
   }
   test("an important experience can trigger one background personal review despite routine goals", async () => {
-    const f = fixture(); for (let n = 0; n < 3; n++) createIntentGoal(f.world, f.agent, `Routine task ${n}`, 5);
+    const f = fixture(); for (let n = 0; n < 4; n++) createIntentGoal(f.world, f.agent, `Routine task ${n}`, 5);
     expect(shouldGenerateGoal(f.world, f.agent)).toBe(false); important(f);
     expect(shouldGenerateGoal(f.world, f.agent)).toBe(true);
     const provider = jest.fn(async () => personalResponse);
     expect(await generateAutonomousGoal(f.world, f.agent, { generateText: provider as any })).not.toBeNull();
-    expect(f.goals()).toHaveLength(4); expect(shouldGenerateGoal(f.world, f.agent)).toBe(false);
+    expect(f.goals()).toHaveLength(5); expect(shouldGenerateGoal(f.world, f.agent)).toBe(false);
     expect(provider).toHaveBeenCalledTimes(1);
   });
   test("personal review can decline a new goal without being retriggered by routine room chatter", async () => {
@@ -91,7 +91,7 @@ describe("Background autonomous goal validity", () => {
     expect(f.goals()).toHaveLength(1);
   });
   test("the reserved personal-review capacity is bounded", () => {
-    const f = fixture(); for (let n = 0; n < 5; n++) createIntentGoal(f.world, f.agent, `Routine task ${n}`, 5);
+    const f = fixture(); for (let n = 0; n < 6; n++) createIntentGoal(f.world, f.agent, `Routine task ${n}`, 5);
     important(f); expect(shouldGenerateGoal(f.world, f.agent)).toBe(false);
   });
   test("explicit noAI never calls either provider, and aspirations use the deterministic fallback", async () => {

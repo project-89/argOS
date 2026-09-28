@@ -112,8 +112,8 @@ test("autonomous goals receive needs and commitments as context rather than mand
   expect(await generateAutonomousGoal(f.world, f.actor)).toMatchObject({ description: "Study the stars", kind: "improve" });
   const request = generate.mock.calls[0][0];
   const content = request.messages.map((message: { content: string }) => message.content).join("\n");
-  expect(content).toContain("background deliberation");
-  expect(content).toContain("Social: 10 (0 = lonely, 100 = fulfilled)");
+  expect(content).toContain("What does this character want to go and do next?");
+  expect(content).toContain("\"social\":10");
   expect(content).toContain("Inspect the room");
   expect(content).toContain("Privately interested in astronomy.");
   expect(content).toContain('"kind": "<explore|social|craft|acquire|improve|survive|custom>"');
@@ -136,8 +136,8 @@ test("reflection keeps memory sources and interpretation boundaries without forc
   generate.mockResolvedValue({ text: JSON.stringify(result) });
   expect(await generateReflection(f.world, f.actor)).toEqual(result);
   const { system, prompt } = generate.mock.calls[0][0];
-  expect(system).toContain("background reflection process");
-  expect(system).toContain("does not execute actions or verify world facts");
+  expect(system).toContain("turning recent experiences over in your mind");
+  expect(system).toContain("turning recent experiences over in your mind");
   expect(system).toContain(`[memory ${memoryId}; episodic; remembered, not independently verified;`);
   expect(system).toContain('"Ivo said the lamp was repaired; I have not checked it."');
   expect(prompt).toContain("up to 4 insights");

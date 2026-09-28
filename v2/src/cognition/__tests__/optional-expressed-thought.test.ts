@@ -79,7 +79,7 @@ test.each([undefined, "", " \n\t "])("unexpressed innerThought=%p still commits 
   expect((console.log as jest.Mock).mock.calls.flat().some(message => typeof message === "string" && message.includes('[Ada] thinks:'))).toBe(false);
   expect(JSON.stringify(getCommittedEvents(f.world))).not.toContain(f.previous);
   const prompt = generate.mock.calls[0][0].messages[0].content;
-  expect(prompt).toContain("Optional innerThought");
+  expect(prompt).toContain("\"innerThought\": \"optional");
   expect(prompt).not.toContain('"innerThought": "A brief thought about this moment"');
 });
 

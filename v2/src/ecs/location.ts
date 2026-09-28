@@ -1,4 +1,4 @@
-import { entityExists, hasComponent, query, getRelationTargets, addComponent, removeComponent } from "bitecs";
+import { entityExists, hasComponent, query, getRelationTargets, addComponent, removeComponent, Wildcard } from "bitecs";
 import type { World } from "./world";
 import { Agent, ObjectState, ObjectType, PhysicalObject, Room } from "./components";
 import { LocatedIn, OccupiedBy, SittingOn, SleepingOn } from "./relations";
@@ -11,10 +11,22 @@ import { transitionObjectState } from "../world/object-state";
  * Returns the direct container for an entity, if any.
  * `LocatedIn` is exclusive, so this is at most one container.
  */
+// bitecs resolves relation targets by copying and scanning every component on
+// the entity; visibility projections call this hundreds of thousands of times.
+// LocatedIn is exclusive, so a remembered target is re-verified with an O(1)
+// pair-membership check on every read. Nothing stale can be returned: a moved,
+// removed or recycled entity fails verification and falls back to the scan.
+const containerHints = new WeakMap<World, Map<number, number | null>>();
 export function getDirectContainer(world: World, eid: number): number | undefined {
   if (!entityExists(world, eid)) return undefined;
-  const targets = getRelationTargets(world, eid, LocatedIn);
-  return targets[0];
+  let hints = containerHints.get(world);
+  if (!hints) { hints = new Map(); containerHints.set(world, hints); }
+  const hint = hints.get(eid);
+  if (hint === null && !hasComponent(world, eid, LocatedIn(Wildcard))) return undefined;
+  if (typeof hint === "number" && hasComponent(world, eid, LocatedIn(hint))) return hint;
+  const target = getRelationTargets(world, eid, LocatedIn)[0];
+  hints.set(eid, target ?? null);
+  return target;
 }
 
 /**

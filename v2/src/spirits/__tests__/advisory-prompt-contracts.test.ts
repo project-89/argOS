@@ -50,14 +50,16 @@ test.each(["guidance", "challenge"])("%s may contribute no whisper without mutat
   expect(f.daemon.whisperCount).toBe(0); expect(getRoomForEntity(f.world, f.actor)).toBe(f.room);
   const prompt = generate.mock.calls[0][0].prompt;
   expect(prompt).toContain(kind === "guidance" ? f.observation.concerns[0].description : f.observation.growthOpportunities[0].description);
-  expect(prompt).toContain("empty string");
+  // The whisper is the person's own inner voice, grounded in their life.
+  expect(prompt).toContain("Mara's daemon"); expect(prompt).toContain("Consider inspecting the observatory");
+  expect(prompt).toContain("Other people's secrets stay theirs");
   expect(prompt).not.toMatch(/stirs jealousy|won't let them rest|Makes them feel the need|push growth/);
 });
 
 test("a generated intuition is only a cognitive stimulus, not a movement action", async () => {
   const f = fixture(); generate.mockResolvedValue({ text: "Would a closer look help?" });
   await whisperToAgent(f.world, f.daemon, f.observation, true);
-  expect(drainPendingStimuli()).toEqual([{ targetEid: f.actor, type: "daemon_whisper", modality: "cognitive", content: "Would a closer look help?", source: "inner_voice", intensity: 0.3, timestamp: expect.any(Number) }]);
+  expect(drainPendingStimuli()).toEqual([{ targetEid: f.actor, type: "daemon_whisper", modality: "cognitive", content: "Would a closer look help?", source: "inner_voice", intensity: 0.6, timestamp: expect.any(Number) }]);
   expect(getRoomForEntity(f.world, f.actor)).toBe(f.room);
 });
 
@@ -67,8 +69,8 @@ test("nudge wrappers propose options without asserting a changed priority or arr
   queueNarrativeNudge(f.registry, "Mara", { type: "arrive", action: "Check the landing", reason: "A possibility", source: "narrator", priority: "normal" });
   const whispers = processPendingNudges(f.daemon, f.world);
   expect(whispers).toHaveLength(2);
-  expect(whispers[0].content).toContain("Consider whether this fits your priorities");
-  expect(whispers[1].content).toContain("A possibility for your journey");
+  expect(whispers[0].content).toBe("What if, instead, you did this: Inspect the observatory");
+  expect(whispers[1].content).toBe("Something keeps pulling you that way: Check the landing");
   expect(getRoomForEntity(f.world, f.actor)).toBe(f.room);
 });
 
@@ -82,8 +84,8 @@ test("narrative repetition context permits silence and does not turn intended mo
   const { system, prompt } = generate.mock.calls[0][0];
   expect(system).toContain("Live ECS state is authoritative");
   expect(prompt).toContain("Mara heads toward the staircase.");
-  expect(prompt).toContain("Movement intent is not evidence of arrival");
-  expect(prompt).toContain("leave storyProse empty");
+  expect(prompt).toContain("someone heading somewhere hasn't arrived yet");
+  expect(prompt).toContain("empty if nothing new");
   expect(prompt).not.toMatch(/Emma arrives|Write something NEW|describe the PROGRESSION/);
   expect(output.interventions).toEqual([]); expect(getRoomForEntity(f.world, f.actor)).toBe(f.room);
 });

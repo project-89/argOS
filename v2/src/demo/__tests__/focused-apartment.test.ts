@@ -95,7 +95,7 @@ test("startup notification knowledge is conditional; only a real delivery create
     const context = buildAgentContext(t.sim.world, t.ids[actor]);
     expect(context).toContain("AVAILABLE OPERATIONS (rules, not events):");
     expect(context).toContain("CURRENT LOCAL OBSERVATIONS:");
-    expect(context).toContain("Familiar properties and remembered routines describe what could happen");
+    expect(context).toContain("WHAT YOU'VE JUST SENSED:");
     expect(context).not.toContain("means I have a notification");
     expect(context).not.toContain("Phone display in your hand");
     expect(notificationKeys(t, actor)).toEqual([]);

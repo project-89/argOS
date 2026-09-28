@@ -17,6 +17,10 @@ export interface SpiritInterventionEvidence {
   records: readonly SpiritEvidenceRecord[];
   omittedRecords: number;
   bind(ids: unknown): (() => boolean) | undefined;
+  /** Optional citations: issued IDs are enforced, anything else is ignored. */
+  bindCited(ids: unknown): { current: () => boolean; cited: number };
+  /** Guard for the issued record of one kind and subject, if any. */
+  guardFor(kind: SpiritEvidenceRecord["kind"], subject: string): (() => boolean) | undefined;
 }
 
 const LIMIT = 192;
@@ -33,7 +37,8 @@ export function captureSpiritInterventionEvidence(world: World,
   };
   const issue = (kind: SpiritEvidenceRecord["kind"], subject: string, value: SpiritEvidenceRecord["value"], current: () => boolean) => {
     if (records.length >= LIMIT) { omittedRecords++; return; }
-    const id = `observation:${randomUUID()}`;
+    // Short, per-capture random IDs keep the prompt compact; guards are per capture.
+    const id = `observation:${randomUUID().slice(0, 13)}`;
     records.push(Object.freeze({ id, kind, subject, value: typeof value === "object" ? Object.freeze(value) : value }));
     guards.set(id, current);
   };
@@ -87,6 +92,15 @@ export function captureSpiritInterventionEvidence(world: World,
       // Copy the actual predicates, not a mutable model response array.
       const selected = ids.map(id => guards.get(id)!);
       return () => { try { return selected.every(current => current()); } catch { return false; } };
+    },
+    bindCited(ids) {
+      const valid = Array.isArray(ids) ? [...new Set(ids.filter((id): id is string => typeof id === "string" && guards.has(id)))].slice(0, 8) : [];
+      const selected = valid.map(id => guards.get(id)!);
+      return { cited: selected.length, current: () => { try { return selected.every(current => current()); } catch { return false; } } };
+    },
+    guardFor(kind, subject) {
+      const record = records.find(row => row.kind === kind && row.subject === subject);
+      return record ? guards.get(record.id) : undefined;
     },
   };
 }

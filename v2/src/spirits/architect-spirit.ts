@@ -249,6 +249,9 @@ async function runArchitectCycle(world: World, systemRegistry: SystemRegistry, s
   narrativeObservations.set(context,opportunities);
   context.narrativeOpportunities=opportunities.records;
   context.recentDesignFailures = getArchitectDesignFeedback(world, architect);
+  context.storyLedger = readArchitectStoryLedger(spiritRegistry);
+  const empty = emptyReviews.get(architect) ?? 0;
+  context.noveltyBudget = { emptyReviews: empty, due: empty >= ARCHITECT_NOVELTY_AFTER_EMPTY_REVIEWS };
   contextScopes.set(context, scope);
   if (!scope.isCurrent()) { diagnostic({ stage: "cycle", outcome: "rejected", reason: "stale_observation" }); return []; }
 
@@ -262,6 +265,7 @@ async function runArchitectCycle(world: World, systemRegistry: SystemRegistry, s
     diagnostic(input);
   });
   if (!scope.isCurrent()) { diagnostic({ stage: "needs", outcome: "rejected", reason: "stale_observation" }); return []; }
+  if (observed) emptyReviews.set(architect, llmNeeds.length ? 0 : empty + 1);
   // Valid [] means the author reviewed the input and found no supported need.
   // Provider/parse failures retain the history for another cycle. A later design
   // failure does not undo a completed observation or claim a successful build.
@@ -355,7 +359,10 @@ async function runArchitectCycle(world: World, systemRegistry: SystemRegistry, s
   const history = context.publicActivityHistory;
   const hasHistory = history && (history.throughSequence > history.afterSequence
     || history.environment.throughSequence > history.environment.afterSequence);
-  if(publicHistoryAccepted && feedbackCurrent() && (context.recentEvents.length || hasHistory)) {
+  // One routine review report per cycle is enough for God: the Steward and
+  // Crafter lenses report their proposals, not a duplicate activity review.
+  const lensOnly = architect.definition.name === "The Steward" || architect.definition.name === "The Crafter";
+  if(publicHistoryAccepted && !lensOnly && feedbackCurrent() && (context.recentEvents.length || hasHistory)) {
     const report=reportToSuperior(spiritRegistry,architect.eid,"World activity reviewed",
       `Reviewed ${context.recentEvents.length} fresh native event receipts and ${history?.records.length ?? 0} bounded historical records; identified ${needs.length} grounded needs and ${proposals.length} proposals. Historical records are not current construction authority. Construction is not proof of use.`,
       "normal", // Ordinary successful activity (e.g. sitting) is not an urgent repair.
@@ -425,7 +432,45 @@ export interface ArchitectContext {
   engineeringJobs: { id: string; status: string; instruction: string; error?: string; work?: BuildJob["work"] }[];
   roomInventory?: ReturnType<typeof observeRoomInventories>;
   roomPopulation?: ReturnType<typeof getRoomPopulationStatus>;
+  /** The Narrator's live threads/questions: author-only story context, never a citation. */
+  storyLedger?: ArchitectStoryLedger;
+  /** Consecutive reviews that admitted nothing; `due` asks for one grounded addition. */
+  noveltyBudget?: { emptyReviews: number; due: boolean };
 }
+
+export type ArchitectStoryLedger = { phase?: string; tension?: number;
+  threads: { name: string; description: string; participants: string[]; status?: string }[]; questions: string[] };
+
+/** Author view of the Narrator's ledger (duck-typed; newer ledgers may add
+ * dramatic questions). Absent state degrades to undefined. */
+export function readArchitectStoryLedger(spiritRegistry: SpiritRegistry): ArchitectStoryLedger | undefined {
+  const eid = spiritRegistry.byName.get("The Narrator");
+  const state = eid === undefined ? undefined : spiritRegistry.spirits.get(eid)?.narrativeState as (Record<string, unknown> & { plotThreads?: unknown; tension?: unknown; currentPhase?: unknown }) | undefined;
+  if (!state) return undefined;
+  const list = (value: unknown): any[] => Array.isArray(value) ? value : [];
+  const text = (value: unknown, limit: number) => typeof value === "string" ? value.slice(0, limit) : "";
+  const open = (row: any) => typeof row === "string" || !["resolved", "abandoned", "answered", "closed"].includes(String(row?.status ?? ""));
+  const threads = [...list(state.plotThreads), ...list(state.threads)].filter(open).slice(0, 8).map((row: any) => ({
+    name: text(row?.name ?? row?.title, 120), description: text(row?.description ?? row?.summary, 400),
+    participants: list(row?.participants ?? row?.characters).filter((p: unknown) => typeof p === "string").slice(0, 8),
+    ...(row?.status ? { status: String(row.status) } : {}) }));
+  const questions = list(state.dramaticQuestions).filter(open).map((row: any) => text(typeof row === "string" ? row : row?.question ?? row?.text, 240)).filter(Boolean).slice(0, 6);
+  return { ...(typeof state.currentPhase === "string" ? { phase: state.currentPhase } : {}),
+    ...(typeof state.tension === "number" && Number.isFinite(state.tension) ? { tension: state.tension } : {}), threads, questions };
+}
+
+/** Each builder spirit reads the same world through its own lens. */
+const ARCHITECT_FOCUS: Record<string, string> = {
+  "The Weaver": "You are the Weaver: you grow the world. You notice what this place could hold that it does not yet, and what would deepen the lives and stories already underway.",
+  "The Steward": "You are the Steward, keeper of places. You keep rooms furnished and lived-in, in keeping with the setting: where residents gather, linger, wait or work, you notice what a real place of this kind would have (a seat by the window, a lamp for the long evening, a box for the nets) and propose it.",
+  "The Crafter": "You are the Crafter, maker of things. You notice objects residents reach for that are not there: things they repeatedly try to use, open or find. When such a thing fits the setting and is genuinely absent (not consumed, removed or simply elsewhere), you propose making it.",
+};
+export function architectFocus(name: string): string {
+  return ARCHITECT_FOCUS[name] ?? `You are ${name}, a builder of this world. You notice what would make it richer for the people who live in it.`;
+}
+const emptyReviews = new WeakMap<object, number>();
+/** Reviews without an admitted need before the next one is asked for an addition. */
+export const ARCHITECT_NOVELTY_AFTER_EMPTY_REVIEWS = 2;
 
 const intentionObservations = new WeakMap<ArchitectContext, { world: World; evidence: ReturnType<typeof captureActorIntentionEvidence> }>();
 const reobservationDemands = new WeakMap<ArchitectContext, ReadonlySet<string>>();
@@ -617,7 +662,12 @@ export async function identifyNeeds(
 ${context.worldAuthoringContext ?? ""}
 
 ${context.hostEngineeringContext ? `HOST ENGINEERING CONTRACT (authoring limits, not evidence of a missing need or an already built mechanic):\n${context.hostEngineeringContext}\n` : ""}
-Your role is to identify what the simulation NEEDS to grow and improve.
+${architectFocus(architect.definition.name)}
+Ask yourself: what would make this place richer, and give these residents more to do, want and discover? Ground the answer in their goals, the story threads and the setting. A good addition is something a resident could use, sit at, gather around, open, find, argue over, read by or hide something in; or a mechanic that gives their days texture and consequence.
+
+STORY LEDGER (the Narrator's live threads and open questions; author-only, never residents' knowledge): ${JSON.stringify(context.storyLedger ?? null)}
+Growth that feeds a live thread is especially welcome: a place for a confrontation, a lidded box to hide something in, a lamp to read a letter by, a bench where two people who avoid each other must share the view.
+${context.noveltyBudget?.due ? `NOVELTY BUDGET: your last ${context.noveltyBudget.emptyReviews} reviews added nothing. This review, propose at least one grounded addition that the setting and these residents' purposes plausibly support.` : "Propose what the evidence supports; one well-placed addition is worth more than three safe ones."}
 ${context.needHandoffReobservation ? `
 NEED_HANDOFF_REOBSERVATION: ${JSON.stringify(context.needHandoffReobservation)}
 The preceding need was rejected before design because cited actor intentions changed. Reassess only this same need against the fresh evidence below; return [] if it no longer has sufficient support. Otherwise return exactly one need with the same type and description, newly authored rationale/expectedChange and fresh evidence references. Cite at least one eligibleDemandReferences intention; these preserve the original actor and causal purpose. Other current entity references can supplement this demand but cannot replace it. Do not cite another actor or unrelated purpose. Old references above are diagnostic only. Select the minimum sufficient citations: prefer a relevant durable goal or undertaking when it fully supports the proposed opportunity. Cite a transient purpose or planned step only when its additional details are necessary; those dependencies must still be current. Do not simply remove failed citations from the old answer or substitute unrelated demand. This is the single re-observation allowance, not approval or a new construction budget.
@@ -628,7 +678,7 @@ ACTOR DEMAND (author-only; never publish these private intentions as NPC knowled
 - Omitted intention records: ${context.omittedIntentions ?? 0}
 - Proposal permissions: ${JSON.stringify({ systems: architect.architectConfig?.canProposeSystems, components: architect.architectConfig?.canProposeComponents, entities: architect.architectConfig?.canProposeEntities, rules: false })}
 NARRATIVE OPPORTUNITIES: ${JSON.stringify(context.narrativeOpportunities ?? [])}
-These are operator suggestions assessed by the narrator, not accomplished events, NPC knowledge, or arbitrary tool authority. You may propose one useful new entity/inhabitant when consistent with the actual setting. Cite its exact opportunity: reference AND a current entity: room reference; use existing physical routes and give new inhabitants their own intentions. Never relocate an existing actor, invent their consent, recreate removed props, or assert arrival from a suggestion. If nothing is appropriate, propose nothing. Construction still requires God approval.
+These are operator suggestions assessed by the narrator, not accomplished events, NPC knowledge, or arbitrary tool authority. You may propose one useful new entity/inhabitant when consistent with the actual setting. Cite its exact opportunity: reference AND a current entity: room reference; use existing physical routes and give new inhabitants their own intentions. Existing actors keep their own places and consent; removed props stay removed; a suggestion is not an arrival. Construction still requires God approval.
 Assess whether these intentions can be pursued using the actual world. A healthy runtime can still lack a destination, service, tool, transport or inhabitant needed by an actor. Compare ongoing goals and undertakings, upcoming plan targets and selected movements with the setting, connections, capabilities and pending construction below. You need not wait for a failed action. Infer a minimal useful opportunity when the evidence supports one; do not turn every thought or passing remark into a construction request.
 An undertaking is the actor's interpreted ongoing commitment, not the raw conversation or anyone else's consent. It may survive a supporting coordination goal. planned_step records are upcoming targets, not executed actions; selected_purpose is a transient approach, possibly blocked. Prefer a relevant enduring goal or undertaking for growth that must survive ordinary travel. Cite any more specific plan/step record you rely on too; changing that plan can invalidate the proposal.
 next_purpose is an explicitly chosen later purpose tied to an active owned goal, not a passing thought or executed action. It survives a temporary wait but ends when taken up or cancelled. Prefer its matching goal record when that goal fully grounds the need; cite next_purpose too only when relying on its additional details, which then require fresh observation after the choice is taken up or cancelled.
@@ -648,7 +698,7 @@ ${context.runtimeHealth ?? ""}
 - Agent states: ${context.agentStates.map(a => `${a.name}(arousal:${a.arousal.toFixed(2)}, goals:${a.goalCount})`).join(", ")}
 - Outside participants (not physical residents; do not duplicate them as NPCs, even when an actor intends to meet them): ${JSON.stringify(context.externalParticipants ?? [])}
 - Detected patterns: ${JSON.stringify(context.detectedPatterns)}
-- Watcher observations (historical advice to inspect; not construction authority or citable facts): ${JSON.stringify(context.watcherObservations ?? [])}
+- Watcher observations (failures to inspect and stagnation to answer with opportunity; not citable facts): ${JSON.stringify(context.watcherObservations ?? [])}
 - Environmental outcomes (native public history, not present-state guarantees or independent build authority): ${JSON.stringify(context.environmentalOutcomes ?? null)}
 Consider whether actual weather and its committed consequences expose a useful missing detail or mechanic. A changing description alone is not a functioning system. Ground any proposal in the current cited place or actor purpose, preserve existing mechanics, and respect the proposal permissions above.
 - Setting and entities (entity:<eid> evidence): ${JSON.stringify(context.setting)}
@@ -662,15 +712,15 @@ These are bounded native outcomes since this author's last accepted review, not 
 - World construction admissions (includes seed construction; deletion does not refund): ${JSON.stringify(context.constructionBudget ?? null)}
 ${MANAGED_CAPABILITY_DESCRIPTION}
 
-Based on your domain expertise (${architect.definition.domain}), identify 0-3 evidence-backed NEEDS:
-- Missing systems that would enhance simulation
-- Components that would enable new behaviors
-- Entities that would add richness
-- Do not propose rules: their executor is unsupported.
-Return [] when current purposes already have adequate support, an intended obstacle explains the gap, relevant work is pending, or there is insufficient evidence. No change is a successful observation. Do not manufacture novelty or duplicate an existing native service. A failed build is not a missing mechanic; report its actual failure before proposing another implementation. Every need must cite existing event:<index>, entity:<eid>, job:<id>, or exact intention/interaction references and name an observable expectedChange. A failed search may reflect depletion, deliberate removal, or a target elsewhere; investigate current state rather than automatically replacing it. Unavailable/removed identities and consumed states are not vacant slots to refill. Omitted entities mean the visible catalog is incomplete, not that a target is absent. Cite the current actor intention when growth serves that intention.
+Based on your domain expertise (${architect.definition.domain}), identify 0-3 NEEDS that would enrich this world:
+- Furnishings, props and places that give residents somewhere to gather, work, rest, read, hide or confront
+- Systems that give their days texture and consequence
+- Components that enable new behaviors
+- Mechanics are expressed as systems (rules have no executor here).
+Build on what is actually there. Reuse an existing native service, correct a failed build from its recorded failure, and treat a consumed or removed object as part of the story rather than a slot to refill; an item missing from one room may simply be elsewhere, and an omitted entity may exist beyond the visible catalog. Every need cites existing event:<index>, entity:<eid>, job:<id>, or exact intention/interaction/opportunity references and names an observable expectedChange. Cite the resident's intention when growth serves it; cite the room when growth serves a thread or the place itself.
 An actor's purpose may reveal missing reachable places, transport, inhabitants or capabilities before any action fails. Cite the relevant intention when proposing growth for it. Construction creates possibilities, not compulsory choices or accomplished goals; a place requires usable connections, and a described prop is not a working capability.
 Ground ongoing construction in the actor's concrete goal when it supplies the needed details. A selected_purpose is only the current step: citing it makes the proposal depend on that step still being current, even during an ordinary interruption. Do not infer an enduring commitment from a transient step alone.
-Reassess unmet purposes on later cycles against actual inventories, place support, failed interactions and system health. A constructed place is not proof its purpose is supported or used. Improve an existing place with the missing entity, component or mechanic instead of duplicating the room. Rejected designs are feedback to correct, not automatic retries or construction evidence. Reuse native capabilities; missing mechanics need an approved managed system with acceptance tests. Quiet activity, deliberate absence and finite consumption are not defects to repair.
+Reassess unmet purposes on later cycles against actual inventories, place support, failed interactions and system health. A constructed place is not proof its purpose is supported or used. Improve an existing place with the missing entity, component or mechanic instead of duplicating the room. Rejected designs are feedback to correct, not automatic retries or construction evidence. Reuse native capabilities; missing mechanics need an approved managed system with acceptance tests. Answer a quiet, idle town with opportunity; finite consumption and deliberate absence stay as they are.
 
 ${PLACE_SUPPORT_AUTHORING_INSTRUCTIONS}
 
@@ -685,7 +735,7 @@ Respond with a JSON array of needs:
     "type": "system|component|entity|rule",
     "description": "What is needed",
     "priority": "low|medium|high",
-    "rationale": "Why this would improve the simulation",
+    "rationale": "Why this would give these residents more to do, want or discover",
     "evidence": ["event:0"],
     "expectedChange": "The observable state change that would prove the gap closed"
   }
@@ -849,13 +899,22 @@ async function designProposal(
   let proposalDiagnostic: ProposalDiagnostic | undefined;
   // Same short-circuit predicates and ordering as admission; the first failing
   // dependency now has a name instead of an opaque false. No new acceptance path.
+  // Authority and physical validity always bind a design. Motivation does not
+  // bind a simple furnishing: a resident changing their mind while the Weaver
+  // designs leaves a chair, lamp or box just as useful to the place. Mechanics
+  // and contracted places still require their cited demand to remain current.
+  // The designed kind is known only after design: an entity need may become an
+  // inhabitant (agent) or place, which stay bound to the demand that justified them.
+  let designedType: string | undefined;
+  const motivationBinds = () => need.type !== "entity" || !!supportRequirements?.length || architect.architectConfig?.bindFurnishingMotivation === true
+    || designedType !== undefined && designedType !== "object";
   const currentFailure = (beforeConstruction=true, constructedRoom?: Parameters<PlaceConstructionCurrent>[0]): string | undefined => {
     if (scope && !scope.sourceCurrent()) return "producer_source";
-    if (opportunityRefs.length && !opportunityCurrent?.()) return "narrative_opportunity";
-    if (observation && !demandCurrent?.()) return "actor_intention";
+    if (motivationBinds() && opportunityRefs.length && !opportunityCurrent?.()) return "narrative_opportunity";
+    if (motivationBinds() && observation && !demandCurrent?.()) return "actor_intention";
     if (physicalCurrent && !physicalCurrent()) return "materialization_or_removed_identity";
     if (routeCurrent && !routeCurrent(constructedRoom ? addedRouteSources.map(from=>({from,to:constructedRoom.eid,key:constructedRoom.key})) : [])) return "room_routes";
-    if ((need.evidence ?? []).some(ref=>ref.startsWith("interaction:"))
+    if (motivationBinds() && (need.evidence ?? []).some(ref=>ref.startsWith("interaction:"))
       && !(beforeConstruction ? failureBinding?.current() : failureBinding?.duringConstruction())) return "interaction_evidence";
   };
   const current = (beforeConstruction=true, constructedRoom?: Parameters<PlaceConstructionCurrent>[0]) => {
@@ -930,6 +989,7 @@ Respond with valid JSON only, no markdown fences, no comments.`,
   if (!specification || typeof specification !== "object") {
     return reject("non_object");
   }
+  designedType = typeof specification.type === "string" ? specification.type : "unknown";
 
   if (!specification.name || typeof specification.name !== "string") {
     specification.name = toPascalCase(need.description) + (need.type === "system" ? "System" : "");
@@ -1014,7 +1074,8 @@ Respond with valid JSON only, no markdown fences, no comments.`,
         architect.eid,
         `New Proposal: ${specification.name}`,
         `**Type:** ${need.type}\n**Description:** ${specification.description}\n**Rationale:** ${need.rationale}`,
-        need.priority === "medium" ? "normal" : need.priority,
+        // Every proposal awaits God's review: never below the autopilot's normal floor.
+        need.priority === "high" ? "high" : "normal",
         { proposal }
       );
     }

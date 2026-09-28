@@ -44,6 +44,8 @@ export type ChronicleEventType =
   | "system_failed"
   | "spirit_proposal"
   | "narrative_nudge_lifecycle" // Private transport metadata only, not public evidence or causal attribution
+  | "narrator_prose" // Narrator's story feed for viewers/recordings; never resident perception
+  | "daemon_inner_voice" // A daemon whisper was delivered; transport metadata only, never the whisper text
   | "gap_detected"
   | "affordance_evolved"     // spirit created a new affordance
   // Agent learning

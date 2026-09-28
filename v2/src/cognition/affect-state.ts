@@ -102,8 +102,8 @@ export function commitPreparedAffectUpdate(world: World, eid: number, token: Pre
 }
 export function formatAffectContext(world: World, eid: number): string {
   const current = snapshotAffect(world, eid);
-  return current ? `YOUR LAST SELF-APPRAISAL (private interpretation, not proof about other people):\n`
+  return current ? `HOW YOU FEEL:\n`
     + `${JSON.stringify({ feeling: current.feeling, valence: current.valence, arousal: current.arousal, reason: current.reason })}\n`
-    + `Your visible expression is ${JSON.stringify(current.expression ?? "not specified")}. It need not reveal what you feel.`
+    + `Your face shows ${JSON.stringify(current.expression ?? "nothing in particular")} — it doesn't have to match what you feel.`
     : publicFacialExpression(world, eid) ? `YOUR VISIBLE EXPRESSION: ${JSON.stringify(publicFacialExpression(world, eid))}. No private self-appraisal recorded yet.` : "";
 }
