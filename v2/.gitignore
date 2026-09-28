@@ -21,6 +21,11 @@ simulations/
 stress-test-output/
 logs/
 feedback/
+recordings/
+data/live-builds/
+data/eval/
+data/chronicles/
+output/
 
 # Temp and scratch files
 tmp/

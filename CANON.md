@@ -4,6 +4,15 @@
 
 *Canonical design document for ArgOS / Project89. Established 2026-07-24.*
 
+> **Reading this today (2026-09-27):** this is normative architectural intent,
+> not an inventory of implemented features or passed gates. Start at
+> [AGENTS.md](AGENTS.md); use [the current cognition map](v2/COGNITIVE_ARCHITECTURE.md)
+> and [latest evidence](v2/src/demo/TICK-AND-NARRATOR-DELIVERY-CHECKPOINT.md) to
+> establish what actually runs. The supersession statements below concern the
+> earlier design revisions; they do not retire the subsequent implementation
+> updates in `COGNITIVE_ARCHITECTURE.md`. Old root prototypes now live under
+> [archive/](archive/README.md), and older v2 specs under [v2/docs/](v2/docs/README.md).
+
 > This document supersedes the design corpus that preceded it. Every section ends with a
 > **Supersedes:** line naming the documents it retires. The defining pathology of this project's
 > history is that nine attempts at the same subsystem coexist because no document ever killed its
@@ -1073,12 +1082,6 @@ observe → aggregate → prioritise → propose → design → bake → REGRESS
                         gapId with status lifecycle: open → addressed → verified → failed
 ```
 
-```
-observe → aggregate → prioritise → propose → design → bake → REGRESSION GATE → commit
-                                                              ↑
-                        gapId with status lifecycle: open → addressed → verified → failed
-```
-
 **The regression gate and the gap lifecycle are the missing halves.** Without them the loop generates
 without selecting, which is the documented cause of 74 components and 65 systems (§7).
 
@@ -1101,6 +1104,22 @@ The design is sound and mostly built. It is wired badly.
 | **GodAI has no spirit visibility in the dev server.** `setGodAgentCallback` is never called there, so all spirit→God traffic falls back to keyword routing and God acts only when a human types. | |
 
 Together these explain the file counts in §7 exactly: **generation works, evaluation does not.**
+
+### Runtime wiring update — 2026-09-01
+
+The public library path now owns the specialist evolution cycle in
+`v2/src/runtime/evolution-coordinator.ts`: Crafter, Steward, Weaver, safe proposal approval and
+execution, Tinker, Lawgiver, and file-system repair run as a tick-driven, single-flight pipeline.
+`createSimulation()` installs it for both runtime modes and exposes cumulative stage/error state via
+`getEvolutionStatus()`. The “spirits only work in the dev server” defect is therefore closed, and
+the Lawgiver now has a production cadence. A useful source of Lawgiver rule requests remains open.
+
+Generated systems are continuously observable without a UI: `createSimulation()` publishes
+`system:created`, `system:executed`, and `system:error` from registry telemetry and exposes complete
+health reports via `getSystemHealth()`. Genesis worlds now retain the deterministic builtin
+substrate; genesis replaces authored entities and presets, not physics, cognition, goals, schedules,
+stimuli, or monitoring. A natural-language seed can be passed directly to the sole primary entry
+point: `createSimulation(prompt)`.
 
 **Supersedes:** `v2/WORLDBUILDING_ARCHITECTURE.md` §13-§15,
 `god-agent-v2/META_COGNITIVE_ARCHITECTURE.md` and `LIVE_BUILDING_CONCEPT.md` (their three-tier LLM
@@ -1145,7 +1164,7 @@ Ordering falls out of the dependency chain. Each phase is independently testable
 
 | Phase | Work | Unblocks |
 |---|---|---|
-| **0. Unbreak** | Ban `require()` (lint gate); collision-reject in `component-registry`; register office-tools; delete `src/core/`; tick the NLE | Everything. Restores 5 of 6 evolution sensors; makes worlds loadable |
+| **0. Unbreak — complete 2026-09-01** | Ban `require()` (AST test gate); collision-reject in `component-registry`; register office-tools and repo integration; delete the closed `src/core/` cohort; tick and persist the NLE in both production boot paths | Everything. Restores 5 of 6 evolution sensors; makes worlds loadable |
 | **1. Identity** (§4) | Durable NodeId, bidirectional eid index | Every subsequent phase |
 | **2. Change record** (§6) | Conform to the studio schema; observer-based capture | The stream |
 | **3. Determinism** (§8) | Seeded RNG, logical clock, tick wiring | Replay |
@@ -1155,8 +1174,8 @@ Ordering falls out of the dependency chain. Each phase is independently testable
 | **7. Studio bidirectionality** (§11) | Author → instantiate; run → export | The product |
 | **8. Media nodes** (§12) | Artifacts as graph nodes; visual continuity | Comics, microdramas |
 
-Phase 0 is unglamorous and is the highest-leverage work available. Nothing above it is worth
-designing on a codebase where saved worlds do not load.
+Phase 0 completed on 2026-09-01. The backend typecheck, deterministic unit suite, no-AI smoke path,
+and UI production build are its executable acceptance gates. Phase 1 is now the active frontier.
 
 ---
 

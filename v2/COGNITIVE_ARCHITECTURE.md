@@ -6,6 +6,35 @@ This document describes:
 
 North star: **one substrate** (ECS world state + canonical relations + events) and **many projections** (text/perception, affordance lists, plans, policies, org artifacts, UI views). Agents should **do** things in the world deterministically whenever possible, and fall back to LLM reasoning only when needed.
 
+Bounded agency consolidation: **2026-09-27**. See the
+[pass record](src/architecture/COHERENT-AGENCY-PASS-2026-09-27.md) for retained core
+drives, shared background character context, concurrent agenda review, queue
+fairness, inspection-loop repair and separate household challenge evidence.
+This is not a claim that baseline repeatability or endurance gates passed.
+
+Follow-up grounding/growth repair: see the
+[repair record](src/architecture/GROUNDING-GROWTH-REPAIR-2026-09-27.md) and
+[world-generation readiness audit](src/architecture/WORLD-GENERATION-READINESS-2026-09-27.md).
+The latter separates existing prompt-to-ECS authoring from unproven cross-genre
+behavior and the still-authored 3D/builder integration.
+
+Shared specification / movement-memory follow-up: see the
+[implementation and evidence record](src/architecture/WORLD-SPECIFICATION-PASS-2026-09-27.md).
+World-local style/private character creation now reaches the existing authoring
+owners, alongside an explicit runtime profile; this is offline integration,
+not a new live behavioral or endurance pass.
+
+Controller update: **2026-09-05**. The native loop now separates admitted
+experience/continuing purpose from immediate command execution, with a fast
+deterministic actor controller outside the model queue. See the
+[controller contract](src/cognition/ACTOR-CONTROLLER.md) for source checks,
+save/restore behavior, compatibility and remaining limits.
+
+Earlier implementation / evidence update: **2026-09-04**. See the
+[cognition audit](src/evals/COGNITION-AUDIT-2026-09-04.md) for regression coverage,
+live-model results, and limits. The architecture below is not a claim that every
+exported research module is enabled in the native NPC runtime.
+
 ---
 
 ## 0) Core Principles
@@ -38,11 +67,32 @@ North star: **one substrate** (ECS world state + canonical relations + events) a
 Runs at high FPS (or as fast as possible) with deterministic ECS systems.
 - Examples: Movement, RoomArrival, StimulusEmission, NeedsDecay, inventory/containment sync.
 
-### Slow loop (cognition tick)
-Runs less frequently and may include LLM calls.
-- Agent decision-making and planning
-- Spirit orchestration and system baking (where enabled)
-- Org tooling workflows (if present)
+### Asynchronous work: three reserved lanes
+
+| Lane | Default slots | Work |
+| --- | --- | --- |
+| Foreground | 2 | Per-actor perception, next-action selection, grounded execution |
+| Subconscious | 2 | Per-actor multi-step planning, autonomous goals, reflection, optional image critique |
+| Background world work | 3 | God, spirits, narrative direction, system-building orchestration |
+
+These are separate concurrency budgets, not a total limit of three. Native
+foreground selection uses deterministic plans/policies when possible; its LLM
+fallback has an eight-second request deadline. It does not await autonomous goal
+formation, plan generation, or reflection. Native physical planning and its
+single possible validation repair share one operation budget: 10/15/20 seconds
+for low/medium/high background reasoning (currently medium by default).
+Subconscious tasks age after five monotonic seconds and receive priority at an
+eligible free slot; running work is not preempted and lane capacity is unchanged.
+
+`createSimulation().start()` enrolls new actors independently. Planning can run
+while an actor performs a physical action, but a stale goal/room/capability snapshot
+cannot be installed. Queued jobs recheck eligibility at dispatch. Planning has
+priority within the subconscious lane; other faculties yield after one expensive
+operation rather than chaining several calls in a single occupied slot.
+
+`runCognitionCycle()` is foreground-only by default. Explicit `enablePlanning:true`
+remains an awaited batch option. `sim.step()` executes immediate actions first and
+then awaits subconscious work; it is a batch API, not a latency guarantee.
 
 The architecture aims to support:
 - **No-AI mode:** deterministic emergent simulation (fast loop only).
@@ -53,6 +103,11 @@ The architecture aims to support:
 ## 2) The Current Cognitive Stack (What Runs First)
 
 Agent decision selection happens in `src/cognition/agent-mind.ts` (`agentThink()`), roughly in this order:
+
+Unconsidered salient input can bypass routines to invite a fresh decision. Only
+signals actually included in a bounded prompt are acknowledged; unshown signals
+remain pending. Speech/whispers are inputs to reasoning, not commands or proof of
+world state.
 
 1) **Procedural Skill Reflex (macro replay)**
    - If the agent has an active procedure state / applicable learned macro, pick the next step deterministically.
@@ -65,23 +120,31 @@ Agent decision selection happens in `src/cognition/agent-mind.ts` (`agentThink()
    - If the last action failed (grounded evidence), pick a different strategy immediately to avoid loops.
    - File: `src/cognition/failure-recovery.ts`
 
-3) **Deterministic Directed Speech Reply (no-LLM safety)**
-   - If running without an LLM key, respond once to directed speech to prevent dead conversations.
-   - File: `src/cognition/agent-mind.ts`
+3) **Speech attention and dialogue recall**
+   - Actual local speech enters actor-owned recall separately from model request/response history.
+   - Speech invites reconsideration, not a compulsory reply. AI opt-out does not manufacture canned responses.
+   - Heard answers can retire stale social steps; subjective social satisfaction cannot bypass physical goal proofs.
+   - Files: `src/cognition/agent-mind.ts`, `src/cognition/social-memory.ts`.
+   - See the [cognition prompt review](src/cognition/PROMPT-REVIEW.md) for scope, evidence and remaining limitations.
 
-4) **Behavior Policy (behavior tree / policy graph)**
+4) **Urgent organization contracts and active plan step**
+   - Org coordination contracts can precede plans where relevant.
+   - Otherwise follow the highest-priority goal's active plan without a model call.
+   - New attention can interrupt; completing an urgent goal leaves the old cursor available.
+
+5) **Behavior Policy (behavior tree / policy graph)**
    - Optional per-agent deterministic policy that can emit actions or start procedures.
    - This is where “traditional game AI” patterns plug in cleanly.
    - File: `src/cognition/behavior-policy.ts`
 
-5) **Contract-Driven Action Selection (no plan, no LLM)**
+6) **Contract-Driven Action Selection (no plan, no LLM)**
    - Deterministic “minimal next step” solver for typed goal success contracts.
    - Current scope: Kanban/Wiki goal contracts (org workflows).
    - Files:
      - `src/cognition/contract-driven-actions.ts`
      - wired into `src/cognition/agent-mind.ts`
 
-6) **LLM Fallback**
+7) **LLM Fallback**
    - Only when configured and when deterministic options didn’t yield a step.
    - File: `src/cognition/agent-mind.ts`
 
@@ -89,6 +152,12 @@ This ordering is intentional:
 - “Learned deterministic behaviors” should beat “fresh reasoning”.
 - “Policy” should beat “LLM”.
 - “Contracts” provide a robust backstop for common structured workflows.
+
+The subconscious (`src/cognition/subconscious-system.ts`) separately develops
+goals and reflections. New episodic/semantic memories feed reflection's salience
+accumulator. Derived insights do not recursively feed it, and arrivals during a
+reflection survive its completion. Interpretations of past experiences remain
+distinct from present sensory evidence.
 
 ---
 
@@ -134,7 +203,7 @@ Actions are executed centrally (ECS-authoritative) in `src/cognition/cognition-s
 Two key evidence channels are recorded to ground cognition and evaluation:
 
 1) `LastAction` (per agent)
-- Written after interact success/failure.
+- Written for executed core actions and real deferred completions; pending jobs are not success.
 - Captures: action type, target, content, success, timestamp.
 
 2) `LastToolResult` (per agent)
@@ -195,7 +264,11 @@ Plans are “soft”: steps are suggestions. Execution is still grounded through
 After each action, the engine tries to match the action against the current plan step and advance the plan.
 - File: `src/cognition/cognition-system.ts` (`advanceAgentPlan`)
 
-Key improvement: for deterministically evaluable goals, plan completion does **not** force goal completion; evaluation is done by `GoalEvaluationSystem`.
+Plan exhaustion does **not** force goal completion, including custom goals.
+Typed goals are verified by `GoalEvaluationSystem`; custom goals without a verifier
+remain unverified. Advancement and learning use the action's captured goal, plan,
+and step, not a replacement plan or whichever goal happens to be highest priority
+when an asynchronous result arrives.
 
 ### Procedural compilation (“learning”)
 When a goal/plan succeeds, the plan can be compiled into a reusable macro keyed by a **goal signature**, enabling robust reuse across contexts and reducing drift.
@@ -401,4 +474,3 @@ This ensures we don’t regress robustness as we scale complexity.
 - `src/behavioral-tests/35-office-programming-benchmark.ts`
 - `src/behavioral-tests/37-agent-uses-kanban-wiki-benchmark.ts`
 - `src/behavioral-tests/38-agent-contract-driven-org-work.ts`
-

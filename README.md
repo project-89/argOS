@@ -1,189 +1,76 @@
-# Project 89 - ArgOS
+# Argos — living worlds
 
-> 🚀 **Cutting-Edge Experimental Technology**
->
-> ArgOS represents the bleeding edge of autonomous agent architectures, pushing the boundaries of what's possible in artificial consciousness and emergent behavior. This is highly experimental technology that explores uncharted territories in cognitive architectures and multi-agent systems.
->
-> ⚠️ **Note**: This project is in active development and should be considered alpha software. Features and APIs may change rapidly as we discover new approaches and paradigms.
+Argos is an experimental generative simulation engine: an ECS world inhabited
+by characters with private memories, intentions and ongoing activities. God,
+spirits and coding daemons can propose and build new mechanics within explicit
+host permissions. Text, 3D and video are views of the same underlying world.
 
-A sophisticated agent simulation system built on BitECS, featuring autonomous agents with advanced cognitive architectures, capable of dynamic interactions, self-spawning, and emergent narrative generation.
+**The active implementation is [`v2/`](v2/README.md).** Start there for setup,
+library usage, current demos and tests. Agents should first read
+[`AGENTS.md`](AGENTS.md), then [`v2/AGENTS.md`](v2/AGENTS.md).
 
-## Overview
+## Current entrypoints
 
-ArgOS is an experimental platform for creating and running autonomous agent simulations. It represents a radical departure from traditional AI architectures, implementing a novel cognitive framework that enables genuine agent autonomy and emergence.
+| Start here for… | Document |
+| --- | --- |
+| Running or developing the engine | [Argos v2 README](v2/README.md) |
+| Architectural intent | [CANON](CANON.md) |
+| Implemented cognition | [Cognitive architecture](v2/COGNITIVE_ARCHITECTURE.md) |
+| Current implementation/evidence checkpoint | [Tick cost and Narrator delivery](v2/src/demo/TICK-AND-NARRATOR-DELIVERY-CHECKPOINT.md) |
+| Interactive 3D town and other demos | [Demo index](v2/src/demo/README.md) |
+| God/spirit/coding authority in the town | [World development](v2/src/demo/WORLD-DEVELOPMENT.md) |
 
-### Key Innovations
+CANON is a design authority, not a claim that every target or migration is
+implemented. Its older inventories and supersession statements must be read
+alongside dated implementation records and source. Current cognition documents
+remain useful implementation references; do not silently discard them because
+an older design document names their predecessors.
 
-- **Cognitive Architecture**: A groundbreaking approach to agent consciousness that goes beyond simple prompt-response patterns
-- **Emergent Behavior**: Agents develop their own personalities, relationships, and narratives through dynamic interactions
-- **Scalable Architecture**: Built on BitECS for unprecedented performance in large-scale agent simulations
-- **Memory Systems**: Advanced hierarchical memory structures that enable genuine learning and adaptation
+## Quick start
 
-### Future Trajectory
-
-ArgOS is evolving towards becoming a complete framework for artificial consciousness research and autonomous agent development. Our roadmap includes:
-
-- **Artificial Consciousness**: Developing deeper models of self-awareness and consciousness
-- **Emergent Societies**: Enabling large-scale agent interactions that form complex social structures
-- **Cross-Reality Integration**: Bridging virtual and physical worlds through agent embodiment
-- **Autonomous Evolution**: Allowing agents to modify their own cognitive architectures
-- **Narrative Intelligence**: Creating rich, dynamic storylines through agent interactions
-
-### Use Cases
-
-- **Research**: Studying emergence, consciousness, and collective intelligence
-- **Gaming & Entertainment**: Creating dynamic, evolving narratives and characters
-- **Social Simulation**: Modeling complex human systems and behaviors
-- **Training & Education**: Developing adaptive learning environments
-- **Creative Applications**: Generating stories, art, and other creative works through agent collaboration
-
-## Current Features
-
-- **Entity Component System (BitECS)**
-
-  - Efficient agent state management
-  - Component-based architecture
-  - Fast query system
-
-- **Agent Systems**
-
-  - Thinking System (cognitive processing)
-  - Room System (environment management)
-  - Action System (behavior execution)
-  - Perception System (stimuli processing)
-
-- **Memory Management**
-
-  - Thought history
-  - Experience tracking
-  - Context awareness
-
-- **Action Framework**
-  - Speech capabilities
-  - Environment interaction
-  - Tool usage system
-
-## Getting Started
-
-1. Install dependencies:
-
-```bash
-npm install
+```sh
+cd v2
+npm ci
+npm run demo:spatial
 ```
 
-2. Run the basic conversation example:
+This plain spatial command is a local manual physics fixture without live AI
+or H3. Open its printed private localhost URL. Live NPCs, God requests, coding
+jobs and video use separate modes and can incur provider costs; consult the
+[v2 guide](v2/README.md) before enabling them.
 
-```bash
-npm run start
-```
+The root package only delegates convenience commands. Install and manage active
+engine dependencies inside `v2/`.
 
-This will start a simulation with two agents in a room, demonstrating basic interaction capabilities.
+## Status and scope
 
-Some features may require the project to be built before running. Use the following command to compile TypeScript (if applicable):
+The current work prioritizes simulation quality, grounded character behavior,
+temporal correctness and useful world development. A successful test or demo
+does not establish open-ended realism. The fresh ten-trial behavioral baseline
+and ten-minute endurance gates remain open at the linked checkpoint; targeted
+test results are documented without implying a full-suite or live-quality pass.
 
-```bash
-npm run build
-```
+The 3D renderer projects authoritative ECS outcomes. Imported assets do not
+automatically acquire gameplay behavior. WebXR/VR, expanded asset pipelines and
+Aureum integration remain proposed work, not capabilities claimed here.
 
-## Cloning the Repository
+## Repository layout
 
-```bash
-git clone https://github.com/project-89/argOS.git
-```
+- [`v2/`](v2/README.md): active engine, local applications and implementation records.
+- [`research/psyche-bt/`](research/psyche-bt/README.md): separate behavior-tree
+  research project; read its own agent guidance before working there.
+- `archive/`: preserved older runtimes/design material, including the former
+  root runtime in `archive/argos-v1/`. Not the current setup path.
+- [`docs/archive/entrypoints/`](docs/archive/entrypoints/README.md): exact copies
+  of the former root and oil-demo entry documents.
 
-Navigate to the project directory:
-
-```bash
-cd argOS
-```
-
-## Configuring the Environment
-
-Environment Variables:
-
-1. Check if the repository includes a .env.example file. If so, rename it to .env:
-
-```bash
-cp .env.example .env
-```
-
-2. Populate the .env file with the required values. For example:
-
-```bash
-GOOGLE_GENERATIVE_AI_API_KEY=your-api-key-here
-```
-
-## Architecture
-
-The system is built on several core components:
-
-1. **World State**
-
-   - Resource management
-   - Narrative state tracking
-   - Population management
-
-2. **Agent Components**
-
-   - Core agent properties
-   - Memory systems
-   - Action capabilities
-   - Relationship tracking
-
-3. **Systems**
-   - Cognitive processing
-   - Environmental interaction
-   - Action execution
-   - State management
-
-For a detailed architectural overview, see `DESIGN_DOC.md`.
-
-## Development Status
-
-Currently implemented:
-
-- [x] Basic agent interactions and conversations
-- [x] Simple Thought generation with LLM integration
-- [x] Basic Environment awareness and room system
-- [x] Basic action and perception system
-- [x] Simple Memory tracking (thoughts and experiences)
-- [x] Speech and examination tools
-
-In progress:
-
-- [ ] Physical actions and body awareness
-- [ ] Enhanced agent perception (sight, sound, smell)
-- [ ] Long term vector memory
-- [ ] Goal setting and planning system
-- [ ] Multi-agent coordination
-- [ ] Core memory systems (childhood, significant experiences)
-- [ ] Relationship formation and tracking
-
-Planned features:
-
-- [ ] Self-spawning capabilities (agent reproduction)
-- [ ] Dynamic narrative generation
-- [ ] World generation from text prompts
-- [ ] World state as entity relationships
-- [ ] Meta-agent for narrative control
-- [ ] Tool system for world modification
-- [ ] Long-term persistence and database integration
-- [ ] Advanced memory hierarchies
-  - Working memory
-  - Episodic memory
-  - Semantic memory
-  - Procedural memory
-
-## Running Examples
-
-The project includes several example scenarios:
-
-- `basic-conversation.ts`: Two agents engaging in basic interaction
-
-## Contributing
-
-This is an experimental project in active development. Feel free to explore and experiment with the codebase.
+Private credentials, session URLs/tokens, raw provider prompts and recordings
+do not belong in public documentation. Keep failed evidence and review artifact
+privacy before sharing. See [agent guidance](AGENTS.md) for working boundaries.
 
 ## License
 
-MIT
+Historical license metadata is inconsistent: the older README says MIT while
+the former root package says ISC. This cleanup does not resolve or change that
+licensing. Confirm it before redistribution. Third-party asset licenses and
+provenance are retained alongside the assets.
