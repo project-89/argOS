@@ -1,5 +1,62 @@
 # Spatial viewer boundary
 
+## Experience: Watch · Inhabit · Analysis
+
+Built against `../INHABIT-CONTRACT.md`. The mode switcher (top centre, keys
+`1`/`2`/`3`) is always visible. Transitions are pure (`modes.mjs`); the
+snapshot stays authoritative for control (`control`) and pause (`paused`).
+
+- **Watch**: the god's-eye diorama, story feed, weather chip and resident roster.
+  Each resident offers **Take control** (`POST /api/control/take`) and
+  **Interview**. **Enter as a visitor** calls `POST /api/control/visitor`; a
+  world that hasn't begun is started first. Operator tools (phone, planted
+  thoughts, house spirit, build requests, diagnostics) sit in one drawer.
+- **Inhabit** (`inhabit-view.mjs`): a perspective camera over the right
+  shoulder (C toggles first person) with wall collision, drag or pointer-lock
+  look, WASD/arrows → `walk {dx,dy}` relative to the camera heading (≤6 Hz while
+  held, never two in flight, nothing at rest), E → the nearest `control.nearby`
+  thing (several verbs open a 1–4 chooser; "Talk" opens the talk box), Enter →
+  `say` to the nearest resident or the room, hold V → push-to-talk. Subtitles
+  show only `control.heard` (excerpts grow in place; the completed turn replaces
+  them and is the only one voiced). Room labels, overhead speech and goals are
+  hidden: the body knows what it perceives. O shows the operator-only "nearby
+  minds" panel. P pauses; Release lets go.
+- **Analysis** (`analysis-view.mjs`): entering pauses a running world (and
+  resumes on exit only if Analysis paused it; also on tab close). The town is
+  shown as a desaturated model on a white lab field without sky, haze or sea.
+  Left: God console (`/api/god/ask`, receipts as chips, God's voice). Right: the
+  interview chair (`/api/interview`) with a still portrait rendered from the
+  resident's own model, **In character / Analysis** register, **Let them
+  remember** (in character only) and per-register sessions. Click a resident in
+  the scene to seat them.
+
+Keyboard: `1` Watch · `2` Inhabit (opens the body chooser without a body) ·
+`3` Analysis · `Esc` closes the innermost thing (talk box, verb chooser, chooser
+sheet), then steps out of Inhabit, or resumes out of Analysis · `W A S D`/arrows
+walk · drag look · `E` interact (`1`–`4` while the chooser is open) · `Enter`
+talk · hold `V` speak (Inhabit → say, Analysis → last-used panel) · `C` camera
+view · `O` nearby minds · `P` pause/resume · `M` mute voices.
+
+Voice (`voice-client.mjs`): `/api/voice/cast` `enabled` shows or hides voice UI.
+Lines are synthesized only when they will play (heard lines in Inhabit, God,
+interview replies), one at a time with the next prefetched, capped per minute,
+stale lines dropped; 429 backs off for `retryAfterSeconds`, 503/404 hide voice.
+Playback uses Web Audio `decodeAudioData` (the page CSP has no blob media
+source). Push-to-talk records 16 kHz 16-bit WAV through the Web Audio graph,
+falling back to MediaRecorder webm/opus.
+
+Device independence: `createBodyControls` (`inhabit-controls.mjs`) is the only
+path to the body: `walk(dx, dy)`, `interact(verb, targetKey)`, `say(text,
+targetKey)`. `xr-entry.mjs` feature-detects `immersive-vr` for the **Enter VR**
+button and documents the WebXR follow-up (`TODO(webxr)`); it is not implemented.
+
+QA: `?mode=analysis&interview=Leon` opens a mode and seats a resident on load.
+Checks: `node --test` in this directory (modes, inhabit controls/camera,
+subtitles, voice queue/capture, analysis state, plus the renderer suites).
+
+## Renderer boundary
+
+
 This is a Three.js **view of Argos**, not another game simulation. The server supplies authored geometry, authoritative entity positions, and native activity state through `SpatialViewState`.
 
 - The client interpolates only between observed positions, clamps at the newest observed point, and never dispatches an action from an animation completion callback.
@@ -10,7 +67,7 @@ This is a Three.js **view of Argos**, not another game simulation. The server su
 - Current ongoing activity or leading goal appears for the selected actor, from the private operator DTO. It does not select an action or grant execution authority. No completed goal is presented as active.
 - Private current thoughts and phone records are displayed only in the operator panel. They are not used as input to a rendering model or sent to an external service. All runtime assets are local.
 - Message, planted-thought, explicit operator-action, start, terminal stop, and authored expansion controls use separate authenticated API routes. Manual mode is visibly labeled; no autonomous behavior is invented in the client.
-- This first slice has no generated speech audio, custom mesh authoring, inverse kinematics, or browser-owned collision detection. Model animations illustrate native activity; they do not grant physical effects.
+- Speech audio comes only from the voice endpoints above. There is no custom mesh authoring, inverse kinematics, or browser-owned movement collision (the Inhabit camera's wall collision is presentation only). Model animations illustrate native activity; they do not grant physical effects.
 
 Serve `index.html`, bundle `client.mjs` as `/client.js`, serve `styles.css` and this directory's `assets/` as `/assets/`. Supply the operator bearer token in the URL fragment, which is not sent with static requests. The client uses it only in API authorization headers.
 

@@ -102,6 +102,15 @@ export const Thought = {
   observedAtSimMs: [] as number[],
 };
 
+/** Operator possession of a body (see ecs/controlled.ts). Session state only:
+ * deliberately NOT listed in AllComponents, so it is never serialized, restored,
+ * exposed to generated systems or granted by a builder. A restore therefore
+ * cannot hand anyone control; a possessed resident simply comes back as itself. */
+export const Controlled = {
+  controller: [] as string[],
+  sinceSimMs: [] as number[],
+};
+
 /** Private continuing purpose. Serialized state carries no queued-action authority. */
 export const CognitiveControl = {
   ownerKey: [] as string[],

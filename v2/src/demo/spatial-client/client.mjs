@@ -15,6 +15,12 @@ import { worldTheme, sceneLighting } from './theme-view.mjs';
 import { createThemeScene } from './theme-scene.mjs';
 import { createGodCommandState } from './development-control-view.mjs';
 import { generatedDetailsPresentation } from './generated-details-view.mjs';
+import { createModeState, transition as modeTransition, modeKeyEvent, MODE_LABELS } from './modes.mjs';
+import { createBodyControls } from './inhabit-controls.mjs';
+import { createInhabitView } from './inhabit-view.mjs';
+import { createAnalysisView } from './analysis-view.mjs';
+import { createVoiceQueue, createAudioPlayer, createPushToTalk } from './voice-client.mjs';
+import { detectImmersiveVR, enterImmersiveVR } from './xr-entry.mjs';
 
 /** @typedef {import('../spatial-contract').SpatialViewState} SpatialViewState */
 /** @typedef {import('../spatial-contract').SpatialViewEntity} SpatialViewEntity */
@@ -45,6 +51,7 @@ const host = el('canvas-host');
 const scene = new THREE.Scene();
 const weatherScene = createWeatherScene(scene, { reducedMotion });
 const themeScene = createThemeScene(scene);
+const atmosphereRoot = scene.getObjectByName('world-atmosphere'), themeRoot = scene.getObjectByName('theme-presentation-only');
 const camera = new THREE.OrthographicCamera(-11, 11, 9, -9, 0.1, ENVIRONMENT_FAR);
 let renderer, controls, keyLight, skyLight;
 let townLifeView = null, townLifeSignature = '', weatherSignature = '';
@@ -60,17 +67,265 @@ const assetFiles = {
   'actor-a': 'characters/character-a.glb', 'actor-b': 'characters/character-b.glb', 'actor-f': 'characters/character-f.glb',
 };
 
+// ------------------------------------------------------------ Experience --
+// Watch · Inhabit · Analysis. Mode transitions are pure (modes.mjs); this
+// block performs their effects. The snapshot stays authoritative for control
+// and pause: nothing here assumes a request succeeded until a poll shows it.
+const params = new URLSearchParams(location.search);
+/** `?mode=analysis|inhabit` opens a mode on load; `&interview=<name>` seats a resident. */
+let modeState = createModeState(), controlKey = null, pendingControl = false, lastPaused = false, requestedModeApplied = false;
+let viewCamera = camera, voiceEnabled = false, voiceMuted = false, pttMode = null;
+try { voiceMuted = localStorage.getItem('argos.voice.muted') === '1'; } catch {}
+const bodyControls = createBodyControls({ api });
+const player = createAudioPlayer();
+const voice = createVoiceQueue({
+  synthesize: item => api('/api/voice/speak', { text: item.text, ...(item.voice === 'god' ? { voice: 'god' } : { speakerKey: item.speakerKey }) }, { as: 'arrayBuffer', timeoutMs: 30000 }),
+  play: bytes => player.play(bytes), stop: () => player.stop(), onChange: status => onVoiceStatus(status),
+});
+voice.setMuted(voiceMuted);
+const inhabit = createInhabitView({ el, controls: bodyControls, notify, getNode: key => nodes.get(key), voice, reducedMotion,
+  onPauseToggle: () => togglePause(), onRelease: () => void releaseBody(), obstruction: (from, to) => cameraObstruction(from, to) });
+const cameraRay = new THREE.Raycaster(), rayOrigin = new THREE.Vector3(), rayDirection = new THREE.Vector3();
+const shown = object => { for (let at = object; at; at = at.parent) if (!at.visible) return false; return true; };
+/** Distance to the first visible wall/architecture between the body's head and its camera. */
+function cameraObstruction(from, to) {
+  rayOrigin.set(from.x, from.y, from.z); rayDirection.set(to.x - from.x, to.y - from.y, to.z - from.z);
+  const length = rayDirection.length(); if (length < 1e-3) return null;
+  cameraRay.set(rayOrigin, rayDirection.divideScalar(length)); cameraRay.far = length;
+  const solids = [];
+  for (const node of nodes.values()) if (node.entity.asset === 'wall' && node.root.visible) solids.push(node.root);
+  if (townArchitecture?.group) solids.push(townArchitecture.group);
+  for (const hit of cameraRay.intersectObjects(solids, true)) if (shown(hit.object)) return hit.distance;
+  return null;
+}
+const analysis = createAnalysisView({ el, api, notify, voice, getState: () => state, portrait: (key, container) => renderPortrait(key, container) });
+const ptt = createPushToTalk({ transcribe: blob => api('/api/voice/transcribe', blob, { timeoutMs: 45000 }), onState: status => onPttState(status) });
+const unavailable = (error, what) => error?.status === 404 ? `${what} isn’t available on this server yet.` : error?.message || `${what} failed.`;
+
+function dispatchMode(event) {
+  const previous = modeState.mode;
+  // A world that is not running is already still: Analysis neither pauses nor resumes it.
+  const result = modeTransition(modeState, event, { controlled: !!controlKey, paused: state?.paused === true || state?.running !== true });
+  modeState = result.state;
+  for (const effect of result.effects) {
+    if (effect === 'pause') void setPaused(true, { quiet: true });
+    else if (effect === 'resume') void setPaused(false, { quiet: true });
+    else if (effect === 'release-pointer') { if (document.pointerLockElement) document.exitPointerLock?.(); }
+    else if (effect === 'choose-body') openChooser();
+    else if (effect === 'dismiss') closeChooser();
+  }
+  if (modeState.mode !== previous) applyMode(previous, modeState.mode);
+  syncModeChrome();
+}
+function applyMode(previous, mode) {
+  el('app').dataset.mode = mode;
+  if (previous === 'inhabit') { inhabit.exit(); follow = false; el('camera-follow').classList.remove('active'); }
+  if (previous !== mode && (previous === 'analysis' || previous === 'inhabit')) voice.interrupt();
+  if (ptt.state !== 'idle') ptt.cancel();
+  if (controls) controls.enabled = mode !== 'inhabit';
+  if (mode === 'inhabit') { selectedKey = controlKey ?? selectedKey; follow = true; inhabit.enter(); syncPanel(); }
+  if (mode === 'analysis') { analysis.enter(selectedKey); homeCamera(false); }
+  if (mode === 'watch' && previous === 'analysis') homeCamera(false);
+  viewCamera = mode === 'inhabit' ? inhabit.camera : camera;
+  syncTownVisibility();
+  document.title = `Argos · ${MODE_LABELS[mode]}`;
+}
+function syncModeChrome() {
+  const mode = modeState.mode;
+  for (const button of document.querySelectorAll('[data-mode-button]')) button.setAttribute('aria-pressed', String(button.dataset.modeButton === mode));
+  const body = state?.control;
+  el('possession-chip').hidden = !(mode === 'watch' && body);
+  el('possession-name').textContent = body?.name ?? '';
+  const enterLabel = body ? `Return to ${body.name}` : 'Enter as a visitor';
+  if (el('enter-visitor').dataset.label !== enterLabel) {
+    el('enter-visitor').dataset.label = enterLabel; el('enter-visitor').replaceChildren(document.createTextNode(enterLabel));
+    safeText(el('enter-visitor'), 'span', '↗');
+  }
+  const paused = state?.paused === true, seconds = Math.floor((state?.atSimMs ?? 0) / 1000);
+  const clock = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  el('lab-status').textContent = paused ? 'Freeze all motor functions.' : 'The world is still running.';
+  el('lab-clock').textContent = paused ? `FROZEN AT ${clock}` : `LIVE · ${clock}`;
+  el('lab-resume').firstChild.textContent = modeState.returnMode === 'inhabit' && body ? `Back to ${body.name} ` : paused && modeState.pausedByAnalysis ? 'Resume ' : 'Back ';
+}
+async function setPaused(paused, { quiet = false } = {}) {
+  try { await bodyControls[paused ? 'pause' : 'resume'](); await pollOnce().catch(() => {}); if (!quiet) notify(paused ? 'Freeze all motor functions.' : 'The world resumes.'); }
+  catch (error) { notify(error?.status === 404 ? (paused ? 'Pausing isn’t available on this server yet — the world keeps running.' : 'Resume isn’t available on this server yet.') : error.message, true); }
+}
+function togglePause() { void setPaused(state?.paused !== true); }
+async function takeControl(actorKey) {
+  if (!actorKey) return;
+  if (actorKey === controlKey) { dispatchMode({ type: 'select', mode: 'inhabit' }); return; }
+  closeChooser(); pendingControl = true;
+  try { await ensureRunning(); await bodyControls.take(actorKey); await pollOnce(); }
+  catch (error) { pendingControl = false; notify(unavailable(error, 'Taking control'), true); }
+}
+async function enterAsVisitor(name = '') {
+  if (controlKey) { dispatchMode({ type: 'select', mode: 'inhabit' }); return; }
+  closeChooser(); pendingControl = true;
+  try { await ensureRunning(); await bodyControls.visitor(name.trim() ? { name: name.trim().slice(0, 40) } : {}); await pollOnce(); }
+  catch (error) { pendingControl = false; notify(unavailable(error, 'Entering as a visitor'), true); }
+}
+/** Stepping inside a world that hasn't begun starts it first. */
+async function ensureRunning() {
+  if (state?.status !== 'ready') return;
+  await api('/api/start', {}); notify('The world begins.');
+}
+async function releaseBody() {
+  try { await bodyControls.release(); await pollOnce(); notify('Released. Their own mind takes the wheel again.'); }
+  catch (error) { notify(unavailable(error, 'Releasing'), true); }
+}
+function interview(actorKey) {
+  if (!actorKey) return;
+  if (modeState.mode !== 'analysis') dispatchMode({ type: 'select', mode: 'analysis' });
+  analysis.select(actorKey);
+}
+function openChooser() {
+  const list = el('chooser-residents'); list.replaceChildren();
+  for (const actor of state?.actors ?? []) {
+    const button = document.createElement('button'); button.type = 'button';
+    const accent = actorAccent(state.entities.find(e => e.key === actor.key) ?? actor);
+    const avatar = safeText(button, 'span', actor.name.slice(0, 1), 'avatar'); avatar.style.color = accent; avatar.style.background = `${accent}22`;
+    const text = safeText(button, 'span', ''); safeText(text, 'strong', actor.name); safeText(text, 'small', actor.room);
+    button.addEventListener('click', () => void takeControl(actor.key)); list.append(button);
+  }
+  const supported = !!state && ('control' in state || 'paused' in state);
+  el('chooser-note').hidden = supported || !state;
+  el('chooser-note').textContent = 'This server doesn’t report possession support yet. Choosing a body will tell you if it isn’t available.';
+  el('body-chooser').hidden = false;
+  setTimeout(() => el('visitor-name').focus(), 30);
+}
+function closeChooser() { el('body-chooser').hidden = true; }
+
+/** Experience state from each accepted snapshot. */
+function syncExperience(next) {
+  const key = next.control?.actorKey ?? null;
+  // The body view learns its body before any mode change enters it.
+  inhabit.sync(next, performance.now());
+  if (key !== controlKey) {
+    const acquired = !!key && pendingControl;
+    controlKey = key; if (key) pendingControl = false;
+    dispatchMode({ type: 'controlChanged', controlled: !!key, acquired });
+  }
+  const paused = next.paused === true;
+  if (lastPaused && !paused && modeState.mode === 'analysis' && modeState.pausedByAnalysis) modeState = modeTransition(modeState, { type: 'externalResume' }, {}).state;
+  lastPaused = paused;
+  el('app').classList.toggle('frozen', paused);
+  if (modeState.mode === 'analysis') analysis.sync();
+  syncModeChrome();
+  if (!requestedModeApplied) {
+    requestedModeApplied = true;
+    const requested = params.get('mode');
+    if (requested && requested !== modeState.mode) {
+      if (requested === 'inhabit' && controlKey) dispatchMode({ type: 'select', mode: 'inhabit' });
+      else if (requested !== 'inhabit') dispatchMode({ type: 'select', mode: requested });
+      const subject = params.get('interview');
+      if (requested === 'analysis' && subject) { const actor = next.actors.find(a => a.key === subject || a.name.toLowerCase() === subject.toLowerCase()); if (actor) analysis.select(actor.key); }
+    }
+  }
+}
+function onVoiceStatus(status) {
+  if (!status.available && voiceEnabled) { voiceEnabled = false; syncVoiceChrome(); }
+  el('voice-toggle').dataset.state = status.playing?.phase === 'playing' ? 'speaking' : '';
+  inhabit.voiceStatus(status, performance.now());
+  analysis.voiceStatus(status);
+}
+function syncVoiceChrome() {
+  const button = el('voice-toggle');
+  button.disabled = !voiceEnabled;
+  button.setAttribute('aria-pressed', String(voiceEnabled && !voiceMuted));
+  button.title = !voiceEnabled ? 'Voices unavailable on this server' : voiceMuted ? 'Voices muted (M)' : 'Voices on (M)';
+  button.classList.toggle('muted', !voiceEnabled || voiceMuted);
+  for (const id of ['god-mic', 'interview-mic']) el(id).hidden = !voiceEnabled || !ptt.supported;
+}
+function toggleVoice() {
+  if (!voiceEnabled) { notify('Voices aren’t available on this server.', true); return; }
+  voiceMuted = !voiceMuted; voice.setMuted(voiceMuted);
+  try { localStorage.setItem('argos.voice.muted', voiceMuted ? '1' : '0'); } catch {}
+  syncVoiceChrome(); notify(voiceMuted ? 'Voices muted.' : 'Voices on.');
+}
+async function probeVoice() {
+  try { const cast = await api('/api/voice/cast'); voiceEnabled = cast?.enabled !== false; }
+  catch { voiceEnabled = false; }
+  voice.setAvailable(voiceEnabled); syncVoiceChrome();
+}
+async function startPtt() {
+  if (!voiceEnabled || !ptt.supported) { notify(voiceEnabled ? 'This browser can’t record audio.' : 'Voice input isn’t available on this server.', true); return; }
+  pttMode = modeState.mode; player.unlock();
+  try { await ptt.start(); } catch (error) { notify(error.message, true); }
+}
+async function stopPtt() {
+  if (ptt.state === 'idle') return;
+  try {
+    const text = await ptt.stop(); if (!text) return;
+    if (pttMode === 'inhabit' && modeState.mode === 'inhabit') void inhabit.say(text);
+    else if (pttMode === 'analysis' && modeState.mode === 'analysis') void analysis.submitSpoken(text);
+  } catch (error) { notify(unavailable(error, 'Transcription'), true); }
+}
+function onPttState(status) {
+  const lab = modeState.mode === 'analysis';
+  el('ptt-indicator').hidden = true; el('lab-ptt').hidden = true;
+  const indicator = lab ? el('lab-ptt') : el('ptt-indicator'), label = lab ? el('lab-ptt-label') : el('ptt-label');
+  if (status !== 'idle') {
+    indicator.hidden = false; indicator.dataset.state = status;
+    const who = lab ? (analysis.focus === 'interview' && analysis.subject ? state?.actors.find(a => a.key === analysis.subject)?.name : 'God') : inhabit.talkTarget()?.name;
+    label.textContent = status === 'transcribing' ? 'Transcribing…' : `Listening${who ? ` · to ${who}` : ''} — release V to send`;
+  }
+  const recording = status === 'recording' || status === 'starting';
+  el('god-mic').classList.toggle('recording', recording && lab && analysis.focus === 'god');
+  el('interview-mic').classList.toggle('recording', recording && lab && analysis.focus === 'interview');
+}
+const portraitCamera = new THREE.PerspectiveCamera(22, 96 / 116, .05, 60), portraitLight = new THREE.DirectionalLight('#ffffff', 2.4);
+let portraitRenderer = null;
+/** A still portrait of the resident's actual model, isolated against the lab backdrop. */
+function renderPortrait(key, container) {
+  container.classList.remove('has-render');
+  container.querySelector('canvas')?.remove();
+  const node = nodes.get(key); if (!node || !renderer) return;
+  if (!node.loaded) setTimeout(() => { if (analysis.subject === key && modeState.mode === 'analysis') renderPortrait(key, container); }, 700);
+  try {
+    if (!portraitRenderer) {
+      portraitRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+      portraitRenderer.setPixelRatio(Math.min(devicePixelRatio, 2)); portraitRenderer.setSize(96, 116, false);
+      portraitRenderer.outputColorSpace = THREE.SRGBColorSpace; portraitRenderer.toneMapping = THREE.ACESFilmicToneMapping; portraitRenderer.toneMappingExposure = 1.25;
+      portraitRenderer.setClearColor(0x000000, 0);
+    }
+    const height = node.entity.size?.y ?? 1.65, yaw = node.root.rotation.y + .38, p = node.root.position;
+    portraitCamera.position.set(p.x + Math.sin(yaw) * 3.1, p.y + height * .8, p.z + Math.cos(yaw) * 3.1);
+    portraitCamera.lookAt(p.x, p.y + height * .7, p.z);
+    portraitLight.position.copy(portraitCamera.position).add(new THREE.Vector3(0, 1.5, 0)); portraitLight.target.position.set(p.x, p.y + height * .7, p.z);
+    const hidden = [];
+    for (const child of scene.children) if (child !== node.root && !child.isLight && child.visible) { child.visible = false; hidden.push(child); }
+    const fog = scene.fog, rootVisible = node.root.visible; scene.fog = null; node.root.visible = true;
+    scene.add(portraitLight, portraitLight.target);
+    portraitRenderer.render(scene, portraitCamera);
+    scene.remove(portraitLight, portraitLight.target);
+    for (const child of hidden) child.visible = true;
+    scene.fog = fog; node.root.visible = rootVisible;
+    container.prepend(portraitRenderer.domElement); container.classList.add('has-render');
+  } catch (error) { console.warn('Portrait unavailable:', error.message); }
+}
+
 function notify(message, error = false) {
   clearTimeout(toastTimer); el('toast').textContent = message; el('toast').classList.toggle('error', error); el('toast').hidden = false;
   toastTimer = setTimeout(() => { el('toast').hidden = true; }, error ? 6500 : 3800);
 }
-async function api(path, body, { timeoutMs = 12000 } = {}) {
+/** The one authenticated transport. JSON by default; a Blob body is sent raw
+ * with its own type (voice transcription); `as: 'arrayBuffer'` returns bytes
+ * (voice synthesis). Errors carry `status` and any `retryAfterSeconds`. */
+async function api(path, body, { timeoutMs = 12000, as = 'json', keepalive = false } = {}) {
+  const raw = typeof Blob !== 'undefined' && body instanceof Blob;
   const response = await fetch(path, { method: body === undefined ? 'GET' : 'POST',
-    headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }), cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
-  const content = response.headers.get('content-type')?.includes('application/json') ? await response.json() : undefined;
-  if (!response.ok) throw new Error(content?.error || (response.status === 401 || response.status === 403 ? 'This world link needs its access key. Open the complete link supplied by the server.' : `World request failed (${response.status}).`));
-  return content;
+    headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': raw ? body.type || 'application/octet-stream' : 'application/json' }) },
+    ...(body === undefined ? {} : { body: raw ? body : JSON.stringify(body) }), cache: 'no-store', keepalive, signal: AbortSignal.timeout(timeoutMs) });
+  const json = response.headers.get('content-type')?.includes('application/json');
+  if (!response.ok) {
+    const content = json ? await response.json().catch(() => undefined) : undefined;
+    const message = content?.error || (response.status === 401 || response.status === 403 ? 'This world link needs its access key. Open the complete link supplied by the server.' : `World request failed (${response.status}).`);
+    const retryAfter = Number(content?.retryAfterSeconds ?? response.headers.get('retry-after'));
+    throw Object.assign(new Error(message), { status: response.status, ...(Number.isFinite(retryAfter) ? { retryAfterSeconds: retryAfter } : {}) });
+  }
+  if (as === 'arrayBuffer') return response.arrayBuffer();
+  return json ? response.json() : undefined;
 }
 function safeText(parent, tag, text, className) {
   const node = document.createElement(tag); node.textContent = text; if (className) node.className = className; parent.append(node); return node;
@@ -319,9 +574,11 @@ function syncWorld(next) {
   const architectureChanged = syncTownArchitecture(next);
   syncTownWeather(next);
   cueTracker.sync(next, performance.now());
+  if (modeState.mode === 'inhabit' && next.control?.actorKey && next.actors.some(a => a.key === next.control.actorKey)) selectedKey = next.control.actorKey;
   if (!selectedKey || !next.actors.some(a => a.key === selectedKey)) selectedKey = next.actors[0]?.key ?? null;
   if (roomChanged || changedSource || architectureChanged) fitWorldLighting();
   if (initializeOverview) homeCamera(false);
+  syncExperience(next);
   syncTownVisibility();
   syncPanel();
 }
@@ -456,6 +713,12 @@ function homeCamera(reset = true) {
   const frame = overviewFrame(state?.rooms ?? [], cameraFramingEntities(), host.clientWidth, host.clientHeight);
   requestedOverview = frame;
   applyOverviewFrame(camera, controls, frame);
+  if (modeState.mode === 'analysis') {
+    // The lab panels flank the frozen diorama; fit the town between them.
+    const panels = (el('god-console').offsetWidth || 380) + (el('interview-panel').offsetWidth || 380) + 72;
+    const between = overviewFrame(state?.rooms ?? [], cameraFramingEntities(), Math.max(320, host.clientWidth - panels), host.clientHeight);
+    camera.zoom = Math.min(frame.zoom, between.zoom * 1.08);
+  }
   // Atmosphere extends beyond the town, but must not shrink its overview fit.
   camera.far = Math.max(camera.far, ENVIRONMENT_FAR); camera.updateProjectionMatrix();
   updateCameraDiagnostics();
@@ -483,8 +746,9 @@ function syncPanel() {
   const actor = state.actors.find(a => a.key === selectedKey), view = state.entities.find(e => e.key === selectedKey);
   const clockSeconds = Math.floor(state.atSimMs / 1000);
   el('clock').textContent = `${String(Math.floor(clockSeconds / 60)).padStart(2, '0')}:${String(clockSeconds % 60).padStart(2, '0')}`;
-  el('connection').textContent = state.running ? 'World is living' : state.status === 'stopped' ? 'World stopped' : 'Ready to begin';
-  el('connection-dot').className = `status-dot ${state.running ? 'live' : ''}`;
+  const frozen = state.paused === true;
+  el('connection').textContent = frozen ? 'World frozen' : state.running ? 'World is living' : state.status === 'stopped' ? 'World stopped' : 'Ready to begin';
+  el('connection-dot').className = `status-dot ${frozen ? 'frozen' : state.running ? 'live' : ''}`;
   el('run-mode').textContent = state.mode === 'live' ? 'Live NPC cognition' : state.development?.enabled ? 'Manual NPCs · God AI available' : 'Manual test mode · no AI';
   el('start').hidden = state.running || state.status === 'stopped'; el('start').disabled = state.status !== 'ready';
   el('stop').hidden = !state.running; el('stop').disabled = !state.running;
@@ -495,20 +759,37 @@ function syncPanel() {
   el('roster-title').textContent = presentation.rosterTitle;
   el('stage').classList.toggle('town-view', state.scenario?.id === 'town');
   el('camera-follow').disabled = !actor;
-  const nextPanel = JSON.stringify([selectedKey, state.actors.map(a => [a.key, a.name, a.room, state.entities.find(e => e.key === a.key)?.color])]);
+  const nextPanel = JSON.stringify([selectedKey, controlKey, state.actors.map(a => { const e = state.entities.find(row => row.key === a.key); return [a.key, a.name, a.room, a.action ?? e?.activity?.action, e?.color]; })]);
   if (nextPanel !== panelSignature) {
     panelSignature = nextPanel; const scrollTop = el('characters').scrollTop; el('characters').replaceChildren();
-    state.actors.forEach(a => {
-      const button = document.createElement('button'); button.className = `character-button${a.key === selectedKey ? ' selected' : ''}`;
-      button.setAttribute('aria-pressed', String(a.key === selectedKey));
-      const avatar = safeText(button, 'span', a.name.slice(0, 1), 'avatar');
-      const accent = actorAccent(state.entities.find(e => e.key === a.key) ?? a);
-      avatar.style.color = accent; avatar.style.background = `${accent}22`;
-      const text = safeText(button, 'span', '');
-      safeText(text, 'strong', a.name); safeText(text, 'small', a.room); button.addEventListener('click', () => selectActor(a.key)); el('characters').append(button);
-    });
+    for (const a of state.actors) {
+      const entity = state.entities.find(e => e.key === a.key), accent = actorAccent(entity ?? a), mine = a.key === controlKey;
+      const row = safeText(el('characters'), 'div', '', `resident-row${a.key === selectedKey ? ' selected' : ''}`); row.setAttribute('role', 'listitem');
+      const select = safeText(row, 'button', '', 'resident-select'); select.type = 'button';
+      select.setAttribute('aria-pressed', String(a.key === selectedKey)); select.setAttribute('aria-label', `${a.name}, ${a.room}`);
+      const avatar = safeText(select, 'span', a.name.slice(0, 1), 'avatar'); avatar.style.color = accent; avatar.style.background = `${accent}22`;
+      if (mine) avatar.dataset.controlled = 'true';
+      const text = safeText(select, 'span', '', 'resident-text'), name = safeText(text, 'strong', a.name);
+      if (mine) safeText(name, 'span', 'You', 'resident-tag');
+      const status = safeText(text, 'small', ''); safeText(status, 'b', a.room);
+      const doing = a.action ?? entity?.activity?.action; if (doing) status.append(document.createTextNode(` · ${doing}`));
+      select.addEventListener('click', () => selectActor(a.key));
+      const actions = safeText(row, 'div', '', 'resident-actions');
+      const take = safeText(actions, 'button', mine ? 'Return' : 'Take control', 'take'); take.type = 'button';
+      take.title = mine ? `Return to ${a.name}` : `Possess ${a.name}; their own mind rests while you drive`;
+      take.addEventListener('click', () => void takeControl(a.key));
+      const ask = safeText(actions, 'button', 'Interview'); ask.type = 'button'; ask.title = `Freeze the world and interview ${a.name}`;
+      ask.addEventListener('click', () => interview(a.key));
+    }
     el('characters').scrollTop = scrollTop;
   }
+  el('detail-name').textContent = actor ? `${actor.name} · current thought` : 'Current thought';
+  el('detail-take').disabled = !actor; el('detail-interview').disabled = !actor;
+  const detailTake = actor && actor.key === controlKey ? `Return to ${actor.name}` : 'Take control';
+  if (el('detail-take').dataset.label !== detailTake) { el('detail-take').dataset.label = detailTake; el('detail-take').replaceChildren(document.createTextNode(detailTake)); safeText(el('detail-take'), 'span', '↗'); }
+  const weather = weatherPresentation(state);
+  el('weather-chip').hidden = !weather;
+  if (weather) { el('weather-chip-icon').textContent = weather.condition === 'rain' ? '☂' : weather.condition === 'cloudy' ? '☁' : '☀'; el('weather-chip-label').textContent = weather.label; }
   const thought = actor?.thought;
   el('thought').textContent = thought?.text ? `“${thought.text}”` : state.mode === 'manual' ? 'Manual mode: no model-authored thoughts. Test a native action below.' : 'No articulated thought yet. Their actions don’t always need words.';
   el('thought').classList.toggle('empty', !thought?.text);
@@ -748,7 +1029,7 @@ function syncGeneratedDetails() {
   }
 }
 function projectLabel(label, point) {
-  const projected = point.clone().project(camera); label.style.left = `${(projected.x * .5 + .5) * host.clientWidth}px`;
+  const projected = point.clone().project(viewCamera); label.style.left = `${(projected.x * .5 + .5) * host.clientWidth}px`;
   label.style.top = `${(-projected.y * .5 + .5) * host.clientHeight}px`; label.style.opacity = isProjectedPointVisible(projected) ? '1' : '0';
 }
 function drawWorldCues(now) {
@@ -775,7 +1056,7 @@ function drawWorldCues(now) {
     const point = cue.kind === 'sound' ? anchor.view.getWorldPosition(new THREE.Vector3())
       : anchor.root.position.clone();
     point.y += cue.kind === 'speech' ? (anchor.entity.size?.y ?? 1.65) + .65 : .65;
-    const projected = point.project(camera);
+    const projected = point.project(viewCamera);
     label.hidden = !isProjectedPointVisible(projected);
     if (label.hidden) continue;
     const width = label.offsetWidth, height = label.offsetHeight;
@@ -826,15 +1107,25 @@ function poseHeldPhone(node) {
 function animate(now) {
   frame = requestAnimationFrame(animate); const delta = Math.min(.07, (now - previousFrameWall) / 1000); previousFrameWall = now;
   const environmentAt = environmentClock.sample(now);
+  const inhabiting = modeState.mode === 'inhabit', frozen = state?.paused === true;
+  // Inhabit drives its own perspective camera from the body's shown position.
+  const bodyCamera = inhabit.frame(now, delta);
+  viewCamera = bodyCamera ?? camera; viewCamera.updateMatrixWorld();
+  const cameraPosition = viewCamera.getWorldPosition(new THREE.Vector3());
   for (const [key, node] of nodes) {
     const shown = motionPlayback.sample(key, now);
     if (shown) { node.root.position.set(shown.position.x, shown.position.y, shown.position.z); node.root.rotation.y = shown.yaw; }
     setAnimation(node, animationFor(node.entity, shown?.moving === true));
     // No idle animation clock can move an entity root or alter its ECS state.
-    node.mixer?.update(reducedMotion ? 0 : delta);
+    // A frozen world holds every pose ("freeze all motor functions").
+    node.mixer?.update(reducedMotion || frozen ? 0 : delta);
     poseTreeIncident(node, environmentAt);
     if (labels.has(key)) {
-      const label = labels.get(key); label.hidden = exteriorOccludes(node.entity, state?.rooms ?? [], revealedRooms);
+      const label = labels.get(key);
+      label.hidden = exteriorOccludes(node.entity, state?.rooms ?? [], revealedRooms)
+        // In a body you see names only of people near you, never your own over your head.
+        || inhabiting && (key === controlKey || node.root.position.distanceTo(cameraPosition) > 16);
+      label.classList.toggle('controlled', key === controlKey);
       if (!label.hidden) projectLabel(label, node.root.position.clone().add(new THREE.Vector3(0, (node.entity.size?.y ?? 1.65) + .27, 0)));
     }
   }
@@ -846,18 +1137,24 @@ function animate(now) {
     label.hidden = !node || exteriorOccludes(node.entity, state?.rooms ?? [], revealedRooms);
     if (node && !label.hidden) projectLabel(label, node.root.position.clone().add(new THREE.Vector3(0, (node.entity.size?.y ?? .4) + .16, 0)));
   }
-  const selected = nodes.get(selectedKey); selectedRing.visible = !!selected && !exteriorOccludes(selected.entity, state?.rooms ?? [], revealedRooms);
+  const selected = nodes.get(selectedKey); selectedRing.visible = !inhabiting && !!selected && !exteriorOccludes(selected.entity, state?.rooms ?? [], revealedRooms);
   if (selected) { selectedRing.position.set(selected.root.position.x, selected.root.position.y + .008, selected.root.position.z);
-    if (follow && controls) { const target = selected.root.position.clone().add(new THREE.Vector3(0, .6, 0)); const shift = target.sub(controls.target).multiplyScalar(reducedMotion ? 1 : .06); controls.target.add(shift); camera.position.add(shift); } }
+    if (follow && controls && !inhabiting) { const target = selected.root.position.clone().add(new THREE.Vector3(0, .6, 0)); const shift = target.sub(controls.target).multiplyScalar(reducedMotion ? 1 : .06); controls.target.add(shift); camera.position.add(shift); } }
   for (const row of rooms.values()) {
     const north = row.room.building?.front === 'north';
     projectLabel(row.label, new THREE.Vector3(row.room.bounds.x + row.room.bounds.width / 2, .03, north ? row.room.bounds.z - .45 : row.room.bounds.z + row.room.bounds.depth + .45));
   }
   controls?.update(); drawWorldCues(now);
-  weatherScene.draw(environmentAt, { camera, interiors,
+  weatherScene.draw(environmentAt, { camera: viewCamera, interiors,
     focusPosition: selected && (follow || revealedRooms.has(selected.entity.roomId))
       ? selected.root.position.clone().add(new THREE.Vector3(0, (selected.entity.size?.y ?? 1.65) * .75, 0)) : null });
-  if (renderer) renderer.render(scene, camera);
+  if (renderer && modeState.mode === 'analysis') {
+    // The lab shows the town as a clean model: no sky, haze, sea or clouds.
+    const fog = scene.fog, atmosphere = atmosphereRoot?.visible, dressing = themeRoot?.visible;
+    scene.fog = null; if (atmosphereRoot) atmosphereRoot.visible = false; if (themeRoot) themeRoot.visible = false;
+    renderer.render(scene, viewCamera);
+    scene.fog = fog; if (atmosphereRoot) atmosphereRoot.visible = atmosphere; if (themeRoot) themeRoot.visible = dressing;
+  } else if (renderer) renderer.render(scene, viewCamera);
   if (now - lastGraphicsDiagnosticAt > 1000) { updateCameraDiagnostics(); lastGraphicsDiagnosticAt = now; }
 }
 function initializeRenderer() {
@@ -879,17 +1176,22 @@ function initializeRenderer() {
     fitWorldLighting();
     const resize = () => { const w = host.clientWidth, h = host.clientHeight, aspect = w / Math.max(1, h); const half = 8.8;
       camera.left = -half * aspect; camera.right = half * aspect; camera.top = half; camera.bottom = -half; camera.updateProjectionMatrix(); renderer.setSize(w, h);
+      inhabit.resize(w, h);
       if (overviewMode) homeCamera(false); };
     new ResizeObserver(resize).observe(host); resize(); homeCamera(false);
     let down = null;
     renderer.domElement.addEventListener('pointerdown', event => { down = { x: event.clientX, y: event.clientY }; });
+    inhabit.attach(renderer.domElement);
     renderer.domElement.addEventListener('pointerup', event => {
+      if (modeState.mode === 'inhabit') return;
       if (!down || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 5) return;
       const rect = host.getBoundingClientRect(); pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
-      raycaster.setFromCamera(pointer, camera);
+      raycaster.setFromCamera(pointer, viewCamera);
       const actors = [...nodes].filter(([, n]) => n.entity.kind === 'actor');
       const hits = actors.flatMap(([key, node]) => raycaster.intersectObject(node.root, true).map(hit => ({ key, distance: hit.distance }))).sort((a, b) => a.distance - b.distance);
-      if (hits[0]) selectActor(hits[0].key, true);
+      if (!hits[0]) return;
+      selectActor(hits[0].key, modeState.mode === 'watch');
+      if (modeState.mode === 'analysis') analysis.select(hits[0].key);
     });
     renderer.domElement.addEventListener('webglcontextlost', event => { event.preventDefault(); el('renderer-error').hidden = false; el('renderer-error').textContent = 'The graphics context was interrupted. The simulation remains separate. Reload this page to reconnect the view.'; });
     frame = requestAnimationFrame(animate);
@@ -944,6 +1246,57 @@ for (const button of el('house-spirit').querySelectorAll('[data-world-example]')
 el('action-type').addEventListener('change', syncPanel);
 el('action-form').addEventListener('submit', event => { event.preventDefault(); if (!selectedKey) return;
   void handle(el('action-form'), () => api('/api/action', { actorKey: selectedKey, type: el('action-type').value, targetKey: el('action-target').value, ...(el('action-content').value.trim() ? { content: el('action-content').value.trim() } : {}) }), 'Operator action submitted to the native executor.'); });
-window.addEventListener('pagehide', () => cancelAnimationFrame(frame));
+// ---------------------------------------------------- Experience controls --
+for (const button of document.querySelectorAll('[data-mode-button]')) button.addEventListener('click', () => dispatchMode({ type: 'select', mode: button.dataset.modeButton }));
+el('enter-visitor').addEventListener('click', () => void enterAsVisitor());
+el('enter-analysis').addEventListener('click', () => dispatchMode({ type: 'select', mode: 'analysis' }));
+el('detail-take').addEventListener('click', () => void takeControl(selectedKey));
+el('detail-interview').addEventListener('click', () => interview(selectedKey));
+el('possession-return').addEventListener('click', () => dispatchMode({ type: 'select', mode: 'inhabit' }));
+el('possession-release').addEventListener('click', () => void releaseBody());
+el('lab-resume').addEventListener('click', () => dispatchMode({ type: 'escape' }));
+el('visitor-form').addEventListener('submit', event => { event.preventDefault(); void enterAsVisitor(el('visitor-name').value); });
+el('chooser-close').addEventListener('click', closeChooser);
+el('body-chooser').addEventListener('click', event => { if (event.target === el('body-chooser')) closeChooser(); });
+el('voice-toggle').addEventListener('click', toggleVoice);
+for (const [id, target] of [['god-mic', 'god'], ['interview-mic', 'interview']]) {
+  const button = el(id);
+  button.addEventListener('pointerdown', event => { event.preventDefault(); analysis.setFocus(target); void startPtt(); });
+  for (const type of ['pointerup', 'pointerleave', 'pointercancel']) button.addEventListener(type, () => void stopPtt());
+}
+// Audio may only start after a user gesture.
+window.addEventListener('pointerdown', () => player.unlock(), { capture: true });
+const isTyping = target => target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+window.addEventListener('keydown', event => {
+  player.unlock();
+  const typing = isTyping(event.target), mode = modeState.mode;
+  if (!el('body-chooser').hidden) { if (event.key === 'Escape') { event.preventDefault(); closeChooser(); } return; }
+  if (mode === 'inhabit' && inhabit.keydown(event, { typing })) return;
+  const plain = !typing && !event.metaKey && !event.ctrlKey && !event.altKey;
+  if (plain && event.code === 'KeyV') { event.preventDefault(); if (!event.repeat && mode !== 'watch') void startPtt(); return; }
+  if (plain && event.code === 'KeyM' && !event.repeat) { toggleVoice(); return; }
+  if (plain && event.code === 'KeyP' && !event.repeat && mode !== 'analysis') { togglePause(); return; }
+  if (event.key === 'Escape' && mode === 'inhabit' && inhabit.escape()) { event.preventDefault(); return; }
+  const modeEvent = modeKeyEvent(event, { typing, verbMenuOpen: mode === 'inhabit' && inhabit.verbMenuOpen });
+  if (modeEvent) { event.preventDefault(); dispatchMode(modeEvent); }
+});
+window.addEventListener('keyup', event => {
+  if (event.code === 'KeyV') void stopPtt();
+  inhabit.keyup(event);
+});
+window.addEventListener('blur', () => { inhabit.blur(); if (ptt.state === 'recording') void stopPtt(); });
+void detectImmersiveVR().then(supported => { el('enter-vr').hidden = !supported; });
+el('enter-vr').addEventListener('click', () => {
+  // TODO(webxr): see xr-entry.mjs — immersive Inhabit reuses the same body controls.
+  enterImmersiveVR({ renderer, controls: bodyControls, inhabit }).catch(error => notify(error.message));
+});
+syncVoiceChrome(); void probeVoice();
+window.addEventListener('pagehide', () => {
+  cancelAnimationFrame(frame);
+  // Analysis froze the world for this viewer; don't leave it frozen when the tab closes.
+  if (modeState.mode === 'analysis' && modeState.pausedByAnalysis && state?.paused) {
+    void api('/api/resume', {}, { keepalive: true }).catch(() => {});
+  }
+});
 window.addEventListener('pageshow', event => { if (event.persisted) { previousFrameWall = performance.now(); frame = requestAnimationFrame(animate); } });
 initializeRenderer(); void poll();

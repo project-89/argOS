@@ -1,3 +1,4 @@
+import { isOperatorControlled } from "../ecs/controlled";
 import type { World } from "../ecs/world";
 import type { SystemDefinition, SystemContext, SystemRegistry } from "../ecs/dynamic-systems";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
@@ -1476,6 +1477,9 @@ export function runActorControlStep(world: World, eid: number, registry: SystemR
     maybeCaptureStimulusAsMemory(world, event);
     addPerception(world, eid, event);
   }
+  // Operator possession: the body still perceives and remembers (above), but
+  // its own mind does not continue, select or resume anything for it.
+  if (isOperatorControlled(world, eid)) return false;
   if (resumeDeferredGoals(world, eid)) wakeForegroundCognition(world, eid, { cause: "goal_resumed" });
   // Rich receipt appraisal is asynchronous interpretation, not ownership of
   // the actor's body or immediate reaction. It admits against its own sources.

@@ -59,6 +59,15 @@ export interface SpatialDevelopmentView {
     status: "queued" | "working" | "completed" | "failed" | "cancelled"; atSimMs: number }>;
   capabilities: string[];
 }
+/** Operator-only view of the body the operator currently drives (Inhabit mode).
+ * `heard` comes from that body's own social memory: only speech it really heard. */
+export interface SpatialControlView {
+  actorKey: string; name: string; visitor: boolean;
+  /** Things within ~3 m and the native verbs this body can use on each now. */
+  nearby: Array<{ key: string; name: string; kind: "actor" | "prop"; distance: number; verbs: string[] }>;
+  /** Newest last, at most 20. */
+  heard: Array<{ id: string; speaker: string; text: string; atSimMs: number }>;
+}
 export interface SpatialViewState {
   sourceId: string; atSimMs: number; tick: number; running: boolean;
   status: "ready" | "running" | "stopped";
@@ -77,4 +86,8 @@ export interface SpatialViewState {
   storyFeed?: Array<{ id: string; atSimMs: number; text: string; spirit: string; phase?: string; tension?: number }>;
   growth: { status: "available" | "built" | "gated"; summary: string };
   limits: { seconds: number; ai: boolean; autonomousGrowth: boolean };
+  /** Present while the operator drives a body. Operator-only (not in /api/scene). */
+  control?: SpatialControlView;
+  /** Simulation time and minds are frozen by the operator. */
+  paused: boolean;
 }

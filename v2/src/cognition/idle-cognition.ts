@@ -5,6 +5,7 @@
  * Physics, needs, planning, reflection and world-building keep their own clocks.
  * This runtime-only ledger deliberately starts fresh when a world is restored.
  */
+import { isOperatorControlled } from "../ecs/controlled";
 import { entityExists, getRelationTargets, hasComponent } from "bitecs";
 import type { World } from "../ecs/world";
 import { readSimulationTime } from "../ecs/simulation-time";
@@ -126,7 +127,7 @@ export interface ForegroundReadinessOptions {
 }
 export interface ForegroundCognitionReadiness {
   ready: boolean;
-  reason: "inactive" | "speaking" | "occupied" | "speech_floor" | "first_decision" | "new_stimulus" | "critical_need" | "actionable_plan" | "state_changed" | "idle_deadline" | "evidence_deadline" | "quiet" | "rejection_backoff";
+  reason: "inactive" | "controlled" | "speaking" | "occupied" | "speech_floor" | "first_decision" | "new_stimulus" | "critical_need" | "actionable_plan" | "state_changed" | "idle_deadline" | "evidence_deadline" | "quiet" | "rejection_backoff";
   quietDecisions: number;
   nextCheckAtMs: number | null;
   /** Typed causes only; no raw perception, message or private memory content. */
@@ -244,6 +245,8 @@ export function getForegroundCognitionReadiness(world: World, eid: number, optio
     ...(state?.listening ? { listening: { ...state.listening, executionIds: [...state.listening.executionIds] } } : {}),
   });
   if (!entityExists(world, eid) || !hasComponent(world, eid, Agent) || !Agent.active[eid]) return result(false, "inactive");
+  // A possessed body is driven by the operator; its own foreground mind waits.
+  if (isOperatorControlled(world, eid)) return result(false, "controlled");
   const recovery = rejectionRecovery.get(world)?.get(eid);
   if (recovery && !options.hasQueuedStimuli && rejectionBasisCurrent(world, eid, recovery.basis) && readSimulationTime(world) < recovery.nextSimMs)
     return { ...result(false, "rejection_backoff"), nextCheckAtMs: recovery.nextSimMs };

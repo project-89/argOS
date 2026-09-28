@@ -28,7 +28,9 @@ type SeatEgress = { actorKey: string; seat: number; seatKey: string; collider: O
 type Work = { requestId: string; actor: number; actorKey: string; target: number; targetKey: string; targetRoom: number;
   roomKey: string; targetPosition: SpatialPoint; actorPosition: SpatialPoint; actorRoom: number; actorRoomKey: string;
   geometry: RoomGeometry | TargetGeometry; arrival: SpatialPoint; path: readonly SpatialPoint[]; cursor: number; startedAt: number; lastAt: number;
-  moved: boolean; arrivalBlockedSince?: number; signal?: AbortSignal; onFinish?: (outcome: SpatialOutcome) => void };
+  moved: boolean; arrivalBlockedSince?: number; signal?: AbortSignal; onFinish?: (outcome: SpatialOutcome) => void;
+  /** A transient ground-point walk: target is the destination room, arrival is the point. */
+  point?: boolean };
 
 // A transient crossing can delay a final approach, but cannot strand its action
 // forever. This is native source-time congestion, not a new decision controller.
@@ -155,6 +157,14 @@ export function createSpatialWorld(world: World, options: {
     return { room: roomId, roomKey: liveRoom(roomId)!.key, row, position: p,
       anchors: row.anchors.map(a => ({ x: p.x + a.x, y: p.y + a.y })), reach: row.reach };
   }
+  /** The admitted destination is unchanged: the same live target geometry, or
+   * for a point walk the same live destination room. */
+  function destinationCurrent(row: Work) {
+    if (row.point) return key(row.target) === row.targetKey && liveRoom(row.target)?.key === row.roomKey && rooms.get(row.target) === row.geometry;
+    const goal = destination(row.target);
+    return !!goal && key(row.target) === row.targetKey && goal.row === row.geometry && goal.room === row.targetRoom
+      && goal.roomKey === row.roomKey && spatialDistance(goal.position, row.targetPosition) <= 1e-8;
+  }
   function arrivalAvailable(actor: number, arrival: SpatialPoint) {
     const separation = Math.max(radius * 2, 1e-6);
     for (const other of query(world, [Agent, Position])) {
@@ -167,11 +177,9 @@ export function createSpatialWorld(world: World, options: {
     // source-stop path releases it. Retired work cannot reserve a replacement.
     for (const row of work.values()) {
       if (row.actor === actor || row.signal?.aborted || !actorLive(row.actor, row.actorKey)) continue;
-      const p = position(row.actor), goal = destination(row.target);
+      const p = position(row.actor);
       if (!p || spatialDistance(p, row.actorPosition) > 1e-8 || getRoomForEntity(world, row.actor) !== row.actorRoom
-        || liveRoom(row.actorRoom)?.key !== row.actorRoomKey || !goal || key(row.target) !== row.targetKey
-        || goal.row !== row.geometry || goal.room !== row.targetRoom || goal.roomKey !== row.roomKey
-        || spatialDistance(goal.position, row.targetPosition) > 1e-8) continue;
+        || liveRoom(row.actorRoom)?.key !== row.actorRoomKey || !destinationCurrent(row)) continue;
       if (spatialDistance(row.arrival, arrival) < separation) return false;
     }
     return true;
@@ -220,21 +228,55 @@ export function createSpatialWorld(world: World, options: {
     for (const row of [...work.values()]) finish(row, "cancelled", "source_stopped");
     notify();
   });
-  function request(actor: number, target: number, onFinish?: (outcome: SpatialOutcome) => void): SpatialAdmission {
+  function admissible(actor: number): SpatialAdmission | undefined {
     assertSimulationTaskActive();
     if (work.has(actor)) return { ok: false, reason: "actor_busy" };
     if (work.size >= 128) return { ok: false, reason: "spatial_capacity" };
     for (const [eid, seat] of egress) { const p = position(eid); if (!p || !seatCurrent(eid, seat, p)) egress.delete(eid); }
-    const found = route(actor, target, routingContext(actor), true); if (!found) return { ok: false, reason: "no_reachable_anchor" };
+  }
+  type Found = { start: SpatialPoint; path: readonly SpatialPoint[]; arrival: SpatialPoint; length: number; room: number; seat?: SeatEgress;
+    goal: { room: number; roomKey: string; row: RoomGeometry | TargetGeometry; position: SpatialPoint } };
+  function admit(actor: number, target: number, found: Found, onFinish?: (outcome: SpatialOutcome) => void, point = false): SpatialAdmission {
     if (found.seat && !egress.has(actor) && egress.size >= 128) return { ok: false, reason: "spatial_capacity" };
     if (found.seat) egress.set(actor, found.seat);
     const now = readSimulationTime(world), requestId = `spatial:${randomUUID()}`;
     work.set(actor, { requestId, actor, actorKey: key(actor)!, target, targetKey: key(target)!, targetRoom: found.goal.room,
       roomKey: found.goal.roomKey, targetPosition: found.goal.position, actorPosition: found.start, actorRoom: found.room,
       actorRoomKey: key(found.room)!, geometry: found.goal.row, arrival: found.arrival, path: found.path, cursor: 0, startedAt: now, lastAt: now,
-      moved: false, signal: getSimulationTaskSignal(), onFinish });
+      moved: false, signal: getSimulationTaskSignal(), onFinish, ...(point ? { point: true } : {}) });
     // Completion is always delivered by advance, including zero-length routes.
     return { ok: true, requestId, estimatedMs: found.length / speed * 1000 };
+  }
+  function request(actor: number, target: number, onFinish?: (outcome: SpatialOutcome) => void): SpatialAdmission {
+    const refused = admissible(actor); if (refused) return refused;
+    const found = route(actor, target, routingContext(actor), true); if (!found) return { ok: false, reason: "no_reachable_anchor" };
+    return admit(actor, target, found, onFinish);
+  }
+  /** A body standing here would be clear of walls, furniture and other bodies. */
+  function standable(p: SpatialPoint, shape: Shape, actor?: number) {
+    if (!shape.pointClear(p) || roomAt(p) === undefined) return false;
+    for (const other of query(world, [Agent, Position])) {
+      if (other === actor || !isEntityPresent(world, other)) continue;
+      const q = position(other); if (q && spatialDistance(q, p) < Math.max(radius * 2, 1e-6)) return false;
+    }
+    return true;
+  }
+  /** Walk to a transient ground point through the same planner, speed, collision,
+   * seat egress, arrival and room-membership logic as any approach. The point
+   * is not an entity; the admitted destination is the room that contains it. */
+  function requestWalk(actor: number, point: SpatialPoint, onFinish?: (outcome: SpatialOutcome) => void): SpatialAdmission {
+    const refused = admissible(actor); if (refused) return refused;
+    if (!validSpatialPoint(point) || !insideSpatialRect(point, bounds)) return { ok: false, reason: "outside_world" };
+    const context = routingContext(actor); if (!context) return { ok: false, reason: "actor_not_placed" };
+    const room = roomAt(point, context.room), row = room === undefined ? undefined : liveRoom(room);
+    if (room === undefined || !row) return { ok: false, reason: "not_walkable" };
+    if (!context.shape.pointClear(point)) return { ok: false, reason: "blocked" };
+    if (!arrivalAvailable(actor, point)) return { ok: false, reason: "occupied" };
+    const path = findSpatialPath(context.start, point, bounds, cellSize, context.shape);
+    if (!path) return { ok: false, reason: "unreachable" };
+    const length = path.reduce((sum, p, i) => sum + spatialDistance(i === 0 ? context.start : path[i - 1], p), 0);
+    return admit(actor, room, { start: context.start, path, arrival: point, length, room: context.room, seat: context.seat,
+      goal: { room, roomKey: row.key, row, position: point } }, onFinish, true);
   }
   return {
     registerRoom(eid: number, input: { bounds: SpatialRect; entry?: SpatialPoint }) {
@@ -267,17 +309,42 @@ export function createSpatialWorld(world: World, options: {
       return request(actor, room, onFinish);
     },
     requestApproach: request,
+    requestWalk,
+    /** The farthest standable point up to `distance` along a direction from the
+     * actor, stepping back toward the actor; undefined when even a short step is blocked. */
+    walkPointToward(actor: number, direction: SpatialPoint, distance = 1.2): SpatialPoint | undefined {
+      const context = routingContext(actor), length = Math.hypot(direction.x, direction.y);
+      if (!context || !validSpatialPoint(direction) || length < 1e-6 || !Number.isFinite(distance) || distance <= 0 || distance > 10) return;
+      const ux = direction.x / length, uy = direction.y / length;
+      for (let d = distance; d >= Math.min(distance, 0.3) - 1e-9; d -= 0.15) {
+        const p = { x: context.start.x + ux * d, y: context.start.y + uy * d };
+        if (insideSpatialRect(p, bounds) && standable(p, context.shape, actor) && findSpatialPath(context.start, p, bounds, cellSize, context.shape)) return p;
+      }
+    },
+    /** A clear standing spot near a point (e.g. to place a newly arrived body). */
+    findStandingPoint(near: SpatialPoint, maxRadius = 3, accept: (p: SpatialPoint) => boolean = () => true): SpatialPoint | undefined {
+      if (!validSpatialPoint(near)) return;
+      const shape = geometry(), step = Math.max(cellSize, radius * 2 + .05);
+      const clear = (p: SpatialPoint, g: typeof shape) => standable(p, g) && accept(p);
+      if (clear(near, shape)) return { x: near.x, y: near.y };
+      for (let ring = 1; ring * step <= maxRadius; ring++) for (let y = -ring; y <= ring; y++) for (let x = -ring; x <= ring; x++) {
+        if (Math.max(Math.abs(x), Math.abs(y)) !== ring) continue;
+        const p = { x: near.x + x * step, y: near.y + y * step };
+        if (insideSpatialRect(p, bounds) && clear(p, shape)) return p;
+      }
+    },
+    /** The room whose installed floor contains this point, if any. */
+    roomAtPoint: (p: SpatialPoint) => validSpatialPoint(p) ? roomAt(p) : undefined,
     advance(atSimMs = readSimulationTime(world)) {
       assertSimulationTaskActive();
       if (!Number.isFinite(atSimMs) || atSimMs < installedAt || atSimMs > readSimulationTime(world)) throw new Error("Spatial advancement requires committed world time");
       for (const row of [...work.values()]) {
         if (work.get(row.actor) !== row) continue;
-        const p = position(row.actor), goal = destination(row.target);
+        const p = position(row.actor);
         const actorCurrent = actorLive(row.actor, row.actorKey) && !!p && spatialDistance(p, row.actorPosition) < 1e-8
           && getRoomForEntity(world, row.actor) === row.actorRoom && liveRoom(row.actorRoom)?.key === row.actorRoomKey;
         if (!current() || row.signal?.aborted || !actorCurrent || atSimMs < row.lastAt) { finish(row, "failed", "stale_actor_or_source"); continue; }
-        if (!goal || key(row.target) !== row.targetKey || goal.row !== row.geometry || goal.room !== row.targetRoom
-          || goal.roomKey !== row.roomKey || spatialDistance(goal.position, row.targetPosition) > 1e-8) { finish(row, "failed", "target_changed"); continue; }
+        if (!destinationCurrent(row)) { finish(row, "failed", "target_changed"); continue; }
         let travel = (atSimMs - row.lastAt) / 1000 * speed; row.lastAt = atSimMs;
         let exit = egress.get(row.actor);
         if (exit && !seatCurrent(row.actor, exit, row.actorPosition)) { egress.delete(row.actor); exit = undefined; }

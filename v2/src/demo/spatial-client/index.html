@@ -3,103 +3,275 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="dark light">
   <title>Argos — A world that keeps living</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main id="app">
-    <section id="stage" aria-label="Live three dimensional simulation">
+  <main id="app" data-mode="watch">
+    <section id="stage" aria-label="Live three dimensional world">
       <div id="canvas-host"></div>
       <div id="scene-labels" aria-hidden="true"></div>
-      <header class="stage-header">
-        <a class="brand" href="#" id="brand-link" aria-label="Argos world overview"><span class="brand-mark">◈</span><span>ARGOS<small>LIVING WORLDS</small></span></a>
-        <div class="connection-pill"><span id="connection-dot" class="status-dot"></span><span id="connection">Connecting</span><span class="pill-divider"></span><span id="clock">00:00</span></div>
-        <button id="toggle-panel" class="icon-button" aria-label="Toggle character panel" title="Character panel">◧</button>
+      <div class="stage-vignette" aria-hidden="true"></div>
+      <div class="lab-grid" aria-hidden="true"></div>
+
+      <header class="topbar">
+        <a class="brand" href="#" id="brand-link" aria-label="Argos world overview"><span class="brand-mark" aria-hidden="true">◈</span><span>ARGOS<small>LIVING WORLDS</small></span></a>
+        <nav class="mode-switch" aria-label="Experience mode">
+          <button type="button" data-mode-button="watch" aria-pressed="true" title="Watch the whole world (1)"><kbd>1</kbd><span>Watch</span></button>
+          <button type="button" data-mode-button="inhabit" aria-pressed="false" title="Inhabit a body (2)"><kbd>2</kbd><span>Inhabit</span></button>
+          <button type="button" data-mode-button="analysis" aria-pressed="false" title="Freeze the world, question God, interview residents (3)"><kbd>3</kbd><span>Analysis</span></button>
+        </nav>
+        <div class="topbar-tools">
+          <div class="connection-pill"><span id="connection-dot" class="status-dot"></span><span id="connection">Connecting</span><span class="pill-divider"></span><span id="clock">00:00</span></div>
+          <button type="button" id="voice-toggle" class="icon-button" aria-pressed="true" title="Voices on (M)" aria-label="Toggle voices"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.2L12 5.5v13l-4.8-4H4z" fill="currentColor" fill-opacity=".18"/><g class="voice-on"><path class="voice-wave" d="M15.5 9.2a4 4 0 0 1 0 5.6"/><path class="voice-wave" d="M18.2 6.6a7.6 7.6 0 0 1 0 10.8"/></g><g class="voice-off"><path d="M16 9.5l5 5M21 9.5l-5 5"/></g></svg></button>
+          <button type="button" id="enter-vr" class="vr-button" hidden title="Enter VR (headset detected)">Enter VR</button>
+          <button type="button" id="fullscreen" class="icon-button" title="Fullscreen" aria-label="Fullscreen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+          <button type="button" id="toggle-panel" class="icon-button panel-toggle" aria-label="Toggle world panel" title="World panel">◧</button>
+        </div>
       </header>
-      <div class="world-heading"><span class="eyebrow">A LITTLE WORLD. REAL CONSEQUENCES.</span><h1 id="world-title">A life of their own.</h1><p id="world-description">A shared world.<br>You’re someone on the other side.</p></div>
+
+      <!-- WATCH ------------------------------------------------------------------>
+      <div class="world-heading watch-only">
+        <span class="eyebrow">A LITTLE WORLD. REAL CONSEQUENCES.</span>
+        <h1 id="world-title">A life of their own.</h1>
+        <p id="world-description">A shared world.<br>You’re someone on the other side.</p>
+        <div id="weather-chip" class="weather-chip" hidden><span id="weather-chip-icon" aria-hidden="true">○</span><span id="weather-chip-label"></span></div>
+      </div>
       <div id="scenario-banner" class="scenario-banner" role="status" hidden><span class="scenario-spark" aria-hidden="true">ϟ</span><div><strong id="scenario-title"></strong><p id="scenario-phase"></p></div><span id="scenario-power"></span></div>
-      <div id="renderer-error" role="alert" hidden></div>
-      <div class="stage-bottom">
-        <div class="camera-tools" aria-label="Camera controls"><button id="camera-home" title="See the whole world">↗ <span>Overview</span></button><button id="camera-follow" title="Follow the selected character">◎ <span>Follow</span></button><button id="camera-interiors" title="Reveal building interiors" aria-pressed="false" hidden>⌂ <span>Interiors</span></button><button id="fullscreen" title="Fullscreen">⛶</button></div>
+      <div id="possession-chip" class="possession-chip watch-only" hidden>
+        <span class="possession-dot" aria-hidden="true"></span>
+        <span>You are inhabiting <strong id="possession-name"></strong></span>
+        <button type="button" id="possession-return">Return <kbd>2</kbd></button>
+        <button type="button" id="possession-release" class="quiet">Release</button>
+      </div>
+      <div class="stage-bottom watch-only">
+        <div class="camera-tools" aria-label="Camera controls"><button id="camera-home" title="See the whole world">↗ <span>Overview</span></button><button id="camera-follow" title="Follow the selected resident">◎ <span>Follow</span></button><button id="camera-interiors" title="Reveal building interiors" aria-pressed="false" hidden>⌂ <span>Interiors</span></button></div>
         <div class="playback-tools"><span id="run-mode">Simulation ready</span><button id="start" class="primary">Start world <span>↗</span></button><button id="stop" hidden>Stop world</button></div>
       </div>
-      <div class="stage-caption"><span class="tiny-dot"></span> Argos is the world. This is just the window. <span class="camera-hint">Drag to orbit · Scroll to zoom · Select a character</span></div>
+      <div class="stage-caption watch-only"><span class="tiny-dot"></span> Argos is the world. This is just the window. <span class="camera-hint">Drag to orbit · Scroll to zoom · Click a resident</span></div>
+
+      <!-- INHABIT ---------------------------------------------------------------->
+      <div id="inhabit-hud" class="inhabit-only">
+        <div class="hud-identity">
+          <span class="hud-avatar" id="hud-avatar" aria-hidden="true">·</span>
+          <div><small id="hud-kind">YOU ARE</small><strong id="hud-name">—</strong><span id="hud-place">—</span></div>
+        </div>
+        <div class="hud-actions">
+          <button type="button" id="hud-view" title="Toggle first/third person (C)">◐ <span id="hud-view-label">Third person</span> <kbd>C</kbd></button>
+          <button type="button" id="hud-minds" aria-pressed="false" title="Operator view: show what nearby residents are thinking (O)">✧ Minds <kbd>O</kbd></button>
+          <button type="button" id="hud-pause" title="Freeze or resume the world (P)">❙❙ <span id="hud-pause-label">Pause</span> <kbd>P</kbd></button>
+          <button type="button" id="hud-release" class="quiet" title="Let go of this body">Release</button>
+        </div>
+        <div id="hud-frozen" class="hud-frozen" hidden><span>World frozen</span><small>P to resume · 3 for Analysis</small></div>
+        <div id="reticle" aria-hidden="true"></div>
+        <div id="interact-prompt" class="interact-prompt" hidden>
+          <ol id="verb-menu" class="verb-menu" hidden></ol>
+          <div class="prompt-primary"><kbd>E</kbd><span id="prompt-label"></span><small id="prompt-more"></small></div>
+        </div>
+        <div id="subtitles" class="subtitles" aria-live="polite"></div>
+        <form id="talk-box" class="talk-box" hidden autocomplete="off">
+          <span id="talk-to" class="talk-to">Speaking aloud</span>
+          <label class="sr-only" for="talk-input">What you say</label>
+          <input id="talk-input" maxlength="500" placeholder="Say something…" enterkeyhint="send">
+          <button type="submit">Say <kbd>↵</kbd></button>
+        </form>
+        <div id="ptt-indicator" class="ptt-indicator" hidden><span class="ptt-dot"></span><span id="ptt-label">Listening… release V to speak</span></div>
+        <div class="hud-hints"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk</span><span><kbd>drag</kbd> look</span><span><kbd>E</kbd> interact</span><span><kbd>↵</kbd> talk</span><span><kbd>V</kbd> hold to speak</span><span><kbd>Esc</kbd> step out</span></div>
+        <aside id="inhabit-mind" class="inhabit-mind" hidden aria-label="Operator view of nearby minds">
+          <header><small>OPERATOR VIEW</small><strong>Nearby minds</strong><p>Your body doesn’t know this.</p></header>
+          <ol id="inhabit-mind-list"></ol>
+        </aside>
+      </div>
+
+      <!-- ANALYSIS --------------------------------------------------------------->
+      <div id="analysis-layer" class="analysis-only">
+        <div class="lab-banner">
+          <span class="lab-mark">◈ DIAGNOSTIC</span>
+          <strong id="lab-status">Freeze all motor functions.</strong>
+          <span id="lab-clock" class="lab-clock">—</span>
+          <button type="button" id="lab-resume" class="lab-button">Resume <kbd>Esc</kbd></button>
+        </div>
+        <section id="god-console" class="lab-panel" aria-labelledby="god-title">
+          <header class="lab-panel-head">
+            <small>OMNISCIENT CONSOLE</small>
+            <h2 id="god-title">God</h2>
+            <p>Ask what anyone wants, fears or hides, where they are, and why things happened.</p>
+          </header>
+          <div id="god-log" class="lab-log" role="log" aria-live="polite"></div>
+          <div id="god-suggestions" class="lab-suggestions">
+            <button type="button" data-god-suggestion="Where is everyone right now, and what are they doing?">Where is everyone?</button>
+            <button type="button" data-god-suggestion="Who is lying to whom, and about what?">Who is lying?</button>
+            <button type="button" data-god-suggestion="What is the Narrator building toward?">The Narrator’s plan</button>
+            <button type="button" data-god-suggestion="What just happened, and why?">What just happened?</button>
+          </div>
+          <form id="god-form" class="lab-composer" autocomplete="off">
+            <label class="sr-only" for="god-input">Ask God</label>
+            <textarea id="god-input" rows="2" maxlength="2000" placeholder="Ask God anything about this world…"></textarea>
+            <div class="lab-composer-row">
+              <button type="button" id="god-mic" class="mic-button" title="Hold to speak (or hold V)" aria-label="Hold to speak to God"><span class="mic-glyph" aria-hidden="true"></span></button>
+              <span class="composer-hint">↵ ask · ⇧↵ new line · hold <kbd>V</kbd></span>
+              <button type="submit" id="god-send" class="lab-button solid">Ask</button>
+            </div>
+          </form>
+        </section>
+        <section id="interview-panel" class="lab-panel" aria-labelledby="interview-title">
+          <header class="lab-panel-head">
+            <small>INTERVIEW</small>
+            <h2 id="interview-title">The chair</h2>
+            <div id="interview-roster" class="interview-roster" role="group" aria-label="Choose a resident to interview"></div>
+          </header>
+          <div id="interview-empty" class="interview-empty"><p>Select a resident to bring them in for questioning.</p><small>Pick from the list above, or click someone in the world.</small></div>
+          <div id="interview-body" class="interview-body" hidden>
+            <div class="interview-subject">
+              <div id="interview-portrait" class="interview-portrait"><span id="interview-monogram" aria-hidden="true"></span></div>
+              <div class="interview-identity">
+                <strong id="interview-name"></strong>
+                <span id="interview-meta"></span>
+                <span id="interview-mood" class="interview-mood" hidden></span>
+              </div>
+              <button type="button" id="interview-restart" class="lab-link" title="Start a fresh session with this resident">New session</button>
+            </div>
+            <div class="interview-controls">
+              <div class="segmented" role="group" aria-label="Interview register">
+                <button type="button" data-interview-mode="in_character" aria-pressed="true">In character</button>
+                <button type="button" data-interview-mode="analysis" aria-pressed="false">Analysis</button>
+              </div>
+              <label class="toggle" id="remember-toggle" title="Store this as a private conversation they lived through"><input type="checkbox" id="interview-remember"><span class="toggle-track" aria-hidden="true"></span><span>Let them remember</span></label>
+            </div>
+            <p id="interview-register" class="interview-register"></p>
+            <div id="interview-log" class="lab-log" role="log" aria-live="polite"></div>
+            <form id="interview-form" class="lab-composer" autocomplete="off">
+              <label class="sr-only" for="interview-input">Question for the resident</label>
+              <textarea id="interview-input" rows="2" maxlength="1000" placeholder="Ask them anything…"></textarea>
+              <div class="lab-composer-row">
+                <button type="button" id="interview-mic" class="mic-button" title="Hold to speak (or hold V)" aria-label="Hold to speak to the resident"><span class="mic-glyph" aria-hidden="true"></span></button>
+                <span class="composer-hint">↵ ask · hold <kbd>V</kbd></span>
+                <button type="submit" id="interview-send" class="lab-button solid">Ask</button>
+              </div>
+            </form>
+          </div>
+        </section>
+        <div id="lab-ptt" class="ptt-indicator lab" hidden><span class="ptt-dot"></span><span id="lab-ptt-label">Listening…</span></div>
+      </div>
+
+      <!-- Body chooser ------------------------------------------------------------>
+      <div id="body-chooser" class="sheet" hidden role="dialog" aria-modal="true" aria-labelledby="chooser-title">
+        <div class="sheet-card">
+          <small class="eyebrow">INHABIT</small>
+          <h2 id="chooser-title">Choose a body</h2>
+          <p>Walk in as a stranger, or take over a resident. While you drive, their own mind rests; everyone else meets you as they would meet anyone.</p>
+          <form id="visitor-form" class="visitor-form" autocomplete="off">
+            <label class="sr-only" for="visitor-name">Your name (optional)</label>
+            <input id="visitor-name" maxlength="40" placeholder="Your name — or stay a stranger">
+            <button type="submit" class="primary">Enter as a visitor <span>↗</span></button>
+          </form>
+          <div class="chooser-divider"><span>or become a resident</span></div>
+          <div id="chooser-residents" class="chooser-residents"></div>
+          <p id="chooser-note" class="chooser-note" hidden></p>
+          <button type="button" id="chooser-close" class="quiet chooser-close">Cancel <kbd>Esc</kbd></button>
+        </div>
+      </div>
+
+      <div id="renderer-error" role="alert" hidden></div>
       <div id="toast" role="status" aria-live="polite" hidden></div>
     </section>
-    <aside id="sidebar" aria-label="World interaction panel">
-      <div class="sidebar-heading"><span class="eyebrow">ON THE INSIDE</span><div><h2 id="roster-title">Meet the minds.</h2><span class="small-label" id="actor-count">—</span></div></div>
-      <div id="characters" role="group" aria-label="Choose a character"></div>
-      <section class="mind-section" aria-labelledby="thought-heading">
-        <div class="section-heading"><h3 id="thought-heading">Current thought</h3><span id="thought-age" class="small-label">—</span></div>
-        <blockquote id="thought">Their next thought will appear here.</blockquote>
-        <div class="activity-line"><span class="activity-icon">↳</span><span id="activity">Waiting for the world</span></div>
-        <div class="place-line"><span>⌖</span><span id="location">—</span><span id="thought-provenance">Private, operator view</span></div>
-        <div class="goal-card"><span class="eyebrow" id="goal-heading">LEADING GOAL</span><p id="current-goal">No active goal yet.</p><span class="goal-note" id="goal-note">An intention, not a guaranteed next action.</span></div>
-        <div id="needs-readout" class="needs-readout" role="group" aria-label="Native physical needs" hidden><div title="Higher means hungrier"><span>Hunger</span><strong id="need-hunger"></strong></div><div title="Higher means more energy"><span>Energy</span><strong id="need-energy"></strong></div></div>
+
+    <aside id="sidebar" aria-label="World panel">
+      <section class="enter-card" aria-labelledby="enter-heading">
+        <small class="eyebrow">STEP INSIDE</small>
+        <h2 id="enter-heading">Walk among them.</h2>
+        <p>Enter as a visitor, or take control of any resident below.</p>
+        <div class="enter-actions">
+          <button type="button" id="enter-visitor" class="primary">Enter as a visitor <span>↗</span></button>
+          <button type="button" id="enter-analysis" class="ghost" title="Freeze the world (3)">Analyze <kbd>3</kbd></button>
+        </div>
       </section>
+
       <section id="story-section" class="story-section" aria-labelledby="story-heading" hidden>
         <div class="section-heading"><h3 id="story-heading">The story so far</h3><span class="small-label">NARRATOR</span></div>
         <ol id="story-feed" class="story-feed" aria-live="polite" aria-label="Narrator story feed, newest first"></ol>
-        <p id="story-empty" class="section-copy">The Narrator hasn't written anything yet.</p>
+        <p id="story-empty" class="section-copy">The Narrator hasn’t written anything yet.</p>
       </section>
-      <section id="house-spirit" class="house-spirit-section" aria-labelledby="house-spirit-heading" hidden>
-        <div class="section-heading"><h3 id="house-spirit-heading">Ask the house spirit</h3><span class="small-label">WORLD CONTROL</span></div>
-        <p id="house-spirit-summary" class="section-copy">Available in a running Blackout session.</p>
-        <p class="section-copy spirit-boundary">Change supported parts of the house—not a character’s mind. The spirit checks each request.</p>
-        <div class="world-command-examples" aria-label="House spirit request examples">
-          <button type="button" data-world-example="Turn the light back off">Turn the light back off</button>
-          <button type="button" data-world-example="Restore power">Restore power</button>
-          <button type="button" data-world-example="Open the supplies box">Open the supplies box</button>
-          <button type="button" data-world-example="Close the supplies box">Close the supplies box</button>
+
+      <section class="residents-section" aria-labelledby="roster-title">
+        <div class="section-heading"><h3 id="roster-title">Meet the minds.</h3><span class="small-label" id="actor-count">—</span></div>
+        <div id="characters" role="list" aria-label="Residents"></div>
+      </section>
+
+      <section class="mind-section" aria-labelledby="thought-heading">
+        <div class="section-heading"><h3 id="thought-heading"><span id="detail-name">Current thought</span></h3><span id="thought-age" class="small-label">—</span></div>
+        <blockquote id="thought">Their next thought will appear here.</blockquote>
+        <div class="activity-line"><span class="activity-icon">↳</span><span id="activity">Waiting for the world</span></div>
+        <div class="place-line"><span>⌖</span><span id="location">—</span><span id="thought-provenance">Private · operator view</span></div>
+        <div class="goal-card"><span class="eyebrow" id="goal-heading">LEADING GOAL</span><p id="current-goal">No active goal yet.</p><span class="goal-note" id="goal-note">An intention, not a guaranteed next action.</span></div>
+        <div id="needs-readout" class="needs-readout" role="group" aria-label="Native physical needs" hidden><div title="Higher means hungrier"><span>Hunger</span><strong id="need-hunger"></strong></div><div title="Higher means more energy"><span>Energy</span><strong id="need-energy"></strong></div></div>
+        <div class="detail-actions">
+          <button type="button" id="detail-take" class="primary">Take control <span>↗</span></button>
+          <button type="button" id="detail-interview" class="ghost">Interview</button>
         </div>
-        <form id="world-command-form" aria-busy="false"><label class="sr-only" for="world-command-input">Request to the house spirit</label><textarea id="world-command-input" rows="2" maxlength="500" placeholder="Turn the light back off…" required disabled></textarea><button id="world-command-send" type="submit" disabled>Ask the house spirit ↗</button></form>
-        <div id="world-command-receipt" class="world-command-receipt" role="status" aria-live="polite" hidden><strong id="world-command-outcome"></strong><p id="world-command-detail"></p><small id="world-command-time"></small></div>
       </section>
-      <section class="phone-section" aria-labelledby="phone-heading">
-        <div class="section-heading"><h3 id="phone-heading">A line into the world</h3><span class="small-label">TWO WAY</span></div>
-        <p id="phone-detail" class="section-copy">Text their phone. What they do with it is up to them.</p>
-        <div id="messages" class="messages" role="log" aria-live="polite"><div class="empty-messages"><span>↗</span><p>Start a conversation<br>across the fourth wall.</p></div></div>
-        <form id="message-form" class="composer"><label class="sr-only" for="message-input">Message the selected character</label><textarea id="message-input" rows="2" maxlength="500" placeholder="There’s something you should know…" required></textarea><button type="submit" title="Send message" aria-label="Send message">↗</button></form>
-      </section>
-      <section class="thought-section" aria-labelledby="plant-heading">
-        <div class="section-heading"><h3 id="plant-heading">A quiet suggestion</h3><span class="small-label">INFLUENCE</span></div>
-        <p class="section-copy">Plant a thought, not an instruction they must obey.</p>
-        <form id="thought-form"><label class="sr-only" for="thought-input">Thought to plant</label><div class="thought-composer"><input id="thought-input" maxlength="500" placeholder="Maybe I could use some fresh air…" required><button type="submit" aria-label="Plant thought">✧</button></div></form>
-      </section>
-      <section class="growth-section" aria-labelledby="growth-heading">
-        <div class="section-heading"><h3 id="growth-heading">Beyond these walls</h3><span id="growth-kind" class="small-label">WORLD BUILDING</span></div>
-        <p id="growth-detail" class="section-copy">An authored café expansion can become a real, connected place.</p>
-        <div id="town-life" hidden>
-          <div class="town-life-weather"><span aria-hidden="true" id="town-weather-icon">○</span><strong id="town-weather-label"></strong><small id="town-life-status"></small></div>
-          <div id="town-story" class="town-change" aria-label="Story brief and narrator review" hidden></div>
-          <div id="town-spirits" class="town-spirits" aria-label="Spirit activity"></div>
-          <p id="town-growth-budget" class="section-copy"></p>
-          <p id="town-mechanic" class="section-copy" hidden></p>
-          <ol id="town-changes" class="town-changes" aria-label="Recent world changes"></ol>
-          <p id="town-changes-empty" class="section-copy">No changes reported yet.</p>
-          <p class="town-life-note">Approved is not yet applied. Used means a character actually used it.</p>
-        </div>
-        <button id="grow" class="growth-button"><span class="growth-icon">⌘</span><span>Add the neighborhood café<small>Bounded catalog construction</small></span><span>↗</span></button>
-      </section>
-      <section id="god-control" class="god-control-section" aria-labelledby="god-control-heading" hidden>
-        <div class="section-heading"><h3 id="god-control-heading">Ask God</h3><span class="small-label">DEVELOPMENT</span></div>
-        <p id="god-control-status" class="section-copy"></p>
-        <p class="section-copy">Operator requests for the world—not messages to a resident. God may inspect, explain, or use the capabilities listed below.</p>
-        <details class="god-capabilities"><summary>Enabled capabilities and limits</summary><ul id="god-capabilities"></ul><p id="god-limits" class="section-copy"></p></details>
-        <div id="god-messages" class="god-messages" role="log" aria-label="Operator conversation with God" aria-live="polite"></div>
-        <form id="god-command-form" aria-busy="false"><label class="sr-only" for="god-command-input">Development request to God</label><textarea id="god-command-input" rows="3" maxlength="2000" placeholder="Inspect the world, explain an issue, or request a supported change…" required disabled></textarea><button id="god-command-send" type="submit" disabled>Ask God ↗</button></form>
-        <p id="god-command-receipt" class="section-copy god-command-receipt" role="status" aria-live="polite" hidden></p>
-        <div id="god-builds" hidden><h4>Build jobs</h4><ol id="god-jobs" class="town-changes" aria-label="Development build jobs"></ol></div>
-        <p class="town-life-note">A reply is not an applied change. Job status is separate; confirmed native effects appear in the world and its event records.</p>
-      </section>
-      <section id="generated-details" class="generated-details-section" aria-labelledby="generated-details-heading" hidden>
-        <div class="section-heading"><h3 id="generated-details-heading">Generated details</h3><span class="small-label">PUBLIC MEASUREMENTS</span></div>
-        <p class="section-copy">Committed numeric and true/false values. Field names have no implied units, animation, or physical effect.</p>
-        <div id="generated-details-list" class="generated-details-list"></div>
-      </section>
-      <details id="world-details"><summary>Under the hood <span>+</span></summary><div id="world-stats"></div><div id="event-list"></div></details>
-      <details id="operator-details"><summary>Operator test controls <span>+</span></summary><p class="section-copy">These are explicit operator actions, not autonomous NPC choices.</p><form id="action-form"><select id="action-type" aria-label="Operator action"><option value="move">Move</option><option value="pickup">Pick up</option><option value="interact">Interact</option><option value="drop">Drop</option></select><select id="action-target" aria-label="Action target"></select><input id="action-content" placeholder="Operation, e.g. sit" aria-label="Interaction operation"><button type="submit">Dispatch test action</button></form><p id="action-receipt" class="section-copy" role="status" aria-live="polite">Dispatch is a request. Its native outcome appears here.</p></details>
+
+      <details id="operator-drawer" class="operator-drawer">
+        <summary><span>Operator tools</span><small>Phone, influence, world building, diagnostics</small><span class="summary-mark">+</span></summary>
+        <section class="phone-section" aria-labelledby="phone-heading">
+          <div class="section-heading"><h3 id="phone-heading">A line into the world</h3><span class="small-label">TWO WAY</span></div>
+          <p id="phone-detail" class="section-copy">Text their phone. What they do with it is up to them.</p>
+          <div id="messages" class="messages" role="log" aria-live="polite"><div class="empty-messages"><span>↗</span><p>Start a conversation<br>across the fourth wall.</p></div></div>
+          <form id="message-form" class="composer"><label class="sr-only" for="message-input">Message the selected resident</label><textarea id="message-input" rows="2" maxlength="500" placeholder="There’s something you should know…" required></textarea><button type="submit" title="Send message" aria-label="Send message">↗</button></form>
+        </section>
+        <section class="thought-section" aria-labelledby="plant-heading">
+          <div class="section-heading"><h3 id="plant-heading">A quiet suggestion</h3><span class="small-label">INFLUENCE</span></div>
+          <p class="section-copy">Plant a thought, not an instruction they must obey.</p>
+          <form id="thought-form"><label class="sr-only" for="thought-input">Thought to plant</label><div class="thought-composer"><input id="thought-input" maxlength="500" placeholder="Maybe I could use some fresh air…" required><button type="submit" aria-label="Plant thought">✧</button></div></form>
+        </section>
+        <section id="house-spirit" class="house-spirit-section" aria-labelledby="house-spirit-heading" hidden>
+          <div class="section-heading"><h3 id="house-spirit-heading">Ask the house spirit</h3><span class="small-label">WORLD CONTROL</span></div>
+          <p id="house-spirit-summary" class="section-copy">Available in a running Blackout session.</p>
+          <p class="section-copy spirit-boundary">Change supported parts of the house—not a character’s mind. The spirit checks each request.</p>
+          <div class="world-command-examples" aria-label="House spirit request examples">
+            <button type="button" data-world-example="Turn the light back off">Turn the light back off</button>
+            <button type="button" data-world-example="Restore power">Restore power</button>
+            <button type="button" data-world-example="Open the supplies box">Open the supplies box</button>
+            <button type="button" data-world-example="Close the supplies box">Close the supplies box</button>
+          </div>
+          <form id="world-command-form" aria-busy="false"><label class="sr-only" for="world-command-input">Request to the house spirit</label><textarea id="world-command-input" rows="2" maxlength="500" placeholder="Turn the light back off…" required disabled></textarea><button id="world-command-send" type="submit" disabled>Ask the house spirit ↗</button></form>
+          <div id="world-command-receipt" class="world-command-receipt" role="status" aria-live="polite" hidden><strong id="world-command-outcome"></strong><p id="world-command-detail"></p><small id="world-command-time"></small></div>
+        </section>
+        <section class="growth-section" aria-labelledby="growth-heading">
+          <div class="section-heading"><h3 id="growth-heading">Beyond these walls</h3><span id="growth-kind" class="small-label">WORLD BUILDING</span></div>
+          <p id="growth-detail" class="section-copy">An authored café expansion can become a real, connected place.</p>
+          <div id="town-life" hidden>
+            <div class="town-life-weather"><span aria-hidden="true" id="town-weather-icon">○</span><strong id="town-weather-label"></strong><small id="town-life-status"></small></div>
+            <div id="town-story" class="town-change" aria-label="Story brief and narrator review" hidden></div>
+            <div id="town-spirits" class="town-spirits" aria-label="Spirit activity"></div>
+            <p id="town-growth-budget" class="section-copy"></p>
+            <p id="town-mechanic" class="section-copy" hidden></p>
+            <ol id="town-changes" class="town-changes" aria-label="Recent world changes"></ol>
+            <p id="town-changes-empty" class="section-copy">No changes reported yet.</p>
+            <p class="town-life-note">Approved is not yet applied. Used means a character actually used it.</p>
+          </div>
+          <button id="grow" class="growth-button"><span class="growth-icon">⌘</span><span>Add the neighborhood café<small>Bounded catalog construction</small></span><span>↗</span></button>
+        </section>
+        <section id="god-control" class="god-control-section" aria-labelledby="god-control-heading" hidden>
+          <div class="section-heading"><h3 id="god-control-heading">God · build requests</h3><span class="small-label">DEVELOPMENT</span></div>
+          <p id="god-control-status" class="section-copy"></p>
+          <p class="section-copy">Operator requests for the world—not messages to a resident. God may inspect, explain, or use the capabilities listed below.</p>
+          <details class="god-capabilities"><summary>Enabled capabilities and limits</summary><ul id="god-capabilities"></ul><p id="god-limits" class="section-copy"></p></details>
+          <div id="god-messages" class="god-messages" role="log" aria-label="Operator conversation with God" aria-live="polite"></div>
+          <form id="god-command-form" aria-busy="false"><label class="sr-only" for="god-command-input">Development request to God</label><textarea id="god-command-input" rows="3" maxlength="2000" placeholder="Inspect the world, explain an issue, or request a supported change…" required disabled></textarea><button id="god-command-send" type="submit" disabled>Ask God ↗</button></form>
+          <p id="god-command-receipt" class="section-copy god-command-receipt" role="status" aria-live="polite" hidden></p>
+          <div id="god-builds" hidden><h4>Build jobs</h4><ol id="god-jobs" class="town-changes" aria-label="Development build jobs"></ol></div>
+          <p class="town-life-note">A reply is not an applied change. Job status is separate; confirmed native effects appear in the world and its event records.</p>
+        </section>
+        <section id="generated-details" class="generated-details-section" aria-labelledby="generated-details-heading" hidden>
+          <div class="section-heading"><h3 id="generated-details-heading">Generated details</h3><span class="small-label">PUBLIC MEASUREMENTS</span></div>
+          <p class="section-copy">Committed numeric and true/false values. Field names have no implied units, animation, or physical effect.</p>
+          <div id="generated-details-list" class="generated-details-list"></div>
+        </section>
+        <details id="world-details"><summary>Under the hood <span>+</span></summary><div id="world-stats"></div><div id="event-list"></div></details>
+        <details id="operator-details"><summary>Operator test controls <span>+</span></summary><p class="section-copy">These are explicit operator actions, not autonomous NPC choices.</p><form id="action-form"><select id="action-type" aria-label="Operator action"><option value="move">Move</option><option value="pickup">Pick up</option><option value="interact">Interact</option><option value="drop">Drop</option></select><select id="action-target" aria-label="Action target"></select><input id="action-content" placeholder="Operation, e.g. sit" aria-label="Interaction operation"><button type="submit">Dispatch test action</button></form><p id="action-receipt" class="section-copy" role="status" aria-live="polite">Dispatch is a request. Its native outcome appears here.</p></details>
+      </details>
       <footer class="sidebar-footer"><span>Persistent state. Independent minds.</span><a href="/assets/ATTRIBUTION.md" target="_blank" rel="noopener">Assets ↗</a></footer>
     </aside>
   </main>

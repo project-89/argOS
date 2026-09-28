@@ -38,6 +38,7 @@ import { clearSimulationTimeline } from "./runtime/simulation-timeline";
 import { configureWorldConstructionBudget, getWorldConstructionStatus } from "./runtime/world-construction-budget";
 import { startCommittedEvents, stopCommittedEvents } from "./runtime/committed-events";
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "./ecs/prefabs";
+import { isOperatorControlled } from "./ecs/controlled";
 import { initializeRegistry } from "./ecs/component-registry";
 import { createGodAgent, godCommand, getWorldState, tickWorld, runWorldTickAt, updateGlobalTime, type GodAgentState, type GodAgentConfig } from "./god/god-agent";
 import { createPrebakePreset, getAvailablePresets, type PrebakePreset } from "./god/system-baker";
@@ -1166,6 +1167,10 @@ Do NOT explain — just create everything using your tools.`;
                     });
                     if (aiEnabled) {
                       const active = () => entityExists(world, eid) && Agent.active[eid];
+                      // Appraisal is how lived experience becomes feeling and memory; it
+                      // continues while the operator possesses this body. The resident's
+                      // own planning, goal review and reflection wait until release.
+                      const ownMind = () => active() && !isOperatorControlled(world, eid);
                       if (config.enableExperienceAppraisal !== false) registerAIOperation(runtime!, {
                         name: `AgentAppraisal:${eid}`, interval: 1, priority: "high", lane: "subconscious",
                         ready: () => active() && hasExperienceAppraisal(world, eid),
@@ -1174,24 +1179,24 @@ Do NOT explain — just create everything using your tools.`;
                       if (config.enableReflection !== false) initializeReflectionState(world, eid);
                       if (config.enableReflection !== false) registerAIOperation(runtime!, {
                         name: `AgentCoordinationReview:${eid}`, interval: 2, priority: "normal", lane: "subconscious",
-                        ready: () => active() && hasPendingCoordinationReview(world, eid),
+                        ready: () => ownMind() && hasPendingCoordinationReview(world, eid),
                         execute: () => runCoordinationReview(world, eid),
                       });
                       if (config.enablePlanning !== false) {
                         registerAIOperation(runtime!, {
                           name: `AgentPlanning:${eid}`, interval: 1, priority: "high", lane: "subconscious",
-                          ready: () => active() && !hasPendingPersonalGoalReview(world, eid) && hasPendingPlanning(world, eid, { focusActiveGoal: true, background: true }),
+                          ready: () => ownMind() && !hasPendingPersonalGoalReview(world, eid) && hasPendingPlanning(world, eid, { focusActiveGoal: true, background: true }),
                           execute: () => runPlanningSystem(world, { agentEids: [eid], focusActiveGoal: true, background: true }),
                         });
                       }
                       registerAIOperation(runtime!, {
                         name: `AgentPersonalReview:${eid}`, interval: 1, priority: "high", lane: "subconscious",
-                        ready: () => active() && hasPendingPersonalGoalReview(world, eid),
+                        ready: () => ownMind() && hasPendingPersonalGoalReview(world, eid),
                         execute: () => runAgentSubconscious(world, eid, { enableReflection: config.enableReflection }),
                       });
                       registerAIOperation(runtime!, {
                         name: `AgentSubconscious:${eid}`, interval: 5, priority: "normal", lane: "subconscious",
-                        ready: () => active() && !hasPendingPersonalGoalReview(world, eid) && hasSubconsciousWork(world, eid, { enableReflection: config.enableReflection }),
+                        ready: () => ownMind() && !hasPendingPersonalGoalReview(world, eid) && hasSubconsciousWork(world, eid, { enableReflection: config.enableReflection }),
                         execute: () => runAgentSubconscious(world, eid, { enableReflection: config.enableReflection }),
                       });
                     }

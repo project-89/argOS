@@ -19,6 +19,7 @@ import { readSimulationTime } from "../ecs/simulation-time";
 import { legacySimulationTimestamp } from "../ecs/temporal-age";
 import { Name, Description, Agent, Mind, Goal, GridPosition, Health, Inventory, WorkingMemoryIdentity, Removed, Room, Perception } from "../ecs/components";
 import { HasGoal, HasMemory, HasThought } from "../ecs/relations";
+import { hasOwnMindSuspended } from "../ecs/controlled";
 import { getRoomForEntity } from "../ecs/location";
 import { safeGetRelationTargets } from "../ecs/dynamic-systems";
 import { queueGuardedStimulus } from "../cognition/stimulus-queue";
@@ -2129,7 +2130,9 @@ function captureWhisperScope(world: World, daemon: DaemonState, observation: Dae
       && (!registry || registry.daemons.get(eid) === daemon)
       && entityExists(world, eid) && !hasComponent(world, eid, Removed) && hasComponent(world, eid, Agent) && hasComponent(world, eid, Name) && Agent.active[eid]
       && hasComponent(world, eid, WorkingMemoryIdentity) && WorkingMemoryIdentity.id[eid] === actor.key
-      && nudgePersona(eid) === persona && daemon.agentName === actor.label && observation.agentName === actor.label;
+      && nudgePersona(eid) === persona && daemon.agentName === actor.label && observation.agentName === actor.label
+      // A possessed (or mindless visitor) body hears no inner voice, even one already in flight.
+      && !hasOwnMindSuspended(world, eid);
     // The inner voice travels with its person; changing rooms mid-thought does
     // not silence it. Concern-specific whispers keep their own evidence checks.
   };
@@ -2563,6 +2566,9 @@ export async function runDaemonSystem(
   for (const daemon of [...registry.daemons.values()]) {
     assertSimulationTaskActive();
     if (daemon.pendingNudges.length === 0) continue;
+    // Operator-driven or mindless bodies get no whispers; pending nudges keep
+    // their own scope checks and may still apply after release.
+    if (hasOwnMindSuspended(world, daemon.agentEid)) continue;
     // A living world voices the Narrator's pull in the person's inner voice;
     // otherwise the already evaluated wording is delivered synchronously.
     const delivered = registry.innerVoice && registry.useModel
@@ -2584,6 +2590,7 @@ export async function runDaemonSystem(
     const deliveredNudges = deliveredThisCycle.has(daemon);
     assertSimulationTaskActive();
     if (getCommittedSource(world).stopped) break;
+    if (hasOwnMindSuspended(world, daemon.agentEid)) continue;
 
     // Observe
     const observation = observeAgent(world, daemon);
@@ -2614,7 +2621,7 @@ export async function runDaemonSystem(
   if (registry.innerVoice) {
     const now = readSimulationTime(world);
     const due = [...registry.daemons.values()].filter(daemon => !deliveredThisCycle.has(daemon)
-      && entityExists(world, daemon.agentEid) && isInnerVoiceDue(world, daemon, registry))
+      && entityExists(world, daemon.agentEid) && !hasOwnMindSuspended(world, daemon.agentEid) && isInnerVoiceDue(world, daemon, registry))
       .sort((a, b) => (a.innerVoice?.lastAtSimMs ?? now) - (b.innerVoice?.lastAtSimMs ?? now))
       .slice(0, Math.max(0, registry.innerVoiceMaxPerCycle));
     for (const daemon of due) {

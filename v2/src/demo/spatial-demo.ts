@@ -1,16 +1,25 @@
 /** A world package, not another cognition controller. Native Argos chooses;
  * this package validates and executes embodied actions on the shared clock. */
 import { addComponent, addEntity, entityExists, getRelationTargets, hasComponent, query, removeComponent } from "bitecs";
+import { randomUUID } from "node:crypto";
 import { createSimulation, type ArgosSimulation } from "../index";
-import { Agent, BehaviorPolicy, Container, Description, Inventory, Name, Needs, ObjectState, PhysicalObject, Position, Room, Surface, StimulusSource, WorkingMemoryIdentity } from "../ecs/components";
-import { createObjectEntity, createRoomEntity } from "../ecs/prefabs";
+import { Agent, BehaviorPolicy, Container, Description, Impression, Inventory, Mind, Name, Needs, ObjectState, PhysicalObject, Position, Room, Surface, StimulusSource, Thought, WorkingMemoryIdentity } from "../ecs/components";
+import { createAgentEntity, createObjectEntity, createRoomEntity } from "../ecs/prefabs";
+import { getControlledBodies, isOperatorControlled, releaseControl as releaseBody, takeControl as possessBody } from "../ecs/controlled";
 import { getDirectContainer, getRoomForEntity, listDirectContents, setLocatedIn } from "../ecs/location";
 import { tryAddToInventory, tryRemoveFromInventory } from "../ecs/inventory";
 import { attachToEntity, extendDynamicComponent, getComponent } from "../ecs/component-registry";
 import { readSimulationTime } from "../ecs/simulation-time";
 import { registerSystem } from "../ecs/dynamic-systems";
 import { runWorldTickAt } from "../god/god-agent";
-import { addPerception, addThought, type AgentAction } from "../cognition/agent-mind";
+import { addPerception, addThought, getAgentThoughts, type AgentAction } from "../cognition/agent-mind";
+import { drainPendingStimuli } from "../cognition/stimulus-queue";
+import { wakeForegroundCognition } from "../cognition/idle-cognition";
+import { snapshotAffect } from "../cognition/affect-state";
+import { getAgentImpressions } from "../cognition/knowledge-graph";
+import { formatPlansForContext } from "../cognition/planning-system";
+import { getSocialDialogue } from "../cognition/social-memory";
+import { getSpiritSystemState } from "../spirits/spirit-system";
 import { completeDeferredAction, createIntentGoal, executeActions } from "../cognition/cognition-system";
 import { getAgentVisualEntities, getAgentWorldCapabilityGeneration, isAgentVisualEntity, isPublicContainerOpen, registerAgentWorldCapabilities, type ObservableStateField } from "../cognition/world-capabilities";
 import { setGoalContract } from "../cognition/goal-contract";
@@ -38,13 +47,16 @@ import { createBlackout, type BlackoutOperation } from "./spatial-blackout";
 import { createSpatialWorldControl } from "./spatial-world-control";
 import { INITIAL_SPATIAL_BLUEPRINT, CAFE_SPATIAL_BLUEPRINT, SPATIAL_ASSETS, validateSpatialBlueprint, blackoutSpatialBlueprint, extendedBlackoutSpatialBlueprint,
   type SpatialBlueprint, type SpatialPoint } from "./spatial-catalog";
-import type { SpatialOperatorActor, SpatialSceneCue, SpatialViewEntity, SpatialViewState } from "./spatial-contract";
+import type { SpatialControlView, SpatialOperatorActor, SpatialSceneCue, SpatialViewEntity, SpatialViewState } from "./spatial-contract";
+import { CONTROL_NEARBY_METRES, CONTROL_STEP_METRES, DEFAULT_VISITOR_PERSONA, VISITOR_LIMIT, controlActSchema, controlSaySchema, controlTakeSchema,
+  controlVisitorSchema, controlWalkSchema, nativeControlAction, projectHeardSpeech } from "./spatial-control";
+import { createSpatialInterviews } from "./spatial-interview";
 import { spatialAgentConfig, validateSpatialScenario, type SpatialScenarioDefinition } from "./spatial-scenario";
 import { createTownScenario, type TownFixture } from "./spatial-town-fixtures";
 import { createSpatialTownGrowth, townGrowthSites, TOWN_GROWTH_ATTEMPTS, type TownGrowthAddition, type TownGrowthSnapshot, type TownGrowthSite } from "./spatial-town-growth";
 import { createSpatialTownLife, townEvolutionConfig } from "./spatial-town-life";
 import { createStoryTownScenario } from "./spatial-town-story";
-import { createLovecraftTownScenario, createLovecraftWorldSpecification } from "./spatial-lovecraft-town";
+import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSaltmereAuthorCast } from "./spatial-lovecraft-town";
 import { createHouseholdScenario, HOUSEHOLD_GROWTH_SITES } from "./spatial-household";
 import { createHouseholdChallengeScenario } from "./spatial-household-challenge";
 import type { PlanningEvent } from "../cognition/planning-telemetry";
@@ -57,9 +69,12 @@ import { createSpatialWeatherMechanic, createSpatialWeatherMechanicRequest, asse
   registerSpatialWeatherExposureSchema, SPATIAL_WEATHER_MECHANIC_SYSTEM } from "./spatial-weather-mechanic";
 import { createSpatialDevelopmentInputs, registerSpatialDevelopmentInputSchema } from "./spatial-development-inputs";
 import { assertSpatialDevelopmentRelease, SPATIAL_DEVELOPMENT_LIMITS, SPATIAL_DEVELOPMENT_BUILDER_CONTEXT, isSpatialDevelopmentComponent, permitsSpatialDevelopmentValue } from "./spatial-development-policy";
-import { createSpatialGodConsole } from "./spatial-god-console";
+import { createSpatialGodConsole, type SpatialOmniscience } from "./spatial-god-console";
 import { DEVELOPMENT_EVOLUTION_CONFIG } from "./spatial-town-life";
 import { getSpatialAssetEntry, loadSpatialAssetCatalog, spatialAssetModel } from "./spatial-asset-registry";
+import { readLocalSpeechOpportunity } from "../cognition/timed-speech";
+/** How long a controlled body waits for a natural gap before cutting in. */
+const SAY_GAP_WAIT_MS = 3500;
 
 type Pending = { actor: number; actorKey: string; target: number; targetKey: string; sourceId: string;
   action: AgentAction; verb: string; startedAt: number; due?: number; container?: number; containerKey?: string;
@@ -135,6 +150,17 @@ export class SpatialDemo {
   private readonly motivations = new Map<number, ReturnType<typeof createCommunicationMotivation>>();
   private timer?: NodeJS.Timeout;
   private deadline?: NodeJS.Timeout;
+  /** Wall time the session deadline fires; suspended (as remaining ms) while paused. */
+  private deadlineAt?: number;
+  private deadlineRemainingMs?: number;
+  /** Operator pause: simulation time and all minds frozen (see pause()). */
+  private pausedState = false;
+  /** Bodies the operator brought in. They have no mind of their own (no Mind component). */
+  readonly visitors = new Set<number>();
+  private readonly pendingSays: Array<{ actor: number; text: string; targetKey?: string; queuedAtSimMs: number }> = [];
+  /** Operator walk per body: its body reservation id. A new walk replaces the old. */
+  private readonly walks = new Map<number, string>();
+  readonly interviews: ReturnType<typeof createSpatialInterviews>;
   private started = false;
   private stopped = false;
   private built = false;
@@ -164,7 +190,7 @@ export class SpatialDemo {
     }, { requiredSpec: options.requiredSpec });
     if (this.blackout) this.observedCircuit = { power: this.blackout.view().power,
       isolated: this.blackout.component.isolated[this.byId.get("lighting-panel")!] };
-    if (this.blackout) this.houseSpirit = createSpatialWorldControl({ world: w, running: () => this.running,
+    if (this.blackout) this.houseSpirit = createSpatialWorldControl({ world: w, running: () => this.admitting,
       live: this.live, blackout: this.blackout, box: this.byId.get("supply-box")!,
       changed: operation => {
         if (operation.startsWith("light_")) this.announceCircuitChanges();
@@ -271,7 +297,7 @@ export class SpatialDemo {
         ? HOUSEHOLD_GROWTH_SITES.map(({ roomId, ...site }) => ({ ...structuredClone(site), roomEid: this.byId.get(roomId)! }))
         : townGrowthSites(id => this.byId.get(id));
       const growth = createSpatialTownGrowth({ world: w, spatial: this.spatial, bounds: options.world!.bounds,
-        cellSize: .5, ready: () => this.running, sites, snapshot: () => this.growthGeometry(),
+        cellSize: .5, ready: () => this.admitting, sites, snapshot: () => this.growthGeometry(),
         ...(options.scenario === "household" ? {} : { maxAttempts: TOWN_GROWTH_ATTEMPTS }),
         environment: roomEid => this.roomViews.find(room => room.id === roomEid)?.environment,
         commit: (eid, addition) => {
@@ -284,7 +310,7 @@ export class SpatialDemo {
           this.announcePhysicalChange(eid, `${addition.name} is now present here.`, "new furnishing");
           this.developmentInputs?.addTarget({ id: eid, key: this.key(eid), kind: "object", asset: addition.assetId });
         } });
-      if (options.story === "community-drama" || options.story === "coastal-mystery") this.storyEvents = createSpatialStoryEvents({ world: w, running: () => this.running,
+      if (options.story === "community-drama" || options.story === "coastal-mystery") this.storyEvents = createSpatialStoryEvents({ world: w, running: () => this.admitting,
         trees: ["square-tree-1", "square-tree-3", "garden-tree-1"].map(id => {
           const eid = this.byId.get(id)!, roomId = getRoomForEntity(w, eid)!;
           return { id: eid, key: this.key(eid), roomId, roomKey: this.key(roomId) };
@@ -295,7 +321,7 @@ export class SpatialDemo {
             receipt.operation === "tree_damage" ? "CRACK · branch snapped" : "branches cleared", 6500);
           this.townLife?.recordStoryReceipt(receipt);
         } });
-      if (options.story) this.narrativeEvents = createSpatialNarrativeEvents({ world: w, running: () => this.running,
+      if (options.story) this.narrativeEvents = createSpatialNarrativeEvents({ world: w, running: () => this.admitting,
         rooms: this.roomViews.map(room => ({ id: room.id, key: room.key, outdoor: room.environment === "outdoor" })),
         lamps: [...this.visuals].filter(([, visual]) => visual.asset === "lamp").map(([id, visual]) => ({ id, key: visual.key })),
         placeProp: (roomId, spec) => this.placeStoryProp(roomId, spec),
@@ -303,7 +329,7 @@ export class SpatialDemo {
         cue: (entity, kind, text) => this.storyCue(entity, kind, text),
         ...(options.development ? { mechanicGuidance: SPATIAL_DEVELOPMENT_BUILDER_CONTEXT } : {}),
         record: receipt => { this.record("world", receipt.publicDetail); this.townLife?.recordNarrativeReceipt(receipt); } });
-      try { this.townLife = createSpatialTownLife({ sim, live: this.live, running: () => this.running, growth,
+      try { this.townLife = createSpatialTownLife({ sim, live: this.live, running: () => this.admitting, growth,
         householdChallenge: options.householdChallenge, narrativeEvents: this.narrativeEvents,
         story: options.story, storyEvents: this.storyEvents, growthSiteCount: sites.length, reviewMechanics: !!options.weatherMechanic || !!options.development,
         development: !!options.development,
@@ -314,7 +340,7 @@ export class SpatialDemo {
         targets: [...this.visuals].filter(([id, visual]) => this.actors.includes(id) || ["chair", "table", "sofa"].includes(visual.asset))
           .map(([id, visual]) => ({ id, key: visual.key, kind: this.actors.includes(id) ? "resident" as const : "furniture" as const })),
         outdoorRooms: this.roomViews.filter(room => room.environment === "outdoor").map(({ id, key }) => ({ id, key })),
-        weather: () => this.townLife!.weather.view(), running: () => this.running,
+        weather: () => this.townLife!.weather.view(), running: () => this.admitting,
         active: () => !!sim.god.systemRegistry.systems.get(SPATIAL_WEATHER_MECHANIC_SYSTEM)?.managedRelease,
         record: receipt => {
           this.record("world", receipt.detail);
@@ -328,12 +354,20 @@ export class SpatialDemo {
           rooms: this.roomViews.map(room => ({ id: room.id, key: room.key, outdoor: room.environment === "outdoor" })),
           weather: () => this.townLife!.weather.view().rooms });
         this.godConsole = createSpatialGodConsole({ sim, running: () => this.running, atSimMs: () => this.atSimMs,
+          profile: "develop", omniscience: this.omniscience,
           guidance: () => SPATIAL_DEVELOPMENT_BUILDER_CONTEXT,
           publicWorld: () => { const view = this.snapshot(); return { sourceId: view.sourceId, atSimMs: view.atSimMs,
             mode: view.mode, running: view.running, rooms: view.rooms, entities: view.entities, weather: view.weather }; },
           weather: (condition, roomId) => this.townLife!.weather.set(condition, roomId, undefined, "operator") });
       }
     }
+    // God answers the operator in every live session: omniscient reads only.
+    // Construction tools stay with the explicit development profile above.
+    if (!this.godConsole && this.live) this.godConsole = createSpatialGodConsole({ sim, running: () => this.running, atSimMs: () => this.atSimMs,
+      profile: "operator", omniscience: this.omniscience, guidance: () => "", publicWorld: () => ({}),
+      weather: () => ({ status: "rejected", detail: "Weather is not an operator tool in this profile." }) });
+    this.interviews = createSpatialInterviews({ world: w, resolve: key => this.actors.find(id => this.current(id, key)
+      && this.visuals.get(id)?.key === key && hasComponent(w, id, Agent) && hasComponent(w, id, Mind)) });
   }
   static async create(options: Options = {}) {
     // Data-driven kinds (catalog/*.json) become buildable and renderable. A bad
@@ -401,6 +435,10 @@ export class SpatialDemo {
   }
   get sourceId() { return getCommittedEvents(this.sim.world).sourceId!; }
   get running() { return this.started && !this.stopped; }
+  get paused() { return this.pausedState; }
+  /** World mutations (author events, growth, weather, resident actions) are
+   * admitted only while running and not paused. Stop still fences everything. */
+  private get admitting() { return this.running && !this.pausedState; }
   get atSimMs() { return readSimulationTime(this.sim.world); }
   private mechanicStatus() {
     const status = this.sim.getCodingStatus(), job = status?.jobs.at(-1);
@@ -470,7 +508,7 @@ export class SpatialDemo {
     recordSpiritPublicEnvironmentReceipt(w, { id: eventId, atSimMs: this.atSimMs, roomId: getRoomForEntity(w, target)!, detail: content });
     for (const actor of this.actors) if (getAgentVisualEntities(w, actor).includes(target)) {
       addPerception(w, actor, { type: "attention", source: Name.value[target], content, signalKey: eventId, intensity: .6 });
-      queueExperiencedEvent(w, actor, { id: `${eventId}:${actor}`, channel: "physical-world",
+      this.experience(actor, { id: `${eventId}:${actor}`, channel: "physical-world",
         source: Name.value[target], content, atSimMs: this.atSimMs });
     }
     this.cue(key, "action", cue); this.record("world", content);
@@ -552,7 +590,7 @@ export class SpatialDemo {
   private installCapabilities(eid: number) {
     const w = this.sim.world, blackout = this.blackout;
     this.removers.push(registerAgentWorldCapabilities(w, eid, {
-      ownsMovement: true, ready: () => this.running, busy: () => this.work.has(eid),
+      ownsMovement: true, ready: () => this.admitting, busy: () => this.work.has(eid),
       movementTargets: () => this.spatial.movementTargets(eid),
       context: () => this.context(eid),
       // This executor owns physical interactions. Generic schema traits must
@@ -589,7 +627,11 @@ export class SpatialDemo {
       beginDecision: () => {
         this.decisions.get(eid)?.abort(); const controller = new AbortController(), key = this.key(eid);
         this.decisions.set(eid, controller);
-        return { signal: controller.signal, isCurrent: () => this.running && this.current(eid, key) && this.decisions.get(eid) === controller && !controller.signal.aborted, finish: () => {} };
+        // A decision that lands while the world is paused, or after the operator
+        // took this body, is discarded rather than committed; after resume or
+        // release the resident simply decides afresh from what it perceives.
+        return { signal: controller.signal, isCurrent: () => this.admitting && !isOperatorControlled(w, eid) && this.current(eid, key)
+          && this.decisions.get(eid) === controller && !controller.signal.aborted, finish: () => {} };
       },
       onThought: (_id, text, type) => { if (type !== "injected") this.thoughts.set(eid, { text, atSimMs: this.atSimMs }); },
       ...(this.options.onPlanningEvent ? { onPlanningEvent: this.options.onPlanningEvent } : {}),
@@ -661,6 +703,7 @@ export class SpatialDemo {
     const w = this.sim.world;
     const fail = (reason: string) => { completeDeferredAction(w, actor, action, false, reason); return true; };
     if (!this.running) return fail("The world is stopped.");
+    if (this.pausedState) return fail("The world is paused.");
     // The native give action names the recipient as target and the item as
     // content; the object-first interact form is "give <person>".
     const giveAction = action.type === "give";
@@ -825,13 +868,18 @@ export class SpatialDemo {
     for (const other of this.actors) {
       if (other === actor || exclude.includes(other) || !isEntityPresent(w, other) || !Agent.active[other] || !getAgentVisualEntities(w, other).includes(actor)) continue;
       addPerception(w, other, { type: "attention", source: Name.value[actor], content, signalKey: `${eventId}:${other}`, intensity: .5 });
-      queueExperiencedEvent(w, other, { id: `${eventId}:${other}`, channel: "physical-world", source: Name.value[actor], content, atSimMs: this.atSimMs });
+      this.experience(other, { id: `${eventId}:${other}`, channel: "physical-world", source: Name.value[actor], content, atSimMs: this.atSimMs });
     }
   }
   private tell(actor: number, source: string, content: string, type = "attention") {
     const w = this.sim.world, eventId = `object:${this.sourceId}:${++this.sequence}`;
     addPerception(w, actor, { type, source, content, signalKey: eventId, intensity: .7 });
-    queueExperiencedEvent(w, actor, { id: `${eventId}:${actor}`, channel: "physical-world", source, content, atSimMs: this.atSimMs });
+    this.experience(actor, { id: `${eventId}:${actor}`, channel: "physical-world", source, content, atSimMs: this.atSimMs });
+  }
+  /** Experience appraisal is a mind's work; a visitor body has none to queue for. */
+  private experience(actor: number, event: Parameters<typeof queueExperiencedEvent>[2]) {
+    if (!hasComponent(this.sim.world, actor, Mind)) return;
+    queueExperiencedEvent(this.sim.world, actor, event);
   }
   private commitObjectVerb(p: Pending): { success: boolean; detail: string } {
     const w = this.sim.world, actorName = Name.value[p.actor], thing = Name.value[p.target], item = this.items.get(p.target);
@@ -980,6 +1028,11 @@ export class SpatialDemo {
     }
     this.spatial.advance();
     const w = this.sim.world;
+    // Mindless visitor bodies still perceive (heard speech, notices); nothing
+    // else drains their inbox because no cognition loop enrolls them.
+    if (this.visitors.size) for (const event of drainPendingStimuli(this.visitors, w))
+      if (entityExists(w, event.targetEid)) addPerception(w, event.targetEid, event);
+    this.flushPendingSays();
     for (const p of [...this.work.values()]) {
       if (p.due === undefined || p.due > this.atSimMs) continue;
       const invalid = this.pendingInvalid(p, true);
@@ -1101,16 +1154,254 @@ export class SpatialDemo {
     return this.houseSpirit.command(text);
   }
   godCommand(body: unknown) {
-    if (!this.godConsole) throw Error("World development is not enabled in this session");
+    if (!this.godConsole || !this.options.development) throw Error("World development is not enabled in this session");
     return this.godConsole.submit(body);
   }
-  dispatch(actorKey: string, type: string, targetKey?: string, content?: string) {
+  dispatch(actorKey: string, type: string, targetKey?: string, content?: string, speechMode?: "interrupt") {
     const actor = this.requireActor(actorKey);
     if (type === "wait" && this.work.has(actor)) { const p = this.work.get(actor)!; this.spatial.cancel(actor, "operator_cancelled"); this.finish(p, false, "Operator cancelled the action before completion."); return; }
     const target = targetKey ? [...this.visuals.keys(), ...this.roomViews.map(r => r.id)].find(id => this.current(id, targetKey)) : undefined;
     if (targetKey && target === undefined) throw new Error("Stale target identity");
     this.record("operator", `Explicit operator action for ${Name.value[actor]}: ${type}`);
-    executeActions(this.sim.world, [{ eid: actor, action: { type, ...(target !== undefined ? { target: Name.value[target] } : {}), ...(content ? { content } : {}) } as AgentAction }], this.sim.god.systemRegistry);
+    executeActions(this.sim.world, [{ eid: actor, action: { type, ...(target !== undefined ? { target: Name.value[target] } : {}), ...(content ? { content } : {}),
+      ...(speechMode ? { speechMode } : {}) } as AgentAction }], this.sim.god.systemRegistry);
+  }
+  // ---------------------------------------------------------------------------
+  // Inhabit: operator control of one body (ECS `Controlled`, see ecs/controlled.ts)
+  // ---------------------------------------------------------------------------
+  private controlledBody(): number | undefined {
+    return getControlledBodies(this.sim.world).find(id => this.actors.includes(id) && this.current(id, this.visuals.get(id)?.key ?? ""));
+  }
+  private requireControlled() {
+    if (!this.running) throw Error("Start a session first");
+    const actor = this.controlledBody();
+    if (actor === undefined) throw Error("Take control of a body first");
+    return actor;
+  }
+  private stopWalk(actor: number) {
+    if (this.walks.has(actor)) this.spatial.cancel(actor, "walk_replaced");
+    const execution = this.walks.get(actor);
+    if (execution) { releaseSimulationResources(this.sim.world, actor, execution); this.walks.delete(actor); }
+  }
+  /** An unfinished native act ends when the operator does something else. */
+  private interruptWork(actor: number, detail = "You stopped before finishing.") {
+    const pending = this.work.get(actor);
+    if (!pending) return;
+    this.spatial.cancel(actor, "operator_interrupted"); this.finish(pending, false, detail);
+  }
+  /** Spawn a new visitor body at the world's entry, through the same native
+   * construction path residents use, and take control of it. It has no mind of
+   * its own: no Mind component, so no cognition loop ever enrolls it. */
+  spawnVisitor(input: unknown = {}) {
+    const request = controlVisitorSchema.parse(input ?? {});
+    if (!this.admitting) throw Error(this.running ? "The world is paused" : "Start a session first");
+    if (this.visitors.size >= VISITOR_LIMIT) throw Error("This session already has its visitors");
+    const w = this.sim.world, name = request.name ?? (this.visitors.size ? `Visitor ${this.visitors.size + 1}` : "Visitor");
+    if ([...query(w, [Agent, Name])].some(id => Name.value[id]?.toLowerCase() === name.toLowerCase())) throw Error(`Someone called ${name} is already here`);
+    const entry = this.roomViews.find(room => room.environment === "outdoor") ?? this.roomViews[0];
+    const blueprintRoom = this.blueprint.rooms.find(room => this.byId.get(room.id) === entry.id);
+    // Arrive in clear space: at least a metre from anyone already standing there.
+    const others = this.actors.map(id => ({ x: Position.x[id], y: Position.y[id] }));
+    const spot = this.spatial.findStandingPoint(blueprintRoom?.entry ?? { x: entry.bounds.x + entry.bounds.width / 2, y: entry.bounds.z + entry.bounds.depth / 2 }, 5,
+      p => others.every(o => Math.hypot(o.x - p.x, o.y - p.y) >= 1));
+    if (!spot || this.spatial.roomAtPoint(spot) !== entry.id) throw Error("There is no clear place to arrive right now");
+    const eid = createAgentEntity(w, { name, role: "visitor", description: "A stranger new to this place.",
+      systemPrompt: request.persona ?? DEFAULT_VISITOR_PERSONA, roomId: entry.id });
+    removeComponent(w, eid, Mind);
+    if (hasComponent(w, eid, BehaviorPolicy)) BehaviorPolicy.enabled[eid] = false;
+    this.position(eid, spot.x, spot.y);
+    this.visitors.add(eid); this.actors.push(eid);
+    this.sim.god.registry.byName.set(name, eid); this.sim.god.registry.byId.set(eid, name);
+    this.visuals.set(eid, { key: this.key(eid), asset: "actor-a", size: SPATIAL_ASSETS["actor-a"].size });
+    configureCharacterAppearance(w, eid, { age: "adult", hairColor: "dark", hairStyle: "short", clothing: "a travel-worn grey coat", posture: "standing" });
+    Needs.hunger[eid] = 20; Needs.energy[eid] = 90;
+    this.installCapabilities(eid);
+    this.record("operator", `${name} arrives in ${entry.name} (operator visitor).`);
+    this.witness(eid, `${name}, someone you have not seen here before, arrives in ${entry.name}.`);
+    this.takeControl(this.key(eid));
+    return { actorKey: this.key(eid) };
+  }
+  takeControl(actorKey: unknown) {
+    const request = controlTakeSchema.parse(typeof actorKey === "string" ? { actorKey } : actorKey);
+    const actor = this.requireActor(request.actorKey), w = this.sim.world;
+    const previous = this.controlledBody();
+    if (previous === actor) return { actorKey: request.actorKey };
+    if (previous !== undefined) this.releaseControl();
+    possessBody(w, actor);
+    // Its own mind stops here: an in-flight decision is discarded, and an
+    // unfinished physical act it chose ends without effect.
+    this.decisions.get(actor)?.abort();
+    this.interruptWork(actor);
+    this.record("operator", `Operator took control of ${Name.value[actor]}.`);
+    return { actorKey: request.actorKey };
+  }
+  releaseControl() {
+    const w = this.sim.world, released: string[] = [];
+    for (const actor of getControlledBodies(w)) {
+      this.stopWalk(actor);
+      releaseBody(w, actor);
+      if (!this.actors.includes(actor)) continue;
+      released.push(this.key(actor));
+      // A resident resumes its own mind with everything it perceived while
+      // possessed; a visitor body simply stays where it is, idle.
+      if (hasComponent(w, actor, Mind) && isEntityPresent(w, actor)) wakeForegroundCognition(w, actor, { cause: "explicit" });
+      this.record("operator", `Operator released ${Name.value[actor]}.`);
+    }
+    return { released };
+  }
+  walk(input: unknown): { ok: boolean; reason?: string } {
+    const request = controlWalkSchema.parse(input), actor = this.requireControlled(), w = this.sim.world;
+    if (this.pausedState) return { ok: false, reason: "paused" };
+    const point = "dx" in request ? this.spatial.walkPointToward(actor, { x: request.dx, y: request.dy }, CONTROL_STEP_METRES) : { x: request.x, y: request.y };
+    if (!point) return { ok: false, reason: "blocked" };
+    this.stopWalk(actor); this.interruptWork(actor, "You walked away before finishing.");
+    const execution = `walk:${randomUUID()}`;
+    if (!reserveSimulationResources(w, actor, execution, ["body"], { activity: { kind: "moving" } })) return { ok: false, reason: "body_busy" };
+    const admission = this.spatial.requestWalk(actor, point, () => {
+      releaseSimulationResources(w, actor, execution);
+      if (this.walks.get(actor) === execution) this.walks.delete(actor);
+    });
+    if (!admission.ok) { releaseSimulationResources(w, actor, execution); return { ok: false, reason: admission.reason }; }
+    this.walks.set(actor, execution);
+    return { ok: true };
+  }
+  /** Any native action as the controlled body: the same executor and checks a
+   * resident's own choice goes through. Control confers no extra power. */
+  act(input: unknown) {
+    const request = controlActSchema.parse(input), actor = this.requireControlled();
+    if (this.pausedState) throw Error("The world is paused");
+    const native = nativeControlAction(request);
+    if (native.type !== "speak") { this.stopWalk(actor); if (native.type !== "wait") this.interruptWork(actor); }
+    this.dispatch(this.key(actor), native.type, request.targetKey, native.content);
+    return { ok: true };
+  }
+  /** Real committed speech: audible to whoever is near, remembered by them. */
+  /** A human speaks like anyone in the room: at the next natural gap in the
+   * conversation, cutting in only if no gap comes within a few seconds. A line
+   * is never silently dropped because someone else held the floor. */
+  say(input: unknown) {
+    const request = controlSaySchema.parse(input), actor = this.requireControlled();
+    if (this.pausedState) throw Error("The world is paused");
+    if (readLocalSpeechOpportunity(this.sim.world, actor).available && !this.pendingSays.length) {
+      this.dispatch(this.key(actor), "speak", request.targetKey, request.text);
+      return { ok: true };
+    }
+    if (this.pendingSays.length >= 4) throw Error("You already have lines waiting to be said");
+    this.pendingSays.push({ actor, text: request.text, targetKey: request.targetKey, queuedAtSimMs: this.atSimMs });
+    return { ok: true, queued: true };
+  }
+  private flushPendingSays() {
+    const next = this.pendingSays[0]; if (!next) return;
+    if (this.controlledBody() !== next.actor) { this.pendingSays.length = 0; return; }
+    const w = this.sim.world, waited = this.atSimMs - next.queuedAtSimMs >= SAY_GAP_WAIT_MS;
+    const opportunity = readLocalSpeechOpportunity(w, next.actor, { mode: waited ? "urgent" : "conversational" });
+    if (!opportunity.available) return; // includes our own previous line still being spoken
+    this.pendingSays.shift();
+    this.dispatch(this.key(next.actor), "speak", next.targetKey, next.text, waited ? "interrupt" : undefined);
+  }
+  private controlView(): SpatialControlView | undefined {
+    const actor = this.controlledBody(); if (actor === undefined) return;
+    const w = this.sim.world, here = { x: Position.x[actor], y: Position.y[actor] };
+    const nearby: SpatialControlView["nearby"] = [];
+    for (const id of new Set([...getAgentVisualEntities(w, actor), ...listDirectContents(w, actor)])) {
+      const visual = this.visuals.get(id);
+      if (id === actor || !visual || visual.asset === "wall" || !this.current(id, visual.key)) continue;
+      const held = getDirectContainer(w, id) === actor, person = this.actors.includes(id);
+      const distance = held ? 0 : Math.hypot(Position.x[id] - here.x, Position.y[id] - here.y);
+      if (!Number.isFinite(distance) || distance > CONTROL_NEARBY_METRES) continue;
+      const verbs = person ? ["speak", "examine"] : [...new Set([...this.verbs(actor, id), "examine", ...(held ? ["drop"] : [])])];
+      nearby.push({ key: visual.key, name: Name.value[id], kind: person ? "actor" : "prop", distance: Math.round(distance * 100) / 100, verbs });
+    }
+    nearby.sort((a, b) => a.distance - b.distance);
+    return { actorKey: this.key(actor), name: Name.value[actor], visitor: this.visitors.has(actor),
+      nearby: nearby.slice(0, 16), heard: projectHeardSpeech(w, actor) };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pause, God and the interview chair
+  // ---------------------------------------------------------------------------
+  /** Freeze simulation time and minds. The fast loop stops (no physics, speech
+   * or cognition scheduling); runtime AI operations not yet started are held
+   * at dispatch; results already in flight cannot commit: resident decisions
+   * are discarded (beginDecision.isCurrent) and author/world mutations are
+   * refused (admitting). The wall-clock session deadline is suspended too. */
+  pause() {
+    if (!this.running) throw Error("Start a session first");
+    if (this.pausedState) return { paused: true };
+    this.pausedState = true;
+    this.sim.pause();
+    if (this.deadline && this.deadlineAt !== undefined) {
+      clearTimeout(this.deadline); this.deadline = undefined;
+      this.deadlineRemainingMs = Math.max(1000, this.deadlineAt - Date.now());
+    }
+    this.record("session", "The world is paused: time and every mind stand still.");
+    return { paused: true };
+  }
+  resume() {
+    if (!this.running) throw Error("Start a session first");
+    if (!this.pausedState) return { paused: false };
+    this.pausedState = false;
+    this.sim.resume();
+    if (this.deadlineRemainingMs !== undefined) { this.armDeadline(this.deadlineRemainingMs); this.deadlineRemainingMs = undefined; }
+    this.record("session", "The world resumes.");
+    return { paused: false };
+  }
+  async askGod(body: unknown) {
+    if (!this.godConsole) throw Error("God answers in live sessions");
+    const result = await this.godConsole.ask(body);
+    return { reply: result.reply, ...(result.receipts.length ? { receipts: result.receipts } : {}) };
+  }
+  interview(body: unknown) { return this.interviews.ask(body); }
+  /** The authenticated operator's omniscient view: private minds included.
+   * Never a resident perception; never part of /api/scene. */
+  readonly omniscience: SpatialOmniscience = {
+    whereIsEveryone: () => this.actors.filter(id => this.current(id, this.visuals.get(id)?.key ?? "")).map(id => {
+      const w = this.sim.world, body = getSimulationBodyActivity(w, id), seat = getRelationTargets(w, id, SittingOn)[0];
+      const focus = projectSpatialGoals(w, id).focus;
+      return { name: Name.value[id], room: Name.value[getRoomForEntity(w, id)!], position: { x: Math.round(Position.x[id] * 10) / 10, y: Math.round(Position.y[id] * 10) / 10 },
+        doing: body ? body.operation ?? body.kind : seat !== undefined ? `sitting on ${Name.value[seat]}` : "standing",
+        ...(focus ? { focus: focus.description } : {}), ...(this.visitors.has(id) ? { visitor: true } : {}),
+        ...(isOperatorControlled(w, id) ? { controlledByOperator: true } : {}) };
+    }),
+    inspectResident: (name: string) => this.inspectResident(name),
+    storyLedger: () => {
+      const registry = getSpiritSystemState(this.sim.world)?.registry, eid = registry?.byName.get("The Narrator");
+      const state = eid === undefined ? undefined : registry!.spirits.get(eid)?.narrativeState;
+      return { ...(state ? { phase: state.currentPhase, tension: state.tension, ledger: state.ledger,
+        threads: state.plotThreads?.filter(thread => !["resolved", "abandoned"].includes(thread.status)).slice(-12),
+        characterArcs: state.characterArcs?.slice(-12), plannedBeats: state.plannedBeats?.slice(0, 8) } : { note: "No Narrator is active in this session." }),
+        recentProse: this.storyFeed.slice(-6).map(row => ({ atSimMs: row.atSimMs, text: row.text })),
+        ...(this.townLife ? { story: this.townLife.view().story } : {}) };
+    },
+    recentEvents: (count: number) => structuredClone(this.events.slice(-Math.max(1, Math.min(100, count)))),
+  };
+  private inspectResident(name: string) {
+    const w = this.sim.world, wanted = name.trim().toLowerCase();
+    const id = this.actors.find(a => Name.value[a]?.toLowerCase() === wanted && this.current(a, this.visuals.get(a)?.key ?? ""));
+    if (id === undefined) return { found: false, residents: this.actors.map(a => Name.value[a]) };
+    const resident = this.options.world?.residents.find(r => r.name === Name.value[id]);
+    const authored = this.options.story === "coastal-mystery" ? getSaltmereAuthorCast().find(r => r.name === Name.value[id]) : undefined;
+    const affect = snapshotAffect(w, id), room = getRoomForEntity(w, id);
+    const clip = (text: unknown, n: number) => typeof text === "string" ? text.length > n ? `${text.slice(0, n - 1)}…` : text : undefined;
+    const thoughts = getAgentThoughts(w, id).sort((a, b) => (Thought.timestamp[b] || 0) - (Thought.timestamp[a] || 0)).slice(0, 8)
+      .map(t => ({ type: Thought.type[t], text: clip(Thought.content[t], 400) }));
+    const latest = this.thoughts.get(id);
+    return { found: true, name: Name.value[id], role: Agent.role[id], ...(this.visitors.has(id) ? { visitor: true, note: "An operator visitor body; it has no mind of its own." } : {}),
+      controlledByOperator: isOperatorControlled(w, id),
+      location: { room: room === undefined ? undefined : Name.value[room], x: Math.round(Position.x[id] * 10) / 10, y: Math.round(Position.y[id] * 10) / 10,
+        doing: getSimulationBodyActivity(w, id)?.operation ?? getSimulationBodyActivity(w, id)?.kind ?? "idle" },
+      needs: { hunger: Math.round(Needs.hunger[id]), energy: Math.round(Needs.energy[id]) },
+      mood: affect ? { feeling: affect.feeling, valence: affect.valence, arousal: affect.arousal, reason: affect.reason } : undefined,
+      focus: hasComponent(w, id, Mind) ? Mind.focus[id] || undefined : undefined,
+      ...projectSpatialGoals(w, id), plans: clip(formatPlansForContext(w, id), 1500),
+      latestThought: latest ? { text: latest.text, atSimMs: latest.atSimMs } : undefined, recentThoughts: thoughts,
+      secret: resident?.past?.secret ?? authored?.secret, background: clip(resident?.past?.background ?? authored?.background, 1500),
+      wants: authored?.wants ?? resident?.aspirations, drives: authored?.drives ?? resident?.past?.drives, voice: authored?.voice ?? resident?.past?.voice,
+      impressions: getAgentImpressions(w, id).slice(-16).map(i => ({ of: Impression.targetName[i], trait: Impression.trait[i],
+        valence: Impression.valence[i], confidence: Impression.confidence[i], basis: clip(Impression.basis[i], 200) })),
+      carrying: listDirectContents(w, id).filter(item => this.visuals.has(item)).map(item => Name.value[item]),
+      recentDialogue: getSocialDialogue(w, id).slice(-12).map(turn => ({ speaker: turn.own ? Name.value[id] : turn.speaker,
+        ...(turn.target ? { to: turn.target } : {}), text: clip(turn.content, 400), atSimMs: turn.simulation?.completedAtSimMs ?? turn.atSimMs })) };
   }
   grow() {
     if (!this.running) throw new Error("Start the world first");
@@ -1144,9 +1435,10 @@ export class SpatialDemo {
         this.developmentInputs.syncInputs();
         if (!this.live) getCodingDaemon(this.sim.world)?.start();
       }
-      if (this.options.automaticClock !== false) this.deadline = setTimeout(() => this.stop(), this.seconds * 1000);
+      if (this.options.automaticClock !== false) this.armDeadline(this.seconds * 1000);
       if (this.live) await this.sim.start();
       else if (this.options.automaticClock !== false) this.timer = setInterval(() => {
+        if (this.pausedState) return;
         try { this.advance(100); } catch (error) { this.record("error", error instanceof Error ? error.message : "World tick failed"); this.stop(); }
       }, 100);
       this.record("session", this.live ? "Live native Argos cognition started." : this.options.development
@@ -1156,8 +1448,14 @@ export class SpatialDemo {
         : "Manual physics session started. No AI and no scripted decisions.");
     } catch (error) { this.stop(); throw error; }
   }
+  private armDeadline(ms: number) {
+    if (this.deadline) clearTimeout(this.deadline);
+    this.deadlineAt = Date.now() + ms;
+    this.deadline = setTimeout(() => this.stop(), ms);
+  }
   advance(deltaMs: number) {
     if (!this.running || this.live) throw new Error("Manual advancement requires an active non-live session");
+    if (this.pausedState) throw new Error("The world is paused");
     if (!Number.isFinite(deltaMs) || deltaMs < 0 || deltaMs > 60_000) throw new Error("Invalid bounded time step");
     for (let remaining = Math.min(deltaMs, this.seconds * 1000 - this.atSimMs); remaining > 0; remaining -= 100) {
       getCodingDaemon(this.sim.world)?.commitReady(this.sim.world.time.tick + 1);
@@ -1232,13 +1530,14 @@ export class SpatialDemo {
         ...(this.options.story === "coastal-mystery" ? { theme: "lovecraft" as const } : {}) } } : {}),
       ...(this.houseSpirit ? { worldControl: this.houseSpirit.view() } : {}),
       ...(this.townLife ? { townLife: this.townLife.view(), weather: this.townLife.weatherView() } : {}),
-      ...(this.godConsole ? { development: this.godConsole.view() } : {}),
+      ...(this.godConsole && this.options.development ? { development: this.godConsole.view() } : {}),
       ...(this.townLife ? { storyFeed: structuredClone(this.storyFeed) } : {}),
       cues: this.running ? [...this.sceneCues.values()].filter(cue => cue.expiresAtSimMs > this.atSimMs
         && entities.some(entity => entity.key === cue.entityKey)).map(cue => ({ ...cue })) : [],
       growth: { status: this.options.development ? "available" : this.options.world ? "gated" : this.built ? "built" : "available", summary: this.options.development ? "World development · Ask God · managed scalar mechanics and catalog furnishings · new geometry still needs native adapters" : this.townLife ? "Bounded spirit proposals · God-reviewed catalog furnishings; no operator-forced builds"
         : this.options.world ? "Authored town · autonomous construction gated pending spatial growth validation" : this.blackout ? "Need-driven growth gated: first prove the repair and retained-memory comparison" : this.built ? "Validated café added to ECS" : "One operator-triggered café expansion available" },
-      limits: { seconds: this.seconds, ai: this.live, autonomousGrowth: this.options.evolving === true && this.live } };
+      limits: { seconds: this.seconds, ai: this.live, autonomousGrowth: this.options.evolving === true && this.live },
+      ...(this.controlView() ? { control: this.controlView() } : {}), paused: this.pausedState };
   }
 
   /** Host geometry is read from native identities, never supplied by a model. */

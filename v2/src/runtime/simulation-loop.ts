@@ -136,6 +136,8 @@ export interface SimulationState {
 
   // Timers
   ecsTimer: NodeJS.Timeout | null;
+  /** Operator pause: no new AI operation may launch until resume. */
+  paused?: boolean;
 
   // Stats
   tickTimes: number[];
@@ -226,6 +228,7 @@ export function startSimulation(state: SimulationState): void {
   }
 
   state.isRunning = true;
+  state.paused = false;
   state.fastHealth.start();
   activeRuntimes.add(state);
   if (state.abort.signal.aborted) state.abort = new AbortController();
@@ -299,6 +302,9 @@ export function pauseSimulation(state: SimulationState): void {
     clearInterval(state.ecsTimer);
     state.ecsTimer = null;
   }
+  // Already-queued operations re-check this at dispatch (below), so a pause
+  // also stops model work that was enrolled but had not started yet.
+  state.paused = true;
 
   console.log(`[SimLoop] Paused at tick ${state.tick}`);
   state.fastHealth.pause();
@@ -319,6 +325,7 @@ export function resumeSimulation(state: SimulationState): void {
   }
 
   const tickInterval = 1000 / state.config.ecsTickRate;
+  state.paused = false;
   state.lastTickTime = Date.now();
   state.ecsTimer = setInterval(() => {
     runECSTick(state);
@@ -424,7 +431,7 @@ function checkAIOperations(state: SimulationState): void {
         const operation = withSimulationTask(AbortSignal.any([signal, taskSignal]), async () => {
           // Queue capacity may become available long after this operation was
           // enrolled. Never launch a model request for stale readiness.
-          if (!state.isRunning || !operationIsReady(op)) {
+          if (!state.isRunning || state.paused || !operationIsReady(op)) {
             skipped = true;
             op.lastRun = previousRun;
             return undefined;

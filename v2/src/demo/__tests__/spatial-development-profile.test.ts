@@ -11,6 +11,7 @@ import { getSpiritSystemState } from "../../spirits/spirit-system";
 import { getActiveSpirits } from "../../spirits/spirit-registry";
 import { getAgentWorldCapabilities } from "../../cognition/world-capabilities";
 import { DEVELOPMENT_EVOLUTION_CONFIG } from "../spatial-town-life";
+import { GOD_REQUEST_LIMIT } from "../spatial-god-console";
 const demos: SpatialDemo[] = [];
 beforeEach(() => { jest.spyOn(globalThis, "fetch").mockRejectedValue(Error("Development profile tests are offline"));
   jest.spyOn(console, "log").mockImplementation(() => {}); });
@@ -22,7 +23,7 @@ async function fixture(live = false) {
 }
 test("development activates managed engineering and seven existing spirits without starting a model", async () => {
   const demo = await fixture(true), view = demo.snapshot(), daemon = getCodingDaemon(demo.sim.world)!;
-  expect(view.development).toMatchObject({ enabled: true, available: false, busy: false, jobs: [], messages: [], limits: { maxBuildJobs: 8, maxRequests: 32 } });
+  expect(view.development).toMatchObject({ enabled: true, available: false, busy: false, jobs: [], messages: [], limits: { maxBuildJobs: 8, maxRequests: GOD_REQUEST_LIMIT } });
   expect(view.limits.seconds).toBe(1800); expect(view.running).toBe(false);
   expect(daemon.getStatus().admissionBudget).toMatchObject({ limit: 8, used: 0, remaining: 8 });
   expect(getActiveSpirits(getSpiritSystemState(demo.sim.world)!.registry).map(s => s.definition.name).sort())

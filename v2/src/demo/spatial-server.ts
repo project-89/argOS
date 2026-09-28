@@ -50,7 +50,7 @@ export async function createSpatialDemoApp(options: { demo: SpatialDemo; token: 
   };
   app.get("/api/state", (_req: any, res: any) => res.json(snapshot()));
   app.get("/api/scene", (_req: any, res: any) => {
-    const { actors: _privateActors, events: _operatorEvents, worldControl: _operatorControl, townLife: _operatorLife, development: _operatorDevelopment, ...scene } = snapshot(); res.json(scene);
+    const { actors: _privateActors, events: _operatorEvents, worldControl: _operatorControl, townLife: _operatorLife, development: _operatorDevelopment, control: _operatorControlledBody, ...scene } = snapshot(); res.json(scene);
   });
   app.post("/api/start", endpoint(async body => { z.object({}).strict().parse(body); await demo.start(); return demo.snapshot(); }));
   let saved: Promise<void> | undefined;
@@ -72,6 +72,19 @@ export async function createSpatialDemoApp(options: { demo: SpatialDemo; token: 
   app.post("/api/god-command", endpoint(body => demo.godCommand(body)));
   app.post("/api/action", endpoint(body => { const value = action.parse(body); demo.dispatch(value.actorKey, value.type, value.targetKey, value.content); return { accepted: true }; }));
   app.post("/api/grow", endpoint(body => { z.object({}).strict().parse(body); return demo.grow(); }));
+  // Inhabit / pause / God / interview (INHABIT-CONTRACT.md). Operator-only, token-gated like every /api route.
+  const empty = (body: unknown) => z.object({}).strict().parse(body ?? {});
+  app.post("/api/control/visitor", endpoint(body => demo.spawnVisitor(body ?? {})));
+  app.post("/api/control/take", endpoint(body => demo.takeControl(body)));
+  app.post("/api/control/release", endpoint(body => { empty(body); return demo.releaseControl(); }));
+  app.post("/api/control/walk", endpoint(body => demo.walk(body)));
+  app.post("/api/control/act", endpoint(body => demo.act(body)));
+  app.post("/api/control/say", endpoint(body => demo.say(body)));
+  app.post("/api/pause", endpoint(body => { empty(body); return demo.pause(); }));
+  app.post("/api/resume", endpoint(body => { empty(body); return demo.resume(); }));
+  app.post("/api/god/ask", endpoint(body => demo.askGod(body)));
+  app.post("/api/interview", endpoint(body => demo.interview(body)));
+  (await import("../voice/routes")).mountVoiceRoutes(app, { demo, token: options.token }); // /api/voice/* (Gemini TTS/STT; 503 without a key)
   app.use((error: unknown, _req: any, res: any, _next: any) => res.status(400).json({ error: "Malformed or oversized request" }));
   const remove = demo.onStop(() => { queueMicrotask(() => { void stop().catch(error => console.error("[SpatialDemo] Save failed", error)); }); });
   return { app, stop: async () => { remove(); await stop(); } };
