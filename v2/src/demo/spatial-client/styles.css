@@ -214,8 +214,9 @@ button.quiet:hover { color: var(--ink); background: rgba(255, 255, 255, .06); }
   color: #d4e0c1; border: 1px solid rgba(156, 174, 106, .3); border-radius: 8px; font-size: 11.5px; line-height: 1.4; padding: 6px 10px;
 }
 #app[data-mode="inhabit"] .room-label,
-#app[data-mode="inhabit"] .cue-speech,
 #app[data-mode="inhabit"] .prop-state-label { display: none; }
+/* Inhabit shows speech only within earshot (client.mjs fades it by distance). */
+#app[data-mode="inhabit"] .cue-addressed { box-shadow: 0 0 0 2px rgba(200, 227, 157, .75), 0 8px 26px rgba(0, 0, 0, .25); }
 #app[data-mode="inhabit"] .world-goal { display: none; }
 #app[data-mode="analysis"] .world-cue,
 #app[data-mode="analysis"] .world-goal,

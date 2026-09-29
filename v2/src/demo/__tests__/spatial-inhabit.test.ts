@@ -1,8 +1,9 @@
 import { jest } from "@jest/globals";
 import { hasComponent, getRelationTargets } from "bitecs";
 import { SpatialDemo } from "../spatial-demo";
-import { Agent, Controlled, Mind, Name, Position } from "../../ecs/components";
-import { getRoomForEntity } from "../../ecs/location";
+import { Agent, Controlled, Mind, Name, Perception, Position } from "../../ecs/components";
+import { getRoomForEntity, setLocatedIn } from "../../ecs/location";
+import { readLocalSpeechOpportunity } from "../../cognition/timed-speech";
 import { SittingOn } from "../../ecs/relations";
 import { getControlledBodies, isOperatorControlled } from "../../ecs/controlled";
 import { getSocialDialogue } from "../../cognition/social-memory";
@@ -100,6 +101,33 @@ test("a human waits for a gap in the conversation, then cuts in, and is never si
   const spoken = getSocialDialogue(world, eli).filter(turn => turn.speaker === "Wren").map(turn => turn.content);
   expect(spoken).toEqual(["Sorry to interrupt, but what happened to the Marrow Star?"]);
   expect(getCommittedEvents(world).events.some(e => e.kind === "speech" && e.actorId === visitor && e.status === "succeeded")).toBe(true);
+});
+
+test("voices carry about nine metres: a far conversation on the same square is not heard and holds no one else's floor", () => {
+  const world = w(), eli = named("Eli"), otis = named("Otis");
+  expect(world.meta.speechEarshotMetres).toBe(9);
+  setLocatedIn(world, otis, getRoomForEntity(world, eli)!); // both on Saltmere Common, twenty metres apart
+  Position.x[otis] = Position.x[eli] + 20; Position.y[otis] = Position.y[eli];
+  d.dispatch(key(otis), "speak", undefined, "Anyone for a hand of cards at the Gull tonight?");
+  d.advance(300);
+  expect(readLocalSpeechOpportunity(world, eli).available).toBe(true); // Otis holds only his own corner's floor
+  d.advance(8000);
+  expect(getSocialDialogue(world, eli).some(turn => turn.speaker === "Otis")).toBe(false);
+  Position.x[otis] = Position.x[eli] + 3;
+  d.dispatch(key(otis), "speak", undefined, "Eli! Cards?");
+  d.advance(6000);
+  expect(getSocialDialogue(world, eli).some(turn => turn.speaker === "Otis" && turn.content === "Eli! Cards?")).toBe(true);
+});
+
+test("walking up to a resident is something they notice", () => {
+  d.spawnVisitor({ name: "Wren" });
+  const world = w(), visitor = d.actors.find(id => Name.value[id] === "Wren")!, eli = named("Eli");
+  Position.x[visitor] = Position.x[eli] + 6; Position.y[visitor] = Position.y[eli]; d.advance(200);
+  const before = getAgentPerceptions(world, eli).length;
+  expect(d.walk({ x: Position.x[eli] + 1.2, y: Position.y[eli] })).toMatchObject({ ok: true });
+  d.advance(8000);
+  const noticed = getAgentPerceptions(world, eli).slice(before).map(id => Perception.content[id]);
+  expect(noticed).toContain("Wren walks up to you and stops close by.");
 });
 
 test("the control block reports nearby things with usable verbs and what the body heard", () => {

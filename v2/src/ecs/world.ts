@@ -49,6 +49,8 @@ export interface WorldContext {
     /** How often a running conversation must justify itself. "relaxed" (default)
      * lets lively exchanges run; "strict" restores the earlier every-few-turns check. */
     activityReviewCadence?: "relaxed" | "strict";
+    /** Speaking distance in metres for worlds with positions (spatial towns). Unset: room-wide hearing. */
+    speechEarshotMetres?: number;
     /** Whether schedules should be LLM-generated (vs. deterministic defaults) */
     generateSchedules?: boolean;
     /** Model utterances as finite in-world actions (enabled by the library). */

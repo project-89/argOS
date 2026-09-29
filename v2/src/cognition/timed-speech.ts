@@ -2,7 +2,7 @@
  * words emitted at an exact timeline boundary can be heard. */
 import { entityExists, hasComponent, query } from "bitecs";
 import type { World } from "../ecs/world";
-import { Agent, Name, WorkingMemoryIdentity } from "../ecs/components";
+import { Agent, Name, Position, WorkingMemoryIdentity } from "../ecs/components";
 import { getRoomForEntity } from "../ecs/location";
 import { readSimulationTime } from "../ecs/simulation-time";
 import { getAgentSensoryCapabilities } from "./sensory-capabilities";
@@ -36,6 +36,17 @@ const clearingVoices = new WeakSet<World>();
 const speechEpochs = new WeakMap<World, number>();
 type TurnEnd = { roomKey: string; actorId: number; actorKey: string; atSimMs: number };
 const recentTurns = new WeakMap<World, Map<number, TurnEnd>>();
+
+/** Voices carry a speaking distance in worlds that set one (spatial towns): a
+ * conversation across a large square is not heard by everyone on it, and people
+ * out of earshot of each other do not share a conversational floor. Worlds
+ * without positions or without a configured distance keep room-wide hearing. */
+export function withinEarshot(world: World, a: number, b: number): boolean {
+  const limit = world.meta.speechEarshotMetres;
+  if (!limit || a === b || !hasComponent(world, a, Position) || !hasComponent(world, b, Position)) return true;
+  const dx = Position.x[a] - Position.x[b], dy = Position.y[a] - Position.y[b];
+  return !Number.isFinite(dx) || !Number.isFinite(dy) || dx * dx + dy * dy <= limit * limit;
+}
 // A place in conversation, never permission to utter saved words. Runtime-only:
 // restore/source replacement cannot inherit a reservation. Revisions retain FIFO
 // order, but a stalled author can hold an otherwise free floor for only 3 seconds.
@@ -61,7 +72,7 @@ export function requestConversationTurn(world: World, eid: number, target: strin
   const old = rows.get(eid), now = readSimulationTime(world);
   const retain = old && turnCurrent(world, eid, old) && old.target === target;
   const floorEnd = Math.max(now, ...[...voices.get(world)?.entries() ?? []]
-    .filter(([actor, row]) => voiceCurrent(world, actor, row) && getRoomForEntity(world, actor) === room)
+    .filter(([actor, row]) => voiceCurrent(world, actor, row) && getRoomForEntity(world, actor) === room && withinEarshot(world, eid, actor))
     .map(([, row]) => row.end + SPEECH_HANDOFF_GAP_MS));
   rows.set(eid, { actorKey, room, roomKey, source: tape.sourceId, generation: getAgentWorldCapabilityGeneration(world, eid),
     target, since: retain ? old.since : now, holdUntil: floorEnd + 3000, current });
@@ -101,20 +112,21 @@ export function readLocalSpeechOpportunity(world: World, eid: number,
   const canHear = getAgentSensoryCapabilities(world, eid).auditory > 0;
   const roomKey = hasComponent(world, room, WorkingMemoryIdentity) ? WorkingMemoryIdentity.id[room] : undefined;
   const speakers = canHear ? [...voices.get(world)?.entries() ?? []].filter(([speaker, row]) => speaker !== eid
-    && voiceCurrent(world, speaker, row) && getRoomForEntity(world, speaker) === room
+    && voiceCurrent(world, speaker, row) && getRoomForEntity(world, speaker) === room && withinEarshot(world, eid, speaker)
     && (row.room !== room || row.roomKey === roomKey)) : [];
   if (speakers.length) return result("another_speaker", speakers.map(([speaker]) => speaker).sort((a, b) => a - b),
     Math.min(...speakers.map(([, row]) => row.end)) + SPEECH_HANDOFF_GAP_MS);
   const recent = recentTurns.get(world)?.get(room);
   if (canHear) {
     const next = [...turnRequests.get(world)?.entries() ?? []]
-      .filter(([actor, row]) => row.room === room && turnCurrent(world, actor, row))
+      .filter(([actor, row]) => row.room === room && withinEarshot(world, eid, actor) && turnCurrent(world, actor, row))
       .sort((a, b) => a[1].since - b[1].since)[0];
     if (next && next[0] !== eid) return result("queued_turn", [], now + 250);
   }
-  if (!canHear || !recent || recent.roomKey !== roomKey || now < recent.atSimMs) return result("available");
+  if (!canHear || !recent || recent.roomKey !== roomKey || now < recent.atSimMs
+    || entityExists(world, recent.actorId) && !withinEarshot(world, eid, recent.actorId)) return result("available");
   const otherListeners = [...query(world, [Agent])].some(other => other !== eid && Agent.active[other]
-    && getRoomForEntity(world, other) === room && getAgentSensoryCapabilities(world, other).auditory > 0);
+    && getRoomForEntity(world, other) === room && withinEarshot(world, eid, other) && getAgentSensoryCapabilities(world, other).auditory > 0);
   const ownLastTurn = recent.actorId === eid && hasComponent(world, eid, WorkingMemoryIdentity)
     && WorkingMemoryIdentity.id[eid] === recent.actorKey;
   const next = recent.atSimMs + (ownLastTurn && otherListeners ? SPEECH_REPEAT_GAP_MS : SPEECH_HANDOFF_GAP_MS);
@@ -153,6 +165,12 @@ export function getSpeakingActivity(world: World, eid: number) {
     ? { executionId: row.executionId, startedAtSimMs: row.start, expectedEndSimMs: row.end,
       emittedTokens: row.emitted, spokenText: row.words.slice(0, row.emitted).map(word => word.text).join("") } : undefined;
 }
+/** Full script of an utterance still being spoken, so a listener within earshot
+ * can hear it voiced as it happens. Returns nothing once it has ended or changed. */
+export function getUtteranceScript(world: World, eid: number, executionId: string): string | undefined {
+  const row = voices.get(world)?.get(eid);
+  return row && row.executionId === executionId && voiceCurrent(world, eid, row) ? row.words.map(word => word.text).join("") : undefined;
+}
 function retire(world: World, eid: number, row: Utterance, result?: Result) {
   const rows = voices.get(world); if (rows?.get(eid) !== row) return;
   rows.delete(eid); releaseSimulationResources(world, eid, row.executionId);
@@ -182,7 +200,7 @@ function emitWord(world: World, eid: number, row: Utterance, index: number) {
   const audience = new Set<number>();
   for (const listener of query(world, [Agent, Name])) {
     if (listener === eid || !Agent.active[listener] || getRoomForEntity(world, listener) !== room
-      || getAgentSensoryCapabilities(world, listener).auditory <= 0) continue;
+      || !withinEarshot(world, eid, listener) || getAgentSensoryCapabilities(world, listener).auditory <= 0) continue;
     const key = workingMemoryEntityRef(world, listener)!.key, heard = row.heard.get(listener);
     row.heard.set(listener, { key, count: heard?.key === key ? heard.count + 1 : 1 });
     audience.add(listener);

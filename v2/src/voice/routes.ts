@@ -7,7 +7,7 @@ import { z } from "zod";
 import { Agent, Appearance, Name } from "../ecs/components";
 import { GOD_VOICE, VoiceCastBook, type PersonaInput, type VoiceCast } from "./casting";
 import { createGeminiVoiceClient, parseWav, VOICE_LIMITS, VOICE_MODELS, VoiceError, type VoiceClient } from "./gemini-voice";
-import { VoiceService } from "./voice-service";
+import { VoiceService, type SpeakResult } from "./voice-service";
 
 /** The read-only slice of SpatialDemo the voice module uses. */
 export type VoiceDemoView = {
@@ -15,6 +15,10 @@ export type VoiceDemoView = {
   readonly visuals: ReadonlyMap<number, { key: string }>;
   readonly sim: { readonly world: any };
   snapshot?: () => { scenario?: { theme?: string; title?: string } };
+  /** Script of an utterance the operator's body can hear right now (earshot-gated). */
+  audibleUtterance?: (executionId: string) => { text: string; speakerKey: string } | undefined;
+  /** Called when a line starts within the body's earshot, so its voice can be rendered early. */
+  onUtteranceInEarshot?: (executionId: string, speakerKey: string) => void;
 };
 
 export type VoiceRouteOptions = {
@@ -29,6 +33,8 @@ export type VoiceRouteOptions = {
   setting?: string;
 };
 
+/** How long after a client last asked for line audio the server keeps rendering ahead. */
+export const LISTENING_WINDOW_MS = 20_000;
 export const VOICE_AUDIO_FORMAT = { mimeType: "audio/wav", encoding: "pcm_s16le", sampleRate: 24_000, channels: 1, bitsPerSample: 16 } as const;
 
 const TRANSCRIBE_TYPES: Record<string, string> = {
@@ -135,6 +141,39 @@ export function mountVoiceRoutes(app: Pick<express.Express, "get" | "post">, opt
         "X-Voice-Cache": result.cached ? "hit" : "miss", "X-Voice-Budget-Remaining": String(usage.synthesis.remaining),
         "X-Audio-Duration-Ms": String(result.durationMs), "X-Audio-Sample-Rate": String(result.sampleRate), "X-Voice-Latency-Ms": String(Date.now() - started) })
         .end(result.wav);
+    } catch (error) { fail(res, error); }
+  });
+
+  // Lines within earshot start synthesizing as they begin; the client's request
+  // joins that work, so a listener hears a line as it is spoken, not after.
+  const inFlight = new Map<string, Promise<SpeakResult>>();
+  const render = (executionId: string) => {
+    const existing = inFlight.get(executionId); if (existing) return existing;
+    const line = demo.audibleUtterance?.(executionId), cast = line && castFor(line.speakerKey);
+    if (!line || !cast || !service) return undefined;
+    const job = service.speak({ text: line.text.slice(0, VOICE_LIMITS.maxLineChars), voice: cast.voice, style: cast.style });
+    inFlight.set(executionId, job);
+    job.catch(() => {}).finally(() => setTimeout(() => inFlight.delete(executionId), 60_000));
+    while (inFlight.size > 48) inFlight.delete(inFlight.keys().next().value!);
+    return job;
+  };
+  // Render ahead only while someone is actually listening (a client asked for line
+  // audio recently); Watch mode, a muted tab or a closed one spends nothing.
+  let listeningUntil = 0;
+  if (service && demo.audibleUtterance) {
+    (demo as { onUtteranceInEarshot?: (id: string, key: string) => void }).onUtteranceInEarshot = id => {
+      if (Date.now() < listeningUntil) void render(id)?.catch(() => {});
+    };
+  }
+  app.post("/api/voice/utterance", guard, enabled, json, async (req: any, res: any) => {
+    try {
+      const executionId = typeof req.body?.executionId === "string" ? req.body.executionId.slice(0, 200) : "";
+      listeningUntil = Date.now() + LISTENING_WINDOW_MS;
+      const job = executionId ? render(executionId) : undefined;
+      if (!job) return void res.status(403).json({ error: "That line is not within earshot of your body" });
+      const result = await job;
+      res.status(200).set({ "Content-Type": "audio/wav", "Content-Length": String(result.wav.length),
+        "X-Audio-Duration-Ms": String(result.durationMs), "X-Audio-Sample-Rate": String(result.sampleRate) }).end(result.wav);
     } catch (error) { fail(res, error); }
   });
 

@@ -72,9 +72,13 @@ import { assertSpatialDevelopmentRelease, SPATIAL_DEVELOPMENT_LIMITS, SPATIAL_DE
 import { createSpatialGodConsole, type SpatialOmniscience } from "./spatial-god-console";
 import { DEVELOPMENT_EVOLUTION_CONFIG } from "./spatial-town-life";
 import { getSpatialAssetEntry, loadSpatialAssetCatalog, spatialAssetModel } from "./spatial-asset-registry";
-import { readLocalSpeechOpportunity } from "../cognition/timed-speech";
+import { getSpeakingActivity, getUtteranceScript, readLocalSpeechOpportunity, withinEarshot } from "../cognition/timed-speech";
 /** How long a controlled body waits for a natural gap before cutting in. */
 const SAY_GAP_WAIT_MS = 3500;
+/** How far a voice carries in the spatial town. */
+export const SPEECH_EARSHOT_METRES = 9;
+/** Conversation distance: coming this close is noticed; moving past the reset distance re-arms it. */
+const APPROACH_METRES = 2, APPROACH_RESET_METRES = 3, APPROACH_NOTICE_WINDOW_MS = 45_000;
 
 type Pending = { actor: number; actorKey: string; target: number; targetKey: string; sourceId: string;
   action: AgentAction; verb: string; startedAt: number; due?: number; container?: number; containerKey?: string;
@@ -157,6 +161,8 @@ export class SpatialDemo {
   private pausedState = false;
   /** Bodies the operator brought in. They have no mind of their own (no Mind component). */
   readonly visitors = new Set<number>();
+  private readonly approachPairs = new Map<string, { near: boolean; toldAtSimMs: number }>();
+  private readonly lastBodyPositions = new Map<number, { x: number; y: number }>();
   private readonly pendingSays: Array<{ actor: number; text: string; targetKey?: string; queuedAtSimMs: number }> = [];
   /** Operator walk per body: its body reservation id. A new walk replaces the old. */
   private readonly walks = new Map<number, string>();
@@ -430,6 +436,9 @@ export class SpatialDemo {
               emotionalTone: "practical confidence", importance: .8, meaning: "Careful diagnosis saves trouble.", selfBelief: "I can be useful without rushing.",
               cues: ["repair", "lighting", "supplies"], period: "before this visit", provenance: "authored-history" as const }] } } : {}) },
       ] });
+    // Voices carry about nine metres here: a conversation on the far side of the
+    // Common is not heard by everyone on it, and does not hold everyone's floor.
+    sim.world.meta.speechEarshotMetres = SPEECH_EARSHOT_METRES;
     try { const demo = new SpatialDemo(sim, { ...options, seconds });
       projectWeatherInputs = () => demo.weatherMechanic?.syncInputs();
       projectDevelopmentInputs = () => demo.developmentInputs?.syncInputs();
@@ -1036,6 +1045,7 @@ export class SpatialDemo {
     if (this.visitors.size) for (const event of drainPendingStimuli(this.visitors, w))
       if (entityExists(w, event.targetEid)) addPerception(w, event.targetEid, event);
     this.flushPendingSays();
+    this.noticeApproaches();
     for (const p of [...this.work.values()]) {
       if (p.due === undefined || p.due > this.atSimMs) continue;
       const invalid = this.pendingInvalid(p, true);
@@ -1293,6 +1303,42 @@ export class SpatialDemo {
     this.pendingSays.push({ actor, text: request.text, targetKey: request.targetKey, queuedAtSimMs: this.atSimMs });
     return { ok: true, queued: true };
   }
+  /** Someone walking up to a resident is an event they notice, not just a change in
+   * who is somewhere in the same large room. Fires on entering conversation
+   * distance (hysteresis on leaving), once per pair per window, to whoever stayed put. */
+  private noticeApproaches() {
+    const w = this.sim.world, now = this.atSimMs;
+    const bodies = this.actors.filter(id => isEntityPresent(w, id) && Agent.active[id] && hasComponent(w, id, Position));
+    const here = new Map(bodies.map(id => [id, { x: Position.x[id], y: Position.y[id], room: getRoomForEntity(w, id) }]));
+    const moved = (id: number) => { const was = this.lastBodyPositions.get(id), p = here.get(id)!;
+      return !!was && Math.hypot(p.x - was.x, p.y - was.y) > 1e-3; };
+    for (let i = 0; i < bodies.length; i++) for (let j = i + 1; j < bodies.length; j++) {
+      const a = bodies[i], b = bodies[j], pa = here.get(a)!, pb = here.get(b)!, pairKey = `${a}:${b}`;
+      const distance = pa.room === pb.room ? Math.hypot(pa.x - pb.x, pa.y - pb.y) : Infinity;
+      const row = this.approachPairs.get(pairKey) ?? { near: false, toldAtSimMs: -Infinity };
+      if (row.near && distance > APPROACH_RESET_METRES) row.near = false;
+      else if (!row.near && distance <= APPROACH_METRES) {
+        row.near = true;
+        if (now - row.toldAtSimMs >= APPROACH_NOTICE_WINDOW_MS && (moved(a) || moved(b))) {
+          row.toldAtSimMs = now;
+          const pairs: Array<[mover: number, noticer: number]> = moved(a) && moved(b) ? [[a, b], [b, a]] : moved(a) ? [[a, b]] : [[b, a]];
+          for (const [mover, noticer] of pairs) {
+            if (this.visitors.has(noticer) || !getAgentVisualEntities(w, noticer).includes(mover)) continue;
+            this.tell(noticer, Name.value[mover], moved(noticer)
+              ? `You and ${Name.value[mover]} come face to face.`
+              : `${Name.value[mover]} walks up to you and stops close by.`);
+          }
+        }
+      }
+      this.approachPairs.set(pairKey, row);
+    }
+    for (const [id, p] of here) {
+      // Bodies face the way they walk (ground x/y render as three.js x/z).
+      const was = this.lastBodyPositions.get(id), visual = this.visuals.get(id);
+      if (was && visual && Math.hypot(p.x - was.x, p.y - was.y) > 1e-3) visual.rotationY = Math.atan2(p.x - was.x, p.y - was.y);
+      this.lastBodyPositions.set(id, { x: p.x, y: p.y });
+    }
+  }
   private flushPendingSays() {
     const next = this.pendingSays[0]; if (!next) return;
     if (this.controlledBody() !== next.actor) { this.pendingSays.length = 0; return; }
@@ -1316,8 +1362,43 @@ export class SpatialDemo {
       nearby.push({ key: visual.key, name: Name.value[id], kind: person ? "actor" : "prop", distance: Math.round(distance * 100) / 100, verbs });
     }
     nearby.sort((a, b) => a.distance - b.distance);
+    // Speakers by name resolve to live bodies so lines carry their key and distance.
+    const byName = new Map(this.actors.filter(id => id !== actor).map(id => [Name.value[id], id] as const));
+    const heard = projectHeardSpeech(w, actor).map(line => {
+      const speaker = byName.get(line.speaker);
+      return speaker === undefined ? line : { ...line, speakerKey: this.key(speaker),
+        distance: Math.round(Math.hypot(Position.x[speaker] - here.x, Position.y[speaker] - here.y) * 100) / 100 };
+    });
     return { actorKey: this.key(actor), name: Name.value[actor], visitor: this.visitors.has(actor),
-      nearby: nearby.slice(0, 16), heard: projectHeardSpeech(w, actor) };
+      nearby: nearby.slice(0, 16), heard, earshotMetres: SPEECH_EARSHOT_METRES, speaking: this.speakingInEarshot(actor) };
+  }
+  /** Utterances this body can hear right now. Starts voicing them early (server
+   * cache) so a listener hears the line as it is spoken, not after it ends. */
+  private speakingInEarshot(actor: number): NonNullable<SpatialControlView["speaking"]> {
+    const w = this.sim.world, room = getRoomForEntity(w, actor), rows: NonNullable<SpatialControlView["speaking"]> = [];
+    const events = getCommittedEvents(w).events.slice(-200);
+    for (const speaker of this.actors) {
+      if (speaker === actor || getRoomForEntity(w, speaker) !== room || !withinEarshot(w, actor, speaker)) continue;
+      const activity = getSpeakingActivity(w, speaker); if (!activity) continue;
+      const addressed = events.some(event => event.executionId === activity.executionId && event.targetId === actor);
+      rows.push({ executionId: activity.executionId, speakerKey: this.key(speaker), speaker: Name.value[speaker],
+        distance: Math.round(Math.hypot(Position.x[speaker] - Position.x[actor], Position.y[speaker] - Position.y[actor]) * 100) / 100,
+        startedAtSimMs: activity.startedAtSimMs, expectedEndSimMs: activity.expectedEndSimMs, addressedToYou: addressed });
+      this.onUtteranceInEarshot?.(activity.executionId, this.key(speaker));
+    }
+    return rows.sort((a, b) => Number(b.addressedToYou) - Number(a.addressedToYou) || a.distance - b.distance);
+  }
+  /** Voice hook: set by the voice routes to pre-synthesize lines the body will hear. */
+  onUtteranceInEarshot?: (executionId: string, speakerKey: string) => void;
+  /** The script of an utterance the controlled body can hear right now, for voicing it. */
+  audibleUtterance(executionId: string): { text: string; speakerKey: string } | undefined {
+    const actor = this.controlledBody(); if (actor === undefined) return;
+    const w = this.sim.world, room = getRoomForEntity(w, actor);
+    for (const speaker of this.actors) {
+      if (speaker === actor || getRoomForEntity(w, speaker) !== room || !withinEarshot(w, actor, speaker)) continue;
+      const text = getUtteranceScript(w, speaker, executionId);
+      if (text) return { text, speakerKey: this.key(speaker) };
+    }
   }
 
   // ---------------------------------------------------------------------------

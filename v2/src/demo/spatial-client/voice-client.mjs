@@ -107,6 +107,8 @@ export function createAudioPlayer({ AudioContextClass = globalThis.AudioContext 
   };
   return {
     unlock() { try { const ctx = ensure(); if (ctx.state === 'suspended') void ctx.resume(); } catch {} },
+    /** The shared AudioContext (positional voices render through it too). */
+    context: ensure,
     async play(bytes) {
       const ctx = ensure(); if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
       const buffer = await ctx.decodeAudioData(bytes.slice(0));

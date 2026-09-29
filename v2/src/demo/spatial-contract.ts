@@ -66,7 +66,12 @@ export interface SpatialControlView {
   /** Things within ~3 m and the native verbs this body can use on each now. */
   nearby: Array<{ key: string; name: string; kind: "actor" | "prop"; distance: number; verbs: string[] }>;
   /** Newest last, at most 20. */
-  heard: Array<{ id: string; speaker: string; text: string; atSimMs: number }>;
+  heard: Array<{ id: string; speaker: string; text: string; atSimMs: number; speakerKey?: string; distance?: number }>;
+  /** How far a voice carries for this body. */
+  earshotMetres?: number;
+  /** Utterances being spoken right now within this body's earshot. */
+  speaking?: Array<{ executionId: string; speakerKey: string; speaker: string; distance: number;
+    startedAtSimMs: number; expectedEndSimMs: number; addressedToYou: boolean }>;
 }
 export interface SpatialViewState {
   sourceId: string; atSimMs: number; tick: number; running: boolean;

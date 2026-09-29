@@ -109,3 +109,24 @@ test("transcribe accepts raw audio, checks type, WAV length and size", async () 
   expect((await call("/api/voice/transcribe", { raw: Buffer.alloc(8 * 1024 * 1024 + 1), type: "audio/webm" })).status).toBe(413);
   expect(calls.transcribe).toBe(2);
 });
+
+test("a line within earshot is voiced once, early, and only while the body can hear it", async () => {
+  const demo: any = saltmereDemo(), leonKey = "actor:leon";
+  let audible = true;
+  demo.audibleUtterance = (id: string) => audible && id === "exec-1" ? { text: "The sea takes what it's given.", speakerKey: leonKey } : undefined;
+  const { client, calls } = fakeClient();
+  const { call } = await serve({ demo, client });
+  // Nobody is listening yet: a line starting in earshot costs nothing.
+  demo.onUtteranceInEarshot("exec-0", leonKey);
+  expect(calls.synthesize).toHaveLength(0);
+  // A client asks for line audio (e.g. a line it missed); now lines render ahead.
+  expect((await call("/api/voice/utterance", { body: { executionId: "unheard" } })).status).toBe(403);
+  demo.onUtteranceInEarshot("exec-1", leonKey);
+  expect(calls.synthesize).toHaveLength(1);
+  const res = await call("/api/voice/utterance", { body: { executionId: "exec-1" } });
+  expect(res.status).toBe(200); expect(res.headers.get("content-type")).toBe("audio/wav");
+  expect(calls.synthesize).toHaveLength(1); // joined, not synthesized twice
+  expect((await call("/api/voice/utterance", { body: { executionId: "someone-else" } })).status).toBe(403);
+  audible = false;
+  expect((await call("/api/voice/utterance", { body: { executionId: "exec-2" } })).status).toBe(403);
+});

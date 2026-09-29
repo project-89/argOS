@@ -1,6 +1,11 @@
+import { earshotMetres, prioritizeSubtitles } from './earshot.mjs';
+
 /** Cinematic subtitles for speech the controlled body actually heard
  * (`control.heard`). Only what this body perceived; never other rooms, never
- * thoughts. A change of body (or first sight of one) does not replay backlog. */
+ * thoughts, and only within earshot (`control.earshotMetres`, ≈9 m): a line
+ * whose speaker stood farther away is neither shown nor voiced. At most
+ * `maxVisible` lines: addressed-to-you and nearest first (`prioritizeSubtitles`).
+ * A change of body (or first sight of one) does not replay backlog. */
 
 export function subtitleDuration(text) {
   const length = String(text ?? '').length;
@@ -10,7 +15,7 @@ export function subtitleDuration(text) {
 /** Still-arriving excerpts grow under one id; a completed turn gets its own. */
 export const isExcerpt = line => typeof line?.id === 'string' && line.id.startsWith('speech-fragment:');
 
-export function createSubtitleQueue({ maxVisible = 3, maxSeen = 400, echoMs = 15000, isPartial = isExcerpt } = {}) {
+export function createSubtitleQueue({ maxVisible = 2, maxSeen = 400, echoMs = 15000, isPartial = isExcerpt } = {}) {
   let bodyKey = null, seen = new Set(), lines = [], echoes = [], local = 0;
   const remember = id => {
     seen.add(id);
@@ -18,8 +23,10 @@ export function createSubtitleQueue({ maxVisible = 3, maxSeen = 400, echoMs = 15
   };
   return {
     /** Returns newly completed lines (for voicing), oldest first. Excerpts are
-     * shown as they grow but never voiced; their completed turn replaces them. */
-    ingest(control, now) {
+     * shown as they grow but never voiced; their completed turn replaces them.
+     * `distanceOf(line)` supplies the speaker's distance when a heard row has no
+     * `distance`; `addressedOf(line)` marks lines spoken to you. */
+    ingest(control, now, { distanceOf, addressedOf } = {}) {
       if (!control || typeof control.actorKey !== 'string') { bodyKey = null; seen = new Set(); lines = []; echoes = []; return []; }
       const heard = (Array.isArray(control.heard) ? control.heard : [])
         .filter(line => line && typeof line.id === 'string' && typeof line.text === 'string' && line.text.trim());
@@ -28,20 +35,31 @@ export function createSubtitleQueue({ maxVisible = 3, maxSeen = 400, echoMs = 15
         for (const line of heard) remember(line.id);
         return [];
       }
-      const fresh = [];
+      const fresh = [], earshot = earshotMetres(control);
+      const measure = line => {
+        if (Number.isFinite(line.distance)) return line.distance;
+        try { const value = distanceOf?.(line); return Number.isFinite(value) ? value : undefined; } catch { return undefined; }
+      };
+      const addressed = line => { try { return line.addressedToYou === true || !!addressedOf?.(line); } catch { return false; } };
       for (const line of heard) {
         const text = line.text.trim(), partial = !!isPartial(line);
+        const self = line.speaker === control.name;
         if (seen.has(line.id)) {
           const shown = lines.find(row => row.id === line.id);
           if (shown && shown.text !== text) { shown.text = text; shown.until = Math.max(shown.until, now + subtitleDuration(text)); }
+          if (shown && !self) { const distance = measure(line); if (distance !== undefined) shown.distance = distance; shown.addressed ||= addressed(line); }
           continue;
         }
+        const distance = self ? 0 : measure(line);
+        // Out of earshot: not shown, not voiced, and not revisited when it grows.
+        if (distance !== undefined && distance > earshot) { remember(line.id); continue; }
         remember(line.id);
-        const self = line.speaker === control.name;
         // Our own words were already shown when we said them.
         const echo = self && echoes.findIndex(row => row.text === text && row.until > now);
         if (self && echo >= 0) { echoes.splice(echo, 1); continue; }
         const entry = { id: line.id, speaker: String(line.speaker ?? 'Someone'), text, self, partial,
+          ...(typeof line.speakerKey === 'string' ? { speakerKey: line.speakerKey } : {}),
+          distance, addressed: !self && addressed(line),
           atSimMs: line.atSimMs, shownAt: now, until: now + subtitleDuration(text) };
         // A completed turn takes the place of the excerpt that was growing on screen.
         const excerpt = !partial && lines.find(row => row.partial && row.speaker === entry.speaker && text.startsWith(row.text.slice(0, 16)));
@@ -56,7 +74,7 @@ export function createSubtitleQueue({ maxVisible = 3, maxSeen = 400, echoMs = 15
     echo(text, speaker, now) {
       const trimmed = String(text ?? '').trim(); if (!trimmed) return null;
       echoes = [...echoes.filter(row => row.until > now), { text: trimmed, until: now + echoMs }];
-      const entry = { id: `local:${++local}`, speaker: speaker || 'You', text: trimmed, self: true, shownAt: now, until: now + subtitleDuration(trimmed) };
+      const entry = { id: `local:${++local}`, speaker: speaker || 'You', text: trimmed, self: true, distance: 0, shownAt: now, until: now + subtitleDuration(trimmed) };
       lines.push(entry); return entry;
     },
     /** A voiced line stays up while it plays, then lingers briefly. */
@@ -67,7 +85,7 @@ export function createSubtitleQueue({ maxVisible = 3, maxSeen = 400, echoMs = 15
     },
     /** Extend a line (never shortens). */
     hold(id, until) { const line = lines.find(row => row.id === id); if (line && until > line.until) line.until = until; },
-    visible(now) { return lines.filter(line => line.until > now).slice(-maxVisible); },
+    visible(now) { return prioritizeSubtitles(lines.filter(line => line.until > now), maxVisible); },
     get bodyKey() { return bodyKey; },
     reset() { bodyKey = null; seen = new Set(); lines = []; echoes = []; },
   };

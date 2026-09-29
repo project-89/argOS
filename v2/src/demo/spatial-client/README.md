@@ -16,9 +16,14 @@ snapshot stays authoritative for control (`control`) and pause (`paused`).
   look, WASD/arrows → `walk {dx,dy}` relative to the camera heading (≤6 Hz while
   held, never two in flight, nothing at rest), E → the nearest `control.nearby`
   thing (several verbs open a 1–4 chooser; "Talk" opens the talk box), Enter →
-  `say` to the nearest resident or the room, hold V → push-to-talk. Subtitles
-  show only `control.heard` (excerpts grow in place; the completed turn replaces
-  them and is the only one voiced). Room labels, overhead speech and goals are
+  `say` to the nearest resident or the room, hold V → push-to-talk. Hearing is
+  local (`earshot.mjs`): within `control.earshotMetres` (default 9 m) only.
+  Subtitles show `control.heard` lines whose speaker is within earshot (the
+  row's `distance`, else computed from snapshot positions), at most two,
+  addressed-to-you / voiced / nearest first (excerpts grow in place; the
+  completed turn replaces them). Overhead speech bubbles appear only for the
+  three nearest speakers in earshot, fading from 60% to 100% of it; your own is
+  hidden in first person. Actions show within ~16 m. Room labels and goals are
   hidden: the body knows what it perceives. O shows the operator-only "nearby
   minds" panel. P pauses; Release lets go.
 - **Analysis** (`analysis-view.mjs`): entering pauses a running world (and
@@ -38,9 +43,18 @@ talk · hold `V` speak (Inhabit → say, Analysis → last-used panel) · `C` ca
 view · `O` nearby minds · `P` pause/resume · `M` mute voices.
 
 Voice (`voice-client.mjs`): `/api/voice/cast` `enabled` shows or hides voice UI.
-Lines are synthesized only when they will play (heard lines in Inhabit, God,
-interview replies), one at a time with the next prefetched, capped per minute,
-stale lines dropped; 429 backs off for `retryAfterSeconds`, 503/404 hide voice.
+God and interview replies (Analysis) are synthesized only when they will play,
+one at a time with the next prefetched, capped per minute, stale lines dropped;
+429 backs off for `retryAfterSeconds`, 503/404 hide voice. Inhabit voices are
+positional (`positional-voice.mjs`): each new `control.speaking` utterance is
+requested once via `POST /api/voice/utterance {executionId}` and played on
+arrival through an HRTF PannerNode (inverse, ref 1.5 m, max = earshot, rolloff
+1.2) that follows the speaker, with the AudioListener on the camera; up to
+three speakers at once, one line each, addressed-to-you first; audio arriving
+after 70% of the utterance is dropped; 403 skips, 429 cools down, 503/budget
+stop voices. Without `control.speaking`, or on a 404 from that route, heard
+lines fall back to `/api/voice/speak` through the serial queue (still placed
+at the speaker).
 Playback uses Web Audio `decodeAudioData` (the page CSP has no blob media
 source). Push-to-talk records 16 kHz 16-bit WAV through the Web Audio graph,
 falling back to MediaRecorder webm/opus.
@@ -52,7 +66,8 @@ button and documents the WebXR follow-up (`TODO(webxr)`); it is not implemented.
 
 QA: `?mode=analysis&interview=Leon` opens a mode and seats a resident on load.
 Checks: `node --test` in this directory (modes, inhabit controls/camera,
-subtitles, voice queue/capture, analysis state, plus the renderer suites).
+subtitles, earshot bubbles/subtitles, positional voices, voice queue/capture,
+analysis state, plus the renderer suites).
 
 ## Renderer boundary
 

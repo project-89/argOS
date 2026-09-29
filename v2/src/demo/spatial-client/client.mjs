@@ -20,6 +20,8 @@ import { createBodyControls } from './inhabit-controls.mjs';
 import { createInhabitView } from './inhabit-view.mjs';
 import { createAnalysisView } from './analysis-view.mjs';
 import { createVoiceQueue, createAudioPlayer, createPushToTalk } from './voice-client.mjs';
+import { createUtteranceVoices, createSpatialAudio } from './positional-voice.mjs';
+import { selectInhabitCues } from './earshot.mjs';
 import { detectImmersiveVR, enterImmersiveVR } from './xr-entry.mjs';
 
 /** @typedef {import('../spatial-contract').SpatialViewState} SpatialViewState */
@@ -78,12 +80,36 @@ let viewCamera = camera, voiceEnabled = false, voiceMuted = false, pttMode = nul
 try { voiceMuted = localStorage.getItem('argos.voice.muted') === '1'; } catch {}
 const bodyControls = createBodyControls({ api });
 const player = createAudioPlayer();
+// Inhabit hears residents where they stand (HRTF panners through the shared
+// AudioContext); God and interviews in Analysis stay non-positional.
+const spatialAudio = createSpatialAudio({ getContext: () => player.context() });
+/** A resident's mouth, in world metres, from the shown (interpolated) position. */
+function speakerPosition(key) {
+  const node = nodes.get(key); if (!node) return null;
+  const p = node.root.position; return { x: p.x, y: p.y + (node.entity.size?.y ?? 1.65) * 0.9, z: p.z };
+}
+let queueVoiceId = null, queueVoiceStatus = null, utteranceVoiceStatus = null, voiceBudgetNoticed = false;
 const voice = createVoiceQueue({
   synthesize: item => api('/api/voice/speak', { text: item.text, ...(item.voice === 'god' ? { voice: 'god' } : { speakerKey: item.speakerKey }) }, { as: 'arrayBuffer', timeoutMs: 30000 }),
-  play: bytes => player.play(bytes), stop: () => player.stop(), onChange: status => onVoiceStatus(status),
+  // Heard lines on a server without /api/voice/utterance still come from where the speaker stands.
+  play: (bytes, item) => {
+    if (!item?.positional || modeState.mode !== 'inhabit') return player.play(bytes);
+    queueVoiceId = `queue:${item.id}`;
+    return spatialAudio.play(bytes, { id: queueVoiceId, speakerKey: item.speakerKey, position: speakerPosition(item.speakerKey) });
+  },
+  stop: () => { player.stop(); if (queueVoiceId) spatialAudio.stop(queueVoiceId); queueVoiceId = null; },
+  onChange: status => onVoiceStatus(status),
 });
-voice.setMuted(voiceMuted);
-const inhabit = createInhabitView({ el, controls: bodyControls, notify, getNode: key => nodes.get(key), voice, reducedMotion,
+const utterances = createUtteranceVoices({
+  request: item => api('/api/voice/utterance', { executionId: item.executionId }, { as: 'arrayBuffer', timeoutMs: 30000 }),
+  play: (bytes, item) => spatialAudio.play(bytes, { id: item.executionId, speakerKey: item.speakerKey, position: speakerPosition(item.speakerKey) }),
+  stop: id => spatialAudio.stop(id),
+  // Staleness is judged in simulation time, which the environment clock estimates between polls.
+  simNow: () => environmentClock.sample(performance.now()),
+  onChange: status => onUtteranceStatus(status),
+});
+voice.setMuted(voiceMuted); utterances.setMuted(voiceMuted);
+const inhabit = createInhabitView({ el, controls: bodyControls, notify, getNode: key => nodes.get(key), voice, utterances, reducedMotion,
   onPauseToggle: () => togglePause(), onRelease: () => void releaseBody(), obstruction: (from, to) => cameraObstruction(from, to) });
 const cameraRay = new THREE.Raycaster(), rayOrigin = new THREE.Vector3(), rayDirection = new THREE.Vector3();
 const shown = object => { for (let at = object; at; at = at.parent) if (!at.visible) return false; return true; };
@@ -223,11 +249,23 @@ function syncExperience(next) {
     }
   }
 }
+function syncVoiceActivity() {
+  const speaking = queueVoiceStatus?.playing?.phase === 'playing' || (utteranceVoiceStatus?.playing?.length ?? 0) > 0;
+  el('voice-toggle').dataset.state = speaking ? 'speaking' : '';
+}
 function onVoiceStatus(status) {
-  if (!status.available && voiceEnabled) { voiceEnabled = false; syncVoiceChrome(); }
-  el('voice-toggle').dataset.state = status.playing?.phase === 'playing' ? 'speaking' : '';
+  queueVoiceStatus = status;
+  if (!status.available && voiceEnabled) { voiceEnabled = false; utterances.setAvailable(false); syncVoiceChrome(); }
+  syncVoiceActivity();
   inhabit.voiceStatus(status, performance.now());
   analysis.voiceStatus(status);
+}
+function onUtteranceStatus(status) {
+  utteranceVoiceStatus = status;
+  if (!status.available && voiceEnabled) { voiceEnabled = false; voice.setAvailable(false); syncVoiceChrome(); }
+  if (status.exhausted && !voiceBudgetNoticed) { voiceBudgetNoticed = true; notify('The voice budget for this session is spent — subtitles only.'); }
+  syncVoiceActivity();
+  inhabit.utteranceStatus(status, performance.now());
 }
 function syncVoiceChrome() {
   const button = el('voice-toggle');
@@ -239,14 +277,14 @@ function syncVoiceChrome() {
 }
 function toggleVoice() {
   if (!voiceEnabled) { notify('Voices aren’t available on this server.', true); return; }
-  voiceMuted = !voiceMuted; voice.setMuted(voiceMuted);
+  voiceMuted = !voiceMuted; voice.setMuted(voiceMuted); utterances.setMuted(voiceMuted);
   try { localStorage.setItem('argos.voice.muted', voiceMuted ? '1' : '0'); } catch {}
   syncVoiceChrome(); notify(voiceMuted ? 'Voices muted.' : 'Voices on.');
 }
 async function probeVoice() {
   try { const cast = await api('/api/voice/cast'); voiceEnabled = cast?.enabled !== false; }
   catch { voiceEnabled = false; }
-  voice.setAvailable(voiceEnabled); syncVoiceChrome();
+  voice.setAvailable(voiceEnabled); utterances.setAvailable(voiceEnabled); syncVoiceChrome();
 }
 async function startPtt() {
   if (!voiceEnabled || !ptt.supported) { notify(voiceEnabled ? 'This browser can’t record audio.' : 'Voice input isn’t available on this server.', true); return; }
@@ -1037,7 +1075,17 @@ function drawWorldCues(now) {
   // simultaneous speech rather than stacking the same speaker's recent lines.
   const current = new Map();
   for (const cue of cueTracker.visible(now).sort((a, b) => a.updatedAtSimMs - b.updatedAtSimMs)) current.set(`${cue.entityKey}:${cue.kind}`, cue);
-  const visible = [...current.values()], active = new Set(visible.map(c => c.id));
+  let visible = [...current.values()];
+  // A body hears only within earshot: bubbles fade toward its edge, none beyond,
+  // the nearest few at most; your own is left to the subtitles in first person.
+  const opacity = new Map();
+  if (modeState.mode === 'inhabit' && controlKey) {
+    const heard = selectInhabitCues(visible, { bodyKey: controlKey, positionOf: key => nodes.get(key)?.root.position,
+      earshot: inhabit.earshot, hideOwn: inhabit.firstPerson, addressedKeys: inhabit.addressedKeys });
+    visible = heard.map(row => row.cue);
+    for (const row of heard) opacity.set(row.cue.id, row.opacity);
+  }
+  const active = new Set(visible.map(c => c.id));
   for (const [id, label] of cueLabels) if (!active.has(id)) { label.remove(); cueLabels.delete(id); }
   const occupied = [];
   for (const cue of visible.filter(c => c.kind === 'speech').concat(visible.filter(c => c.kind !== 'speech'))) {
@@ -1052,6 +1100,9 @@ function drawWorldCues(now) {
     const shown = cue.kind === 'speech' && cue.text.length > 240 ? `…${cue.text.slice(-240)}` : cue.text;
     if (speaker.textContent !== sourceName) speaker.textContent = sourceName;
     if (words.textContent !== shown) words.textContent = shown;
+    const fade = opacity.get(cue.id), faded = fade === undefined ? '' : fade.toFixed(2);
+    if (label.style.opacity !== faded) label.style.opacity = faded;
+    label.classList.toggle('cue-addressed', cue.kind === 'speech' && inhabit.addressedKeys.has(cue.entityKey));
     // Hand attachment is presentation-only; buzz follows the actual phone mesh.
     const point = cue.kind === 'sound' ? anchor.view.getWorldPosition(new THREE.Vector3())
       : anchor.root.position.clone();
@@ -1104,6 +1155,7 @@ function poseHeldPhone(node) {
   node.root.getWorldQuaternion(rootRotation).invert();
   node.view.quaternion.copy(rootRotation.multiply(heldRotation));
 }
+const listenerForward = new THREE.Vector3(), listenerUp = new THREE.Vector3();
 function animate(now) {
   frame = requestAnimationFrame(animate); const delta = Math.min(.07, (now - previousFrameWall) / 1000); previousFrameWall = now;
   const environmentAt = environmentClock.sample(now);
@@ -1145,6 +1197,10 @@ function animate(now) {
     projectLabel(row.label, new THREE.Vector3(row.room.bounds.x + row.room.bounds.width / 2, .03, north ? row.room.bounds.z - .45 : row.room.bounds.z + row.room.bounds.depth + .45));
   }
   controls?.update(); drawWorldCues(now);
+  if (inhabiting && spatialAudio.size) {
+    viewCamera.getWorldDirection(listenerForward); listenerUp.set(0, 1, 0).applyQuaternion(viewCamera.quaternion);
+    spatialAudio.frame({ listener: { position: cameraPosition, forward: listenerForward, up: listenerUp }, positionOf: speakerPosition, earshot: inhabit.earshot });
+  }
   weatherScene.draw(environmentAt, { camera: viewCamera, interiors,
     focusPosition: selected && (follow || revealedRooms.has(selected.entity.roomId))
       ? selected.root.position.clone().add(new THREE.Vector3(0, (selected.entity.size?.y ?? 1.65) * .75, 0)) : null });

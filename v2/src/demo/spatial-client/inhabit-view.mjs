@@ -4,19 +4,27 @@ import { createLookState, applyLook, toggleView, cameraPose, yawBehind, smoothin
 import { createSubtitleQueue } from './subtitles.mjs';
 import { speakableText } from './voice-client.mjs';
 import { actorAccent } from './framing-view.mjs';
+import { earshotMetres, speakerDistance } from './earshot.mjs';
 
 /** Inhabit mode: a perspective camera behind (or inside) the controlled body,
  * keyboard/mouse input routed through the device-independent `controls`
  * facade, the contextual E prompt, the talk box, subtitles of heard speech and
  * the operator-only "nearby minds" panel. The body only ever acts through
- * /api/control/*; the view never moves it locally. */
-export function createInhabitView({ el, controls, notify, getNode, voice, reducedMotion = false, onPauseToggle, onRelease, obstruction }) {
+ * /api/control/*; the view never moves it locally.
+ *
+ * Hearing is local: subtitles (and bubbles, drawn by the client) only for
+ * speakers within earshot. Voices are positional through `utterances`
+ * (positional-voice.mjs) while the server lists `control.speaking`; otherwise,
+ * or when /api/voice/utterance is missing, heard lines go to the serial `voice`
+ * queue (marked `positional` so the client can still place them). */
+export function createInhabitView({ el, controls, notify, getNode, voice, utterances, reducedMotion = false, onPauseToggle, onRelease, obstruction }) {
   const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 1200);
   let look = createLookState(), active = false, state = null, control = null, bodyKey = null, snapped = false, aimed = false;
   let options = null, optionsSignature = '', verbMenuOpen = false, talking = false, talkRow = null, minds = false;
   let subtitleSignature = '', identitySignature = '', mindsSignature = '', hiddenBody = null, walkError = 0, dragging = false;
   let lastPointerLockExit = 0;
-  const held = new Set(), subtitles = createSubtitleQueue();
+  const held = new Set(), subtitles = createSubtitleQueue({ maxVisible: 2 });
+  let addressedKeys = new Set();
   const desiredPosition = new THREE.Vector3(), desiredTarget = new THREE.Vector3(), currentTarget = new THREE.Vector3();
   const sender = createWalkSender({ hz: 6, send: vector => controls.walk(vector.dx, vector.dy).catch(error => {
     if (performance.now() - walkError > 4000) { walkError = performance.now(); notify(error.status === 404 ? 'Walking isn’t available on this server yet.' : error.message, true); }
@@ -72,12 +80,19 @@ export function createInhabitView({ el, controls, notify, getNode, voice, reduce
     const signature = JSON.stringify(lines.map(line => [line.id, line.text, !!line.speaking, !!line.partial]));
     if (signature === subtitleSignature) return;
     subtitleSignature = signature;
-    const box = el('subtitles'); box.replaceChildren();
-    for (const line of lines) {
-      const row = safe(box, 'div', '', `subtitle${line.self ? ' self' : ''}${line.speaking ? ' speaking' : ''}${line.partial ? ' partial' : ''}`);
-      safe(row, 'span', line.self ? 'You' : line.speaker, 'speaker');
-      safe(row, 'span', line.text);
-    }
+    // Update rows in place: a growing excerpt must not replay the entrance animation.
+    const box = el('subtitles'), rows = new Map([...box.children].map(row => [row.dataset.id, row]));
+    const ordered = lines.map(line => {
+      let row = rows.get(line.id);
+      if (!row) { row = document.createElement('div'); row.dataset.id = line.id; safe(row, 'span', '', 'speaker'); safe(row, 'span', ''); }
+      row.className = `subtitle${line.self ? ' self' : ''}${line.speaking ? ' speaking' : ''}${line.partial ? ' partial' : ''}`;
+      const [who, words] = row.children, name = line.self ? 'You' : line.speaker;
+      if (who.textContent !== name) who.textContent = name;
+      if (words.textContent !== line.text) words.textContent = line.text;
+      return row;
+    });
+    for (const [id, row] of rows) if (!lines.some(line => line.id === id)) row.remove();
+    ordered.forEach((row, index) => { if (box.children[index] !== row) box.insertBefore(row, box.children[index] ?? null); });
   }
 
   function renderMinds() {
@@ -207,21 +222,29 @@ export function createInhabitView({ el, controls, notify, getNode, voice, reduce
     exit() {
       active = false; held.clear(); sender.reset(); verbMenuOpen = false;
       if (talking) closeTalk();
-      releasePointer(); showBody(true);
+      releasePointer(); showBody(true); utterances?.interrupt();
       document.getElementById('app')?.classList.remove('first-person', 'minds-visible');
       el('interact-prompt').hidden = true;
     },
     sync(next, now) {
       state = next; const nextControl = next?.control ?? null;
-      if (nextControl?.actorKey !== bodyKey) { showBody(true); snapped = false; aimed = false; }
+      if (nextControl?.actorKey !== bodyKey) { showBody(true); snapped = false; aimed = false; utterances?.interrupt(); }
       control = nextControl; bodyKey = control?.actorKey ?? null;
-      const fresh = subtitles.ingest(control, now);
-      if (active) {
+      // `control.speaking` (utterances within earshot) is feature-detected.
+      const speaking = Array.isArray(control?.speaking) ? control.speaking : null;
+      addressedKeys = new Set((speaking ?? []).filter(row => row?.addressedToYou && typeof row.speakerKey === 'string').map(row => row.speakerKey));
+      const addressedNames = new Set((speaking ?? []).filter(row => row?.addressedToYou).map(row => row.speaker));
+      const fresh = subtitles.ingest(control, now, {
+        distanceOf: line => speakerDistance(next, bodyKey, line),
+        addressedOf: line => addressedNames.has(line.speaker) || (typeof line.speakerKey === 'string' && addressedKeys.has(line.speakerKey)),
+      });
+      if (active && speaking && utterances?.supported) utterances.sync(speaking);
+      else if (active) {
         for (const line of fresh) {
           if (line.self) continue;
-          const speaker = next.actors?.find(a => a.name === line.speaker) ?? next.entities?.find(e => e.kind === 'actor' && e.name === line.speaker);
+          const key = line.speakerKey ?? (next.actors?.find(a => a.name === line.speaker) ?? next.entities?.find(e => e.kind === 'actor' && e.name === line.speaker))?.key;
           // Voices are cast per resident key; an unknown speaker stays a subtitle.
-          if (speaker) voice?.enqueue({ id: line.id, text: speakableText(line.text, 420), speakerKey: speaker.key });
+          if (key) voice?.enqueue({ id: line.id, text: speakableText(line.text, 420), speakerKey: key, positional: true });
         }
       }
       options = interactOptions(control?.nearby);
@@ -236,6 +259,22 @@ export function createInhabitView({ el, controls, notify, getNode, voice, reduce
       for (const line of subtitles.visible(now)) if (line.speaking && line.id !== id) subtitles.speaking(line.id, false, now);
       if (id) subtitles.speaking(id, true, now);
     },
+    /** Positional voices → each speaker's latest subtitle is marked as spoken. */
+    utteranceStatus(status, now) {
+      const voices = new Set((status?.playing ?? []).flatMap(row => [row.speakerKey, row.speaker]).filter(Boolean));
+      const latest = new Map();
+      for (const line of subtitles.visible(now)) if (!line.self) latest.set(line.speaker, line);
+      for (const line of subtitles.visible(now)) {
+        const on = latest.get(line.speaker) === line && (voices.has(line.speaker) || voices.has(line.speakerKey));
+        if (!!line.speaking !== on) subtitles.speaking(line.id, on, now);
+      }
+    },
+    /** Earshot in metres (≈9) for bubbles and voices. */
+    get earshot() { return earshotMetres(control); },
+    /** First person hides your own bubble (subtitles show it). */
+    get firstPerson() { return look.view === 'first'; },
+    /** Speakers currently addressing the controlled body. */
+    get addressedKeys() { return addressedKeys; },
     frame(now, delta) {
       if (!active) return null;
       const node = bodyNode();
