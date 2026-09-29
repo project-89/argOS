@@ -37,7 +37,7 @@ export type GraphSkill = {
   goal: { item: string; count: number };
   tree: SkillNode;
   effect: SkillEffect;
-  stats: { runs: number; successes: number; failures: number };
+  stats: { runs: number; successes: number; failures: number; seconds?: number; timedRuns?: number };
   learned: { life: number; from: "planner" | "revision" };
 };
 
@@ -73,9 +73,14 @@ export class SkillGraph {
   toJson(): SkillGraphJson { return { format: "argos-skill-graph", version: 1, lives: this.lives, skills: [...this.skills.values()] }; }
 
   /** Skills that give this item, most reliable first, then the shortest. */
+  /** Skills that give this item: reliable ones first (in bands), and among
+   * those the quickest per item as measured in the world (buying beats fishing
+   * when both work), then the shortest. */
   producers(item: string): GraphSkill[] {
+    const band = (s: GraphSkill) => Math.floor(successRate(s) * 4);
+    const perItem = (s: GraphSkill) => (s.stats.timedRuns ? (s.stats.seconds ?? 0) / s.stats.timedRuns : Infinity) / Math.max(1, s.effect.gives[item] ?? 1);
     return [...this.skills.values()].filter(skill => (skill.effect.gives[item] ?? 0) > 0)
-      .sort((a, b) => successRate(b) - successRate(a) || countActs(a.tree) - countActs(b.tree) || a.id.localeCompare(b.id));
+      .sort((a, b) => band(b) - band(a) || perItem(a) - perItem(b) || countActs(a.tree) - countActs(b.tree) || a.id.localeCompare(b.id));
   }
 
   /** Keep a way of making something that just worked. The same shape again is more evidence, not a new skill. */

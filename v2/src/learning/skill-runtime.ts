@@ -16,17 +16,22 @@
 import type { Act, ActResult } from "./homestead/world";
 import { SkillGraph, stockDelta, type GraphSkill, type Ref, type SkillNode, type Stock } from "./skill-graph";
 
-/** What the runtime needs from a world. */
+/** What the runtime needs from a world. Acts may take (simulated) time: a
+ * timed world resolves the promise when the act completes. */
 export interface SkillEnv {
   have(): Stock;
-  act(action: Act): ActResult;
+  act(action: Act): ActResult | Promise<ActResult>;
   observation(): string;
   /** The concrete name for a kind of thing here / a place (undefined: none suitable). */
   bind(ref: Ref): string | undefined;
   /** A concrete act as kinds: the target's kind, or where a following act's target stands. */
   abstract(action: Act, next?: Act): { verb: string; target?: Ref; arg?: string };
   /** Walk to where a kind of thing is (walking is native, not learned). */
-  approach(ref: Ref): boolean;
+  approach(ref: Ref): boolean | Promise<boolean>;
+  /** Kinds that are not made (coin, a lifetime): never a sub-goal. */
+  unsolvable?(kind: string): boolean;
+  /** The world's clock (seconds), to learn how long ways of doing things take. */
+  now?(): number;
 }
 
 export type PlannedStep = Act;
@@ -46,6 +51,9 @@ const addStock = (into: Stock, delta: Stock) => { for (const [k, n] of Object.en
 export class SkillSolver {
   readonly stats: SolveStats = { plannerCalls: 0, acts: 0, skillRuns: 0, skillFailures: 0, learned: [], gaps: [] };
   private readonly active = new Set<string>();
+  /** Set when an act failed for want of goods (not knowledge) since the last check. */
+  private scarcity = false;
+  private readonly soughtAlternative = new Set<string>();
   private readonly maxDepth: number; private readonly maxPlannerCalls: number; private readonly maxIterations: number;
 
   constructor(private readonly env: SkillEnv, readonly graph: SkillGraph, private readonly planner: Planner, private readonly options: SolverOptions = {}) {
@@ -59,31 +67,44 @@ export class SkillSolver {
   /** Get to at least `count` of `item`. */
   async solve(item: string, count: number, depth = 0, stack: string[] = []): Promise<boolean> {
     if (this.have(item) >= count) return true;
-    if (depth > this.maxDepth || this.stats.gaps.includes(item)) return false;
+    if (depth > this.maxDepth || this.stats.gaps.includes(item) || this.env.unsolvable?.(item)) return false;
     const path = [...stack, item];
     // A skill already running further up (mine needs a pickaxe needs a stone) is not a way out here.
     const failed = new Set<string>(this.active);
     const failures: string[] = [];
-    let stalls = 0;
+    let stalls = 0, scarce = false;
     for (let i = 0; i < this.maxIterations && this.have(item) < count; i++) {
       const before = this.have(item);
       const skill = this.graph.producers(item).find(s => !failed.has(s.id));
       if (skill) {
+        this.scarcity = false;
         this.stats.skillRuns++; skill.stats.runs++;
         this.log(`${"  ".repeat(depth)}skill ${skill.id} for ${item} (${this.have(item)}/${count})`);
         this.active.add(skill.id);
+        const started = this.env.now?.();
         const ok = await this.runNode(skill.tree, depth, path).finally(() => this.active.delete(skill.id));
-        if (ok && this.have(item) > before) { skill.stats.successes++; stalls = 0; continue; }
-        skill.stats.failures++; this.stats.skillFailures++; failed.add(skill.id);
+        if (ok && this.have(item) > before) {
+          skill.stats.successes++; stalls = 0;
+          if (started !== undefined) { skill.stats.seconds = (skill.stats.seconds ?? 0) + (this.env.now!() - started); skill.stats.timedRuns = (skill.stats.timedRuns ?? 0) + 1; }
+          continue;
+        }
+        failed.add(skill.id);
+        // Short of goods is not a failure of the skill, and asking how will not help.
+        if (this.scarcity) { scarce = true; failures.push(`The usual way (${skill.id}) is short of goods right now.`); continue; }
+        skill.stats.failures++; this.stats.skillFailures++;
         failures.push(`The usual way (${skill.id}) did not work this time.`);
         continue;
       }
+      // Short of goods every known way: look once for another way (then wait for stock).
+      if (scarce && this.soughtAlternative.has(item)) break;
+      if (scarce) this.soughtAlternative.add(item);
       if (this.stats.plannerCalls >= this.maxPlannerCalls) break;
       const learned = await this.plan(item, count, depth, path, failures);
       if (this.have(item) > before) { stalls = 0; continue; }
       if (!learned && ++stalls >= 2) break;
     }
     if (this.have(item) >= count) return true;
+    if (scarce) { this.scarcity = true; return false; } // not a gap in the world's making, only in its stock
     const detail = `Could not get ${count} ${item} (have ${this.have(item)}). ${failures.slice(-3).join(" ")}`.trim();
     if (!this.stats.gaps.includes(item)) { this.stats.gaps.push(item); this.options.onGap?.(item, detail); }
     return false;
@@ -143,25 +164,26 @@ export class SkillSolver {
   private async actWithRecovery(step: Act, depth: number, path: string[], frame: Frame | undefined, next?: Act): Promise<ActResult> {
     const shape = this.env.abstract(step, next);
     let direct: { gained: Stock; lost: Stock } = { gained: {}, lost: {} };
-    const act = () => {
-      const before = this.env.have(), outcome = this.env.act(step);
+    const act = async () => {
+      const before = this.env.have(), outcome = await this.env.act(step);
       this.stats.acts++;
       if (outcome.ok) direct = stockDelta(before, this.env.have());
       if (outcome.ok && frame) { addStock(frame.gives, direct.gained); addStock(frame.needs, direct.lost); }
       return outcome;
     };
-    let result = act();
+    let result = await act();
+    if (!result.ok && result.scarce) this.scarcity = true;
     // Walking is native: a target that stands elsewhere is walked to.
     if (!result.ok && result.elsewhere && step.verb !== "move") {
-      const moved = this.env.act({ verb: "move", target: result.elsewhere }); this.stats.acts++;
-      if (moved.ok) { frame?.acts.push({ node: { kind: "act", ...this.env.abstract({ verb: "move", target: result.elsewhere }, step) } }); result = act(); }
+      const moved = await this.env.act({ verb: "move", target: result.elsewhere }); this.stats.acts++;
+      if (moved.ok) { frame?.acts.push({ node: { kind: "act", ...this.env.abstract({ verb: "move", target: result.elsewhere }, step) } }); result = await act(); }
     }
     for (let attempt = 0; !result.ok && result.missing && attempt < 3; attempt++) {
       const need = result.missing, total = this.have(need.kind) + need.count;
       if (!(await this.solve(need.kind, total, depth + 1, path))) return result;
       frame?.acts.push({ node: { kind: "ensure", item: need.kind, count: total } });
-      if (shape.target && "thing" in shape.target) this.env.approach(shape.target);
-      result = act();
+      if (shape.target && "thing" in shape.target) await this.env.approach(shape.target);
+      result = await act();
     }
     if (result.ok) {
       frame?.acts.push({ node: { kind: "act", ...shape }, gave: direct.gained, took: direct.lost, used: result.used });
@@ -178,9 +200,9 @@ export class SkillSolver {
     }
     if (node.kind === "ensure") return this.solve(node.item, node.count, depth + 1, path);
     // Not here: walk to where one is (walking is native, not part of the skill).
-    if (node.target && "thing" in node.target && !this.env.bind(node.target) && this.env.approach(node.target)) this.stats.acts++;
+    if (node.target && "thing" in node.target && !this.env.bind(node.target) && await this.env.approach(node.target)) this.stats.acts++;
     const target = node.target ? this.env.bind(node.target) : undefined;
-    if (node.target && !target) return false;
+    if (node.target && !target) { this.scarcity = true; return false; } // nothing usable of that kind anywhere now
     const result = await this.actWithRecovery({ verb: node.verb, ...(target ? { target } : {}), ...(node.arg ? { arg: node.arg } : {}) }, depth, path, undefined);
     return result.ok;
   }

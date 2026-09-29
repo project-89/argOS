@@ -23,6 +23,8 @@ export type ActResult = {
   used?: string[];
   /** The target stands in another place (walk there and try again). */
   elsewhere?: string;
+  /** It failed for want of goods, not of knowing how (a spent source, an empty stall, no coin). */
+  scarce?: boolean;
 };
 
 const title = (kind: string) => kind.charAt(0).toUpperCase() + kind.slice(1);

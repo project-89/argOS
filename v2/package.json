@@ -50,6 +50,7 @@
     "typecheck": "tsc --noEmit",
     "train:skills": "tsx src/learning/train-skills.ts",
     "homestead": "tsx src/learning/homestead/run-homestead.ts",
+    "settlement": "tsx src/learning/settlement/run-settlement.ts",
     "extract-sprites": "tsx src/scripts/extract-sprites.ts"
   },
   "dependencies": {

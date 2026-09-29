@@ -52,7 +52,7 @@ export function manualPlanner(land: () => Homestead): Planner {
 
 export type GeminiPlannerStats = { calls: number; tokensIn: number; tokensOut: number; malformed: number };
 
-export function geminiPlanner(stats: GeminiPlannerStats, options: { model?: typeof agentModel; log?: (line: string) => void } = {}): Planner {
+export function geminiPlanner(stats: GeminiPlannerStats, options: { model?: typeof agentModel; log?: (line: string) => void; persona?: string; verbs?: string } = {}): Planner {
   return async request => {
     stats.calls++;
     const prompt = `${request.observation}
@@ -61,12 +61,12 @@ Goal: have ${request.goal.count} ${request.goal.item}${request.goal.item.include
 You already know how to get: ${request.knownSkills.join("; ") || "nothing yet"}. Those happen by themselves when needed.
 ${request.failures.length ? `What went wrong before: ${request.failures.join(" | ")}\n` : ""}
 Plan only the direct steps for this goal, using exact names from above. If a step needs materials or tools you lack,
-still include it: whatever is missing is fetched first, automatically. Verbs: move <place>, pickup <thing>, or the verbs in
+still include it: whatever is missing is fetched first, automatically. Verbs: move <place>, pickup <thing>, ${options.verbs ?? ""}or the verbs in
 "How things are made here" with target = the thing's exact name and arg = the product or part (e.g. craft … planks, build … frame).
 JSON only: {"steps":[{"verb":"...","target":"...","arg":"..."}]}`;
     const response = await generateText({ model: options.model ?? agentModel, maxRetries: 1, maxOutputTokens: 2500,
       providerOptions: { google: { thinkingConfig: { thinkingLevel: "low" } } },
-      system: "You plan practical steps for someone building a homestead. Be brief and exact.",
+      system: options.persona ?? "You plan practical steps for someone building a homestead. Be brief and exact.",
       messages: [{ role: "user", content: prompt }] });
     stats.tokensIn += Number(response.usage?.inputTokens ?? 0) || 0;
     stats.tokensOut += Number(response.usage?.outputTokens ?? 0) || 0;
