@@ -33,11 +33,18 @@ const d = await SpatialDemo.create({ scenario: "town", story: "settlement", evol
     planner: (trade: string) => geminiPlanner(plannerStats, { persona: `You plan practical steps for a ${trade} in a small coastal town rebuilding after the sea took it. Be brief and exact.`,
       verbs: "buy <item> / sell <item> at the Market stall (target the stall, arg the item), " }) } } as any);
 const stamp = () => `[${(d.atSimMs / 60000).toFixed(1)}m ${d.settlementHour().toFixed(1)}h]`;
-let seenEvents = 0, seenAuto = 0, seenSpirit = 0;
-const flush = () => {
-  const events = d.snapshot().events;
-  for (const e of events.slice(Math.max(0, events.length - (events.length - seenEvents)))) if (/speech|thought|world|scene/.test(e.kind)) out(`${stamp()} ${e.kind}: ${e.text.slice(0, 400)}`);
-  seenEvents = events.length;
+let loggedId = 0, seenAuto = 0, seenSpirit = 0;
+// Timed speech grows word by word in its row: log a row once its text has held still for a flush (or at the end).
+const lastText = new Map<number, string>();
+const flush = (final = false) => {
+  let settled = true;
+  for (const e of d.snapshot().events) {
+    if (e.id <= loggedId) continue;
+    settled &&= final || lastText.get(e.id) === e.text;
+    if (!settled) { lastText.set(e.id, e.text); continue; }
+    loggedId = e.id; lastText.delete(e.id);
+    if (/speech|thought|world|scene/.test(e.kind)) out(`${stamp()} ${e.kind}: ${e.text.slice(0, 600)}`);
+  }
   const auto = d.autopilot?.log ?? []; for (const l of auto.slice(seenAuto)) out(`${stamp()} attention ${l.who}: ${l.what.slice(0, 300)}`); seenAuto = auto.length;
   const sp = d.settlementBalance?.interventions() ?? []; for (const i of sp.slice(seenSpirit)) out(`${stamp()} SPIRIT ${i.spirit}: ${i.what}`); seenSpirit = sp.length;
 };
@@ -48,7 +55,7 @@ while (Date.now() - started < MINUTES * 60_000) {
   await new Promise(r => setTimeout(r, 15_000));
   try { flush(); } catch (e) { out(`flush error ${e}`); }
 }
-flush();
+flush(true);
 const w = d.sim.world;
 const summary: string[] = [`== ${MINUTES} min live, game ${d.settlementHour().toFixed(1)}h ==`];
 for (const a of d.actors) {

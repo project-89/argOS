@@ -300,8 +300,7 @@ export class SpatialTradeLife {
     // What their own mind set out to do (a conversation's resolve outlives the conversation).
     for (const goal of (this.host.goalsOf?.(this.eid) ?? []).slice(0, 3))
       if (!this.cooling(`goal:${goal.id}`)) out.push({ label: `pursue: ${goal.description.slice(0, 140)}`, run: () => this.pursue(goal) });
-    // Evenings gather at the fire; people nearby can fall into talk.
-    if (this.supperTime()) out.push({ label: "go to supper at the campfire", run: () => this.supper() });
+    // People nearby can fall into talk.
     if (!this.cooling("talk")) for (const p of (this.host.peopleNear?.(this.eid, 12) ?? []).slice(0, 3))
       out.push({ label: `talk with ${p.name}`, run: () => this.talk(p) });
     out.push({ label: "rest a while", run: async () => { await this.wait(this.gameMinutes(60)); return true; } });
@@ -368,8 +367,8 @@ export class SpatialTradeLife {
       // The mind has the floor: the habit waits.
       if (this.attention?.holds(this.eid)) { await this.wait(2_000); continue; }
       if (this.host.isNight?.()) { await this.sleep(); continue; }
-      // Supper at the fire once each evening, even without a judge to choose it.
-      if (!this.chooser && this.supperTime() && this.atSupper !== (this.host.day?.() ?? -1)) { await this.supper(); continue; }
+      // Supper at the fire once each evening is a habit, not a choice (a judge weighing errands never picks it).
+      if (this.supperTime() && this.atSupper !== (this.host.day?.() ?? -1)) { await this.supper(); continue; }
       const errand = this.errands.shift();
       if (errand) { await this.errand(errand); continue; }
       if (await this.chooseNext()) continue;

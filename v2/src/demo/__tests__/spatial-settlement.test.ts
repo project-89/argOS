@@ -201,7 +201,8 @@ test("a conversation's resolve outlives it: goals on the menu, errands for the h
     await life.pursue({ id: mystery, description: "Find out who forced the Net House box before Mara does" });
     expect(d.autopilot!.holds(otis)).toBe(true);
     expect(d.autopilot!.log.at(-1)?.what).toMatch(/looks up: You set out to Find out who forced the Net House box/);
-    // Supper: evening gathers people at the campfire on the Common.
+    // Supper: evening gathers people at the campfire on the Common — a habit, even under a judge that only ever picks rest.
+    for (const l of d.tradeLives as any[]) l.chooser = async (_eid: number, menu: string[]) => menu.length - 1;
     const step = async (n: number) => { for (let i = 0; i < n; i++) { d!.advance(100); await new Promise(r => setImmediate(r)); } };
     await step(2250); // ~20:40 on a six-minute day (walking takes real time)
     expect(d.settlementHour()).toBeGreaterThan(18);
