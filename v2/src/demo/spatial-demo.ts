@@ -57,6 +57,9 @@ import { createSpatialTownGrowth, townGrowthSites, TOWN_GROWTH_ATTEMPTS, type To
 import { createSpatialTownLife, townEvolutionConfig } from "./spatial-town-life";
 import { createStoryTownScenario } from "./spatial-town-story";
 import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSaltmereAuthorCast, SALTMERE_SCENARIO_TERMS } from "./spatial-lovecraft-town";
+import { createSettlementScenario } from "./spatial-settlement";
+import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
+import { SALTMERE_LAND } from "../learning/settlement/saltmere-land";
 import { createHouseholdScenario, HOUSEHOLD_GROWTH_SITES } from "./spatial-household";
 import { createHouseholdChallengeScenario } from "./spatial-household-challenge";
 import type { PlanningEvent } from "../cognition/planning-telemetry";
@@ -97,7 +100,7 @@ const PERIPHERY_METRES = 25, ADDRESSED_WINDOW_MS = 30_000;
 type Pending = { actor: number; actorKey: string; target: number; targetKey: string; sourceId: string;
   action: AgentAction; verb: string; startedAt: number; due?: number; container?: number; containerKey?: string;
   position: { x: number; y: number }; message?: number; messageKey?: string; messageText?: string; reply?: string; signal?: AbortSignal;
-  generation?: object; blackout?: BlackoutOperation; story?: SpatialStoryOperation; durationMs?: number;
+  generation?: object; blackout?: BlackoutOperation; story?: SpatialStoryOperation; recipe?: RecipeOperation; durationMs?: number;
   /** Story-object operations: a recipient/container/house, a place to walk to
    * first, and a private argument (note text, knock count). */
   destination?: number; destinationKey?: string; approach?: number; approachKey?: string;
@@ -105,7 +108,9 @@ type Pending = { actor: number; actorKey: string; target: number; targetKey: str
 /** Private readable text and the page others glimpse when it is shown. */
 type StoryItem = { text?: string; excerpt?: string; knockFor?: number };
 const STORY_VERBS = ["read", "give", "show", "put", "hide", "knock", "write_note"] as const;
-const PORTABLE_ASSETS = ["phone", "food", "repair-part", "book", "paper", "trinket"];
+const PORTABLE_ASSETS = ["phone", "food", "repair-part", "book", "paper", "trinket",
+  // Settlement goods and tools.
+  "axe", "net", "torn-net", "log", "firewood", "planks", "stone", "raw-fish", "cooked-fish", "berries", "flax", "twine", "water"];
 const NOTE_LIMIT = 12, NOTE_TEXT_LIMIT = 280;
 type Visual = { key: string; asset: string; size?: { x: number; y: number; z: number }; color?: string; rotationY?: number; lift?: number };
 type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; scenario?: "blackout" | "town" | "household"; layout?: "extended"; requiredSpec?: "A" | "B";
@@ -114,7 +119,7 @@ type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; sce
   householdChallenge?: boolean;
   /** Host-only diagnostic sink. Never included in a resident's context. */
   onPlanningEvent?: (event: PlanningEvent) => void;
-  story?: "community-drama" | "household" | "coastal-mystery";
+  story?: "community-drama" | "household" | "coastal-mystery" | "settlement";
   /** One explicitly operator-approved generated mechanic; not broad engineering. */
   weatherMechanic?: { directory: string; backend?: "codex" | "gemini" };
   /** Explicit broader engineering profile; not implied by viewing a town. */
@@ -139,6 +144,12 @@ export class SpatialDemo {
   readonly blackout?: ReturnType<typeof createBlackout>;
   readonly townLife?: ReturnType<typeof createSpatialTownLife>;
   readonly storyEvents?: ReturnType<typeof createSpatialStoryEvents>;
+  /** The settlement's crafts, market and building (story "settlement"). */
+  readonly recipes?: ReturnType<typeof createSpatialRecipes>;
+  /** Settlement kinds of entities (a tree, a log, the stall). */
+  readonly settlementKinds = new Map<number, string>();
+  private settlementItems = 0;
+  private settlementSink?: number;
   /** Author-staged sounds, arrivals, lights and phone texts (shared Narrator/God budget). */
   readonly narrativeEvents?: ReturnType<typeof createSpatialNarrativeEvents>;
   /** Narrator prose for viewers and the recording; never a resident perception. */
@@ -333,11 +344,12 @@ export class SpatialDemo {
       this.cue(event.actorKey, "speech", `${priorCue?.text ?? ""}${event.text}`.slice(-800), 5500, cueId);
     }));
     if (options.evolving) {
-      const sites: TownGrowthSite[] = options.scenario === "household"
+      // The settlement raises its own buildings on its plots; no furnished growth sites.
+      const sites: TownGrowthSite[] = options.story === "settlement" ? [] : options.scenario === "household"
         ? HOUSEHOLD_GROWTH_SITES.map(({ roomId, ...site }) => ({ ...structuredClone(site), roomEid: this.byId.get(roomId)! }))
         : townGrowthSites(id => this.byId.get(id));
       const growth = createSpatialTownGrowth({ world: w, spatial: this.spatial, bounds: options.world!.bounds,
-        cellSize: .5, ready: () => this.admitting, sites, snapshot: () => this.growthGeometry(),
+        cellSize: options.world!.navigationCellSize === 1 ? 1 : .5, ready: () => this.admitting, sites, snapshot: () => this.growthGeometry(),
         ...(options.scenario === "household" ? {} : { maxAttempts: TOWN_GROWTH_ATTEMPTS }),
         environment: roomEid => this.roomViews.find(room => room.id === roomEid)?.environment,
         commit: (eid, addition) => {
@@ -350,6 +362,7 @@ export class SpatialDemo {
           this.announcePhysicalChange(eid, `${addition.name} is now present here.`, "new furnishing");
           this.developmentInputs?.addTarget({ id: eid, key: this.key(eid), kind: "object", asset: addition.assetId });
         } });
+      if (options.story === "settlement") this.recipes = this.installSettlement();
       if (options.story === "community-drama" || options.story === "coastal-mystery") this.storyEvents = createSpatialStoryEvents({ world: w, running: () => this.admitting,
         trees: ["square-tree-1", "square-tree-3", "garden-tree-1"].map(id => {
           const eid = this.byId.get(id)!, roomId = getRoomForEntity(w, eid)!;
@@ -371,7 +384,7 @@ export class SpatialDemo {
         record: receipt => { this.record("world", receipt.publicDetail); this.townLife?.recordNarrativeReceipt(receipt); } });
       try { this.townLife = createSpatialTownLife({ sim, live: this.live, running: () => this.admitting, growth,
         householdChallenge: options.householdChallenge, narrativeEvents: this.narrativeEvents,
-        story: options.story, storyEvents: this.storyEvents, growthSiteCount: sites.length, reviewMechanics: !!options.weatherMechanic || !!options.development,
+        story: options.story === "settlement" ? "coastal-mystery" : options.story, storyEvents: this.storyEvents, growthSiteCount: sites.length, reviewMechanics: !!options.weatherMechanic || !!options.development,
         development: !!options.development,
         mechanicStatus: options.weatherMechanic ? () => this.mechanicStatus() : undefined,
         outdoorRooms: this.roomViews.filter(room => room.environment === "outdoor").map(({ id, key }) => ({ id, key })) }); }
@@ -425,7 +438,7 @@ export class SpatialDemo {
     if (options.evolving && (!["town", "household"].includes(options.scenario ?? "") || options.world)) throw Error("Bounded evolution requires the authored town or household profile");
     if (options.scenario === "household" && options.world) throw Error("Custom worlds cannot substitute for the authored household profile");
     if (options.townFixture && (options.scenario !== "town" || options.world)) throw Error("Town fixtures cannot substitute other world profiles");
-    if (options.story && (!((["community-drama", "coastal-mystery"].includes(options.story) && options.scenario === "town")
+    if (options.story && (!((["community-drama", "coastal-mystery", "settlement"].includes(options.story) && options.scenario === "town")
       || (options.story === "household" && options.scenario === "household")) || !options.evolving || options.world || options.townFixture))
       throw Error("Story requires its authored evolving town or household, without a substitute fixture");
     if (options.householdChallenge && (options.scenario !== "household" || options.world))
@@ -434,7 +447,7 @@ export class SpatialDemo {
       || !options.weatherMechanic.directory?.trim()))
       throw Error("Generated weather requires an authored evolving town or household challenge and an explicit release directory");
     const definition = options.world ?? (options.scenario === "household" ? options.householdChallenge ? createHouseholdChallengeScenario() : createHouseholdScenario()
-      : options.scenario === "town" ? options.story === "coastal-mystery" ? createLovecraftTownScenario()
+      : options.scenario === "town" ? options.story === "coastal-mystery" ? createLovecraftTownScenario() : options.story === "settlement" ? createSettlementScenario()
         : options.story ? createStoryTownScenario() : createTownScenario(options.townFixture) : undefined);
     if (definition) options = { ...options, world: validateSpatialScenario(definition) };
     const live = options.live === true, blackout = options.scenario === "blackout";
@@ -605,6 +618,10 @@ export class SpatialDemo {
         excerpt: prop.item.excerpt ?? prop.item.text.slice(0, 200) } : {}),
         ...(prop.item.knockFor ? { knockFor: this.byId.get(prop.item.knockFor)! } : {}) });
       this.propAnchors.set(eid, prop.interactionAnchors);
+      if (this.options.story === "settlement" && prop.id.startsWith("thing-")) {
+        const thing = SALTMERE_LAND.things.find(t => `thing-${t.id}` === prop.id);
+        if (thing) { this.settlementKinds.set(eid, thing.kind); if (thing.portable) PhysicalObject.portable[eid] = true; }
+      }
       // Phone notifications have one physical producer below. The generic asset
       // template's repeating 'home screen' stimulus is not a read receipt.
       if (prop.assetId === "phone") removeComponent(w, eid, StimulusSource);
@@ -710,11 +727,12 @@ export class SpatialDemo {
     if (!this.visuals.has(target) || !isEntityPresent(w, target)) return [];
     const repair = this.blackout?.verbs(target); if (repair?.length) return repair;
     const story = this.storyEvents?.verbs(target); if (story?.length) return ["examine", ...story];
+    const crafts = this.recipes?.verbs(eid, target) ?? [];
     if ([...this.phones.values()].includes(target)) return getDirectContainer(w, target) === eid ? ["read_phone", ...(getPrivateCommunications(w, eid).some(r => r.channel === `phone:${this.key(target)}` && !r.own) ? ["reply"] : [])] : [];
     const asset = SPATIAL_ASSETS[this.visuals.get(target)!.asset];
     const objectVerbs = this.storyVerbs(eid, target);
     if (getRelationTargets(w, eid, SittingOn).includes(target)) return objectVerbs.includes("write_note") ? ["write_note"] : [];
-    return [...new Set([...(asset?.affordances?.filter(verb => verb !== "sit" || ObjectState.current[target] !== "occupied") ?? []), ...objectVerbs])];
+    return [...new Set([...(asset?.affordances?.filter(verb => verb !== "sit" || ObjectState.current[target] !== "occupied") ?? []), ...objectVerbs, ...crafts])];
   }
   /** Story-object verbs are installed in the story profiles and wherever a
    * world authors story objects. Every one has a native implementation below. */
@@ -745,7 +763,7 @@ export class SpatialDemo {
       const verbs = this.visibleVerbs(eid, id);
       return verbs.length ? [{ target: Name.value[id], verbs }] : [];
     });
-    return `PHYSICAL WORLD: You occupy a real position. Movement follows walkable routes; interactions walk into reach before completing. Furniture and walls are solid. Only completed actions change possession or object state. Walking and talking can overlap.\n${weather ? `${weather}\n` : ""}Current destinations: ${this.spatial.movementTargets(eid).map(id => Name.value[id]).join(", ")}.\n${phone !== undefined ? `Your phone is ${getDirectContainer(w, phone) === eid ? "in your possession" : "where you last left it; observe your surroundings"}. Pick it up with pickup target="${Name.value[phone]}". In your hand, interact read_phone reads one unread text. Reply with interact target="${Name.value[phone]}" content='reply {"replyTo":<read message id>,"text":"your words"}'. Speaking does not send a text. The screen is private; notifications reveal no sender or contents.` : ""}\nMessages you personally read: ${JSON.stringify(this.readMessages(eid))}.\nOther locally available operations: ${JSON.stringify(localOperations)}.\n${this.storyObjectsEnabled ? `${this.carriedContext(eid)}Things you can do with objects and people: pickup/take and drop to carry things. interact target="<document>" content="read" reads it; only you learn what it says. With an object in hand: content="give <person>" hands it over; content="show <person>" (or just "show" for everyone near you) lets them see it and a page of a document; content="put <box or table>" sets it there; content="hide <box>" puts it inside and shuts the lid so nobody sees it. interact target="<door knocker or door>" content="knock" knocks (content="knock 3" for three knocks); people inside hear it. At any table or seat, interact target="<table or seat>" content="write_note <your words>" writes a short note you keep in hand (${NOTE_TEXT_LIMIT} characters at most).\n` : ""}${this.blackout ? 'Lighting controls: interact target="Lighting panel" content="inspect", "isolate", "install <exact carried cartridge name>", or "power_on". Inspection supplies a diagnosis; the selected part must be carried, compatible and intact, and the circuit isolated before installation. These controls do not disclose the current fault. Supplies box uses open/close; visible cartridges use pickup.' : ""}`;
+    return `PHYSICAL WORLD: You occupy a real position. Movement follows walkable routes; interactions walk into reach before completing. Furniture and walls are solid. Only completed actions change possession or object state. Walking and talking can overlap.\n${weather ? `${weather}\n` : ""}Current destinations: ${this.spatial.movementTargets(eid).map(id => Name.value[id]).join(", ")}.\n${phone !== undefined ? `Your phone is ${getDirectContainer(w, phone) === eid ? "in your possession" : "where you last left it; observe your surroundings"}. Pick it up with pickup target="${Name.value[phone]}". In your hand, interact read_phone reads one unread text. Reply with interact target="${Name.value[phone]}" content='reply {"replyTo":<read message id>,"text":"your words"}'. Speaking does not send a text. The screen is private; notifications reveal no sender or contents.` : ""}\nMessages you personally read: ${JSON.stringify(this.readMessages(eid))}.\nOther locally available operations: ${JSON.stringify(localOperations)}.\n${this.recipes ? `${this.recipes.context(eid)}\n` : ""}${this.storyObjectsEnabled ? `${this.carriedContext(eid)}Things you can do with objects and people: pickup/take and drop to carry things. interact target="<document>" content="read" reads it; only you learn what it says. With an object in hand: content="give <person>" hands it over; content="show <person>" (or just "show" for everyone near you) lets them see it and a page of a document; content="put <box or table>" sets it there; content="hide <box>" puts it inside and shuts the lid so nobody sees it. interact target="<door knocker or door>" content="knock" knocks (content="knock 3" for three knocks); people inside hear it. At any table or seat, interact target="<table or seat>" content="write_note <your words>" writes a short note you keep in hand (${NOTE_TEXT_LIMIT} characters at most).\n` : ""}${this.blackout ? 'Lighting controls: interact target="Lighting panel" content="inspect", "isolate", "install <exact carried cartridge name>", or "power_on". Inspection supplies a diagnosis; the selected part must be carried, compatible and intact, and the circuit isolated before installation. These controls do not disclose the current fault. Supplies box uses open/close; visible cartridges use pickup.' : ""}`;
   }
   private execute(actor: number, action: AgentAction): boolean {
     const observesPanel = action.type === "observe" && this.blackout
@@ -777,8 +795,9 @@ export class SpatialDemo {
     if (verb === "read" && [...this.phones.values()].includes(target)) verb = "read_phone";
     const repairVerb = !!this.blackout?.verbs(target).includes(verb);
     const storyVerb = !!this.storyEvents?.verbs(target).includes(verb);
+    const recipeVerb = !!this.recipes?.verbs(actor, target).includes(verb);
     const objectVerb = this.storyObjectsEnabled && (STORY_VERBS as readonly string[]).includes(verb);
-    if (!repairVerb && !storyVerb && !objectVerb && !["move", "pickup", "drop", "sit", "eat", "open", "close", "read_phone", "reply"].includes(verb)) return fail("That operation has no installed physical implementation.");
+    if (!repairVerb && !storyVerb && !objectVerb && !recipeVerb && !["move", "pickup", "drop", "sit", "eat", "open", "close", "read_phone", "reply"].includes(verb)) return fail("That operation has no installed physical implementation.");
     if (verb === "move" ? !this.spatial.movementTargets(actor).includes(target) : !this.visible(actor, target)) return fail("That target is not currently accessible to you.");
     if (verb === "pickup" && (!hasComponent(w, target, PhysicalObject) || !PhysicalObject.portable[target] || held)) return fail("That object cannot be picked up now.");
     if (["drop", "read_phone", "reply", "give", "show", "put", "hide"].includes(verb) && !held) return fail("You must hold that object first.");
@@ -797,6 +816,14 @@ export class SpatialDemo {
       const admission = this.storyEvents!.prepare(actor, target, verb);
       if (!admission.ok) return fail(admission.reason);
       pending.story = admission.operation; pending.durationMs = admission.durationMs;
+    }
+    if (recipeVerb) {
+      const admission = this.recipes!.prepare(actor, target, verb, argument);
+      if (!admission.ok) return fail(admission.reason);
+      pending.recipe = admission.operation; pending.durationMs = admission.durationMs;
+      // Held food is eaten where you stand.
+      if (verb === "eat" || verb === "drink") pending.inPlace = true;
+      this.recipes!.reserve(admission.operation);
     }
     if (verb === "read_phone") {
       pending.message = this.messages(target).find(id => this.messageComponent.direction[id] === "in" && !this.messageComponent.readByKey[id]);
@@ -1025,6 +1052,49 @@ export class SpatialDemo {
     p.publicDetail = `Wrote ${Name.value[note]}.`;
     return { success: true, detail: `You wrote ${Name.value[note]} and are holding it. It says: ${JSON.stringify(text)}` };
   }
+  /** The settlement's crafts: kinds, sources, items made in hand, the stall, raised buildings. */
+  private installSettlement() {
+    const w = this.sim.world;
+    const recipes = createSpatialRecipes({ world: w, land: SALTMERE_LAND,
+      kindOf: eid => this.settlementKinds.get(eid),
+      setKind: (eid, kind) => { this.settlementKinds.set(eid, kind); },
+      key: eid => this.key(eid),
+      spawnInHand: (actor, kind) => {
+        const number = ++this.settlementItems, asset = SPATIAL_ASSETS[kind] ?? SPATIAL_ASSETS.trinket;
+        const item = new ObjectManager(w).spawn("object", { name: `${kind.split("-").map(p => p[0].toUpperCase() + p.slice(1)).join(" ")} ${number}`,
+          description: `A ${kind.replace(/-/g, " ")}.`, containedIn: getRoomForEntity(w, actor)!, state: "normal" });
+        if (item === null) return undefined;
+        this.byId.set(`made-${number}`, item); this.position(item, Position.x[actor], Position.y[actor]);
+        PhysicalObject.portable[item] = true; this.settlementKinds.set(item, kind);
+        this.sim.god.registry.byName.set(Name.value[item], item); this.sim.god.registry.byId.set(item, Name.value[item]);
+        this.visuals.set(item, { key: this.key(item), asset: asset.id, size: asset.size, color: asset.color, lift: 0 });
+        this.propAnchors.set(item, [{ x: 0, y: 0 }]); this.spatial.registerTarget(item, { anchors: [{ x: 0, y: 0 }] });
+        if (!tryAddToInventory(w, actor, item).success) return undefined;
+        tryHoldCarriedItem(w, actor, item);
+        return item;
+      },
+      consume: item => {
+        // Used up: out of the world (kept as an entity in a sink, not recycled mid-session).
+        this.settlementSink ??= createRoomEntity(w, { name: "(used up)", description: "Consumed materials." });
+        setLocatedIn(w, item, this.settlementSink); this.visuals.delete(item); this.settlementKinds.delete(item);
+      },
+      stock: (item, stall) => { setLocatedIn(w, item, stall); this.position(item, Position.x[stall], Position.y[stall]); const v = this.visuals.get(item); if (v) v.lift = 1; },
+      handOver: (item, actor) => { const ok = tryAddToInventory(w, actor, item).success; if (ok) tryHoldCarriedItem(w, actor, item); return ok; },
+      raised: (plot, structure, count) => {
+        const asset = SPATIAL_ASSETS[structure.becomes === "house" ? "cabin" : structure.becomes] ?? SPATIAL_ASSETS.cabin;
+        const view = this.visuals.get(plot);
+        if (view) Object.assign(view, { asset: asset.id, size: asset.size, color: asset.color });
+        Name.value[plot] = `${structure.name} ${count}`;
+        this.sim.god.registry.byName.set(Name.value[plot], plot);
+        this.announcePhysicalChange(plot, `${Name.value[plot]} now stands here.`, "new building");
+      },
+      record: line => this.record("world", line) });
+    for (const [eid, kind] of this.settlementKinds) {
+      const thing = SALTMERE_LAND.things.find(t => t.kind === kind && Name.value[eid] === t.name);
+      recipes.installSource(eid, thing?.uses);
+    }
+    return recipes;
+  }
   private pendingInvalid(p: Pending, atTarget = false): string | undefined {
     const w = this.sim.world, held = getDirectContainer(w, p.target) === p.actor;
     if (p.signal?.aborted || !this.current(p.actor, p.actorKey) || !hasComponent(w, p.actor, Agent) || !Agent.active[p.actor]
@@ -1042,9 +1112,11 @@ export class SpatialDemo {
       || atTarget && !this.spatial.isAtTarget(p.actor, p.approach))) return "The place you were putting it changed before you got there.";
     if (p.blackout) return this.blackout!.validate(p.blackout);
     if (p.story) return this.storyEvents!.validate(p.story);
+    if (p.recipe) return this.recipes!.validate(p.recipe);
   }
   private finish(p: Pending, success: boolean, detail: string) {
     if (this.work.get(p.actor) !== p) return;
+    if (p.recipe && !success) this.recipes?.release(p.recipe);
     this.work.delete(p.actor); releaseSimulationResources(this.sim.world, p.actor, p.action.executionId!);
     if (!this.current(p.actor, p.actorKey) || !hasComponent(this.sim.world, p.actor, Agent) || !Agent.active[p.actor]
       || getAgentWorldCapabilityGeneration(this.sim.world, p.actor) !== p.generation
@@ -1092,6 +1164,7 @@ export class SpatialDemo {
       let success = true, detail = `You ${p.verb} ${Name.value[p.target]}.`;
       if (p.blackout) { const result = this.blackout!.commit(p.blackout); success = result.success; detail = result.detail; this.announceCircuitChanges(); }
       else if (p.story) { const result = this.storyEvents!.commit(p.story); success = result.success; detail = result.detail; }
+      else if (p.recipe) { const result = this.recipes!.commit(p.recipe); success = result.success; detail = result.detail; }
       else if ((STORY_VERBS as readonly string[]).includes(p.verb)) { const result = this.commitObjectVerb(p); success = result.success; detail = result.detail; }
       else if (p.verb === "pickup") { const result = tryAddToInventory(w, p.actor, p.target); success = result.success; if (result.success) tryHoldCarriedItem(w, p.actor, p.target); else detail = result.reason; }
       else if (p.verb === "drop") { const result = tryRemoveFromInventory(w, p.actor, p.target, getRoomForEntity(w, p.actor)!); success = result.success;

@@ -158,7 +158,7 @@ export function createTownGrowthReachability(bounds: SpatialRect, geometry: Retu
 }
 
 export function createSpatialTownGrowth(options: {
-  world: World; spatial: ReturnType<typeof createSpatialWorld>; bounds: SpatialRect; cellSize: .5;
+  world: World; spatial: ReturnType<typeof createSpatialWorld>; bounds: SpatialRect; cellSize: .5 | 1;
   ready: () => boolean; sites: readonly TownGrowthSite[]; snapshot: () => TownGrowthSnapshot;
   reservedNames?: readonly string[];
   /** Lifetime furnishing attempts for this source (default 4, at most 16). */
@@ -170,9 +170,9 @@ export function createSpatialTownGrowth(options: {
 }) {
   assertSimulationTaskActive();
   const { world, spatial } = options, source = getCommittedEvents(world), bounds = { ...options.bounds };
-  if (!source.sourceId || source.stopped || !validSpatialRect(bounds) || options.cellSize !== .5
-    || (Math.floor((bounds.maxX - bounds.minX) / .5) + 1) * (Math.floor((bounds.maxY - bounds.minY) / .5) + 1) > 10000)
-    throw Error("Town growth requires a current source and bounded half-metre world");
+  if (!source.sourceId || source.stopped || !validSpatialRect(bounds) || (options.cellSize !== .5 && options.cellSize !== 1)
+    || (Math.floor((bounds.maxX - bounds.minX) / options.cellSize) + 1) * (Math.floor((bounds.maxY - bounds.minY) / options.cellSize) + 1) > 65536)
+    throw Error("Town growth requires a current source and a bounded half-metre or metre world");
   const sourceId = source.sourceId, limit = options.maxAttempts ?? DEFAULT_TOWN_GROWTH_ATTEMPTS;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_TOWN_GROWTH_ATTEMPTS) throw Error("Town growth attempt budget must be 1-16");
   let disposed = false, attempts = 0, rejected = 0;

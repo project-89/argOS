@@ -41,6 +41,26 @@ const assetTable: Record<string, SpatialAsset> = {
   trinket: { id: "trinket", size: { x: .14, y: .05, z: .08 }, color: "#8a8d84", objectType: "object", initialState: "normal", affordances: ["examine"] },
   // A door knocker on a cottage's front post: the audible way to call on a house.
   knocker: { id: "knocker", size: { x: .16, y: .2, z: .06 }, color: "#4f544e", objectType: "object", initialState: "normal", affordances: ["examine"] },
+  // Settlement (Saltmere as a town that feeds and builds itself). Sources and
+  // stations render as simple shapes until models exist; their crafts are
+  // installed by the settlement's recipe module, not by these entries.
+  tent: { id: "tent", size: { x: 2.4, y: 1.6, z: 2.4 }, color: "#b9a67e", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: 1.2, halfDepth: 1.2 } },
+  "market-stall": { id: "market-stall", size: { x: 3, y: 2.2, z: 1.4 }, color: "#a86b4a", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: 1.5, halfDepth: .7 } },
+  campfire: { id: "campfire", size: { x: 1.2, y: .5, z: 1.2 }, color: "#c9652f", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: .6, halfDepth: .6 } },
+  stump: { id: "stump", size: { x: .8, y: .5, z: .8 }, color: "#7b5a3c", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: .4, halfDepth: .4 } },
+  "stone-pile": { id: "stone-pile", size: { x: 2.2, y: .9, z: 2 }, color: "#8d8f8a", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: 1.1, halfDepth: 1 } },
+  bramble: { id: "bramble", size: { x: 1.6, y: 1.1, z: 1.6 }, color: "#5d7d45", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: .8, halfDepth: .8 } },
+  "flax-patch": { id: "flax-patch", size: { x: 6, y: .8, z: 4 }, color: "#8fa6d6", objectType: "object", initialState: "normal", affordances: ["examine"] },
+  "fishing-water": { id: "fishing-water", size: { x: 6, y: .1, z: 2 }, color: "#3f6f86", objectType: "object", initialState: "normal", affordances: ["examine"] },
+  spring: { id: "spring", size: { x: 1.8, y: .7, z: 1.8 }, color: "#7aa9b8", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: .9, halfDepth: .9 } },
+  workbench: { id: "workbench", size: { x: 2, y: .9, z: 1 }, color: "#9b7650", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: 1, halfDepth: .5 } },
+  "drying-rack": { id: "drying-rack", size: { x: 2.5, y: 1.8, z: .5 }, color: "#8a7a5c", objectType: "object", initialState: "normal", affordances: ["examine"], collider: { halfWidth: 1.25, halfDepth: .25 } },
+  plot: { id: "plot", size: { x: 6, y: .05, z: 6 }, color: "#a0896a", objectType: "object", initialState: "normal", affordances: ["examine"] },
+  cabin: { id: "cabin", size: { x: 5, y: 3.2, z: 5 }, color: "#b08a64", objectType: "object", initialState: "normal", affordances: ["examine"] },
+  ...Object.fromEntries(([["axe", "#8b8f93", .8], ["net", "#c9b98f", .5], ["torn-net", "#9c8f73", .5], ["log", "#8a6440", .9], ["firewood", "#a47a4d", .4],
+    ["planks", "#caa77a", 1], ["stone", "#8e908b", .25], ["raw-fish", "#9fb3b8", .35], ["cooked-fish", "#c89a5d", .35], ["berries", "#7b2f4f", .15],
+    ["flax", "#b9c78f", .5], ["twine", "#d8c9a0", .15], ["water", "#8ec0d1", .25]] as const)
+    .map(([id, color, length]) => [id, { id, size: { x: length, y: .12, z: .15 }, color, objectType: "object", initialState: "normal", affordances: ["examine"] }])),
   "actor-mara": { id: "actor-mara", size: { x: .5, y: 1.7, z: .5 }, color: "#d3a74d", affordances: [] },
   "actor-ivo": { id: "actor-ivo", size: { x: .5, y: 1.8, z: .5 }, color: "#6c9daf", affordances: [] },
   "actor-a": { id: "actor-a", size: { x: .5, y: 1.7, z: .5 }, color: "#7fa990", affordances: [] },

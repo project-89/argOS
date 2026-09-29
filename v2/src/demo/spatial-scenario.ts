@@ -32,7 +32,7 @@ export interface SpatialScenarioDefinition {
   residents: SpatialResident[];
   maxWorldEntities: number;
   /** Explicit host choice; a larger town changes resolution, not clock/speed. */
-  navigationCellSize?: .25 | .5;
+  navigationCellSize?: .25 | .5 | 1;
 }
 
 /** Preflight before createSimulation allocates anything. Validate the renderer,
