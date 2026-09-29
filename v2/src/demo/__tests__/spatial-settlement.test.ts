@@ -69,9 +69,54 @@ test("trades trained headless carry into the walkable world: the town stocks its
   const w = d.sim.world;
   const stall = [...d.settlementKinds].find(([, k]) => k === "stall")![0];
   const stock = listDirectContents(w, stall).map(e => d!.settlementKinds.get(e));
-  expect(stock).toEqual(expect.arrayContaining(["raw-fish", "firewood"]));
+  expect(stock).toContain("raw-fish");
+  expect(new Set(stock).size).toBeGreaterThanOrEqual(3);
   expect(d.recipes!.builtCount().workshop).toBe(1);
   expect(d.tradeLives.some(l => l.stats.skillRuns > 5)).toBe(true);
   expect(d.recipes!.coinsOf(d.actors.find(a => Name.value[a] === "Otis")!)).toBeGreaterThan(12); // he sold fish
   void asked; // gaps the headless training did not cover ask a (here empty) planner; nothing is invented
+}, 180_000);
+
+test("autopilot: spoken to, a fisher looks up (habit pauses, only his mind may think), then carries out what he chose to do", async () => {
+  const { runSettlementLife } = await import("../../learning/settlement/run-settlement");
+  const { SkillGraph } = await import("../../learning/skill-graph");
+  const { configureDecisionLeaves } = await import("../../cognition/decision-leaves");
+  const { foregroundAllowed, backgroundAllowed } = await import("../../runtime/attention");
+  const graphs = new Map<string, InstanceType<typeof SkillGraph>>();
+  await runSettlementLife({ days: 1, life: 1, graphs, planner: "manual" });
+  d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, seconds: 3600,
+    settlementWork: { graphs } });
+  const w = d.sim.world;
+  const asked: string[] = [];
+  configureDecisionLeaves(w, { generate: async ({ prompt }) => {
+    asked.push(prompt);
+    if (prompt.includes('"choice"')) { const m = prompt.match(/(\d+)\. bring raw-fish to Leon/); return { text: `{"choice": ${m ? m[1] : 0}}` }; }
+    return { text: '{"yes": false}' }; // glances: carry on
+  } });
+  w.meta.aiEnabled = true; // a mind to hand the floor to (its model calls are mocked away here)
+  await d.start();
+  const step = async (n: number) => { for (let i = 0; i < n; i++) { d!.advance(100); await new Promise(r => setImmediate(r)); } };
+  const otis = d.actors.find(a => Name.value[a] === "Otis")!, leon = d.actors.find(a => Name.value[a] === "Leon")!, eli = d.actors.find(a => Name.value[a] === "Eli")!;
+  const fish = (eid: number) => listDirectContents(w, eid).filter(e => d!.settlementKinds.get(e) === "raw-fish").length;
+  // On autopilot nobody's mind runs.
+  expect(foregroundAllowed(w, otis)).toBe(false);
+  await step(3000); // five minutes of work
+  expect(fish(otis) + d.recipes!.coinsOf(otis)).toBeGreaterThan(12);
+  // Leon speaks to Otis; they both fish the Shingle.
+  const { setLocatedIn } = await import("../../ecs/location");
+  const { Position } = await import("../../ecs/components");
+  const { getRoomForEntity } = await import("../../ecs/location");
+  setLocatedIn(w, leon, getRoomForEntity(w, otis)!); Position.x[leon] = Position.x[otis] + 2; Position.y[leon] = Position.y[otis];
+  executeActions(w, [{ eid: leon, action: { type: "speak", target: "Otis", content: "Otis — the ones you pulled this morning, did any look wrong to you?" } as any }], d.sim.god.systemRegistry);
+  for (let i = 0; i < 200 && !d.autopilot!.holds(otis); i++) await step(1);
+  expect(d.autopilot!.holds(otis)).toBe(true);
+  expect(foregroundAllowed(w, otis)).toBe(true);    // his mind has the floor
+  expect(foregroundAllowed(w, eli)).toBe(false);    // Eli's does not
+  expect(d.autopilot!.log.some(l => l.who === "Otis" && /looks up: Leon says/.test(l.what))).toBe(true);
+  // Quiet again: he hands the floor back with an errand, and the habit carries it out.
+  const leonFish = fish(leon);
+  for (let i = 0; i < 4000 && fish(leon) <= leonFish; i++) await step(1);
+  expect(d.autopilot!.log.some(l => l.who === "Otis" && /means to bring raw-fish to Leon/.test(l.what))).toBe(true);
+  expect(fish(leon)).toBeGreaterThan(leonFish);
+  expect(d.autopilot!.holds(otis)).toBe(false);
 }, 180_000);

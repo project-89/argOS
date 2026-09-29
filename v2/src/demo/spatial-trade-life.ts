@@ -24,6 +24,7 @@ import { SkillGraph, type Ref } from "../learning/skill-graph";
 import { SkillSolver, type Planner, type SkillEnv, type SolveStats } from "../learning/skill-runtime";
 import type { LandDef } from "../learning/settlement/saltmere-land";
 import type { createSpatialRecipes } from "./spatial-recipes";
+import type { Errand } from "./spatial-autopilot";
 
 export type SpatialTradeHost = {
   world: World;
@@ -34,12 +35,14 @@ export type SpatialTradeHost = {
   /** Rooms with their land place kind. */
   rooms(): Array<{ eid: number; name: string; kind: string }>;
   stall(): number | undefined;
+  personNamed(name: string): number | undefined;
   /** Called on every simulation tick while subscribed. */
   onTick(listener: () => void): () => void;
   now(): number;
 };
 
-const FAIL_PATTERNS = { scarce: /spent|has no |cannot pay|costs \d+; you have|has enough|already building|no longer|is gone/i,
+// Shortages and transient hiccups (an interrupted walk, a busy body) are not surprises about how the world works.
+const FAIL_PATTERNS = { scarce: /spent|has no |cannot pay|costs \d+; you have|has enough|already building|no longer|is gone|invalidated|changed before completion|already occupied|No reachable path/i,
   missing: /(?:you need|needs) (\d+) more ([a-z][a-z-]*)/i };
 
 /** A resident's body as a skill environment. */
@@ -145,11 +148,16 @@ export class SpatialTradeLife {
   stopped = false;
   private readonly env: SkillEnv;
   private readonly cooldown = new Map<string, number>();
+  /** Errands the resident's mind chose (bring someone something, go somewhere): done before the day's work. */
+  readonly errands: Errand[] = [];
   constructor(private readonly host: SpatialTradeHost, readonly eid: number, readonly trade: string, graph: SkillGraph, planner: Planner,
-    private readonly log?: (line: string) => void) {
+    private readonly log?: (line: string) => void,
+    private readonly attention?: { holds(eid: number): boolean; surprised(eid: number, item: string, detail: string): void }) {
     this.env = createSpatialSkillEnv(host, eid);
     this.solver = new SkillSolver(this.env, graph, planner, { maxPlannerCalls: 40, log: log ? line => log(`[${Name.value[eid]}] ${line}`) : undefined,
-      interrupt: () => this.stopped || (Needs.hunger[eid] ?? 0) >= 85 });
+      // The habit yields at its next act when the mind has the floor (or hunger bites).
+      interrupt: () => this.stopped || (Needs.hunger[eid] ?? 0) >= 85 || !!this.attention?.holds(eid),
+      onSurprise: (item, _skill, detail) => this.attention?.surprised(eid, item, detail) });
   }
   get stats(): SolveStats { return this.solver.stats; }
   private held(kind: string) { return this.env.have()[kind] ?? 0; }
@@ -213,8 +221,22 @@ export class SpatialTradeLife {
     }
     return false;
   }
+  /** Carry out an errand the mind chose. */
+  private async errand(errand: Errand): Promise<void> {
+    if (errand.kind === "go") { await this.env.act({ verb: "move", target: errand.place }); return; }
+    if (!(await this.solver.solve(errand.item, this.held(errand.item) + 1))) return;
+    const person = this.host.personNamed(errand.to);
+    if (person === undefined) return;
+    const room = getRoomForEntity(this.host.world, person);
+    if (room !== undefined && room !== getRoomForEntity(this.host.world, this.eid)) await this.env.act({ verb: "move", target: Name.value[room] });
+    await this.env.act({ verb: "give", target: errand.item, arg: errand.to });
+  }
   async live(): Promise<void> {
     while (!this.stopped && entityExists(this.host.world, this.eid)) {
+      // The mind has the floor: the habit waits.
+      if (this.attention?.holds(this.eid)) { await this.wait(2_000); continue; }
+      const errand = this.errands.shift();
+      if (errand) { await this.errand(errand); continue; }
       if ((Needs.hunger[this.eid] ?? 0) >= 55 && await this.eat()) continue;
       if (await this.sell()) continue;
       if (await this.work()) continue;

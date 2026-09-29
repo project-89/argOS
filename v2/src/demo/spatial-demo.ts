@@ -32,7 +32,7 @@ import { getPrivateCommunications, recordPrivateCommunication } from "../cogniti
 import { queueExperiencedEvent } from "../cognition/experience-appraisal";
 import { configureCharacterAppearance, syncHeldAppearance, tryHoldCarriedItem } from "../rendering/character-appearance";
 import { initializeSchedule } from "../cognition/schedule-system";
-import { getSimulationBodyActivity, releaseSimulationResources, reserveSimulationResources, type PublicPhysicalOperation } from "../runtime/simulation-timeline";
+import { getSimulationBodyActivity, isSimulationResourceBusy, releaseSimulationResources, reserveSimulationResources, type PublicPhysicalOperation } from "../runtime/simulation-timeline";
 import { getCommittedEvents, publishCommittedEvent, subscribeCommittedEvents } from "../runtime/committed-events";
 import { createSpatialWorld } from "../world/spatial-world";
 import { executeAffordance } from "../world/effect-executor";
@@ -60,6 +60,8 @@ import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSalt
 import { createSettlementScenario } from "./spatial-settlement";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
 import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
+import { SettlementAutopilot } from "./spatial-autopilot";
+import { setMindGate } from "../runtime/attention";
 import { SkillGraph } from "../learning/skill-graph";
 import type { Planner } from "../learning/skill-runtime";
 import { SALTMERE_LAND } from "../learning/settlement/saltmere-land";
@@ -78,7 +80,7 @@ import { assertSpatialDevelopmentRelease, SPATIAL_DEVELOPMENT_LIMITS, SPATIAL_DE
 import { createSpatialGodConsole, type SpatialOmniscience } from "./spatial-god-console";
 import { DEVELOPMENT_EVOLUTION_CONFIG } from "./spatial-town-life";
 import { describeSpatialCatalog, getSpatialAssetEntry, loadSpatialAssetCatalog, spatialAssetModel } from "./spatial-asset-registry";
-import { getSpeakingActivity, getUtteranceScript, readLocalSpeechOpportunity, setUtteranceVoiceGate, withinEarshot, type UtteranceVoiceGate } from "../cognition/timed-speech";
+import { getSpeakingActivity, getUtteranceScript, isSpeaking, readLocalSpeechOpportunity, setUtteranceVoiceGate, withinEarshot, type UtteranceVoiceGate } from "../cognition/timed-speech";
 import { setAttentionProvider, type AttentionReading } from "../runtime/attention";
 import { setOffstageHost } from "../runtime/offstage";
 import { setSkillWorldAdapter } from "../learning/world-adapter";
@@ -157,6 +159,8 @@ export class SpatialDemo {
   private readonly tickListeners = new Set<() => void>();
   /** Residents working their trades by habit (settlementWork). */
   readonly tradeLives: SpatialTradeLife[] = [];
+  /** Attention over habit for the settlement's residents. */
+  autopilot?: SettlementAutopilot;
   private settlementSink?: number;
   /** Author-staged sounds, arrivals, lights and phone texts (shared Narrator/God budget). */
   readonly narrativeEvents?: ReturnType<typeof createSpatialNarrativeEvents>;
@@ -1074,15 +1078,43 @@ export class SpatialDemo {
       kindOf: eid => this.settlementKinds.get(eid),
       rooms: () => this.roomViews.map(r => ({ eid: r.id, name: r.name, kind: SALTMERE_LAND.places.find(p => p.name === r.name)?.kind ?? (r.name === "The Net House" ? "net-house" : "") })),
       stall: () => [...this.settlementKinds].find(([, k]) => k === "stall")?.[0],
+      personNamed: name => this.actors.find(a => Name.value[a].toLowerCase() === name.trim().toLowerCase()),
       onTick: listener => { this.tickListeners.add(listener); return () => { this.tickListeners.delete(listener); }; },
       now: () => this.atSimMs };
     const noPlanner: Planner = async () => [];
+    // Habits run the day; attention decides when a mind looks up.
+    const managed = SALTMERE_LAND.residents.map(r => this.actors.find(a => Name.value[a] === r.name)).filter((a): a is number => a !== undefined);
+    const residents = this.options.world?.residents ?? [];
+    const autopilot = this.autopilot = new SettlementAutopilot({ world: w, now: () => this.atSimMs, managed: () => managed,
+      cuesOf: eid => { const r = residents.find(x => x.name === Name.value[eid]); return [...new Set([...(r?.past?.memories ?? []).flatMap(m => m.cues), "Marrow Star", "the sea"])]; },
+      inform: (eid, source, text) => this.tell(eid, source, text),
+      engaged: eid => isSimulationResourceBusy(w, eid, "body") || isSpeaking(w, eid) || !!this.attentionFor(eid).addressedByObserver,
+      errandOptions: eid => {
+        const since = this.atSimMs - 120_000, me = Name.value[eid];
+        const people = [...new Set(getSocialDialogue(w, eid).filter(t => (t.simulation?.completedAtSimMs ?? t.atSimMs ?? 0) >= since)
+          .map(t => t.own ? t.target : t.speaker).filter((n): n is string => !!n && n !== me))].slice(0, 3);
+        return { people, items: Object.keys(SALTMERE_LAND.prices), places: this.roomViews.map(r => r.name) };
+      },
+      onErrand: (eid, errand) => { this.tradeLives.find(l => l.eid === eid)?.errands.push(errand); },
+      mindAvailable: () => w.meta.aiEnabled !== false,
+      record: line => this.record("world", line) });
+    setMindGate(w, autopilot.gate);
+    this.tickListeners.add(() => autopilot.tick());
+    this.removers.push(subscribeCommittedEvents(w, event => {
+      if (event.kind !== "speech" || !event.text || event.actorId === undefined) return;
+      const room = getRoomForEntity(w, event.actorId);
+      for (const listener of managed) {
+        if (listener === event.actorId || getRoomForEntity(w, listener) !== room) continue;
+        if (Math.hypot(Position.x[listener] - Position.x[event.actorId], Position.y[listener] - Position.y[event.actorId]) > SPEECH_EARSHOT_METRES) continue;
+        autopilot.heard(listener, event.actorId, event.targetId, event.text);
+      }
+    }));
     for (const r of SALTMERE_LAND.residents) {
       const actor = this.actors.find(a => Name.value[a] === r.name);
       if (actor === undefined) continue;
       let graph = work.graphs.get(r.trade);
       if (!graph) { graph = new SkillGraph(); work.graphs.set(r.trade, graph); }
-      const life = new SpatialTradeLife(host, actor, r.trade, graph, work.planner?.(r.trade) ?? noPlanner, work.log);
+      const life = new SpatialTradeLife(host, actor, r.trade, graph, work.planner?.(r.trade) ?? noPlanner, work.log, autopilot);
       this.tradeLives.push(life);
       void life.live().catch(error => console.warn(`[Settlement] ${r.name} stopped working: ${error instanceof Error ? error.message : error}`));
     }
@@ -1480,9 +1512,10 @@ export class SpatialDemo {
           const pairs: Array<[mover: number, noticer: number]> = moved(a) && moved(b) ? [[a, b], [b, a]] : moved(a) ? [[a, b]] : [[b, a]];
           for (const [mover, noticer] of pairs) {
             if (this.visitors.has(noticer) || !getAgentVisualEntities(w, noticer).includes(mover)) continue;
-            this.tell(noticer, Name.value[mover], moved(noticer)
-              ? `You and ${Name.value[mover]} come face to face.`
-              : `${Name.value[mover]} walks up to you and stops close by.`);
+            const noticed = moved(noticer) ? `You and ${Name.value[mover]} come face to face.` : `${Name.value[mover]} walks up to you and stops close by.`;
+            if (this.autopilot?.gate && this.tradeLives.some(l => l.eid === noticer))
+              this.autopilot.perceive(noticer, { kind: "approach", source: Name.value[mover], atMs: now, text: noticed });
+            else this.tell(noticer, Name.value[mover], noticed);
           }
         }
       }

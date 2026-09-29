@@ -67,3 +67,25 @@ export function backgroundPriorityFor(world: World, eid: number, base: TaskPrior
   const step = tier === "presence" ? 0 : tier === "periphery" ? 1 : 2;
   return order[Math.min(order.length - 1, order.indexOf(base) + step)];
 }
+
+/** Autopilot gate. A host running residents on habit (a skill graph doing their
+ * work) can hold their minds back until something salient happens: the
+ * foreground decision runs only when the gate allows, and background lanes
+ * (appraisal, planning, review, reflection) only while the mind is or was
+ * recently awake. Without a gate everything is allowed (unchanged behaviour).
+ * A resident spoken to directly is always allowed to answer. */
+export type MindGate = { foreground(eid: number): boolean; background(eid: number): boolean };
+const gates = new WeakMap<World, MindGate>();
+export function setMindGate(world: World, gate: MindGate | undefined): void {
+  if (gate) gates.set(world, gate); else gates.delete(world);
+}
+export function foregroundAllowed(world: World, eid: number): boolean {
+  const gate = gates.get(world);
+  if (!gate || readAttention(world, eid).addressedByObserver) return true;
+  try { return gate.foreground(eid); } catch { return true; }
+}
+export function backgroundAllowed(world: World, eid: number): boolean {
+  const gate = gates.get(world);
+  if (!gate) return true;
+  try { return gate.background(eid); } catch { return true; }
+}

@@ -39,7 +39,7 @@ import { configureWorldConstructionBudget, getWorldConstructionStatus } from "./
 import { startCommittedEvents, stopCommittedEvents } from "./runtime/committed-events";
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "./ecs/prefabs";
 import { isOperatorControlled } from "./ecs/controlled";
-import { attentionCadenceOpen, backgroundPriorityFor, foregroundPriorityFor } from "./runtime/attention";
+import { attentionCadenceOpen, backgroundAllowed, backgroundPriorityFor, foregroundAllowed, foregroundPriorityFor } from "./runtime/attention";
 import { attachSkillLibrary, type SkillHarvestReport, type SkillLibraryConfig, type SkillLibrarySession } from "./learning/session";
 import { hasDueOffstageScene, installOffstageLife, noteForegroundDecisionStarted, offstageForegroundReady, reflectionFor,
   runOffstageDriver, runOffstageScene, type OffstageConfig } from "./runtime/offstage";
@@ -1173,6 +1173,8 @@ Do NOT explain — just create everything using your tools.`;
                       // Scarce thinking goes first to whoever the observer is with.
                       priorityOf: () => foregroundPriorityFor(world, eid),
                       ready: () => modelDemand.has(eid) && entityExists(world, eid) && Agent.active[eid] && isForegroundActorAvailable(world, eid)
+                        // Autopilot: the mind waits until something salient wakes it.
+                        && foregroundAllowed(world, eid)
                         && attentionCadenceOpen(world, eid, lastForegroundSimMs, hasPendingCognitionStimuli(world, eid) || hasDueAttentionSignal(world, eid))
                         // Offstage: no cadence loop; think once per new urgent cause (runtime/offstage).
                         && offstageForegroundReady(world, eid)
@@ -1200,10 +1202,11 @@ Do NOT explain — just create everything using your tools.`;
                       // Appraisal is how lived experience becomes feeling and memory; it
                       // continues while the operator possesses this body. The resident's
                       // own planning, goal review and reflection wait until release.
-                      const ownMind = () => active() && !isOperatorControlled(world, eid);
+                      // Background minds digest what happened while the mind is (or was lately) awake.
+                      const ownMind = () => active() && !isOperatorControlled(world, eid) && backgroundAllowed(world, eid);
                       if (config.enableExperienceAppraisal !== false) registerAIOperation(runtime!, {
                         name: `AgentAppraisal:${eid}`, interval: 1, priority: "high", lane: "subconscious", priorityOf: () => backgroundPriorityFor(world, eid, "high"),
-                        ready: () => active() && hasExperienceAppraisal(world, eid),
+                        ready: () => active() && backgroundAllowed(world, eid) && hasExperienceAppraisal(world, eid),
                         execute: () => appraiseWithThoughtPublication(eid),
                       });
                       if (config.enableReflection !== false) initializeReflectionState(world, eid);

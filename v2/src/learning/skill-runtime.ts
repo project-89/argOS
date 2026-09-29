@@ -42,7 +42,9 @@ export type SolveStats = { plannerCalls: number; acts: number; skillRuns: number
 export type SolverOptions = { maxDepth?: number; maxPlannerCalls?: number; maxIterations?: number; life?: number;
   onGap?: (item: string, detail: string) => void; log?: (line: string) => void;
   /** Checked before every act: true abandons the current work (something more urgent, like thirst). */
-  interrupt?: () => boolean };
+  interrupt?: () => boolean;
+  /** A learned way failed for a reason other than shortage: a surprise worth attention. */
+  onSurprise?: (item: string, skillId: string, detail: string) => void };
 
 /** One plan's own record: its acts, and what those acts themselves took and
  * gave (not what sub-goals made along the way — that is their skills' effect). */
@@ -55,6 +57,8 @@ export class SkillSolver {
   private readonly active = new Set<string>();
   /** Set when an act failed for want of goods (not knowledge) since the last check. */
   private scarcity = false;
+  /** What the world said the last time an act failed. */
+  private lastFailure?: string;
   private readonly soughtAlternative = new Set<string>();
   private readonly maxDepth: number; private readonly maxPlannerCalls: number; private readonly maxIterations: number;
 
@@ -96,6 +100,7 @@ export class SkillSolver {
         if (this.scarcity) { scarce = true; failures.push(`The usual way (${skill.id}) is short of goods right now.`); continue; }
         skill.stats.failures++; this.stats.skillFailures++;
         failures.push(`The usual way (${skill.id}) did not work this time.`);
+        if (!this.options.interrupt?.()) this.options.onSurprise?.(item, skill.id, this.lastFailure ?? "it did not work this time");
         continue;
       }
       // Short of goods every known way: look once for another way (then wait for stock).
@@ -180,6 +185,7 @@ export class SkillSolver {
     if (this.options.interrupt?.()) { this.scarcity = true; return { ok: false, summary: "Interrupted by something more urgent.", scarce: true }; }
     let result = await act();
     if (!result.ok && result.scarce) this.scarcity = true;
+    if (!result.ok) this.lastFailure = result.summary;
     // Walking is native: a target that stands elsewhere is walked to.
     if (!result.ok && result.elsewhere && step.verb !== "move") {
       const moved = await this.env.act({ verb: "move", target: result.elsewhere }); this.stats.acts++;
