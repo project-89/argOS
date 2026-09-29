@@ -95,3 +95,28 @@ describe("fast reply to direct address", () => {
     expect(generate.mock.calls[1][0].messages[0].content).toContain("It's your move");
   });
 });
+
+describe("voiced plan speech", () => {
+  test("a planned line is said in the moment's own words by a small say decision, and still completes its step", async () => {
+    const { createIntentGoal, executeActions: execute } = await import("../cognition-system");
+    const { createPlanEntity } = await import("../planning-system");
+    const { configureDecisionLeaves } = await import("../decision-leaves");
+    const { Plan } = await import("../../ecs/components");
+    const f = fixture(false);
+    f.world.meta.voicedPlanSpeech = true;
+    const prompts: string[] = [];
+    configureDecisionLeaves(f.world, { generate: async ({ prompt }) => { prompts.push(prompt); return { text: '{"line": "Wren. The lamp. It needs the amber part, not the blue."}' }; } });
+    const goal = createIntentGoal(f.world, f.ada, "Tell Wren what the lamp needs", 9)!;
+    const plan = createPlanEntity(f.world, f.ada, goal, { goalDescription: "Tell Wren what the lamp needs", steps: [
+      { description: "Tell Wren", actionType: "speak", target: "Wren", content: "the lamp needs the amber cartridge" },
+      { description: "Look around", actionType: "observe", target: "Hall" }] } as any)!;
+    const action = await agentThink(f.world, f.ada);
+    expect(generate).not.toHaveBeenCalled(); // no full foreground decision
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("the lamp needs the amber cartridge");
+    expect(action).toMatchObject({ type: "speak", target: "Wren", content: "Wren. The lamp. It needs the amber part, not the blue." });
+    execute(f.world, [{ eid: f.ada, action: action as any }], f.registry);
+    for (let i = 0; i < 200 && Plan.currentStep[plan] < 1; i++) advanceSimulationTimeline(f.world, 100, { integrate: () => {} });
+    expect(Plan.currentStep[plan]).toBe(1);
+  });
+});

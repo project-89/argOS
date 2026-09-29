@@ -290,7 +290,11 @@ export function compileExecutedPlanToProcedure(
     if (!Array.isArray(parsed)) return { ok: false, reason: "plan steps not an array" };
     steps = parsed as PlanStep[];
   } catch { return { ok: false, reason: "invalid plan steps JSON" }; }
-  const executed = status === "completed" ? steps : steps.slice(0, Math.max(0, Math.min(steps.length, Plan.currentStep[planEid] || 0)));
+  let executed = status === "completed" ? steps : steps.slice(0, Math.max(0, Math.min(steps.length, Plan.currentStep[planEid] || 0)));
+  // Waiting to hear back ends a plan (heard evidence drops what followed it):
+  // what was done up to it is still a way of doing things. Physical waits stay out.
+  const heardWait = executed.findIndex(step => step?.actionType === "wait" && (step.waitUntil == null || (step.waitUntil as { kind?: string }).kind === "heard_evidence"));
+  if (heardWait >= 0 && executed.slice(heardWait + 1).every(step => step?.actionType === "wait" || step?.actionType === "think")) executed = executed.slice(0, heardWait);
   if (executed.some(step => !step || step.resolution)) return { ok: false, reason: "plan includes reconciled rather than executed steps" };
   if (executed.some(step => step.actionType === "wait" || step.waitUntil !== undefined)) return { ok: false, reason: "evidence waits require a condition-preserving procedure format" };
   const procedureSteps = planStepsToProcedureSteps(executed);

@@ -9,7 +9,8 @@ const { addComponent, addEntity, hasComponent } = await import("bitecs");
 const { SpatialDemo } = await import("../../demo/spatial-demo");
 const { SALTMERE_SCENARIO_ID } = await import("../../demo/spatial-lovecraft-town");
 const { createSimulation } = await import("../../index");
-const { Goal, Memory, Name, Plan, ProcedureState } = await import("../../ecs/components");
+const { Goal, Memory, Name, Plan, Position, ProcedureState } = await import("../../ecs/components");
+const { getRoomForEntity, setLocatedIn } = await import("../../ecs/location");
 const { HasMemory } = await import("../../ecs/relations");
 const { getRelationTargets } = await import("bitecs");
 const { HasPlan } = await import("../../ecs/relations");
@@ -262,5 +263,71 @@ describe("hooks are off by default", () => {
     expect(sim.skillLibrary?.seedReport).toMatchObject({ entries: 0, residents: 1 });
     sim.stop();
     expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ format: "argos-skill-library", runIndex: 1, runs: [{ run: "unit" }] });
+  });
+});
+
+/** Bring people over to the first one's side (a test arrangement, not a walk). */
+function gather(d: Awaited<ReturnType<typeof SpatialDemo.create>>, host: string, ...others: string[]): number {
+  const w = d.sim.world, h = named(d, host), room = getRoomForEntity(w, h)!;
+  others.forEach((name, i) => { const eid = named(d, name); setLocatedIn(w, eid, room);
+    Position.x[eid] = Position.x[h] + 0.9 * (i + 1); Position.y[eid] = Position.y[h]; });
+  return h;
+}
+
+describe("public places and chosen people", () => {
+  test("a walk to the square abstracts as a kind of public place and binds back to it", async () => {
+    const d = await saltmere();
+    const w = d.sim.world, noor = named(d, "Noor");
+    const result = abstractProcedure(w, noor, planRecord("Step out to Saltmere Common to check on Leon", [
+      { type: "move", target: "Saltmere Common" }, { type: "observe", target: "Leon" }]));
+    expect(result.ok && result.skill.steps[0]).toEqual({ type: "move", placeQuery: { place: "kind", kind: "square" } });
+    const { bindPlaceQuery } = await import("../binding");
+    expect(Name.value[bindPlaceQuery(w, noor, { place: "kind", kind: "square" })!]).toBe("Saltmere Common");
+    // Dwellings have no public kind: whose house would it be?
+    const { spatialPlaceKind } = await import("../../demo/spatial-demo");
+    expect([spatialPlaceKind("willow-house"), spatialPlaceKind("town-cafe"), spatialPlaceKind("common-square")]).toEqual([undefined, "cafe", "square"]);
+  });
+
+  test("a carried-over line to 'someone here' asks the character who; a learned rule answers without asking", async () => {
+    const { configureDecisionLeaves, settleDecisions, getDecisionLog } = await import("../../cognition/decision-leaves");
+    const { peopleWithFeatures } = await import("../binding");
+    const { recordCommittedSpeech } = await import("../../cognition/social-memory");
+    const d = await saltmere();
+    const w = d.sim.world;
+    const asker = gather(d, "Mara", "Ivo", "Otis");
+    expect(peopleWithFeatures(w, asker).length).toBeGreaterThanOrEqual(2);
+    const calls: string[] = [];
+    w.meta.aiEnabled = true;
+    configureDecisionLeaves(w, { generate: async ({ prompt }) => { calls.push(prompt); return { text: '{"choice": 1}' }; } });
+    const skill = (id: string, goalPattern: string[], rule?: "partner"): Skill => ({ kind: "procedure_v1", signature: `lib:${id}`, name: "How to: ask around about the lamp oil",
+      trigger: { affordance: "__goal_macro__", goalPattern },
+      steps: [{ type: "speak", person: { person: "anyone-present", ...(rule ? { rule } : {}) }, content: "{person}, have you seen the lamp oil?" },
+        { type: "observe", placeQuery: { place: "current" } }],
+      library: { entryId: id, status: "promoted" }, stats: { successes: 3, failures: 0, createdAt: 1, lastUsedAt: 0 } });
+    remember(w, asker, skill("sk-ask", ["ask", "around", "lamp", "oil"]));
+    const goal = createIntentGoal(w, asker, "Ask around about the lamp oil", 9)!;
+    Goal.priority[goal] = 99;
+    expect(selectProceduralAction(w, asker)).toBeNull(); // deciding who
+    await settleDecisions(w);
+    const action = selectProceduralAction(w, asker)!;
+    const row = getDecisionLog(w).find(r => r.kind === "pick")!;
+    expect(row.slot).toBe("skill:lib:sk-ask:0:person");
+    expect(action).toEqual({ type: "speak", target: row.options![1], content: `${row.options![1]}, have you seen the lamp oil?` });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("Who do you say this to");
+
+    // A slot hardened to "whoever I'm talking with": no question.
+    const d2 = await saltmere();
+    const w2 = d2.sim.world;
+    const asker2 = gather(d2, "Mara", "Ivo", "Otis");
+    const partner = peopleWithFeatures(w2, asker2).at(-1)!; // not the nearest
+    w2.meta.aiEnabled = true;
+    const calls2: string[] = [];
+    configureDecisionLeaves(w2, { generate: async ({ prompt }) => { calls2.push(prompt); return { text: '{"choice": 0}' }; } });
+    remember(w2, asker2, skill("sk-ruled", ["ask", "around", "lamp", "oil"], "partner"));
+    Goal.priority[createIntentGoal(w2, asker2, "Ask around about the lamp oil", 9)!] = 99;
+    recordCommittedSpeech(w2, partner.eid, `${Name.value[asker2]}, a word?`, Name.value[asker2]);
+    expect(selectProceduralAction(w2, asker2)).toMatchObject({ type: "speak", target: partner.name });
+    expect(calls2).toHaveLength(0);
   });
 });

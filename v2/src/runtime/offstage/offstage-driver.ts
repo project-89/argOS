@@ -25,7 +25,9 @@ import { isSpeaking } from "../../cognition/timed-speech";
 import { getAgentVisualEntities, getAgentWorldCapabilities } from "../../cognition/world-capabilities";
 import { selectProceduralAction, skipLibrarySoftStep, tryStartProcedureExecution } from "../../cognition/procedural-skills";
 import { evaluateBehaviorPolicy } from "../../cognition/behavior-policy";
-import { getCurrentStep, getNextPlannedAction, getPlanForGoal } from "../../cognition/planning-system";
+import { currentHeardWait, getCurrentStep, getNextPlannedAction, getPlanForGoal, resolveHeardWaitFromScene } from "../../cognition/planning-system";
+import { compileExecutedPlanToProcedure } from "../../cognition/plan-compiler";
+import { recordGoalAttemptActivity } from "../../cognition/goal-attempt";
 import { getCurrentActivity } from "../../cognition/schedule-system";
 import { getWorkingMemory } from "../../cognition/working-memory";
 import { getOffstageLife, isOffstage, isOwnMindResident, isStructure, nextDriverDelay, offstageAdmitting, offstageRandom,
@@ -50,7 +52,7 @@ function topGoal(world: World, eid: number): number | undefined {
 const usable = (action: { type?: string } | null | undefined): action is { type: string; target?: string; content?: string } =>
   !!action && typeof action.type === "string" && !["wait", "think", "reflect", "rest", "speak"].includes(action.type);
 
-function learnedStep(world: World, eid: number): Choice | undefined {
+function learnedStep(world: World, eid: number): Choice | "hold" | undefined {
   // Proven procedures and goal macros compiled from earlier successes.
   let procedural = selectProceduralAction(world, eid);
   // A carried-over (library) procedure's remembered words are the scene's
@@ -62,6 +64,7 @@ function learnedStep(world: World, eid: number): Choice | undefined {
   if (hasComponent(world, eid, BehaviorPolicy) && BehaviorPolicy.enabled[eid]) {
     const policy = evaluateBehaviorPolicy(world, eid);
     if (policy.kind === "action" && usable(policy.action)) return { origin: "learned", action: { ...policy.action } };
+    if (policy.kind === "pending") return "hold"; // a decision leaf is still thinking
     if (policy.kind === "start_procedure" && tryStartProcedureExecution(world, eid, policy.signature, { minSuccesses: policy.minSuccesses })) {
       const next = selectProceduralAction(world, eid);
       if (usable(next)) return { origin: "learned", action: { type: next.type, target: next.target, content: next.content } };
@@ -98,8 +101,39 @@ export function advanceOffstageSpeechStep(world: World, eid: number, targetName?
   return false;
 }
 
-function planStep(world: World, eid: number): Choice | "hold" | undefined {
+/** Longest a resident holds for a scene to bring the reply they wait for (simulated). */
+export const OFFSTAGE_WAIT_HOLD_MS = 180_000;
+
+/** Someone spoke to a resident whose plan waits to hear back from them: the
+ * wait is over; a plan it completes keeps how it was done. */
+export function resolveOffstageHeardWait(world: World, eid: number, speakerName: string, sourceId: string): boolean {
+  for (const row of currentPlanSteps(world, eid)) {
+    if (row.step.actionType !== "wait" || !resolveHeardWaitFromScene(world, eid, row.planEid, [speakerName], sourceId)) continue;
+    recordGoalAttemptActivity(world, eid, row.goalEid);
+    if (String(Plan.status[row.planEid]) === "completed") {
+      try {
+        const compiled = compileExecutedPlanToProcedure(world, eid, row.goalEid, row.planEid);
+        if (compiled.ok) console.log(`[Learning] ${Name.value[eid]} kept how they did it (executed plan): ${compiled.signature}`);
+      } catch { /* learning never blocks the scene */ }
+    }
+    return true;
+  }
+  return false;
+}
+
+function planStep(world: World, eid: number, life: OffstageLife): Choice | "hold" | undefined {
   passInnerBeats(world, eid);
+  // Waiting to hear back: the reply comes in a scene (every minute or so), not
+  // within a live wait's seconds. Hold here for it; past the cap, let the plan's
+  // own wait run its course.
+  const top = currentPlanSteps(world, eid)[0];
+  if (top?.step.actionType === "wait" && currentHeardWait(top.planEid)) {
+    const key = `${top.planEid}:${Plan.createdAt[top.planEid] || 0}:${Plan.currentStep[top.planEid] || 0}`, now = readSimulationTime(world);
+    const since = life.heldWaits.get(key) ?? now;
+    life.heldWaits.set(key, since);
+    if (life.heldWaits.size > 256) life.heldWaits.delete(life.heldWaits.keys().next().value!);
+    if (now - since < OFFSTAGE_WAIT_HOLD_MS) return "hold";
+  }
   const goal = topGoal(world, eid);
   const step = (goal !== undefined ? getNextPlannedAction(world, eid, { selectedGoalId: goal }) : null) ?? getNextPlannedAction(world, eid);
   // Something to say to someone here: stay for the scene that voices it rather
@@ -206,7 +240,7 @@ export function runOffstageDriver(world: World, registry: SystemRegistry): numbe
     life.nextDriverAtSimMs.set(eid, now + nextDriverDelay(life));
     let choice: Choice | "stroll" | "hold" | undefined;
     try {
-      choice = queuedSceneStep(world, life, eid) ?? learnedStep(world, eid) ?? planStep(world, eid) ?? scheduleStep(world, eid) ?? idleStep(world, eid, life);
+      choice = queuedSceneStep(world, life, eid) ?? learnedStep(world, eid) ?? planStep(world, eid, life) ?? scheduleStep(world, eid) ?? idleStep(world, eid, life);
     } catch (error) {
       console.warn(`[Offstage] could not choose for ${Name.value[eid]}: ${error instanceof Error ? error.message : error}`); continue;
     }

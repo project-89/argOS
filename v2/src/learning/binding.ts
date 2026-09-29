@@ -3,15 +3,16 @@
  * of person to someone perceptible. Binding reads only what the resident can
  * perceive plus public layout (furniture standing in rooms) and their own
  * routine (home, schedule); it never reads a hidden object's current location. */
-import { entityExists, hasComponent, query } from "bitecs";
+import { entityExists, getRelationTargets, hasComponent, query } from "bitecs";
 import type { World } from "../ecs/world";
-import { Agent, Name, ObjectState, Position, Room } from "../ecs/components";
+import { Agent, Impression, Name, ObjectState, Position, Room } from "../ecs/components";
+import { HasImpression } from "../ecs/relations";
 import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import { readSimulationTime } from "../ecs/simulation-time";
 import { getAgentVisibleEntities, getAgentWorldCapabilities } from "../cognition/world-capabilities";
 import { getSocialDialogue } from "../cognition/social-memory";
 import type { PersonQuery, PlaceQuery, TargetQuery } from "./library";
-import { entityKind, entityObjectType, entityTraits, homeRoomOf, workplaceRoomOf } from "./world-adapter";
+import { entityKind, entityObjectType, entityTraits, homeRoomOf, placeKindOf, workplaceRoomOf } from "./world-adapter";
 
 const STRUCTURE = new Set(["structural_wall"]);
 
@@ -71,6 +72,15 @@ export function bindPlaceQuery(world: World, actor: number, q: PlaceQuery): numb
   if (q.place === "current") return here;
   if (q.place === "home") return homeRoomOf(world, actor);
   if (q.place === "workplace") return workplaceRoomOf(world, actor);
+  if (q.place === "kind") {
+    const wanted = q.kind.trim().toLowerCase();
+    if (!wanted) return undefined;
+    if (here !== undefined && placeKindOf(world, here) === wanted) return here;
+    let reachableKinds: number[] | undefined;
+    try { reachableKinds = getAgentWorldCapabilities(world, actor)?.movementTargets?.(); } catch { reachableKinds = undefined; }
+    return [...query(world, [Room, Name])].filter(room => room !== here && (!reachableKinds || reachableKinds.includes(room)) && placeKindOf(world, room) === wanted)
+      .sort(byNearest(actor))[0];
+  }
   if (!q.objectType && !q.kind) return undefined;
   if (here !== undefined && roomHas(world, here, q)) return here;
   let reachable: number[] | undefined;
@@ -85,21 +95,63 @@ function visiblePeople(world: World, actor: number): number[] {
     .sort(byNearest(actor));
 }
 
+/** Whoever I have been talking with in the last two minutes, if they are here. */
+export function conversationPartner(world: World, actor: number, people = visiblePeople(world, actor)): number | undefined {
+  const named = (name: string | undefined) => name ? people.find(eid => Name.value[eid].toLowerCase() === name.toLowerCase()) : undefined;
+  const now = readSimulationTime(world), me = Name.value[actor];
+  const recent = getSocialDialogue(world, actor)
+    .filter(turn => now - (turn.simulation?.completedAtSimMs ?? turn.atSimMs ?? 0) <= 120_000)
+    .reverse();
+  for (const turn of recent) {
+    const partner = turn.own ? named(turn.target) : turn.target === me || !turn.target ? named(turn.speaker) : undefined;
+    if (partner !== undefined) return partner;
+  }
+  return undefined;
+}
+
+function impressionOf(world: World, actor: number, name: string): number | undefined {
+  const wanted = name.trim().toLowerCase();
+  for (const eid of getRelationTargets(world, actor, HasImpression)) {
+    if (hasComponent(world, eid, Impression) && String(Impression.targetName[eid] || "").trim().toLowerCase() === wanted) return Impression.valence[eid] ?? 0;
+  }
+  return undefined;
+}
+
+export type PersonRule = import("./slot-rules").PickRule;
+export type PersonOption = { eid: number; name: string; features: { nearest?: boolean; partner?: boolean; liked?: boolean; sameRole?: boolean } };
+
+/** The people I can perceive, nearest first, each with the plain facts a
+ * choice among them could be following (for learning a rule from choices). */
+export function peopleWithFeatures(world: World, actor: number): PersonOption[] {
+  const people = visiblePeople(world, actor);
+  if (!people.length) return [];
+  const partner = conversationPartner(world, actor, people);
+  const valences = people.map(eid => impressionOf(world, actor, Name.value[eid]));
+  const best = Math.max(...valences.map(v => v ?? -Infinity));
+  const likedCount = valences.filter(v => v !== undefined && v === best && best > 0).length;
+  const role = String(Agent.role[actor] || "").trim().toLowerCase();
+  return people.map((eid, i) => ({ eid, name: Name.value[eid], features: {
+    ...(i === 0 ? { nearest: true } : {}),
+    ...(eid === partner ? { partner: true } : {}),
+    ...(likedCount === 1 && valences[i] === best ? { liked: true } : {}),
+    ...(role && String(Agent.role[eid] || "").trim().toLowerCase() === role ? { sameRole: true } : {}),
+  } }));
+}
+
+/** Apply a learned plain rule; undefined when it singles no one out here. */
+export function personByRule(options: readonly PersonOption[], rule: PersonRule): number | undefined {
+  const hits = options.filter(option => option.features[rule]);
+  return hits.length === 1 ? hits[0].eid : undefined;
+}
+
 /** The person a remembered line or gesture was for: whoever is talking with me, else someone here. */
 export function bindPerson(world: World, actor: number, q: PersonQuery): number | undefined {
   const people = visiblePeople(world, actor);
   if (!people.length) return undefined;
-  const named = (name: string | undefined) => name ? people.find(eid => Name.value[eid].toLowerCase() === name.toLowerCase()) : undefined;
   if (q.person === "role") return people.find(eid => String(Agent.role[eid] || "").toLowerCase().includes(q.role.toLowerCase()));
   if (q.person === "addressee") {
-    const now = readSimulationTime(world), me = Name.value[actor];
-    const recent = getSocialDialogue(world, actor)
-      .filter(turn => now - (turn.simulation?.completedAtSimMs ?? turn.atSimMs ?? 0) <= 120_000)
-      .reverse();
-    for (const turn of recent) {
-      const partner = turn.own ? named(turn.target) : turn.target === me || !turn.target ? named(turn.speaker) : undefined;
-      if (partner !== undefined) return partner;
-    }
+    const partner = conversationPartner(world, actor, people);
+    if (partner !== undefined) return partner;
   }
   return people[0];
 }

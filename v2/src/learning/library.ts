@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
+import { distillPickRule, MAX_SLOT_CHOICES, type SlotChoice } from "./slot-rules";
 
 export const SKILL_LIBRARY_FORMAT = "argos-skill-library";
 export const SKILL_LIBRARY_VERSION = 1;
@@ -26,9 +27,16 @@ export type PlaceQuery =
   | { place: "home" }
   | { place: "workplace" }
   | { place: "current" }
-  | { place: "room-with"; objectType?: string; kind?: string };
+  | { place: "room-with"; objectType?: string; kind?: string }
+  /** A kind of public place the world names (a square, a cafe, a garden). */
+  | { place: "kind"; kind: string };
 /** A kind of person: bound at run time to someone perceptible. */
-export type PersonQuery = { person: "addressee" | "anyone-present" } | { person: "role"; role: string };
+export type PersonQuery =
+  /** `rule`: a plain choice learned from the character's own decisions (see
+   * decision-leaves distillPickRule); without it, several candidates are a
+   * small decision for the character's mind. */
+  | { person: "addressee" | "anyone-present"; rule?: "nearest" | "partner" | "liked" | "sameRole" }
+  | { person: "role"; role: string };
 
 export type AbstractStep = {
   type: "interact" | "move" | "observe" | "think" | "speak" | "wait";
@@ -75,6 +83,8 @@ export type LibraryEntry = {
   scope: SkillScope;
   stats: LibraryStats;
   status: SkillStatus;
+  /** Recorded choices per step index (who to turn to), until a rule hardens the slot. */
+  slotChoices?: Record<string, SlotChoice[]>;
   /** Run index at which the entry was retired (for pruning). */
   retiredAtRun?: number;
   provenance: LibraryProvenance[];
@@ -170,6 +180,8 @@ export function saveSkillLibrary(path: string, library: SkillLibrary): void {
 
 /** One harvested piece of evidence about an abstract skill in one run. */
 export type SkillObservation = {
+  /** Seeded use: the character's choices in this skill's person slots, by step index. */
+  slotChoices?: Record<string, SlotChoice[]>;
   kind: LibraryEntry["kind"];
   name: string;
   abstractSignature: string;
@@ -197,7 +209,9 @@ const MAX_PROVENANCE = 20;
 
 export type MergeReport = { observed: number; newEntries: string[]; updated: string[]; ignored: number;
   /** Observations folded into an existing macro with the same steps and a similar intention. */
-  generalized: string[] };
+  generalized: string[];
+  /** Person slots that became a plain rule ("entry#step:rule"). */
+  hardened: string[] };
 
 const stepsPart = (signature: string) => signature.split("|").slice(2).join("|");
 /** Same steps, same scope, an intention with the same core words: one skill.
@@ -215,9 +229,27 @@ function findNearDuplicate(entries: LibraryEntry[], obs: SkillObservation): Libr
   return best;
 }
 
+/** Keep this run's person-slot choices; a slot whose choices all follow one
+ * plain rule becomes that rule (the character is no longer asked there). */
+function hardenSlots(entry: LibraryEntry, choices: Record<string, SlotChoice[]>, report: MergeReport): void {
+  for (const [index, rows] of Object.entries(choices)) {
+    const step = entry.steps?.[Number(index)];
+    if (!step?.person || step.person.person === "role" || step.person.rule || !rows.length) continue;
+    entry.slotChoices ??= {};
+    const kept = [...(entry.slotChoices[index] ?? []), ...rows].slice(-MAX_SLOT_CHOICES);
+    entry.slotChoices[index] = kept;
+    const rule = distillPickRule(kept);
+    if (!rule) continue;
+    step.person = { ...step.person, rule };
+    delete entry.slotChoices[index];
+    report.hardened.push(`${entry.id}#${index}:${rule}`);
+  }
+  if (entry.slotChoices && !Object.keys(entry.slotChoices).length) delete entry.slotChoices;
+}
+
 /** Merge one run's observations. Call beginLibraryRun first so runIndex names this run. */
 export function mergeObservations(library: SkillLibrary, observations: SkillObservation[], now = new Date()): MergeReport {
-  const report: MergeReport = { observed: observations.length, newEntries: [], updated: [], ignored: 0, generalized: [] };
+  const report: MergeReport = { observed: observations.length, newEntries: [], updated: [], ignored: 0, generalized: [], hardened: [] };
   const byId = new Map(library.entries.map(entry => [entry.id, entry]));
   const at = now.toISOString(), run = library.runIndex;
   for (const obs of observations) {
@@ -255,6 +287,7 @@ export function mergeObservations(library: SkillLibrary, observations: SkillObse
     if (entry.scope === "general" && obs.scope !== "general") entry.scope = obs.scope;
     // A retired skill that works again earns its way back as a candidate.
     if (entry.status === "retired" && obs.successes > 0) { entry.status = "candidate"; delete entry.retiredAtRun; }
+    if (obs.slotChoices) hardenSlots(entry, obs.slotChoices, report);
     entry.provenance.push({ ...obs.provenance, at });
     if (entry.provenance.length > MAX_PROVENANCE) entry.provenance.splice(0, entry.provenance.length - MAX_PROVENANCE);
   }

@@ -13,14 +13,16 @@ const { installOffstageLife, getOffstageStats, getOffstageLife, offstageForegrou
   runOffstageScene, hasDueOffstageScene, parseOffstageScene, trackOffstagePlaces } = await import("../offstage");
 const { createIntentGoal } = await import("../../cognition/cognition-system");
 const { setGoalContract, ensureGoalSignature, goalSignatureId } = await import("../../cognition/goal-contract");
-const { createPlanEntity } = await import("../../cognition/planning-system");
+const { createPlanEntity, getNextPlannedAction } = await import("../../cognition/planning-system");
+const { retireGoalPlans } = await import("../../cognition/plan-state");
+const { getRelationTargets } = await import("bitecs");
 const { recordCommittedSpeech, getSocialDialogue } = await import("../../cognition/social-memory");
 const { getNarrativeHistory } = await import("../../cognition/narrative-memory");
 const { snapshotAffect } = await import("../../cognition/affect-state");
 const { recordAttentionSignal } = await import("../../cognition/unresolved-attention");
 const { getSpiritSystemState, initializeSpiritSystem, createStandardHierarchy } = await import("../../spirits/spirit-system");
 const { getForegroundCognitionReadiness } = await import("../../cognition/idle-cognition");
-const { serializeProceduralSkillV1 } = await import("../../cognition/procedural-skills");
+const { serializeProceduralSkillV1, parseProceduralSkillV1 } = await import("../../cognition/procedural-skills");
 
 type Tier = "presence" | "periphery" | "offstage";
 let d: Awaited<ReturnType<typeof SpatialDemo.create>>;
@@ -317,5 +319,67 @@ describe("offstage plans get past talk", () => {
     expect(getSocialDialogue(w(), mara).some(t => t.speaker === "Ivo" && /Otis/.test(t.content))).toBe(true);
     run(10, () => offstageRows().some(row => row === "Ivo (offstage, plan): move Saltmere Common"));
     expect(offstageRows()).toContain("Ivo (offstage, plan): move Saltmere Common");
+  });
+});
+
+describe("offstage plans hear back", () => {
+  test("a resident waiting to hear back holds for the scene; the reply there ends the wait and what they did is kept", async () => {
+    install(); offstage("Mara", "Ivo");
+    const mara = named("Mara"), ivo = named("Ivo");
+    const goal = customGoal(ivo, "Find out what the letter from the harbourmaster said", 0, 90);
+    const plan = createPlanEntity(w(), ivo, goal, { goalDescription: "Find out what the letter from the harbourmaster said", steps: [
+      { description: "Look around the cottage", actionType: "observe", target: "Lantern House" },
+      { description: "Ask Mara about the letter", actionType: "speak", target: "Mara", content: "What did the harbourmaster's letter say?" },
+      { description: "Wait for her answer", actionType: "wait" }] } as any)!;
+    const asking = customGoal(mara, "Ask Ivo about Tuesday", 0, 90);
+    createPlanEntity(w(), mara, asking, { goalDescription: "Ask Ivo about Tuesday", steps: [
+      { description: "Ask Ivo about Tuesday", actionType: "speak", target: "Ivo", content: "Where were you on Tuesday?" }] } as any);
+    run(40, () => Plan.currentStep[plan] >= 1);
+    expect(Plan.currentStep[plan]).toBe(1);
+    trackOffstagePlaces(w(), getOffstageLife(w())!);
+    d.advance(60_000); d.advance(30_000);
+    generate.mockResolvedValueOnce(sceneReply({ summary: "Ivo asked about the letter; Mara told him, reluctantly.",
+      dialogue: [{ speaker: "Ivo", target: "Mara", line: "The harbourmaster's letter. What did it say?" }],
+      memories: [{ actor: "Ivo", text: "I asked." }, { actor: "Mara", text: "He asked about the letter." }] }));
+    expect(await runOffstageScene(w())).toMatchObject({ status: "applied" });
+    // Now waiting to hear back: well past a live wait's seconds, the plan still waits for a scene.
+    expect(Plan.currentStep[plan]).toBe(2);
+    run(20); d.advance(30_000); run(5);
+    expect(String(Plan.status[plan])).toBe("active");
+    expect(Plan.currentStep[plan]).toBe(2);
+    d.advance(60_000);
+    generate.mockResolvedValueOnce(sceneReply({ summary: "Mara answered at last.",
+      dialogue: [{ speaker: "Mara", target: "Ivo", line: "It said the Marrow Star's manifest was never filed." }],
+      memories: [{ actor: "Ivo", text: "Never filed." }, { actor: "Mara", text: "I told him." }] }));
+    const prompt = () => String((generate.mock.calls.at(-1)?.[0] as any)?.messages?.[0]?.content ?? "");
+    expect(await runOffstageScene(w())).toMatchObject({ status: "applied" });
+    expect(prompt()).toContain("waitingToHearFrom");
+    expect(String(Plan.status[plan])).toBe("completed");
+    const kept = [...getRelationTargets(w(), ivo, HasMemory)].map(id => parseProceduralSkillV1(String(Memory.content[id] || "")))
+      .filter(skill => skill?.name.startsWith("How I: Find out what the letter"));
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.steps.map(step => step.type)).toEqual(["observe", "speak"]);
+  });
+
+  test("with voiced plan speech, newly heard talk does not void a planned line; without it, it does", () => {
+    install();
+    const ivo = named("Ivo"), mara = named("Mara");
+    const make = () => {
+      const goal = customGoal(ivo, `Tell Mara about the box ${Math.random()}`, 0, 95);
+      const plan = createPlanEntity(w(), ivo, goal, { goalDescription: Goal.description[goal], steps: [
+        { description: "Tell Mara", actionType: "speak", target: "Mara", content: "I saw Otis at the box." }] } as any)!;
+      return { goal, plan };
+    };
+    expect(w().meta.voicedPlanSpeech).toBe(true);
+    const voiced = make();
+    recordCommittedSpeech(w(), mara, "Ivo, you look like you've seen a ghost.", "Ivo");
+    expect(getNextPlannedAction(w(), ivo, { selectedGoalId: voiced.goal })).toMatchObject({ actionType: "speak", target: "Mara" });
+    expect(String(Plan.status[voiced.plan])).toBe("active");
+    retireGoalPlans(w(), voiced.goal, [voiced.plan]); Goal.status[voiced.goal] = "completed";
+    w().meta.voicedPlanSpeech = false;
+    const fixed = make();
+    recordCommittedSpeech(w(), mara, "Well? Say something.", "Ivo", Date.now() + 5);
+    expect(getNextPlannedAction(w(), ivo, { selectedGoalId: fixed.goal })).toBeNull();
+    expect(String(Plan.status[fixed.plan])).toBe("failed");
   });
 });

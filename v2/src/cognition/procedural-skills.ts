@@ -13,7 +13,8 @@ import { ensureGoalSignature, goalSignatureId } from "./goal-contract";
 import { getAgentVisibleEntities } from "./world-capabilities";
 import { readSimulationTime } from "../ecs/simulation-time";
 import type { PersonQuery, PlaceQuery, TargetQuery } from "../learning/library";
-import { bindPerson, bindPlaceQuery, bindTargetQuery, fillPlaceholders, hasPlaceholder } from "../learning/binding";
+import { bindPerson, bindPlaceQuery, bindTargetQuery, fillPlaceholders, hasPlaceholder, peopleWithFeatures, personByRule } from "../learning/binding";
+import { markVoicedSpeech, noteDistilledDecision, requestDecision } from "./decision-leaves";
 import { abstractText, buildNameIndex, goalKeywords, goalPatternMatches } from "../learning/abstraction";
 
 export type AgentActionLike = {
@@ -143,6 +144,29 @@ function resetBinding(world: World, agentEid: number): void {
   progressMarks.get(world)?.delete(agentEid);
 }
 
+/** Who a library step's person is. A learned rule decides when it singles
+ * someone out; otherwise, with several people here, the character chooses (a
+ * small decision; yields while thinking). Dry runs use the plain binding. */
+function choosePerson(world: World, agentEid: number, signature: string, stepIndex: number, step: ProcedureStep, dryRun: boolean): number | undefined {
+  const q = step.person!;
+  if (q.person === "role") return bindPerson(world, agentEid, q);
+  const options = peopleWithFeatures(world, agentEid);
+  if (!options.length) return undefined;
+  if (q.rule) {
+    const ruled = personByRule(options, q.rule);
+    if (ruled !== undefined) { if (!dryRun) noteDistilledDecision(world); return ruled; }
+  }
+  const plain = bindPerson(world, agentEid, q);
+  if (dryRun || options.length < 2) return plain;
+  if (q.person === "addressee" && options.some(option => option.features.partner)) return plain;
+  const doing = step.type === "speak" ? `say this to: ${JSON.stringify(String(step.content || "").slice(0, 160))}`
+    : step.type === "interact" ? `${String(step.content || "deal with").split(/\s+/)[0]}` : "turn to";
+  const poll = requestDecision(world, agentEid, `skill:${signature}:${stepIndex}:person`, { kind: "pick",
+    question: `Who do you ${doing}?`, options: options.map(option => option.name), features: options.map(option => option.features) });
+  if (poll.status === "pending") return undefined;
+  return options[poll.answer.kind === "pick" ? poll.answer.index : 0]?.eid ?? plain;
+}
+
 /** Bind one abstract step to what this resident can perceive now. Concrete
  * steps are returned unchanged. null: nothing suitable here (yield). */
 function resolveProcedureStep(world: World, agentEid: number, signature: string, stepIndex: number, step: ProcedureStep, dryRun = false): ProcedureStep | null {
@@ -162,7 +186,7 @@ function resolveProcedureStep(world: World, agentEid: number, signature: string,
     resolved.target = object = String(Name.value[target] || "");
   }
   if (step.person) {
-    const person = bindPerson(world, agentEid, step.person);
+    const person = choosePerson(world, agentEid, signature, stepIndex, step, dryRun);
     if (person === undefined) return null;
     resolved.target = addressee = String(Name.value[person] || "");
   }
@@ -799,7 +823,11 @@ export function selectProceduralAction(world: World, agentEid: number): AgentAct
       if (!visible) return null;
     }
     if (requiresFreshAffordanceDecision(world, agentEid, step)) return null;
-    return { type: step.type, target: step.target, content: step.content };
+    const action = { type: step.type, target: step.target, content: step.content };
+    // Carried-over words are a gist: said in this voice, for this moment.
+    if (found.skill.library && step.type === "speak" && step.content?.trim())
+      markVoicedSpeech(action, { gist: step.content, slot: `skill:${signature}:${idx}:say`, onSilence: () => { skipLibrarySoftStep(world, agentEid); } });
+    return action;
   }
 
   // Goal-macro auto-start: if there is an active goal but no explicit plan step,

@@ -9,6 +9,11 @@ import { getMovementTarget } from "../systems/builtin-systems";
 import { getSkillTree } from "./skill-registry";
 import { getComponent, entityHasComponent } from "../ecs/component-registry";
 import { getCurrentPeriod, getActiveWorldEvents } from "../systems/world-clock";
+import { createHash } from "node:crypto";
+import { readSimulationTime } from "../ecs/simulation-time";
+import { requestDecision } from "./decision-leaves";
+import { getAgentVisualEntities } from "./world-capabilities";
+import { fillPlaceholders, peopleWithFeatures } from "../learning/binding";
 
 export type PolicyAction = {
   type: "speak" | "observe" | "move" | "interact" | "think" | "wait" | "rest" | "reflect";
@@ -28,6 +33,11 @@ export type BehaviorNode =
   | { type: "use_procedure"; signature: string; minSuccesses?: number }
   | { type: "skill"; name: string }
   | { type: "llm_skill"; purpose: string; temperature?: number }
+  /** Decision leaves (see decision-leaves.ts): a small closed question to the
+   * character's mind at this point of the tree, not the whole decision. */
+  | { type: "llm_say"; gist: string; to?: "addressee" | "anyone-present" }
+  | { type: "llm_pick"; question: string; from: "people_here" | "things_here"; act: "interact" | "observe" | "speak"; content?: string }
+  | { type: "llm_ask"; question: string; yes: BehaviorNode; no: BehaviorNode }
   | { type: "wander" }
   | { type: "llm_fallback" }
   | { type: "noop" };
@@ -64,6 +74,8 @@ export type PolicyEvalResult =
   | { kind: "action"; action: PolicyAction; trace: string[] }
   | { kind: "start_procedure"; signature: string; minSuccesses: number; trace: string[] }
   | { kind: "llm_fallback"; trace: string[] }
+  /** A decision leaf is still thinking: hold here (do not fall through). */
+  | { kind: "pending"; trace: string[] }
   | { kind: "none"; trace: string[] };
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -335,6 +347,29 @@ export function validateBehaviorNode(
         const purpose = String((n as any).purpose || "").trim();
         if (!purpose) return "llm_skill.purpose required";
         return null;
+      }
+      case "llm_say": {
+        const gist = String((n as any).gist || "").trim();
+        if (!gist || gist.length > 400) return "llm_say.gist required (at most 400 characters)";
+        const to = (n as any).to;
+        if (to !== undefined && to !== "addressee" && to !== "anyone-present") return "llm_say.to must be 'addressee' or 'anyone-present'";
+        return null;
+      }
+      case "llm_pick": {
+        const question = String((n as any).question || "").trim();
+        if (!question || question.length > 300) return "llm_pick.question required (at most 300 characters)";
+        if (!["people_here", "things_here"].includes((n as any).from)) return "llm_pick.from must be 'people_here' or 'things_here'";
+        const act = (n as any).act;
+        if (!["interact", "observe", "speak"].includes(act)) return "llm_pick.act must be interact, observe or speak";
+        if ((act === "interact" || act === "speak") && !String((n as any).content || "").trim()) return `llm_pick.content required for ${act}`;
+        if (act === "speak" && (n as any).from !== "people_here") return "llm_pick speak picks from people_here";
+        return null;
+      }
+      case "llm_ask": {
+        const question = String((n as any).question || "").trim();
+        if (!question || question.length > 300) return "llm_ask.question required (at most 300 characters)";
+        const yes = walk((n as any).yes, depth + 1); if (yes) return yes;
+        return walk((n as any).no, depth + 1);
       }
       case "interact_any_affordance": {
         if ("scope" in n && (n as any).scope !== undefined) {
@@ -627,7 +662,88 @@ interface PolicyEvalContext {
 }
 
 function isSelectedResult(result: PolicyEvalResult): boolean {
-  return result.kind === "action" || result.kind === "start_procedure" || result.kind === "llm_fallback";
+  return result.kind === "action" || result.kind === "start_procedure" || result.kind === "llm_fallback" || result.kind === "pending";
+}
+
+// ---------------------------------------------------------------------------
+// Decision leaves
+// ---------------------------------------------------------------------------
+
+const leafSlot = (prefix: string, text: string) => `bt:${prefix}:${createHash("sha1").update(text).digest("hex").slice(0, 12)}`;
+/** A pick already answered, kept while its follow-up line is being worded. */
+const pickedMemo = new WeakMap<World, Map<string, { name: string; atSimMs: number }>>();
+
+function thingsHere(world: World, agentEid: number, affordance?: string): Array<{ eid: number; name: string }> {
+  const wanted = affordance?.split(/\s+/)[0]?.toLowerCase();
+  return getAgentVisualEntities(world, agentEid)
+    .filter(eid => eid !== agentEid && !hasComponent(world as any, eid, Agent as any) && !hasComponent(world as any, eid, Room as any))
+    .map(eid => ({ eid, name: String(Name.value[eid] || "").trim() }))
+    .filter(row => row.name && (!wanted || getAvailableAffordances(world, agentEid, row.eid).some(a => a.name.toLowerCase() === wanted)))
+    .slice(0, 10);
+}
+
+function sayLeaf(world: World, agentEid: number, slot: string, gist: string, to: string | undefined, trace: string[]): PolicyEvalResult {
+  const filled = to ? fillPlaceholders(gist, { person: to, addressee: to }) : gist;
+  const poll = requestDecision(world, agentEid, slot, { kind: "say", gist: filled, to, allowSilence: true });
+  if (poll.status === "pending") { trace.push(`deciding:${slot}`); return { kind: "pending", trace }; }
+  const line = poll.answer.kind === "say" ? poll.answer.line : null;
+  if (!line) { trace.push("left unsaid"); return { kind: "none", trace }; }
+  return { kind: "action", action: { type: "speak", ...(to ? { target: to } : {}), content: line }, trace };
+}
+
+function evalDecisionLeaf(world: World, agentEid: number, node: BehaviorNode, trace: string[], evalChild: (child: BehaviorNode) => PolicyEvalResult): PolicyEvalResult {
+  if (node.type === "llm_ask") {
+    const slot = leafSlot("ask", node.question);
+    trace.push(`llm_ask:${node.question.slice(0, 60)}`);
+    const poll = requestDecision(world, agentEid, slot, { kind: "yes_no", question: node.question });
+    if (poll.status === "pending") return { kind: "pending", trace };
+    return evalChild(poll.answer.kind === "yes_no" && poll.answer.yes ? node.yes : node.no);
+  }
+  if (node.type === "llm_say") {
+    trace.push(`llm_say:${node.gist.slice(0, 60)}`);
+    const people = peopleWithFeatures(world, agentEid);
+    let to: string | undefined;
+    if (node.to === "addressee") {
+      to = people.find(p => p.features.partner)?.name;
+      if (!to) { trace.push("no one to address"); return { kind: "none", trace }; }
+    } else if (node.to === "anyone-present") {
+      to = people[0]?.name;
+      if (!to) { trace.push("no one here"); return { kind: "none", trace }; }
+    }
+    return sayLeaf(world, agentEid, leafSlot("say", node.gist), node.gist, to, trace);
+  }
+  if (node.type !== "llm_pick") return { kind: "none", trace };
+  trace.push(`llm_pick:${node.question.slice(0, 60)}`);
+  const slot = leafSlot("pick", JSON.stringify([node.question, node.from, node.act, node.content ?? ""]));
+  const now = readSimulationTime(world);
+  let memo = pickedMemo.get(world);
+  if (!memo) { memo = new Map(); pickedMemo.set(world, memo); }
+  const memoKey = `${agentEid}:${slot}`;
+  const options = node.from === "people_here"
+    ? peopleWithFeatures(world, agentEid).map(p => ({ name: p.name, features: p.features }))
+    : thingsHere(world, agentEid, node.act === "interact" ? node.content : undefined).map((t, i) => ({ name: t.name, features: i === 0 ? { nearest: true } : {} }));
+  if (!options.length) { memo.delete(memoKey); trace.push("nothing to choose from"); return { kind: "none", trace }; }
+  let chosen = memo.get(memoKey);
+  if (chosen && (now - chosen.atSimMs > 30_000 || !options.some(o => o.name === chosen!.name))) { memo.delete(memoKey); chosen = undefined; }
+  if (!chosen) {
+    let name = options[0].name;
+    if (options.length > 1) {
+      const poll = requestDecision(world, agentEid, slot, { kind: "pick", question: node.question,
+        options: options.map(o => o.name), features: options.map(o => o.features) });
+      if (poll.status === "pending") return { kind: "pending", trace };
+      name = options[poll.answer.kind === "pick" ? poll.answer.index : 0]?.name ?? name;
+    }
+    chosen = { name, atSimMs: now };
+    if (node.act === "speak") memo.set(memoKey, chosen);
+  }
+  trace.push(`picked:${chosen.name}`);
+  if (node.act === "speak") {
+    const result = sayLeaf(world, agentEid, `${slot}:say`, node.content || "", chosen.name, trace);
+    if (result.kind !== "pending") memo.delete(memoKey);
+    return result;
+  }
+  if (node.act === "observe") return { kind: "action", action: { type: "observe", target: chosen.name }, trace };
+  return { kind: "action", action: { type: "interact", target: chosen.name, content: String(node.content || "").trim() }, trace };
 }
 
 function markCompiledBranchFired(node: BehaviorNode, result: PolicyEvalResult, trace: string[], context: PolicyEvalContext): PolicyEvalResult {
@@ -678,6 +794,10 @@ function evalNode(world: World, agentEid: number, node: BehaviorNode, trace: str
       const skillResult = evalNode(world, agentEid, skillTree, trace, context);
       return skillResult;
     }
+    case "llm_say":
+    case "llm_pick":
+    case "llm_ask":
+      return evalDecisionLeaf(world, agentEid, node, trace, evalChild);
     case "llm_skill": {
       // LLM-backed skill — delegates to LLM with a focused purpose
       // Returns llm_fallback so the cognition chain invokes the LLM

@@ -97,6 +97,8 @@ export type OffstageLife = {
   sceneInFlight: boolean;
   sceneCallsAtMs: number[];
   lastRecord: Map<number, string>;
+  /** plan:cursor -> when this resident began holding for a scene to answer their wait. */
+  heldWaits: Map<string, number>;
   stats: OffstageStats;
   seed: number;
 };
@@ -110,7 +112,7 @@ export function installOffstageLife(world: World, options: { config?: Partial<Of
     || config.maxDialogueLines < 0 || config.maxActions < 0 || config.maxParticipants < 1) throw new Error("Invalid offstage configuration");
   const previous = lives.get(world);
   const life: OffstageLife = { config, host: previous?.host, isDeliberating: options.isDeliberating ?? (() => false),
-    tiers: new Map(), nextDriverAtSimMs: new Map(), consumedUrgency: new Map(), places: new Map(), sceneQueue: new Map(),
+    tiers: new Map(), nextDriverAtSimMs: new Map(), consumedUrgency: new Map(), places: new Map(), sceneQueue: new Map(), heldWaits: new Map(),
     tracked: [], sceneLines: new Set(), sceneSources: new Set(), sceneInFlight: false, sceneCallsAtMs: [], lastRecord: new Map(), seed: 0x9e3779b1,
     stats: { scenes: 0, sceneFailures: 0, sceneRejected: 0, droppedItems: 0, dialogueLines: 0, sceneActionsQueued: 0,
       sceneActionsStarted: 0, sceneActionsDropped: 0,

@@ -10,7 +10,7 @@ import { getRoomForEntity, listDirectContents } from "../ecs/location";
 import type { ProceduralSkillV1 } from "../cognition/procedural-skills";
 import type { BehaviorNode } from "../cognition/behavior-policy";
 import type { AbstractStep, LibraryTrigger, PlaceQuery, SkillScope, TargetQuery } from "./library";
-import { entityKind, entityObjectType, entityTraits, getSkillWorldAdapter, homeRoomOf, workplaceRoomOf } from "./world-adapter";
+import { entityKind, entityObjectType, entityTraits, getSkillWorldAdapter, homeRoomOf, placeKindOf, workplaceRoomOf } from "./world-adapter";
 
 // ---------------------------------------------------------------------------
 // Names -> placeholders
@@ -151,13 +151,15 @@ function placeFor(ctx: Ctx, room: number, next: Array<ProceduralSkillV1["steps"]
       || listDirectContents(ctx.world, room).some(eid => entityObjectType(ctx.world, eid) === q.objectType && entityKind(ctx.world, eid) === q.kind);
     if (inRoom) return { place: "room-with", ...kindQuery };
   }
-  return undefined;
+  // Else the kind of public place it is (the square, the cafe), where the world names one.
+  const kind = placeKindOf(ctx.world, room);
+  return kind ? { place: "kind", kind } : undefined;
 }
 
 export function stepShape(step: AbstractStep): string {
   const t = step.targetQuery, p = step.placeQuery;
   const thing = t ? [t.objectType, t.kind, ...(t.traits ?? [])].filter(Boolean).join("/") : "";
-  const place = p ? p.place === "room-with" ? `room-with ${[p.objectType, p.kind].filter(Boolean).join("/")}` : p.place : "";
+  const place = p ? p.place === "room-with" ? `room-with ${[p.objectType, p.kind].filter(Boolean).join("/")}` : p.place === "kind" ? `kind ${p.kind}` : p.place : "";
   const person = step.person ? step.person.person === "role" ? `role:${step.person.role}` : step.person.person : "";
   const affordance = step.type === "interact" ? (t?.affordance ?? step.content?.split(/\s+/)[0] ?? "") : "";
   return `${step.type}(${[affordance, thing, place, person].filter(Boolean).join(" ")})`;
@@ -311,6 +313,20 @@ export function abstractBehaviorTree(world: World, name: string, description: st
         if (scenarioVerbs.has(node.affordance.toLowerCase())) scenario = true;
         return node;
       case "use_procedure": case "skill": reason = `${node.type} references another world's memory`; return null;
+      case "llm_say": case "llm_pick": {
+        // A decision leaf's words are a gist: names become placeholders.
+        const text = node.type === "llm_say" ? node.gist : node.content;
+        const abstracted = text ? abstractText(index, text) : undefined;
+        const question = node.type === "llm_pick" ? abstractText(index, node.question) : undefined;
+        if (abstracted?.mentioned.some(eid => { try { return adapter.isScenarioEntity?.(eid) === true; } catch { return false; } })) scenario = true;
+        if (node.type === "llm_say") return { ...node, gist: abstracted!.text };
+        return { ...node, question: question!.text, ...(abstracted ? { content: abstracted.text } : {}) };
+      }
+      case "llm_ask": {
+        const yes = walk(node.yes, depth + 1); if (!yes) return null;
+        const no = walk(node.no, depth + 1); if (!no) return null;
+        return { type: "llm_ask", question: abstractText(index, node.question).text, yes, no };
+      }
       case "action": {
         const action = node.action;
         if (action.type === "move") { reason = "move to a named place"; return null; }

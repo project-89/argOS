@@ -22,6 +22,9 @@ export interface SkillWorldAdapter {
   entityKind?(eid: number): string | undefined;
   homeRoom?(agentEid: number): number | undefined;
   workplaceRoom?(agentEid: number): number | undefined;
+  /** A world-portable kind of public place ("square", "cafe", "garden");
+   * undefined for private dwellings and places without a meaningful kind. */
+  placeKind?(roomEid: number): string | undefined;
 }
 
 const adapters = new WeakMap<World, SkillWorldAdapter>();
@@ -72,4 +75,8 @@ export function workplaceRoomOf(world: World, eid: number): number | undefined {
 }
 export function currentActivityRoom(world: World, eid: number): number | undefined {
   return roomNamed(world, getCurrentActivity(world, eid)?.location);
+}
+
+export function placeKindOf(world: World, room: number): string | undefined {
+  try { return getSkillWorldAdapter(world).placeKind?.(room)?.trim().toLowerCase() || undefined; } catch { return undefined; }
 }

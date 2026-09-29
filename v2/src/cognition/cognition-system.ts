@@ -1866,7 +1866,9 @@ function normalizePlanContent(raw: string): string {
 
 function doesActionSatisfyPlanStep(
   action: { type: string; target?: string; content?: string },
-  step: { actionType: string; target?: string; content?: string }
+  step: { actionType: string; target?: string; content?: string },
+  /** Voiced plan speech: a planned line is a gist said in the moment's own words. */
+  voicedSpeech = false,
 ): boolean {
   const typeMatches = String(action.type || "") === String(step.actionType || "");
   if (!typeMatches) return false;
@@ -1880,6 +1882,7 @@ function doesActionSatisfyPlanStep(
 
   const stepContent = normalizePlanContent(step.content || "");
   if (!stepContent) return true;
+  if (voicedSpeech && String(step.actionType) === "speak") return !!normalizePlanContent(action.content || "");
 
   const actionContent = normalizePlanContent(action.content || "");
   if (!actionContent) return false;
@@ -2080,7 +2083,7 @@ function isPlanExecutionCurrent(world: World, eid: number, execution: PlanExecut
 
 export function capturePlanExecution(world: World, eid: number, action: AgentAction): PlanExecution | undefined {
   const step = getNextPlannedAction(world, eid);
-  if (!step || !doesActionSatisfyPlanStep(action, step)) return undefined;
+  if (!step || !doesActionSatisfyPlanStep(action, step, world.meta.voicedPlanSpeech === true)) return undefined;
   // Capture identity before starting the physical action: completion must not
   // advance whichever unrelated/replacement plan happens to be current later.
   if (step.planEid === undefined || step.goalEid === undefined || step.currentStep === undefined) return;
@@ -3719,14 +3722,14 @@ export function executeActions(
     const nextStep = actionPlan && isPlanExecutionCurrent(world, eid, actionPlan)
       ? getCurrentStep(actionPlan.planEid) : null;
     if (nextStep) {
-      if (actionPendingForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep)) {
+      if (actionPendingForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep, world.meta.voicedPlanSpeech === true)) {
         // Waiting on an async tool job to complete; do not advance or count as failure.
-      } else if (actionSucceededForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep)) {
+      } else if (actionSucceededForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep, world.meta.voicedPlanSpeech === true)) {
         const advanced = advanceAgentPlan(world, eid, actionPlan);
         if (advanced) {
           console.log(`📋 ${name} completed plan step: ${nextStep.description}`);
         }
-      } else if (!actionSucceededForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep)) {
+      } else if (!actionSucceededForPlan && doesActionSatisfyPlanStep(validatedAction, nextStep, world.meta.voicedPlanSpeech === true)) {
         const now = readSimulationTime(world);
         const signature = `${workingMemoryEntityRef(world, eid)?.key}|${actionPlan!.planEid}|${actionPlan!.currentStep}|${nextStep.actionType}|${String(nextStep.target || "")}|${String(nextStep.content || "")}`;
         const prev = recentPlanStepFailures.get(eid);

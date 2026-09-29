@@ -7,6 +7,7 @@ import {
   selectSkills, DEFAULT_SELECTION_POLICY, type SkillObservation,
 } from "../library";
 import { goalKeywords, goalPatternMatches } from "../abstraction";
+import type { SlotChoice } from "../slot-rules";
 import { describeTrainingPlan, parseTrainingArgs, runTrainingCli } from "../train-skills";
 
 /** Distinct step shapes per fixture skill (same shapes + similar intentions would fold). */
@@ -188,5 +189,32 @@ describe("training command", () => {
     const args = parseTrainingArgs(["--runs", "3", "--seconds", "60", "--library", join(dir, "x.json"), "--no-trial"]);
     expect(args).toMatchObject({ runs: 3, seconds: 60, live: false, trial: false });
     expect(describeTrainingPlan(args)).toMatch(/missing \(will be created\)/);
+  });
+});
+
+describe("skill library: person slots harden into rules", () => {
+  test("a seeded skill's choices accumulate across runs; once one plain rule explains them all it replaces the question", () => {
+    const lib = emptySkillLibrary();
+    beginLibraryRun(lib);
+    const speak: SkillObservation = { ...obs("ask", 1, 1), abstractSignature: "procedure|goal:ask,oil|speak(anyone-present)",
+      steps: [{ type: "speak", person: { person: "anyone-present" }, content: "{person}, have you seen the lamp oil?" }] };
+    mergeObservations(lib, [speak]);
+    const entry = lib.entries[0];
+    const partnerChoice: SlotChoice = { index: 1, features: [{ nearest: true }, { partner: true }] };
+    const use = (choices: SlotChoice[]): SkillObservation => ({ ...obs("ask", 1, 1), entryId: entry.id,
+      provenance: { run: "r", source: "seeded-use" }, slotChoices: { "0": choices } });
+    beginLibraryRun(lib);
+    let report = mergeObservations(lib, [use([partnerChoice, partnerChoice, partnerChoice])]);
+    expect(report.hardened).toEqual([]);
+    expect(entry.slotChoices?.["0"]).toHaveLength(3);
+    beginLibraryRun(lib);
+    report = mergeObservations(lib, [use([partnerChoice, { index: 0, features: [{ partner: true, nearest: true }, {}] }])]);
+    expect(report.hardened).toEqual([`${entry.id}#0:partner`]);
+    expect(entry.steps![0].person).toEqual({ person: "anyone-present", rule: "partner" });
+    expect(entry.slotChoices).toBeUndefined();
+    // A hardened slot takes no further evidence.
+    beginLibraryRun(lib);
+    expect(mergeObservations(lib, [use([{ index: 0, features: [{ nearest: true }, { partner: true }] }])]).hardened).toEqual([]);
+    expect(entry.steps![0].person).toEqual({ person: "anyone-present", rule: "partner" });
   });
 });

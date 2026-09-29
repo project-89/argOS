@@ -53,6 +53,10 @@ export interface WorldContext {
     speechEarshotMetres?: number;
     /** Answer direct address with a lean conversational decision (spatial towns). */
     fastReplies?: boolean;
+    /** Plan and learned-skill speech is a gist the character words in the
+     * moment (a small say decision), and newly heard talk no longer voids a
+     * planned line: the line is fitted to it or let go (decision-leaves.ts). */
+    voicedPlanSpeech?: boolean;
     /** Whether schedules should be LLM-generated (vs. deterministic defaults) */
     generateSchedules?: boolean;
     /** Model utterances as finite in-world actions (enabled by the library). */

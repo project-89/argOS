@@ -123,6 +123,13 @@ function isStaleSocialPlan(world: World, agentEid: number, goalEid: number, plan
 }
 
 function isStaleSocialStep(world: World, agentEid: number, goalEid: number, planEid: number, step: PlanStep, steps: PlanStep[]): boolean {
+  // Voiced plan speech (world opt-in): a planned line is a gist worded in the
+  // moment, fitted to what was just said or let go, so newly heard talk or a
+  // changed understanding does not void it; nor a glance at someone, a thought
+  // or a plain pause around it. Object inspections keep their premise check.
+  if (world.meta.voicedPlanSpeech === true && (step.actionType === "speak" || step.actionType === "think"
+    || (step.actionType === "wait" && !step.waitUntil) || (step.actionType === "observe" && targetsCharacter(world, step))))
+    return inspectionNeedsReview(world, agentEid, goalEid, step, true);
   const coordination = currentCoordinationDependency(world, agentEid, stepCoordinationScope(world, agentEid, step, steps, goalEid));
   if (step.coordinationDependency === undefined ? coordination !== "[]" : step.coordinationDependency !== coordination) return true;
   // The same premise check owns presentation AND autonomous plan admission.
@@ -1363,6 +1370,7 @@ export function createPlanEntity(
   }
 
   const agentName = Name.value[agentEid];
+  planTallies.created++;
   console.log(`[Planning] Created plan for ${agentName}: ${generatedPlan.steps.length} steps`);
 
   return planEid;
@@ -1410,6 +1418,36 @@ export function getCurrentStep(planEid: number): PlanStep | null {
  */
 export function advancePlanStep(planEid: number, context?: { world: World; agentEid: number }): boolean {
   return advancePlanCursor(planEid, context, false);
+}
+
+/** The heard-evidence wait at this plan's cursor, if that is where it stands. */
+export function currentHeardWait(planEid: number): { speaker?: string } | undefined {
+  if (Plan.status[planEid] !== "active") return undefined;
+  try {
+    const steps = JSON.parse(Plan.steps[planEid] || "[]") as PlanStep[];
+    const step = Array.isArray(steps) ? steps[Plan.currentStep[planEid] || 0] : undefined;
+    if (step?.actionType !== "wait") return undefined;
+    const condition = step.waitUntil === undefined ? { kind: "heard_evidence" as const } : copyPlanWaitUntil(step.waitUntil);
+    return condition?.kind === "heard_evidence" ? { ...(condition.speaker ? { speaker: condition.speaker } : {}) } : undefined;
+  } catch { return undefined; }
+}
+
+/** An offstage scene summary had the awaited person speak to this resident
+ * (committed, remembered speech): the heard wait at the cursor is over. Like
+ * any heard evidence it ends the runnable plan; what follows is reconsidered. */
+export function resolveHeardWaitFromScene(world: World, agentEid: number, planEid: number, speakers: readonly string[], sourceId: string): boolean {
+  const wait = currentHeardWait(planEid);
+  if (!wait || !getRelationTargets(world, agentEid, HasPlan).includes(planEid)) return false;
+  const wanted = wait.speaker?.trim().toLowerCase();
+  if (!speakers.some(name => !wanted || name.trim().toLowerCase() === wanted)) return false;
+  const steps = JSON.parse(Plan.steps[planEid]) as PlanStep[];
+  const index = Plan.currentStep[planEid] || 0;
+  steps.splice(index + 1);
+  steps[index].resolution = { kind: "evidence_barrier", sourceId, resolvedAt: Date.now(),
+    summary: "Heard in a summarized offstage scene; the wait was not a performed action" };
+  Plan.steps[planEid] = JSON.stringify(steps);
+  advancePlanCursor(planEid, { world, agentEid }, true);
+  return true;
 }
 
 /** Capture the selected plan episode before waiting. Only a genuine matching
@@ -1515,7 +1553,19 @@ function advancePlanCursor(planEid: number, context: { world: World; agentEid: n
 /**
  * Mark a plan as failed
  */
+/** Process-wide plan tallies for diagnostics (training reports). */
+const planTallies = { created: 0, failed: new Map<string, number>() };
+export function getPlanTallies(): { created: number; failed: Record<string, number> } {
+  return { created: planTallies.created, failed: Object.fromEntries(planTallies.failed) };
+}
+export function resetPlanTallies(): void { planTallies.created = 0; planTallies.failed.clear(); }
+export function notePlanCreated(): void { planTallies.created++; }
+
 export function failPlan(planEid: number, reason?: string): void {
+  if (Plan.status[planEid] !== "failed") {
+    const key = String(reason || "unspecified").split(/[:;.]/)[0].trim().slice(0, 60) || "unspecified";
+    planTallies.failed.set(key, (planTallies.failed.get(key) ?? 0) + 1);
+  }
   Plan.status[planEid] = "failed";
   Plan.lastUpdated[planEid] = Date.now();
   console.log(`[Planning] Plan ${planEid} failed${reason ? `: ${reason}` : ""}`);

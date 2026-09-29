@@ -41,6 +41,8 @@ export type SkillHarvestReport = {
   updated: number;
   /** Reworded repeats folded into an existing skill (its intention pattern narrowed). */
   generalized: number;
+  /** Person slots that became a plain rule this run ("entry#step:rule"). */
+  hardened: string[];
   promoted: Array<{ id: string; name: string }>; retired: Array<{ id: string; name: string }>;
   pruned: number; capped: number; size: number; statusCounts: Record<string, number>;
   skipped: HarvestSkip[];
@@ -158,7 +160,7 @@ export function attachSkillLibrary(world: World, config: SkillLibraryConfig): Sk
       for (const entry of library.entries) statusCounts[entry.status]++;
       harvestReport = { path, run, runIndex, harvested: result.learned, seededUses: result.seededUses, considered: result.considered,
         newEntries: merged.newEntries.map(id => ({ id, name: byId.get(id)?.name ?? id, scope: byId.get(id)?.scope ?? "general" })),
-        updated: merged.updated.length, generalized: merged.generalized.length, promoted: selected.promoted.map(label), retired: selected.retired.map(label),
+        updated: merged.updated.length, generalized: merged.generalized.length, hardened: merged.hardened, promoted: selected.promoted.map(label), retired: selected.retired.map(label),
         pruned: selected.pruned.length, capped: selected.capped.length, size: library.entries.length, statusCounts, skipped: result.skipped };
       console.log(`[Skills] harvested ${result.learned} (${merged.newEntries.length} new, ${result.seededUses} seeded in use), promoted ${selected.promoted.length}, retired ${selected.retired.length}; library ${library.entries.length} entries → ${path}`);
       return harvestReport;

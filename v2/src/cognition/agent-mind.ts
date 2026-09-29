@@ -39,7 +39,9 @@ import { prepareCoordinationReviews, commitPreparedCoordinationReviews, getPrepa
 import { coordinationDependency, currentCoordinationDependency, coordinationReviewEvidenceIsCurrent } from "./coordination-memory-dependencies";
 import { Memory, Plan, Schedule, ReflectionState, GoalLifecycle, WorkingMemoryIdentity } from "../ecs/components";
 import { HasPlan, HasSchedule, HasReflectionState } from "../ecs/relations";
-import { formatPlansForContext, getNextPlannedAction, getResumableActivityStep } from "./planning-system";
+import { formatPlansForContext, getNextPlannedAction, getResumableActivityStep, type PlanStep } from "./planning-system";
+import { decideNow, markVoicedSpeech, voicedSpeechOf } from "./decision-leaves";
+import { advanceAgentPlan } from "./cognition-system";
 import { formatInsightsForContext } from "./reflection-system";
 import { formatScheduleForContext, getCurrentActivity } from "./schedule-system";
 import { formatActionsForPrompt, getValidActionTypes } from "./action-registry";
@@ -1052,6 +1054,33 @@ export function selectFastAgentAction(world: World, eid: number, guard: Cognitio
   return action && requiresFreshAffordanceDecision(world, eid, action) ? null : action;
 }
 
+/** A stored plan step as an action. Its speech is a gist: where the world
+ * voices plan speech, the foreground words it for this moment (voiceGistSpeech). */
+function plannedStepAction(world: World, eid: number, step: PlanStep & { planEid?: number; goalEid?: number; currentStep?: number }): AgentAction {
+  const action = normalizeSelectedAction(world, eid, { type: step.actionType as ValidActionType, target: step.target, content: step.content });
+  const { planEid, goalEid, currentStep } = step;
+  if (action.type === "speak" && step.content?.trim() && planEid !== undefined && goalEid !== undefined && currentStep !== undefined)
+    markVoicedSpeech(action, { gist: step.content, slot: `plan:${planEid}:${currentStep}:say`,
+      onSilence: () => { advanceAgentPlan(world, eid, { planEid, goalEid, currentStep }); } });
+  return action;
+}
+
+/** Word a plan's or learned skill's gist in this voice, now (a small say
+ * decision instead of the full foreground call). Silence moves past the step. */
+async function voiceGistSpeech(world: World, eid: number, action: AgentAction): Promise<AgentAction> {
+  const meta = voicedSpeechOf(action);
+  if (!meta || world.meta.voicedPlanSpeech !== true || action.type !== "speak") return action;
+  const to = "target" in action && typeof action.target === "string" && action.target.trim() ? action.target : undefined;
+  const answer = await decideNow(world, eid, meta.slot, { kind: "say", gist: meta.gist, to, allowSilence: true });
+  assertSimulationTaskActive();
+  if (answer.kind === "say" && answer.line === null) {
+    try { meta.onSilence?.(); } catch { /* moving past a step is best effort */ }
+    return { type: "think", content: `I let it go unsaid: ${meta.gist.slice(0, 160)}` } as AgentAction;
+  }
+  const line = answer.kind === "say" && answer.line ? answer.line : meta.gist;
+  return { ...action, content: line } as AgentAction;
+}
+
 function selectAutomaticAgentAction(world: World, eid: number, guard: CognitionGuard = {}): AgentAction | null {
   const ensureCurrent = () => { assertSimulationTaskActive(); if (guard.signal?.aborted || guard.isCurrent?.() === false) throw new Error("Cognition superseded or stopped"); };
   ensureCurrent();
@@ -1099,8 +1128,7 @@ function selectAutomaticAgentAction(world: World, eid: number, guard: CognitionG
     // the same model, evidence and admission pipeline as the priority arm.
     const step = reconsider || snapshotActorContinuation(world, eid)?.status !== "dispatched"
       ? null : getNextPlannedAction(world, eid);
-    return step ? normalizeSelectedAction(world, eid, { type: step.actionType as ValidActionType,
-      target: step.target, content: step.content }) : null;
+    return step ? plannedStepAction(world, eid, step) : null;
   }
   if (ownedPurpose && world.meta.aiEnabled !== false && getConfiguredGeminiApiKey()) {
     // Priority mode may propose the next purpose, but must not steal an
@@ -1110,8 +1138,7 @@ function selectAutomaticAgentAction(world: World, eid: number, guard: CognitionG
     const selectedGoalId = situatedPlanGoal(world, eid);
     if (reconsider || ownedPurpose.status !== "dispatched" || selectedGoalId === undefined) return null;
     const step = getNextPlannedAction(world, eid, { selectedGoalId });
-    if (step) return normalizeSelectedAction(world, eid, { type: step.actionType as ValidActionType,
-      target: step.target, content: step.content });
+    if (step) return plannedStepAction(world, eid, step);
     const selectedPlan = getPlanForGoal(world, eid, selectedGoalId);
     if (selectedPlan !== undefined && Plan.status[selectedPlan] === "awaiting_decision") return null;
     const ownedContract = selectContractDrivenAction(world, eid);
@@ -1212,11 +1239,7 @@ function selectAutomaticAgentAction(world: World, eid: number, guard: CognitionG
       // A stored plan description is historical proposal prose, not a fresh
       // assessment of this scene. Selecting its still-valid action must not
       // republish that older premise as a newly experienced thought.
-      return normalizeSelectedAction(world, eid, {
-        type: nextPlanned.actionType as any,
-        target: nextPlanned.target,
-        content: nextPlanned.content,
-      });
+      return plannedStepAction(world, eid, nextPlanned);
     }
   }
 
@@ -1260,6 +1283,9 @@ function selectAutomaticAgentAction(world: World, eid: number, guard: CognitionG
 
     return normalizeSelectedAction(world, eid, policy.action as any);
   }
+  // A decision leaf in the tree is still thinking: hold rather than hand the
+  // moment to the full decision it exists to replace.
+  if (policy.kind === "pending") return { type: "wait" };
   if (policy.kind === "start_procedure") {
     const name = Name.value[eid];
     const ok = tryStartProcedureExecution(world, eid, policy.signature, { minSuccesses: policy.minSuccesses });
@@ -1341,7 +1367,11 @@ export async function agentThink(world: World, eid: number, guard: CognitionGuar
   if (!seen) { seen = new Set(); attendedPerceptions.set(world, seen); }
   const attentionKeys = attention.map(pid => attentionKey(eid, pid));
   const fast = selectFastAgentAction(world, eid, guard);
-  if (fast) return fast;
+  if (fast) {
+    const voiced = await voiceGistSpeech(world, eid, fast);
+    if (voiced !== fast) ensureCurrent();
+    return voiced;
+  }
 
   // Issuance performs actor-local sensing before any context/working-memory
   // projection. The prompt and later admission therefore share one known view.

@@ -13,6 +13,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_SKILL_LIBRARY_PATH, loadSkillLibrary, seedableEntries } from "./library";
 import { SALTMERE_SCENARIO_ID } from "../demo/spatial-lovecraft-town";
+import { getDecisionStats } from "../cognition/decision-leaves";
+import { getPlanTallies, resetPlanTallies } from "../cognition/planning-system";
 
 export const TRAINING_LIMITS = Object.freeze({ maxRuns: 10, maxSeconds: 900, minSeconds: 10 });
 export type TrainingArgs = { runs: number; seconds: number; library: string; scenario: "lovecraft"; live: boolean; trial: boolean };
@@ -92,7 +94,7 @@ async function runLiveTraining(args: TrainingArgs, io: Io): Promise<number> {
   try {
     for (let i = 1; i <= args.runs; i++) {
       // A fresh process-wide learning state: nothing but the library carries over.
-      resetSkillRegistry(); resetGoalLearning(); resetCompilerState(); resetLearningState();
+      resetSkillRegistry(); resetGoalLearning(); resetCompilerState(); resetLearningState(); resetPlanTallies();
       const run = `train-${stamp}-r${i}`, callsBefore = modelCalls, startedAt = Date.now();
       const demo = await SpatialDemo.create({ live: true, scenario: "town", story: "coastal-mystery", evolving: true, training: true,
         seconds: args.seconds, skillLibrary: { path: args.library, seed: true, harvest: true, run, seedCandidates: args.trial } });
@@ -122,10 +124,16 @@ async function runLiveTraining(args: TrainingArgs, io: Io): Promise<number> {
       io.out(`  learned this run: ${planRecords} executed-plan record(s), ${goalMacros} verified goal macro(s)`);
       if (o) io.out(`  offstage actions (started/succeeded/failed): learned ${o.learned.started}/${o.learned.succeeded}/${o.learned.failed} · plan ${o.plan.started}/${o.plan.succeeded}/${o.plan.failed} · schedule ${o.schedule.started}/${o.schedule.succeeded}/${o.schedule.failed} · idle ${o.idle.started}/${o.idle.succeeded}/${o.idle.failed} · scene ${o.scene.started}/${o.scene.succeeded}/${o.scene.failed}`);
       if (stats) io.out(`  scenes: ${stats.scenes} (${stats.sceneFailures} failed, ${stats.sceneRejected} rejected) · goals completed offstage: ${stats.goalsCompleted.length}`);
+      const leaves = getDecisionStats(w);
+      io.out(`  decision leaves: ${leaves.calls} calls (${leaves.model} answered, ${leaves.fallback} fallback) · ${leaves.tokensIn}/${leaves.tokensOut} tokens in/out · ${leaves.distilled} settled by a learned rule`);
+      const tallies = getPlanTallies();
+      const failed = Object.entries(tallies.failed).sort((a, b) => b[1] - a[1]);
+      io.out(`  plans: ${tallies.created} created, ${failed.reduce((n, [, c]) => n + c, 0)} failed${failed.length ? ` (${failed.slice(0, 5).map(([why, c]) => `${c} ${why}`).join("; ")})` : ""}`);
       if (harvest) {
         io.out(`  harvest: ${harvest.harvested} abstracted (${harvest.newEntries.length} new, ${harvest.updated} updated, ${harvest.generalized} generalized), ${harvest.seededUses} seeded in use, ${harvest.skipped.length} non-transferable`);
         for (const entry of harvest.newEntries.slice(0, 8)) io.out(`    + ${entry.name} [${entry.scope === "general" ? "general" : `scenario ${entry.scope.scenario}`}]`);
         for (const skip of harvest.skipped.slice(0, 6)) io.out(`    - skipped ${skip.resident ? `${skip.resident}: ` : ""}${skip.skill.slice(0, 70)} (${skip.reason})`);
+        if (harvest.hardened.length) io.out(`  hardened slots: ${harvest.hardened.join(", ")}`);
         io.out(`  select: promoted ${harvest.promoted.length}${harvest.promoted.length ? ` (${harvest.promoted.map(p => p.name).join("; ").slice(0, 200)})` : ""}, retired ${harvest.retired.length}, pruned ${harvest.pruned + harvest.capped}`);
         io.out(`  library: ${harvest.size} entries (${harvest.statusCounts.promoted} promoted, ${harvest.statusCounts.candidate} candidates, ${harvest.statusCounts.retired} retired)`);
       } else io.out("  harvest: none (session ended without a harvest)");

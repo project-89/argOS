@@ -12,6 +12,8 @@ import { listSkills } from "../cognition/skill-registry";
 import type { SkillObservation } from "./library";
 import { abstractBehaviorTree, abstractProcedure, buildNameIndex } from "./abstraction";
 import { getSkillWorldAdapter } from "./world-adapter";
+import { getDecisionLog } from "../cognition/decision-leaves";
+import type { SlotChoice } from "./slot-rules";
 
 export type RegistryBaseline = Map<string, { attempts: number; successes: number }>;
 export const SEEDED_SKILL_PREFIX = "lib:";
@@ -32,6 +34,18 @@ export type HarvestResult = {
 };
 
 const LEARNED_ORIGINS = new Set(["learned", "compiled", "generated"]);
+
+/** The character's own choices (model answers) in this skill's person slots, by step index. */
+function personSlotChoices(world: World, signature: string): Record<string, SlotChoice[]> | undefined {
+  const prefix = `skill:${signature}:`, out: Record<string, SlotChoice[]> = {};
+  for (const row of getDecisionLog(world)) {
+    if (row.kind !== "pick" || row.source !== "model" || row.index === undefined || !row.features || !row.slot.startsWith(prefix) || !row.slot.endsWith(":person")) continue;
+    const index = row.slot.slice(prefix.length, -":person".length);
+    if (!/^\d+$/.test(index)) continue;
+    (out[index] ??= []).push({ index: row.index, features: row.features });
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 export function harvestWorldSkills(world: World, options: { run: string; scenarioId?: string; registryBaseline?: RegistryBaseline }): HarvestResult {
   const scenario = options.scenarioId ?? getSkillWorldAdapter(world).scenarioId;
@@ -56,8 +70,10 @@ export function harvestWorldSkills(world: World, options: { run: string; scenari
         const habitFail = Math.max(0, skill.stats.failures - (skill.library.seededFailures ?? skill.stats.failures));
         if ((!used || used.started === 0) && habitOk + habitFail === 0) continue;
         result.seededUses++;
+        const slotChoices = personSlotChoices(world, skill.signature);
         result.observations.push({ entryId: skill.library.entryId, kind: "procedure", name: skill.name, abstractSignature: "", trigger: { type: "skill", description: "" },
-          scope: "general", attempts: settledOk + settledFail + habitOk + habitFail, successes: settledOk + habitOk, provenance: { ...provenance, source: "seeded-use" } });
+          scope: "general", attempts: settledOk + settledFail + habitOk + habitFail, successes: settledOk + habitOk, provenance: { ...provenance, source: "seeded-use" },
+          ...(slotChoices ? { slotChoices } : {}) });
         continue;
       }
       const abstracted = abstractProcedure(world, agent, skill, index);

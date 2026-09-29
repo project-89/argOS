@@ -78,6 +78,13 @@ import { setOffstageHost } from "../runtime/offstage";
 import { setSkillWorldAdapter } from "../learning/world-adapter";
 import type { SkillLibraryConfig } from "../learning/session";
 import { materializeApprovedEntity } from "../engineering/entity-materialization";
+/** The portable kind of a public place from its blueprint id ("town-cafe" is a
+ * cafe, "common-square" a square); dwellings have none (whose would it be?). */
+export function spatialPlaceKind(id: string): string | undefined {
+  const bare = id.trim().toLowerCase().replace(/^town-/, "");
+  if (!bare || /(^|-)(house|home|apartment|flat|cottage)$/.test(bare)) return undefined;
+  return bare.split("-").at(-1) || undefined;
+}
 /** How long a controlled body waits for a natural gap before cutting in. */
 const SAY_GAP_WAIT_MS = 3500;
 /** How far a voice carries in the spatial town. */
@@ -211,6 +218,7 @@ export class SpatialDemo {
       scenarioTerms: options.story === "coastal-mystery" ? SALTMERE_SCENARIO_TERMS : [],
       entityKind: eid => this.visuals.get(eid)?.asset,
       homeRoom: eid => { const home = options.world?.residents.find(r => r.name === Name.value[eid])?.homeRoomId; return home ? this.byId.get(home) : undefined; },
+      placeKind: eid => { for (const [id, room] of this.byId) if (room === eid) return spatialPlaceKind(id); return undefined; },
     });
     if (options.scenario === "blackout") this.blackout = createBlackout(w, {
       panel: this.byId.get("lighting-panel")!, box: this.byId.get("supply-box")!, lamp: this.byId.get("apartment-lamp")!,
@@ -466,6 +474,8 @@ export class SpatialDemo {
     sim.world.meta.speechEarshotMetres = SPEECH_EARSHOT_METRES;
     // Someone spoken to directly answers from a lean conversational decision.
     sim.world.meta.fastReplies = true;
+    // Planned and learned lines are said in the moment (decision leaves), not replayed or discarded.
+    sim.world.meta.voicedPlanSpeech = true;
     try { const demo = new SpatialDemo(sim, { ...options, seconds });
       projectWeatherInputs = () => demo.weatherMechanic?.syncInputs();
       projectDevelopmentInputs = () => demo.developmentInputs?.syncInputs();
