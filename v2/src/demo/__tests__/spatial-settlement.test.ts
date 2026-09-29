@@ -63,7 +63,7 @@ test("trades trained headless carry into the walkable world: the town stocks its
   await runSettlementLife({ days: 2, life: 1, graphs, planner: "manual" });
   let asked = 0;
   d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, seconds: 3600,
-    settlementWork: { graphs, planner: () => async () => { asked++; return []; } } });
+    settlementWork: { graphs, planner: () => async () => { asked++; return []; }, jev: false } });
   await d.start();
   for (let i = 0; i < 36_000 && !(d.recipes!.builtCount().workshop >= 1); i++) { d.advance(100); await new Promise(r => setImmediate(r)); }
   const w = d.sim.world;
@@ -85,7 +85,7 @@ test("autopilot: spoken to, a fisher looks up (habit pauses, only his mind may t
   const graphs = new Map<string, InstanceType<typeof SkillGraph>>();
   await runSettlementLife({ days: 1, life: 1, graphs, planner: "manual" });
   d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, seconds: 3600,
-    settlementWork: { graphs } });
+    settlementWork: { graphs, jev: false } });
   const w = d.sim.world;
   const asked: string[] = [];
   configureDecisionLeaves(w, { generate: async ({ prompt }) => {

@@ -18,6 +18,11 @@ import { requestDecision } from "../cognition/decision-leaves";
 import type { MindGate } from "../runtime/attention";
 
 export type Errand = { kind: "bring"; item: string; to: string } | { kind: "go"; place: string };
+/** What a moment stirs and what the resident wants to do about it (from the fast judge). */
+export type Appraisal = { wake: number; remember: number; importance: number;
+  feeling?: string; valence?: number; arousal?: number; response?: "carry on" | "look into it" | "tell someone" | "confront someone" | "hide it" | "leave" };
+/** Something a resident means to act on when the habit next chooses (look into it, tell someone...). */
+export type Concern = { response: NonNullable<Appraisal["response"]>; about: string; source: string; atMs: number };
 
 export type AutopilotHost = {
   world: World;
@@ -37,7 +42,9 @@ export type AutopilotHost = {
   mindAvailable(): boolean;
   /** A fast judge (Jev): does this call for the mind now, is it worth remembering, how much does it matter?
    * Replaces the yes/no glance when present. Probabilities in [0, 1]; importance in [0, 1]. */
-  appraise?(eid: number, percept: Percept): Promise<{ wake: number; remember: number; importance: number } | undefined>;
+  appraise?(eid: number, percept: Percept): Promise<Appraisal | undefined>;
+  /** Let the moment colour their feeling (and face). */
+  feel?(eid: number, feeling: string, valence: number, arousal: number, reason: string): void;
   /** Keep something as a memory without waking the mind. */
   remember?(eid: number, text: string, importance: number): void;
   record(line: string): void;
@@ -53,7 +60,10 @@ export class SettlementAutopilot {
   private readonly lastAwake = new Map<number, number>();
   private readonly lastGlance = new Map<number, number>();
   private readonly glances = new Map<number, { slot: string; request: { kind: "yes_no"; question: string }; percept: Percept }>();
-  private readonly appraisals = new Map<number, { percept: Percept; result: undefined | { wake: number; remember: number; importance: number } | null }>();
+  private readonly appraisals = new Map<number, { percept: Percept; result: undefined | Appraisal | null }>();
+  /** The most salient moment that arrived while an appraisal was running: judged next, not dropped. */
+  private readonly nextAppraisal = new Map<number, { percept: Percept; score: number }>();
+  private readonly concerns = new Map<number, Concern[]>();
   private readonly errandAsks = new Map<number, { slot: string; request: { kind: "pick"; question: string; options: string[] } }>();
   readonly log: Array<{ at: number; who: string; what: string }> = [];
   private sequence = 0;
@@ -70,19 +80,23 @@ export class SettlementAutopilot {
     background: eid => !this.host.managed().includes(eid) || this.floors.has(eid) || this.host.now() - (this.lastAwake.get(eid) ?? -Infinity) < RECENT_MIND_MS,
   };
 
+  /** What the resident means to act on (newest last); taken when the habit chooses. */
+  concernsOf(eid: number): readonly Concern[] { return this.concerns.get(eid) ?? []; }
+  dropConcern(eid: number, concern: Concern): void { this.concerns.set(eid, (this.concerns.get(eid) ?? []).filter(c => c !== concern)); }
+  /** Hand the floor to a resident's mind for a reason of their own (they came to talk, to look into something). */
+  summon(eid: number, reason: string, source = "self"): void { if (this.host.mindAvailable() && !this.floors.has(eid)) this.wake(eid, reason, source); }
+
   /** Something reached this resident. */
   perceive(eid: number, percept: Percept): void {
     if (!this.host.managed().includes(eid)) return;
     const floor = this.floors.get(eid);
     if (floor) { if (percept.kind !== "speech" || this.filter(eid).novelty(percept) > .5) floor.lastSalientAt = percept.atMs; this.filter(eid).perceive(percept); return; }
     const verdict = this.filter(eid).perceive(percept);
-    if (!this.host.mindAvailable()) { if (verdict.level !== "notice") this.note(eid, `notices: ${percept.text.slice(0, 100)}`); return; }
+    // Without a mind to hand the floor to, the judge still reads feeling and memory; nothing is woken.
+    if (!this.host.mindAvailable() && !(this.host.appraise && verdict.level !== "notice")) { if (verdict.level !== "notice") this.note(eid, `notices: ${percept.text.slice(0, 100)}`); return; }
+    if (verdict.level === "wake" && this.host.appraise && !this.host.mindAvailable()) { this.queueAppraisal(eid, percept, verdict.score); return; }
     if (verdict.level === "wake") this.wake(eid, percept.text, percept.source);
-    else if (verdict.level === "glance" && this.host.appraise && !this.appraisals.has(eid)) {
-      const pending = { percept, result: undefined as undefined | { wake: number; remember: number; importance: number } | null };
-      this.appraisals.set(eid, pending);
-      this.host.appraise(eid, percept).then(r => { pending.result = r ?? null; }, () => { pending.result = null; });
-    }
+    else if (verdict.level === "glance" && this.host.appraise) this.queueAppraisal(eid, percept, verdict.score);
     else if (verdict.level === "glance" && !this.host.appraise && !this.glances.has(eid) && this.host.now() - (this.lastGlance.get(eid) ?? -Infinity) > GLANCE_GAP_MS) {
       this.lastGlance.set(eid, this.host.now());
       const request = { kind: "yes_no" as const, question: `While you work, you notice: ${percept.text}. Do you stop what you are doing to deal with it?` };
@@ -102,7 +116,18 @@ export class SettlementAutopilot {
     this.perceive(eid, { kind: "surprise", source: `habit:${item}`, atMs: this.host.now(), text: `your usual way of getting ${item} did not work — ${detail.slice(0, 200)}` });
   }
 
+  private queueAppraisal(eid: number, percept: Percept, score: number): void {
+    if (!this.appraisals.has(eid)) { this.startAppraisal(eid, percept); return; }
+    const waiting = this.nextAppraisal.get(eid);
+    if (!waiting || score >= waiting.score) this.nextAppraisal.set(eid, { percept, score });
+  }
+  private startAppraisal(eid: number, percept: Percept): void {
+    const pending = { percept, result: undefined as undefined | Appraisal | null };
+    this.appraisals.set(eid, pending);
+    this.host.appraise!(eid, percept).then(r => { pending.result = r ?? null; }, () => { pending.result = null; });
+  }
   private wake(eid: number, text: string, source: string): void {
+    if (!this.host.mindAvailable()) return;
     const now = this.host.now();
     this.floors.set(eid, { since: now, lastSalientAt: now, reason: text });
     this.lastAwake.set(eid, now);
@@ -116,13 +141,29 @@ export class SettlementAutopilot {
     for (const [eid, a] of [...this.appraisals]) {
       if (a.result === undefined) continue;
       this.appraisals.delete(eid);
+      const waiting = this.nextAppraisal.get(eid);
+      if (waiting) { this.nextAppraisal.delete(eid); this.startAppraisal(eid, waiting.percept); }
       if (!a.result) continue;
-      if (a.result.remember >= .5) { this.host.remember?.(eid, a.percept.text, a.result.importance); this.note(eid, `remembers: ${a.percept.text.slice(0, 80)} (${a.result.importance.toFixed(2)})`); }
+      const r = a.result;
+      // A bare meeting carries no content: it may be remembered, but it does not by itself stir feelings or intentions.
+      const contentful = a.percept.kind !== "approach";
+      if (contentful && r.feeling && r.valence !== undefined && r.arousal !== undefined && r.importance >= .5) {
+        this.host.feel?.(eid, r.feeling, r.valence, r.arousal, a.percept.text.slice(0, 200));
+        this.note(eid, `feels ${r.feeling} (valence ${r.valence.toFixed(2)}, arousal ${r.arousal.toFixed(2)})`);
+      }
+      if (contentful && r.response && r.response !== "carry on" && r.importance >= .6) {
+        const list = [...(this.concerns.get(eid) ?? []), { response: r.response, about: a.percept.text, source: a.percept.source, atMs: now }].slice(-4);
+        this.concerns.set(eid, list);
+        this.note(eid, `means to ${r.response}: ${a.percept.text.slice(0, 80)}`);
+      }
+      // A bare meeting has to be more memorable than words or surprises to be kept.
+      if (a.result.remember >= (contentful ? .5 : .75)) { this.host.remember?.(eid, a.percept.text, a.result.importance); this.note(eid, `remembers: ${a.percept.text.slice(0, 80)} (${a.result.importance.toFixed(2)})`); }
       // Two ways to look up: it demands attention now, or it plainly matters a great deal to them
       // (an overheard word about their own secret may not demand attention, but it grips them).
-      const gripping = a.result.importance >= .85 && a.result.remember >= .7;
+      // Strong feeling demands attention too.
+      const gripping = a.result.importance >= .85 && a.result.remember >= .7 || (r.arousal ?? 0) >= .8;
       if ((a.result.wake >= .6 || gripping) && !this.floors.has(eid)) this.wake(eid, a.percept.text, a.percept.source);
-      else if (a.result.remember < .5) this.note(eid, `lets it pass (${a.percept.text.slice(0, 80)})`);
+      else if (a.result.remember < (contentful ? .5 : .75)) this.note(eid, `lets it pass (${a.percept.text.slice(0, 80)})`);
     }
     for (const [eid, g] of [...this.glances]) {
       const poll = requestDecision(this.host.world, eid, g.slot, g.request);

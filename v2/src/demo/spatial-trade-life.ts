@@ -24,7 +24,7 @@ import { SkillGraph, type Ref } from "../learning/skill-graph";
 import { SkillSolver, type Planner, type SkillEnv, type SolveStats } from "../learning/skill-runtime";
 import type { LandDef } from "../learning/settlement/saltmere-land";
 import type { createSpatialRecipes } from "./spatial-recipes";
-import type { Errand } from "./spatial-autopilot";
+import type { Concern, Errand } from "./spatial-autopilot";
 
 export type SpatialTradeHost = {
   world: World;
@@ -152,7 +152,10 @@ export class SpatialTradeLife {
   readonly errands: Errand[] = [];
   constructor(private readonly host: SpatialTradeHost, readonly eid: number, readonly trade: string, graph: SkillGraph, planner: Planner,
     private readonly log?: (line: string) => void,
-    private readonly attention?: { holds(eid: number): boolean; surprised(eid: number, item: string, detail: string): void }) {
+    private readonly attention?: { holds(eid: number): boolean; surprised(eid: number, item: string, detail: string): void;
+      concernsOf?(eid: number): readonly Concern[]; dropConcern?(eid: number, c: Concern): void; summon?(eid: number, reason: string): void },
+    /** A fast judge choosing what to do next from the menu (given who they are and how they feel). */
+    private readonly chooser?: (eid: number, menu: string[]) => Promise<number | undefined>) {
     this.env = createSpatialSkillEnv(host, eid);
     this.solver = new SkillSolver(this.env, graph, planner, { maxPlannerCalls: 40, log: log ? line => log(`[${Name.value[eid]}] ${line}`) : undefined,
       // The habit yields at its next act when the mind has the floor (or hunger bites).
@@ -231,12 +234,48 @@ export class SpatialTradeLife {
     if (room !== undefined && room !== getRoomForEntity(this.host.world, this.eid)) await this.env.act({ verb: "move", target: Name.value[room] });
     await this.env.act({ verb: "give", target: errand.item, arg: errand.to });
   }
+  private lastChoiceAt = -Infinity;
+  /** What could be done next, as the judge sees it: the day's work, needs, and what they mean to act on. */
+  private menu(): Array<{ label: string; run: () => Promise<boolean> }> {
+    const out: Array<{ label: string; run: () => Promise<boolean> }> = [];
+    const hunger = Needs.hunger[this.eid] ?? 0;
+    if (hunger >= 35) out.push({ label: "eat something", run: () => this.eat() });
+    const duties = this.host.land.trades.find(t => t.role === this.trade)?.duties ?? [];
+    if (duties.some(d => this.held(d.item) > (FOOD.includes(d.item) ? 1 : 0))) out.push({ label: "sell what I've made at the stall", run: () => this.sell() });
+    for (const d of duties) if (this.stallStock(d.item) < d.stock) out.push({ label: `make ${d.item.replace(/-/g, " ")} for the stall`, run: () => this.solver.solve(d.item, this.held(d.item) + 1) });
+    if (this.trade === "builder") for (const g of this.host.land.townPlan) {
+      const built = this.host.recipes.builtCount()[g.kind] ?? 0;
+      if (built < g.count) { out.push({ label: `build the ${g.kind}`, run: () => this.solver.solve(g.kind, built + 1) }); break; }
+    }
+    for (const c of this.attention?.concernsOf?.(this.eid) ?? [])
+      out.push({ label: `${c.response}: ${c.about.slice(0, 140)}`, run: async () => {
+        this.attention?.dropConcern?.(this.eid, c);
+        this.attention?.summon?.(this.eid, `You mean to ${c.response}: ${c.about}`);
+        return true; } });
+    out.push({ label: "rest a while", run: async () => { await this.wait(5 * 60_000); return true; } });
+    return out;
+  }
+  /** Let the judge pick when there is a real choice (something on their mind, or several things to do); at most every few minutes. */
+  private async chooseNext(): Promise<boolean> {
+    if (!this.chooser || this.host.now() - this.lastChoiceAt < 3 * 60_000) return false;
+    const menu = this.menu();
+    const concerns = this.attention?.concernsOf?.(this.eid).length ?? 0;
+    if (!concerns && menu.length < 4) return false;
+    this.lastChoiceAt = this.host.now();
+    const index = await this.chooser(this.eid, menu.map(m => m.label));
+    const pick = index === undefined ? undefined : menu[index];
+    if (!pick) return false;
+    this.log?.(`[${Name.value[this.eid]}] chooses: ${pick.label}`);
+    await pick.run();
+    return true;
+  }
   async live(): Promise<void> {
     while (!this.stopped && entityExists(this.host.world, this.eid)) {
       // The mind has the floor: the habit waits.
       if (this.attention?.holds(this.eid)) { await this.wait(2_000); continue; }
       const errand = this.errands.shift();
       if (errand) { await this.errand(errand); continue; }
+      if (await this.chooseNext()) continue;
       if ((Needs.hunger[this.eid] ?? 0) >= 55 && await this.eat()) continue;
       if (await this.sell()) continue;
       if (await this.work()) continue;

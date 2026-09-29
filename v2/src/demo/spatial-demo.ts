@@ -60,7 +60,8 @@ import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSalt
 import { createSettlementScenario } from "./spatial-settlement";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
 import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
-import { SettlementAutopilot } from "./spatial-autopilot";
+import { SettlementAutopilot, type Appraisal } from "./spatial-autopilot";
+import { commitPreparedAffectUpdate, prepareAffectUpdate, type FacialExpression } from "../cognition/affect-state";
 import type { Percept } from "../cognition/autopilot-attention";
 import { JevClient } from "../llm/jev";
 import { configureDecisionLeaves } from "../cognition/decision-leaves";
@@ -96,6 +97,14 @@ export function spatialPlaceKind(id: string): string | undefined {
   if (!bare || /(^|-)(house|home|apartment|flat|cottage)$/.test(bare)) return undefined;
   return bare.split("-").at(-1) || undefined;
 }
+/** Feelings Jev may read in a moment, and the face each shows. */
+const FEELINGS: Record<string, string> = { calm: "untroubled, settled", curious: "interested, wanting to know more", uneasy: "vaguely troubled, something is off",
+  afraid: "frightened", guilty: "feeling guilty, exposed", angry: "angry, provoked", sad: "sad, grieving", hopeful: "hopeful, encouraged",
+  amused: "amused, entertained", suspicious: "suspicious of someone", tender: "warm, affectionate", ashamed: "ashamed" };
+const FEELING_FACE: Record<string, FacialExpression> = { calm: "composed", curious: "attentive", uneasy: "brow furrowed", afraid: "eyes widened",
+  guilty: "downcast", angry: "jaw clenched", sad: "downcast", hopeful: "smiling", amused: "smiling", suspicious: "squinting", tender: "smiling", ashamed: "downcast" };
+const RESPONSES: Record<string, string> = { "carry on": "let it be and carry on with the day", "look into it": "go and look into it, find out more",
+  "tell someone": "tell someone about it", "confront someone": "confront the person involved", "hide it": "hide or cover up what this touches", leave: "get away from here" };
 /** How long a controlled body waits for a natural gap before cutting in. */
 const SAY_GAP_WAIT_MS = 3500;
 /** How far a voice carries in the spatial town. */
@@ -130,8 +139,8 @@ type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; sce
   story?: "community-drama" | "household" | "coastal-mystery" | "settlement";
   /** Settlement: residents work their trades by habit (skill graphs by trade, e.g. trained headless). */
   settlementWork?: { graphs: Map<string, SkillGraph>; planner?: (trade: string) => Planner; log?: (line: string) => void;
-    /** Jev judges attention and memory (default: from TYPESAFE_API_KEY when set). */
-    jev?: JevClient };
+    /** Jev judges attention and memory (default: from TYPESAFE_API_KEY when set; false turns it off). */
+    jev?: JevClient | false };
   /** One explicitly operator-approved generated mechanic; not broad engineering. */
   weatherMechanic?: { directory: string; backend?: "codex" | "gemini" };
   /** Explicit broader engineering profile; not implied by viewing a town. */
@@ -1088,7 +1097,7 @@ export class SpatialDemo {
       now: () => this.atSimMs };
     const noPlanner: Planner = async () => [];
     // A fast judge for attention and memory, when configured.
-    const jev = work.jev ?? JevClient.fromEnv();
+    const jev = work.jev === false ? undefined : work.jev ?? JevClient.fromEnv();
     if (jev) configureDecisionLeaves(w, { jev });
     // Habits run the day; attention decides when a mind looks up.
     const managed = SALTMERE_LAND.residents.map(r => this.actors.find(a => Name.value[a] === r.name)).filter((a): a is number => a !== undefined);
@@ -1105,30 +1114,63 @@ export class SpatialDemo {
       },
       onErrand: (eid, errand) => { this.tradeLives.find(l => l.eid === eid)?.errands.push(errand); },
       mindAvailable: () => w.meta.aiEnabled !== false,
-      ...(jev ? { appraise: (eid: number, percept: Percept) => this.appraiseWithJev(jev, eid, percept), remember: (eid: number, text: string, importance: number) => {
+      ...(jev ? { appraise: (eid: number, percept: Percept) => this.appraiseWithJev(jev, eid, percept),
+        feel: (eid: number, feeling: string, valence: number, arousal: number, reason: string) => {
+          const token = prepareAffectUpdate(w, eid, { feeling, valence: Math.max(-1, Math.min(1, valence)), arousal: Math.max(0, Math.min(1, arousal)),
+            reason, expression: FEELING_FACE[feeling] ?? "attentive" });
+          if (token) commitPreparedAffectUpdate(w, eid, token);
+        },
+        remember: (eid: number, text: string, importance: number) => {
         addMemory(w, eid, { type: "episodic", content: text, importance: Math.max(.1, Math.min(1, importance)), emotionalValence: 0, timestamp: Date.now() });
       } } : {}),
       record: line => this.record("world", line) });
     setMindGate(w, autopilot.gate);
     this.tickListeners.add(() => autopilot.tick());
+    // Speech arrives word by word: attention hears whole lines (a pause of a second and a half ends one).
+    const lines = new Map<string, { speaker: number; target?: number; text: string; lastAt: number; listeners: Set<number> }>();
     this.removers.push(subscribeCommittedEvents(w, event => {
       if (event.kind !== "speech" || !event.text || event.actorId === undefined) return;
+      const key = `${event.actorKey}:${event.executionId}`, line = lines.get(key) ?? { speaker: event.actorId, target: event.targetId, text: "", lastAt: 0, listeners: new Set<number>() };
+      line.text += event.text; line.lastAt = this.atSimMs; line.target ??= event.targetId;
       const room = getRoomForEntity(w, event.actorId);
       for (const listener of managed) {
         if (listener === event.actorId || getRoomForEntity(w, listener) !== room) continue;
-        if (Math.hypot(Position.x[listener] - Position.x[event.actorId], Position.y[listener] - Position.y[event.actorId]) > SPEECH_EARSHOT_METRES) continue;
-        autopilot.heard(listener, event.actorId, event.targetId, event.text);
+        if (Math.hypot(Position.x[listener] - Position.x[event.actorId], Position.y[listener] - Position.y[event.actorId]) <= SPEECH_EARSHOT_METRES) line.listeners.add(listener);
       }
+      lines.set(key, line);
     }));
+    this.tickListeners.add(() => {
+      for (const [key, line] of lines) {
+        if (this.atSimMs - line.lastAt < 1500) continue;
+        lines.delete(key);
+        for (const listener of line.listeners) autopilot.heard(listener, line.speaker, line.target, line.text.trim());
+      }
+    });
     for (const r of SALTMERE_LAND.residents) {
       const actor = this.actors.find(a => Name.value[a] === r.name);
       if (actor === undefined) continue;
       let graph = work.graphs.get(r.trade);
       if (!graph) { graph = new SkillGraph(); work.graphs.set(r.trade, graph); }
-      const life = new SpatialTradeLife(host, actor, r.trade, graph, work.planner?.(r.trade) ?? noPlanner, work.log, autopilot);
+      const life = new SpatialTradeLife(host, actor, r.trade, graph, work.planner?.(r.trade) ?? noPlanner, work.log, autopilot,
+        jev ? (eid, menu) => this.chooseWithJev(jev, eid, menu) : undefined);
       this.tradeLives.push(life);
       void life.live().catch(error => console.warn(`[Settlement] ${r.name} stopped working: ${error instanceof Error ? error.message : error}`));
     }
+  }
+  /** Jev picks what a resident on autopilot does next, from the menu, as that person would. */
+  private async chooseWithJev(jev: JevClient, eid: number, menu: string[]): Promise<number | undefined> {
+    const w = this.sim.world, affect = snapshotAffect(w, eid);
+    const recent = (this.autopilot?.log ?? []).filter(l => l.who === Name.value[eid]).slice(-4).map(l => l.what);
+    const stateValue = { character: { name: Name.value[eid], role: Agent.role[eid] ?? "", persona: String(Agent.systemPrompt[eid] || "").slice(0, 900) },
+      feeling: affect ? { feeling: affect.feeling, valence: affect.valence, arousal: affect.arousal, because: affect.reason } : "steady",
+      hunger: Math.round(Needs.hunger[eid] ?? 0), coin: this.recipes?.coinsOf(eid) ?? 0,
+      holding: listDirectContents(w, eid).map(e => Name.value[e]).slice(0, 10), lately: recent };
+    try {
+      const { answers } = await jev.ask(stateValue, { next: { type: "choice", instructions: `What does ${Name.value[eid]} do next, being who they are and feeling as they do?`,
+        criteria: Object.fromEntries(menu.map((m, i) => [`o${i}`, m])) } });
+      const index = Number(String(answers.next?.choice ?? "").replace(/^o/, ""));
+      return Number.isInteger(index) && index >= 0 && index < menu.length ? index : undefined;
+    } catch { return undefined; }
   }
   /** One Jev call per notable percept: attend now? remember? how much does it matter to this person? */
   private async appraiseWithJev(jev: JevClient, eid: number, percept: Percept) {
@@ -1140,15 +1182,28 @@ export class SpatialDemo {
       doing: life ? `working as the town's ${life.trade}` : "going about their day",
       just_happened: percept.text };
     const LEVELS = ["It does not matter to them at all", "A passing detail", "Somewhat notable", "It matters to them", "It matters a great deal to them"];
+    const name = Name.value[eid];
     try {
-      const { answers } = await jev.ask(stateValue, {
-        wake: { type: "noul", instructions: `Would ${Name.value[eid]} stop what they are doing and give this their full attention right now?` },
-        remember: { type: "noul", instructions: `Is this something ${Name.value[eid]} would remember later?` },
-        importance: { type: "score", instructions: `How much does this matter to ${Name.value[eid]}, given who they are and what they care about and hide?`, criteria: LEVELS },
+      // One call, many readings of the same moment (fan-out).
+      const calm = "Most everyday moments in a working day stir little; judge by what actually happened, not by the secrets they keep, unless it touches them.";
+      const { answers } = await jev.ask({ ...stateValue, guidance: calm }, {
+        wake: { type: "noul", instructions: `Would ${name} stop what they are doing and give this their full attention right now?` },
+        remember: { type: "noul", instructions: `Is this something ${name} would remember later?` },
+        importance: { type: "score", instructions: `How much does this matter to ${name}, given who they are and what they care about and hide?`, criteria: LEVELS },
+        feeling: { type: "choice", instructions: `Which feeling does this stir in ${name}?`, criteria: FEELINGS },
+        valence: { type: "score", instructions: `How does this feel to ${name}?`, criteria: ["Very unpleasant", "Unpleasant", "Neither", "Pleasant", "Very pleasant"] },
+        arousal: { type: "score", instructions: `How stirred up does this leave ${name}?`, criteria: ["Calm", "Slightly stirred", "Stirred", "Agitated", "Overwhelmed"] },
+        response: { type: "choice", instructions: `What does ${name} want to do about it?`, criteria: RESPONSES },
       });
       const wake = answers.wake?.noul, remember = answers.remember?.noul, score = answers.importance?.score;
       if (typeof wake !== "number" || typeof remember !== "number") return undefined;
-      return { wake, remember, importance: typeof score === "number" ? score / (LEVELS.length - 1) : .5 };
+      const unit = (x: unknown) => typeof x === "number" ? x / 4 : undefined;
+      const feeling = answers.feeling?.choice && FEELINGS[answers.feeling.choice] ? answers.feeling.choice : undefined;
+      const response = answers.response?.choice && RESPONSES[answers.response.choice] ? answers.response.choice as Appraisal["response"] : undefined;
+      const valence = unit(answers.valence?.score);
+      return { wake, remember, importance: typeof score === "number" ? score / (LEVELS.length - 1) : .5,
+        ...(feeling ? { feeling } : {}), ...(valence !== undefined ? { valence: valence * 2 - 1 } : {}),
+        ...(unit(answers.arousal?.score) !== undefined ? { arousal: unit(answers.arousal?.score) } : {}), ...(response ? { response } : {}) };
     } catch { return undefined; }
   }
   private spawnSettlementItem(actor: number, kind: string): number | undefined {
