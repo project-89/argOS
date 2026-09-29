@@ -25,21 +25,37 @@ const LARDER = 2;
 const URGENT = 75;
 
 export class ResidentLife {
-  readonly solver: SkillSolver;
+  solver: SkillSolver;
+  private readonly earlier: SolveStats[] = [];
   private readonly cooldown = new Map<string, number>();
   /** Getting food or water now: needs must not interrupt it. */
   private meeting = false;
   stopped = false;
   constructor(private readonly town: Settlement, readonly me: ResidentState, private readonly options: LifeOptions) {
+    this.solver = this.makeSolver();
+  }
+  /** A resident given a new trade by the Steward learns it with that trade's graph. */
+  changeTrade(trade: string): void {
+    this.earlier.push(this.solver.stats);
+    this.me.trade = trade;
+    this.cooldown.clear();
+    this.solver = this.makeSolver();
+  }
+  private makeSolver(): SkillSolver {
+    const { town, me, options } = this;
     let graph = options.graphs.get(me.trade);
     if (!graph) { graph = new SkillGraph(); options.graphs.set(me.trade, graph); }
-    this.solver = new SkillSolver(town.envFor(me.eid), graph, options.planner(me.trade), { life: options.life, maxPlannerCalls: 60,
+    return new SkillSolver(town.envFor(me.eid), graph, options.planner(me.trade), { life: options.life, maxPlannerCalls: 60,
       onGap: (item, detail) => options.onGap?.(me, item, detail),
       // Urgent thirst or hunger breaks off work (except the work of getting food or water).
-      interrupt: () => !this.meeting && (me.thirst >= URGENT || me.hunger >= URGENT),
+      interrupt: () => !this.meeting && (me.thirst >= URGENT || me.hunger >= URGENT || town.isNight()),
       log: options.log ? line => options.log!(`[${me.name}] ${line}`) : undefined });
   }
-  get stats(): SolveStats { return this.solver.stats; }
+  get stats(): SolveStats {
+    const all = [...this.earlier, this.solver.stats];
+    return { ...this.solver.stats, plannerCalls: all.reduce((n, s) => n + s.plannerCalls, 0), acts: all.reduce((n, s) => n + s.acts, 0),
+      skillRuns: all.reduce((n, s) => n + s.skillRuns, 0), skillFailures: all.reduce((n, s) => n + s.skillFailures, 0) };
+  }
   private held(kind: string) { return this.town.have(this.me.eid)[kind] ?? 0; }
   private act(verb: string, target?: string, arg?: string) { return this.town.perform(this.me.eid, { verb, ...(target ? { target } : {}), ...(arg ? { arg } : {}) }); }
   private async toStall() {
@@ -124,6 +140,13 @@ export class ResidentLife {
     const mark = this.town.def.needs.eatAt;
     while (!this.stopped && !this.me.dead) {
       if (this.me.thirst >= mark && await this.consume(["water"], "drink")) continue;
+      if (this.town.isNight()) {
+        // Eat and drink before bed if it will be a long night, then sleep in the tent or house.
+        if (this.me.hunger >= mark / 2 && await this.consume(FOOD_ORDER, "eat")) continue;
+        await this.toStall();
+        if (!(await this.act("sleep")).ok) await this.town.wait(this.me.eid, 600);
+        continue;
+      }
       if (this.me.hunger >= mark && await this.consume(FOOD_ORDER, "eat")) continue;
       if (await this.sellGoods()) continue;
       if (await this.work()) continue;

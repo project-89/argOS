@@ -24,10 +24,22 @@ const WALK_MPS = 1.3, FAIL_S = 5, TRADE_S = 20, PICKUP_S = 10, DAY_S = 86_400;
 const title = (kind: string) => kind.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 
 export type ResidentState = { eid: number; name: string; trade: string; hunger: number; thirst: number; coins: number;
-  starvingSince?: number; dead?: boolean; diedAt?: number; causeOfDeath?: string };
+  starvingSince?: number; dead?: boolean; diedAt?: number; causeOfDeath?: string;
+  /** The house they sleep in (else a tent). */
+  home?: number;
+  /** How rested last night left them: work goes at this speed. */
+  rest: number; sleeping?: boolean;
+  /** Seconds spent waiting with nothing to do (the spirits watch this). */
+  idleS: number };
 type Pending = { end: number; finish: () => ActResult; resolve: (result: ActResult) => void; label: string };
 export type SettlementEvent = { at: number; who: string; what: string };
-export type SettlementTally = { made: Stock; sold: Stock; bought: Stock; eaten: Stock; built: Stock; failures: number; acts: number };
+export type SettlementTally = { made: Stock; sold: Stock; bought: Stock; eaten: Stock; built: Stock; failures: number; acts: number;
+  /** Buyers who found the stall empty / sellers turned away from a full stall, by good. */
+  stockouts: Stock; gluts: Stock;
+  /** What acts failed for want of, by kind and by the trade that wanted it. */
+  lacking: Record<string, Stock>;
+  /** Uses taken from limited sources, by source kind. */
+  spent: Stock };
 
 export class Settlement implements RecipeWorld {
   readonly world: World;
@@ -52,7 +64,7 @@ export class Settlement implements RecipeWorld {
   treasury: number;
   now = 0;
   readonly events: SettlementEvent[] = [];
-  readonly tally: SettlementTally = { made: {}, sold: {}, bought: {}, eaten: {}, built: {}, failures: 0, acts: 0 };
+  readonly tally: SettlementTally = { made: {}, sold: {}, bought: {}, eaten: {}, built: {}, failures: 0, acts: 0, stockouts: {}, gluts: {}, spent: {}, lacking: {} };
 
   constructor(readonly def: LandDef) {
     this.world = createArgosWorld(`Settlement ${def.id}`);
@@ -71,7 +83,7 @@ export class Settlement implements RecipeWorld {
     this.treasury = def.treasury;
     for (const r of def.residents) {
       const eid = createAgentEntity(this.world, { name: r.name, role: r.trade, systemPrompt: `You are ${r.name}, ${r.trade} of Saltmere.`, roomId: this.rooms.get(r.start)! });
-      const state: ResidentState = { eid, name: r.name, trade: r.trade, hunger: 20, thirst: 20, coins: r.coins };
+      const state: ResidentState = { eid, name: r.name, trade: r.trade, hunger: 20, thirst: 20, coins: r.coins, rest: 1, idleS: 0 };
       this.residents.push(state); this.byEid.set(eid, state);
       for (const kind of r.carries ?? []) this.giveItem(eid, kind);
     }
@@ -210,13 +222,55 @@ export class Settlement implements RecipeWorld {
     if (this.pending.has(eid)) return Promise.resolve({ ok: false, summary: "Already busy." });
     this.tally.acts++;
     const plan = this.plan(eid, me, action);
-    if (!plan.ok) this.tally.failures++;
+    if (!plan.ok) {
+      this.tally.failures++;
+      const lack = plan.result.missing?.kind;
+      if (lack && !lack.includes(".") && lack !== "coin") this.add(this.tally.lacking[me.trade] ??= {}, lack);
+    }
     return new Promise(resolve => this.pending.set(eid, { end: this.now + (plan.ok ? plan.durationS : FAIL_S),
       finish: plan.ok ? plan.finish : () => plan.result, resolve, label: `${action.verb} ${action.target ?? ""}` }));
   }
   /** Idle for a while (resting, waiting for goods). */
   wait(eid: number, seconds: number): Promise<ActResult> {
+    const me = this.byEid.get(eid);
+    if (me) me.idleS += Math.max(1, seconds);
     return new Promise(resolve => this.pending.set(eid, { end: this.now + Math.max(1, seconds), finish: () => ({ ok: true, summary: "Waited." }), resolve, label: "wait" }));
+  }
+  /** The town fits out someone taking up a trade: the tools its work needs,
+   * from what lies about or the stall's stock. Returns what was given. */
+  equip(eid: number, trade: string): string[] {
+    const duties = this.def.trades.find(t => t.role === trade)?.duties.map(d => d.item) ?? [];
+    const tools = [...new Set(this.recipes.filter(r => duties.some(d => (r.gives[d] ?? 0) > 0)).flatMap(r => r.tools ?? []))];
+    const given: string[] = [];
+    for (const tool of tools) {
+      if (this.hand(eid).some(e => this.kindOf(e) === tool)) continue;
+      const lying = [...this.rooms.values()].flatMap(r => this.thingsIn(r)).find(e => this.kindOf(e) === tool && PhysicalObject.portable[e] && !this.byEid.has(e));
+      const stocked = listDirectContents(this.world, this.stall).find(e => this.kindOf(e) === tool);
+      const item = lying ?? stocked;
+      if (item === undefined) continue;
+      setLocatedIn(this.world, item, eid);
+      given.push(tool);
+    }
+    return given;
+  }
+  /** Uses left in limited sources, by kind, and what each kind gives. */
+  sourceReserves(): Record<string, { left: number; gives: string[] }> {
+    const out: Record<string, { left: number; gives: string[] }> = {};
+    for (const [eid, left] of this.uses) {
+      if (!entityExists(this.world, eid)) continue;
+      const kind = this.kindOf(eid);
+      const gives = [...new Set(this.recipes.filter(r => r.at === kind).flatMap(r => Object.keys(r.gives)))];
+      out[kind] ??= { left: 0, gives }; out[kind].left += left;
+    }
+    return out;
+  }
+  /** Hour of the day (the clock starts at dawn). */
+  hour(): number { return (this.def.night.dawnHour + this.now / 3600) % 24; }
+  isNight(): boolean { const h = this.hour(), n = this.def.night; return h >= n.bedHour || h < n.wakeHour; }
+  private secondsUntilWake(): number { const h = this.hour(), w = this.def.night.wakeHour; return Math.max(60, ((w - h + 24) % 24) * 3600); }
+  shelterOf(r: ResidentState): { kind: string; rest: number } {
+    const kind = r.home !== undefined ? "house" : "tent";
+    return { kind, rest: this.def.shelter.find(s => s.kind === kind)?.rest ?? 1 };
   }
   busy(eid: number): boolean { return this.pending.has(eid); }
 
@@ -228,6 +282,13 @@ export class Settlement implements RecipeWorld {
       const to = this.resolveRoom(action.target);
       if (to === undefined) return fail(`There is no place called ${action.target}.`);
       return { ok: true, durationS: Math.max(10, this.distance(room, to) / WALK_MPS), finish: () => { setLocatedIn(this.world, eid, to); return { ok: true, summary: `Walked to ${Name.value[to]}.` }; } };
+    }
+    if (verb === "sleep") {
+      if (this.roomOf(eid) !== this.rooms.get("common")) return fail("Your bed is on Saltmere Common.", { elsewhere: Name.value[this.rooms.get("common")!] });
+      me.sleeping = true;
+      return { ok: true, durationS: this.secondsUntilWake(), finish: () => {
+        me.sleeping = false; const shelter = this.shelterOf(me); me.rest = shelter.rest;
+        return { ok: true, summary: `Slept in ${shelter.kind === "house" ? "the house" : "a tent"}.` }; } };
     }
     if (verb === "eat" || verb === "drink") {
       const item = this.named(action.target || arg || (verb === "drink" ? "water" : ""), hand);
@@ -259,7 +320,7 @@ export class Settlement implements RecipeWorld {
       if (verb === "sell") {
         const goods = hand.find(e => this.kindOf(e) === item);
         if (goods === undefined) return fail(`You hold no ${item}.`, { missing: { kind: item, count: 1 } });
-        if ((this.stallStock()[item] ?? 0) >= this.def.stallCap) return fail(`The stall has enough ${item}.`, { scarce: true });
+        if ((this.stallStock()[item] ?? 0) >= this.def.stallCap) { this.add(this.tally.gluts, item); return fail(`The stall has enough ${item}.`, { scarce: true }); }
         // The stall buys at three quarters of its price (its margin keeps the treasury going).
         const paid = Math.max(1, Math.floor(price * 0.75));
         if (this.treasury < paid) return fail("The town cannot pay today.", { scarce: true });
@@ -267,7 +328,7 @@ export class Settlement implements RecipeWorld {
         return { ok: true, durationS: TRADE_S, finish: () => { me.coins += paid; this.treasury -= paid; this.add(this.tally.sold, item); return { ok: true, summary: `Sold ${item} for ${paid}.` }; } };
       }
       const goods = listDirectContents(this.world, this.stall).find(e => this.kindOf(e) === item);
-      if (goods === undefined) return fail(`The stall has no ${item}.`, { scarce: true });
+      if (goods === undefined) { this.add(this.tally.stockouts, item); return fail(`The stall has no ${item}.`, { scarce: true }); }
       if (me.coins < price) return fail(`${item} costs ${price}; you have ${me.coins}.`, { scarce: true });
       me.coins -= price; this.treasury += price;
       setLocatedIn(this.world, goods, eid);
@@ -289,7 +350,7 @@ export class Settlement implements RecipeWorld {
       if (lack) return fail(`The ${part.part} needs ${lack.count} more ${lack.kind}.`, { missing: lack });
       this.takeItems(eid, part.needs);
       this.plotBusy.add(target); this.plotOwner.set(target, eid);
-      return { ok: true, durationS: part.durationS, finish: () => {
+      return { ok: true, durationS: part.durationS / me.rest, finish: () => {
         this.plotBusy.delete(target!);
         const parts = [...(this.plotParts.get(target!) ?? []), part.part];
         this.plotParts.set(target!, parts);
@@ -300,6 +361,9 @@ export class Settlement implements RecipeWorld {
           Name.value[target!] = `${structure.name} ${this.builtCount[structure.kind]}`;
           this.plotParts.delete(target!); this.plotOwner.delete(target!);
           this.add(this.tally.built, structure.kind);
+          // A new house takes in whoever is still sleeping in a tent.
+          const sleeps = this.def.shelter.find(x => x.kind === structure.becomes)?.sleeps ?? 0;
+          for (const r of this.alive().filter(r => r.home === undefined).slice(0, sleeps)) { r.home = target!; this.note(r.eid, `moved out of a tent into ${Name.value[target!]}`); }
           this.note(eid, `finished the ${structure.name.toLowerCase()}`);
           return { ok: true, summary: `Built the ${part.part}: the ${structure.name} is finished.` };
         }
@@ -315,8 +379,8 @@ export class Settlement implements RecipeWorld {
     const lack = this.lacking(eid, recipe.needs, recipe.tools);
     if (lack) return fail(`To ${verb}${recipe.product ? ` ${recipe.product}` : ""} you need ${lack.count} more ${lack.kind}.`, { missing: lack });
     this.takeItems(eid, recipe.needs ?? {});
-    if (recipe.spends && this.uses.has(target)) this.uses.set(target, this.uses.get(target)! - 1);
-    return { ok: true, durationS: recipe.durationS ?? 120, finish: () => {
+    if (recipe.spends && this.uses.has(target)) { this.uses.set(target, this.uses.get(target)! - 1); this.add(this.tally.spent, kind); }
+    return { ok: true, durationS: (recipe.durationS ?? 120) / me.rest, finish: () => {
       for (const [k, n] of Object.entries(recipe.gives)) { for (let i = 0; i < n; i++) this.giveItem(eid, k); this.add(this.tally.made, k, n); }
       for (const tool of recipe.tools ?? []) this.wearTool(eid, tool);
       return { ok: true, summary: `${title(verb)}: got ${Object.entries(recipe.gives).map(([k, n]) => `${n} ${k}`).join(", ")}.`, used: [...(recipe.tools ?? [])] };
@@ -357,8 +421,9 @@ export class Settlement implements RecipeWorld {
     this.now = t;
     const n = this.def.needs;
     for (const r of this.alive()) {
-      r.hunger = Math.min(100, r.hunger + n.hungerPerHour * dt / 3600);
-      r.thirst = Math.min(100, r.thirst + n.thirstPerHour * dt / 3600);
+      const f = r.sleeping ? this.def.night.asleepNeedFactor : 1;
+      r.hunger = Math.min(100, r.hunger + f * n.hungerPerHour * dt / 3600);
+      r.thirst = Math.min(100, r.thirst + f * n.thirstPerHour * dt / 3600);
       if (r.hunger >= 100 || r.thirst >= 100) {
         r.starvingSince ??= t;
         if (t - r.starvingSince >= n.collapseHours * 3600) {

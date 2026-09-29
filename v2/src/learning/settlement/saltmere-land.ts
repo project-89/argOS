@@ -30,6 +30,10 @@ export type LandDef = {
   /** What the town wants built, in order. */
   townPlan: Array<{ kind: string; count: number }>;
   needs: { hungerPerHour: number; thirstPerHour: number; eatAt: number; collapseHours: number };
+  /** Night: residents sleep in their shelter; needs slow while asleep. Hours of the day (the clock starts at dawn). */
+  night: { dawnHour: number; bedHour: number; wakeHour: number; asleepNeedFactor: number };
+  /** Shelter: how rested a night leaves you (work speed next day), and how many a building sleeps. */
+  shelter: Array<{ kind: string; rest: number; sleeps: number }>;
 };
 
 const plots = (kind: string, count: number, from: number): LandThing[] =>
@@ -47,6 +51,9 @@ export const SALTMERE_LAND: LandDef = {
   ],
   things: [
     { id: "stall", name: "Market stall", kind: "stall", place: "common" },
+    // The one building standing: the old Net House, with its rack for nets.
+    { id: "net-house", name: "The Net House", kind: "net-rack", place: "common" },
+    ...Array.from({ length: 10 }, (_, i) => ({ id: `tent-${i + 1}`, name: `Tent ${i + 1}`, kind: "tent", place: "common" })),
     { id: "campfire", name: "Campfire", kind: "hearth", place: "common" },
     { id: "stump", name: "Chopping stump", kind: "stump", place: "common" },
     { id: "axe-1", name: "Old axe", kind: "axe", place: "common", portable: true },
@@ -59,7 +66,7 @@ export const SALTMERE_LAND: LandDef = {
     { id: "spring-pool", name: "Spring pool", kind: "spring", place: "spring" },
     { id: "stone-pile", name: "Loose stone", kind: "stone-pile", place: "quarry", uses: 60 },
     { id: "flax", name: "Flax rows", kind: "flax-patch", place: "field", uses: 30, regrow: 10 },
-    ...plots("workshop-plot", 1, 1), ...plots("rack-plot", 1, 1), ...plots("house-plot", 5, 1),
+    ...plots("workshop-plot", 1, 1), ...plots("house-plot", 5, 1),
   ],
   recipes: [
     { verb: "catch", at: "fishing-water", tools: ["net"], gives: { "raw-fish": 1 }, durationS: 420 },
@@ -111,6 +118,8 @@ export const SALTMERE_LAND: LandDef = {
     { name: "Ivo", trade: "builder", start: "common", coins: 15 },
     { name: "Mara", trade: "builder", start: "common", coins: 15 },
   ],
-  townPlan: [{ kind: "workshop", count: 1 }, { kind: "net-rack", count: 1 }, { kind: "house", count: 5 }],
+  townPlan: [{ kind: "workshop", count: 1 }, { kind: "house", count: 5 }],
   needs: { hungerPerHour: 6, thirstPerHour: 10, eatAt: 45, collapseHours: 4 },
+  night: { dawnHour: 6, bedHour: 22, wakeHour: 6, asleepNeedFactor: 0.4 },
+  shelter: [{ kind: "tent", rest: 0.8, sleeps: 1 }, { kind: "house", rest: 1, sleeps: 2 }],
 };
