@@ -1,0 +1,64 @@
+/** Watch a live Saltmere Settlement session headless (no viewer):
+ *   npx tsx src/demo/settlement-live-session.ts [minutes=40] [skills.json]
+ * Spends model calls: Gemini minds (only when attention wakes them), Jev, the Gemini planner for gaps.
+ * A live Saltmere Settlement session, headless: Gemini minds (woken by attention), Jev (appraisal, choices),
+ * Gemini planner for gaps, trained trade skills. Writes a running log and a summary. */
+import "dotenv/config";
+import { appendFileSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { SpatialDemo } from "./spatial-demo";
+import { runSettlementLife } from "../learning/settlement/run-settlement";
+import { SkillGraph } from "../learning/skill-graph";
+import { JevClient } from "../llm/jev";
+import { geminiPlanner } from "../learning/homestead/planners";
+import { Goal, Name, Needs } from "../ecs/components";
+import { HasGoal } from "../ecs/relations";
+import { getRelationTargets, hasComponent } from "bitecs";
+import { snapshotAffect } from "../cognition/affect-state";
+import { getDecisionStats } from "../cognition/decision-leaves";
+import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
+const MINUTES = Number(process.argv[2] ?? 40), DIR = resolve("recordings", `settlement-live-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+mkdirSync(DIR, { recursive: true });
+const LOG = `${DIR}/session.log`, SKILLS = process.argv[3] ? resolve(process.argv[3]) : resolve("recordings", "settlement-skills.json");
+writeFileSync(LOG, "");
+const out = (line: string) => appendFileSync(LOG, line + "\n");
+const quiet = console.log; console.log = () => {}; console.warn = () => {}; console.error = () => {};
+const graphs = new Map<string, SkillGraph>();
+if (existsSync(SKILLS)) for (const [t, j] of Object.entries(JSON.parse(readFileSync(SKILLS, "utf8")))) graphs.set(t, SkillGraph.fromJson(j as any));
+else { await runSettlementLife({ days: 3, life: 1, graphs, planner: "manual" }); }
+const jev = JevClient.fromEnv(); if (!jev) { quiet("no TYPESAFE key"); process.exit(1); }
+const plannerStats = { calls: 0, tokensIn: 0, tokensOut: 0, malformed: 0 };
+const d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: true, seconds: MINUTES * 60 + 120,
+  settlementWork: { graphs, jev, log: (l: string) => { if (/chooses|plan for|learned/.test(l)) out(`${stamp()} ${l}`); },
+    planner: (trade: string) => geminiPlanner(plannerStats, { persona: `You plan practical steps for a ${trade} in a small coastal town rebuilding after the sea took it. Be brief and exact.`,
+      verbs: "buy <item> / sell <item> at the Market stall (target the stall, arg the item), " }) } } as any);
+const stamp = () => `[${(d.atSimMs / 60000).toFixed(1)}m ${d.settlementHour().toFixed(1)}h]`;
+let seenEvents = 0, seenAuto = 0, seenSpirit = 0;
+const flush = () => {
+  const events = d.snapshot().events;
+  for (const e of events.slice(Math.max(0, events.length - (events.length - seenEvents)))) if (/speech|thought|world|scene/.test(e.kind)) out(`${stamp()} ${e.kind}: ${e.text.slice(0, 400)}`);
+  seenEvents = events.length;
+  const auto = d.autopilot?.log ?? []; for (const l of auto.slice(seenAuto)) out(`${stamp()} attention ${l.who}: ${l.what.slice(0, 300)}`); seenAuto = auto.length;
+  const sp = d.settlementBalance?.interventions() ?? []; for (const i of sp.slice(seenSpirit)) out(`${stamp()} SPIRIT ${i.spirit}: ${i.what}`); seenSpirit = sp.length;
+};
+await d.start();
+const started = Date.now();
+quiet(`live settlement running for ${MINUTES} min; log ${LOG}`);
+while (Date.now() - started < MINUTES * 60_000) {
+  await new Promise(r => setTimeout(r, 15_000));
+  try { flush(); } catch (e) { out(`flush error ${e}`); }
+}
+flush();
+const w = d.sim.world;
+const summary: string[] = [`== ${MINUTES} min live, game ${d.settlementHour().toFixed(1)}h ==`];
+for (const a of d.actors) {
+  const goals = getRelationTargets(w, a, HasGoal).filter(g => hasComponent(w, g, Goal) && Goal.status[g] === "active").map(g => `${Goal.description[g]} (${Goal.priority[g]})`);
+  const f = snapshotAffect(w, a);
+  summary.push(`${Name.value[a]} (${d.tradeLives.find(l => l.eid === a)?.trade}): hunger ${Math.round(Needs.hunger[a])}, coin ${d.recipes!.coinsOf(a)}, feels ${f ? `${f.feeling} (${f.valence.toFixed(2)}/${f.arousal.toFixed(2)})` : "-"}\n   goals: ${goals.join(" | ") || "-"}`);
+}
+summary.push(`built ${JSON.stringify(d.recipes!.builtCount())}; made ${JSON.stringify(d.recipes!.tally.made)}; eaten ${JSON.stringify(d.recipes!.tally.eaten)}`);
+summary.push(`Jev ${JSON.stringify(jev.stats)}; planner ${JSON.stringify(plannerStats)}; leaves ${JSON.stringify(getDecisionStats(w))}`);
+summary.push(`skills ${[...graphs].map(([t, g]) => `${t} ${g.skills.size}`).join(", ")}`);
+writeFileSync(SKILLS, JSON.stringify(Object.fromEntries([...graphs].map(([t, g]) => [t, g.toJson()])), null, 1));
+out(summary.join("\n")); quiet(summary.join("\n"));
+d.stop(); process.exit(0);

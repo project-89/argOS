@@ -499,6 +499,8 @@ export class SpatialDemo {
       initializeInputs: registerSpatialWeatherExposureSchema,
       beforeCommit: () => projectWeatherInputs() } : false;
     const sim = await createSimulation({ name: options.world?.title ?? (blackout ? "Argos · The Blackout" : "Argos · A place to live"), preset: "minimal", enableAI: live,
+      // The settlement's residents run on habit and attention everywhere; offstage life would move them twice.
+      ...(options.story === "settlement" ? { offstageLife: false } : {}),
       ...(options.story === "coastal-mystery" ? { worldSpecification: createLovecraftWorldSpecification(!!options.development) } : {}),
       hostOfficeTools: false, cognitionController: "priority", experienceReconsideration: true, narrativeMind: true,
       enablePlanning: live, enableReflection: live, enableSpirits: options.evolving === true && !options.training, enableNarrativeEngine: false,
@@ -1115,7 +1117,8 @@ export class SpatialDemo {
       dayMs: () => this.settlementDayMs,
       campfire: () => [...this.settlementKinds].find(([, k]) => k === "hearth")?.[0],
       goalsOf: eid => getRelationTargets(w, eid, HasGoal).filter(g => hasComponent(w, g, Goal) && Goal.status[g] === "active"
-          && !/^(Keep Saltmere supplied|Raise the town)/.test(String(Goal.description[g] || "")) && Goal.kind[g] !== "scheduled_activity")
+          // Their own resolve, not the day's routine (the trade and the schedule already run the day).
+          && !/^(Keep Saltmere supplied|Raise the town|Follow schedule:|Go to .+ for (work|supper|sleep))/.test(String(Goal.description[g] || "")) && Goal.kind[g] !== "scheduled_activity")
         .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0))
         .map(g => ({ id: g, description: String(Goal.description[g] || ""), priority: Goal.priority[g] || 0 })),
       peopleNear: (eid, metres) => {
