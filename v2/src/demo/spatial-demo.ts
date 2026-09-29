@@ -71,9 +71,11 @@ import { createSpatialDevelopmentInputs, registerSpatialDevelopmentInputSchema }
 import { assertSpatialDevelopmentRelease, SPATIAL_DEVELOPMENT_LIMITS, SPATIAL_DEVELOPMENT_BUILDER_CONTEXT, isSpatialDevelopmentComponent, permitsSpatialDevelopmentValue } from "./spatial-development-policy";
 import { createSpatialGodConsole, type SpatialOmniscience } from "./spatial-god-console";
 import { DEVELOPMENT_EVOLUTION_CONFIG } from "./spatial-town-life";
-import { getSpatialAssetEntry, loadSpatialAssetCatalog, spatialAssetModel } from "./spatial-asset-registry";
+import { describeSpatialCatalog, getSpatialAssetEntry, loadSpatialAssetCatalog, spatialAssetModel } from "./spatial-asset-registry";
 import { getSpeakingActivity, getUtteranceScript, readLocalSpeechOpportunity, setUtteranceVoiceGate, withinEarshot, type UtteranceVoiceGate } from "../cognition/timed-speech";
 import { setAttentionProvider, type AttentionReading } from "../runtime/attention";
+import { setOffstageHost } from "../runtime/offstage";
+import { materializeApprovedEntity } from "../engineering/entity-materialization";
 /** How long a controlled body waits for a natural gap before cutting in. */
 const SAY_GAP_WAIT_MS = 3500;
 /** How far a voice carries in the spatial town. */
@@ -1359,9 +1361,13 @@ export class SpatialDemo {
     if (observer === undefined || eid === observer) return { tier: "presence" };
     const addressed = this.addressedByObserver.get(eid);
     const addressedByObserver = addressed !== undefined && this.atSimMs - addressed <= ADDRESSED_WINDOW_MS;
-    const sameRoom = getRoomForEntity(w, eid) === getRoomForEntity(w, observer);
+    const room = getRoomForEntity(w, eid), observerRoom = getRoomForEntity(w, observer), sameRoom = room === observerRoom;
     const distance = Math.hypot(Position.x[eid] - Position.x[observer], Position.y[eid] - Position.y[observer]);
-    const tier = sameRoom && distance <= SPEECH_EARSHOT_METRES ? "presence" : distance <= PERIPHERY_METRES ? "periphery" : "offstage";
+    // Walls hide people: someone inside another building is offstage however
+    // close; across open air (outdoor to outdoor) they stay periphery to 25 m.
+    const outdoor = (id?: number) => this.roomViews.find(view => view.id === id)?.environment === "outdoor";
+    const inSight = sameRoom || outdoor(room) && outdoor(observerRoom);
+    const tier = sameRoom && distance <= SPEECH_EARSHOT_METRES ? "presence" : inSight && distance <= PERIPHERY_METRES ? "periphery" : "offstage";
     return { tier: addressedByObserver ? "presence" : tier, distance: Number.isFinite(distance) ? distance : undefined, addressedByObserver };
   }
   private flushPendingSays() {
@@ -1514,6 +1520,30 @@ export class SpatialDemo {
       recentDialogue: getSocialDialogue(w, id).slice(-12).map(turn => ({ speaker: turn.own ? Name.value[id] : turn.speaker,
         ...(turn.target ? { to: turn.target } : {}), text: clip(turn.content, 400), atSimMs: turn.simulation?.completedAtSimMs ?? turn.atSimMs })) };
   }
+  /** A resident's finished project (offstage scene) as a catalog furnishing, via validated growth. */
+  private buildResidentProject(p: { roomId: number; assetId: string; name: string; description: string; near?: string }):
+    { ok: true; entityId: number } | { ok: false; reason: string } {
+    const asset = SPATIAL_ASSETS[p.assetId];
+    if (!this.options.evolving || !this.admitting || !asset?.objectType) return { ok: false, reason: "No growth path for that here." };
+    try {
+      const entityId = materializeApprovedEntity(this.sim.world, { type: "object", name: p.name, description: p.description, roomEid: p.roomId,
+        components: [{ name: "ObjectType", values: { typeId: asset.objectType } }, { name: "SpatialPlacement", values: { assetId: p.assetId, ...(p.near ? { near: p.near } : {}) } }] });
+      return { ok: true, entityId };
+    } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+  }
+  /** Idle offstage life: a few unhurried steps within the same room, as a real walk. */
+  private stroll(actor: number): boolean {
+    const w = this.sim.world, room = getRoomForEntity(w, actor);
+    if (!this.admitting || this.work.has(actor) || this.walks.has(actor) || getRelationTargets(w, actor, SittingOn).length) return false;
+    const angle = (++this.sequence * 2.39996) % (Math.PI * 2);
+    const point = this.spatial.walkPointToward(actor, { x: Math.cos(angle), y: Math.sin(angle) }, 2.5);
+    if (!point || this.spatial.roomAtPoint(point) !== room) return false;
+    const execution = `stroll:${randomUUID()}`;
+    if (!reserveSimulationResources(w, actor, execution, ["body"], { activity: { kind: "moving" } })) return false;
+    const admission = this.spatial.requestWalk(actor, point, () => releaseSimulationResources(w, actor, execution));
+    if (!admission.ok) { releaseSimulationResources(w, actor, execution); return false; }
+    return true;
+  }
   grow() {
     if (!this.running) throw new Error("Start the world first");
     if (this.options.world) throw Error("Town construction is gated until approved growth also installs verified geometry, navigation and interactions. No authored cafe is substituted for autonomous growth.");
@@ -1533,6 +1563,11 @@ export class SpatialDemo {
     if (this.stopped) throw new Error("This session ended; relaunch for a new world");
     if (this.started) return; this.started = true;
     setAttentionProvider(this.sim.world, eid => this.attentionFor(eid));
+    // Offstage life (runtime/offstage): unobserved residents' scenes show in the
+    // event feed; finished projects build through the same growth path as spirits.
+    setOffstageHost(this.sim.world, { admitting: () => this.admitting, record: (kind, text) => { this.record(kind, text); },
+      buildCatalog: () => this.options.evolving ? describeSpatialCatalog().map(({ assetId, name, what, where }) => ({ assetId, name, what, where })) : [],
+      build: input => this.buildResidentProject(input), stroll: actor => this.stroll(actor) });
     try {
       if (this.weatherMechanic) {
         const status = this.sim.getCodingStatus()!;

@@ -40,6 +40,8 @@ import { startCommittedEvents, stopCommittedEvents } from "./runtime/committed-e
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "./ecs/prefabs";
 import { isOperatorControlled } from "./ecs/controlled";
 import { attentionCadenceOpen, backgroundPriorityFor, foregroundPriorityFor } from "./runtime/attention";
+import { hasDueOffstageScene, installOffstageLife, noteForegroundDecisionStarted, offstageForegroundReady, reflectionFor,
+  runOffstageDriver, runOffstageScene, type OffstageConfig } from "./runtime/offstage";
 import { initializeRegistry } from "./ecs/component-registry";
 import { createGodAgent, godCommand, getWorldState, tickWorld, runWorldTickAt, updateGlobalTime, type GodAgentState, type GodAgentConfig } from "./god/god-agent";
 import { createPrebakePreset, getAvailablePresets, type PrebakePreset } from "./god/system-baker";
@@ -303,6 +305,9 @@ export interface SimulationConfig {
   enableReflection?: boolean;
   /** Fast appraisal of personally experienced events, independently of slow planning/reflection. */
   enableExperienceAppraisal?: boolean;
+  /** Offstage life for residents out of the observer's perception (default on with AI;
+   * inert without an attention provider). See runtime/offstage. */
+  offstageLife?: boolean | Partial<OffstageConfig>;
   /** Enable spirit system (Narrator, Arbiter, Crafter, Steward, Weaver) - default: true */
   enableSpirits?: boolean;
   /** Enable continuous entity/component/system/rule evolution, or override its tick cadences. */
@@ -1152,11 +1157,14 @@ Do NOT explain — just create everything using your tools.`;
                       priorityOf: () => foregroundPriorityFor(world, eid),
                       ready: () => modelDemand.has(eid) && entityExists(world, eid) && Agent.active[eid] && isForegroundActorAvailable(world, eid)
                         && attentionCadenceOpen(world, eid, lastForegroundSimMs, hasPendingCognitionStimuli(world, eid) || hasDueAttentionSignal(world, eid))
+                        // Offstage: no cadence loop; think once per new urgent cause (runtime/offstage).
+                        && offstageForegroundReady(world, eid)
                         && isForegroundCognitionReady(world, eid, { hasQueuedStimuli: hasPendingCognitionStimuli(world, eid),
                           hasPendingStimuli: hasPendingCognitionStimuli(world, eid) || hasUnintegratedAttention(world, eid, false),
                           hasDueAttention: hasDueAttentionSignal(world, eid) }),
                       execute: async () => {
                         deliberating.add(eid); lastForegroundSimMs.set(eid, readStoryTime(world));
+                        noteForegroundDecisionStarted(world, eid); // consumes an offstage urgency, if any
                         try {
                           const thoughtCursor = captureThoughtPublication(world, eid);
                           const actions = await runCognitionCycle(world, god.systemRegistry, { tick: runtime!.tick, enablePlanning: false, agentEids: [eid] });
@@ -1201,8 +1209,9 @@ Do NOT explain — just create everything using your tools.`;
                       });
                       registerAIOperation(runtime!, {
                         name: `AgentSubconscious:${eid}`, interval: 5, priority: "normal", lane: "subconscious", priorityOf: () => backgroundPriorityFor(world, eid, "normal"),
-                        ready: () => ownMind() && !hasPendingPersonalGoalReview(world, eid) && hasSubconsciousWork(world, eid, { enableReflection: config.enableReflection }),
-                        execute: () => runAgentSubconscious(world, eid, { enableReflection: config.enableReflection }),
+                        // Offstage residents skip reflection; their summarized scenes become narrative memory.
+                        ready: () => ownMind() && !hasPendingPersonalGoalReview(world, eid) && hasSubconsciousWork(world, eid, { enableReflection: reflectionFor(world, eid, config.enableReflection) }),
+                        execute: () => runAgentSubconscious(world, eid, { enableReflection: reflectionFor(world, eid, config.enableReflection) }),
                       });
                     }
                   }
@@ -1235,6 +1244,18 @@ Do NOT explain — just create everything using your tools.`;
                   }
                 },
               });
+
+              // Offstage life (runtime/offstage): residents out of the observer's
+              // perception are moved by learned skills, plans, schedules and idle
+              // life (no model), and each unobserved place is summarized once per
+              // stretch of time. Never drives a mind mid-decision or a possessed body.
+              if (aiEnabled && config.offstageLife !== false) {
+                installOffstageLife(world, { config: typeof config.offstageLife === "object" ? config.offstageLife : undefined,
+                  isDeliberating: eid => deliberating.has(eid) });
+                registerFastSystem(runtime, { name: "OffstageDriver", execute: () => { runOffstageDriver(world, god.systemRegistry); } });
+                registerAIOperation(runtime, { name: "OffstageScenes", interval: 1, priority: "normal", lane: "subconscious",
+                  ready: () => hasDueOffstageScene(world), execute: () => runOffstageScene(world) });
+              }
 
 	          if (aiEnabled) {
 	            // Daemon observations (async)
