@@ -40,6 +40,7 @@ import { startCommittedEvents, stopCommittedEvents } from "./runtime/committed-e
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "./ecs/prefabs";
 import { isOperatorControlled } from "./ecs/controlled";
 import { attentionCadenceOpen, backgroundPriorityFor, foregroundPriorityFor } from "./runtime/attention";
+import { attachSkillLibrary, type SkillHarvestReport, type SkillLibraryConfig, type SkillLibrarySession } from "./learning/session";
 import { hasDueOffstageScene, installOffstageLife, noteForegroundDecisionStarted, offstageForegroundReady, reflectionFor,
   runOffstageDriver, runOffstageScene, type OffstageConfig } from "./runtime/offstage";
 import { initializeRegistry } from "./ecs/component-registry";
@@ -308,6 +309,10 @@ export interface SimulationConfig {
   /** Offstage life for residents out of the observer's perception (default on with AI;
    * inert without an attention provider). See runtime/offstage. */
   offstageLife?: boolean | Partial<OffstageConfig>;
+  /** Cross-session skill library (src/learning): seed residents with promoted
+   * abstract skills at start and harvest what they learned at stop. Memories are
+   * never carried over. Off unless provided. */
+  skillLibrary?: SkillLibraryConfig;
   /** Enable spirit system (Narrator, Arbiter, Crafter, Steward, Weaver) - default: true */
   enableSpirits?: boolean;
   /** Enable continuous entity/component/system/rule evolution, or override its tick cadences. */
@@ -374,6 +379,10 @@ export interface ArgosSimulation {
   start: () => Promise<void>;
   /** Stop the simulation */
   stop: () => void;
+  /** Skill-library session when config.skillLibrary is set (seed report, harvest). */
+  skillLibrary?: SkillLibrarySession;
+  /** Harvest learned skills into the library now (idempotent; stop() also calls it). */
+  harvestSkillLibrary?: () => SkillHarvestReport | undefined;
   /** After stop, await runtime-owned operation finalizers, bounded in wall time. Does not advance the world. */
   drainPendingOperations: (timeoutMs?: number) => Promise<void>;
   /** Pause the simulation */
@@ -1040,6 +1049,12 @@ Do NOT explain — just create everything using your tools.`;
 
   const dualLoopEnabled = config.dualLoop !== false;
 
+  // Skill library (opt-in): residents start with carried-over abstract skills,
+  // never memories. Harvest happens once, at stop, before any teardown.
+  const skillSession = config.skillLibrary ? attachSkillLibrary(world, config.skillLibrary) : undefined;
+  if (skillSession && config.skillLibrary!.seed !== false) skillSession.seed();
+  const harvestSkills = skillSession && config.skillLibrary!.harvest !== false ? () => skillSession.harvest() : undefined;
+
   // Build simulation state
   let running = false;
   let stopping = false;
@@ -1056,6 +1071,8 @@ Do NOT explain — just create everything using your tools.`;
     tick,
     running: false,
     paused: false,
+    ...(skillSession ? { skillLibrary: skillSession } : {}),
+    ...(harvestSkills ? { harvestSkillLibrary: harvestSkills } : {}),
 
     start: async () => {
       if (running) return;
@@ -1365,6 +1382,7 @@ Do NOT explain — just create everything using your tools.`;
         loopTimeout = null;
       }
       try {
+        if (harvestSkills) cleanup(() => { harvestSkills(); });
         cleanup(() => clearTimedSpeech(world));
         cleanup(() => clearSimulationTimeline(world));
         cleanup(() => stopCommittedEvents(world));

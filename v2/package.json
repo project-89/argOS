@@ -48,6 +48,7 @@
     "demo:godai": "tsx src/behavioral-tests/33-orchestration-eval-repair-harness.ts --durationSec=24 --seed=123 --evalMs=6000 --spiritMs=6000 --daemonPovMs=5000 --autopilotMs=7000",
     "demo:godai:hard": "tsx src/behavioral-tests/19-unified-api-full-stress-test.ts --duration=0.25 --hardTask=full --hardTaskTimeoutMs=30000",
     "typecheck": "tsc --noEmit",
+    "train:skills": "tsx src/learning/train-skills.ts",
     "extract-sprites": "tsx src/scripts/extract-sprites.ts"
   },
   "dependencies": {

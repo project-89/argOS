@@ -23,7 +23,7 @@ import { executeActions } from "../../cognition/cognition-system";
 import type { AgentAction } from "../../cognition/agent-mind";
 import { isSpeaking } from "../../cognition/timed-speech";
 import { getAgentVisualEntities, getAgentWorldCapabilities } from "../../cognition/world-capabilities";
-import { selectProceduralAction, tryStartProcedureExecution } from "../../cognition/procedural-skills";
+import { selectProceduralAction, skipLibrarySoftStep, tryStartProcedureExecution } from "../../cognition/procedural-skills";
 import { evaluateBehaviorPolicy } from "../../cognition/behavior-policy";
 import { getNextPlannedAction } from "../../cognition/planning-system";
 import { getCurrentActivity } from "../../cognition/schedule-system";
@@ -52,7 +52,11 @@ const usable = (action: { type?: string } | null | undefined): action is { type:
 
 function learnedStep(world: World, eid: number): Choice | undefined {
   // Proven procedures and goal macros compiled from earlier successes.
-  const procedural = selectProceduralAction(world, eid);
+  let procedural = selectProceduralAction(world, eid);
+  // A carried-over (library) procedure's remembered words are the scene's
+  // business offstage: step past them instead of stalling on speech.
+  for (let skips = 0; procedural && !usable(procedural) && skips < 4 && skipLibrarySoftStep(world, eid); skips++)
+    procedural = selectProceduralAction(world, eid);
   if (usable(procedural)) return { origin: "learned", action: { type: procedural.type, target: procedural.target, content: procedural.content } };
   // A learned/authored behaviour tree, where the host enables one.
   if (hasComponent(world, eid, BehaviorPolicy) && BehaviorPolicy.enabled[eid]) {

@@ -84,6 +84,7 @@ import { captureLLMDecision, resolveDecision } from "./bt-compiler";
 import { consumeForegroundAction, isDiscardedForegroundDecision, deferIntegratedForegroundSpeech, pollForegroundContinuation } from "./foreground-action-admission";
 import { chronicle } from "./simulation-chronicle";
 import { onProcedureActionResult, upsertProceduralSkillFromInteraction } from "./procedural-skills";
+import { compileExecutedPlanToProcedure } from "./plan-compiler";
 import { advanceGoalTick, expireStaleGoals } from "./autonomous-goals";
 import { setGoalContract } from "./goal-contract";
 import { snapshotActorContinuation } from "./actor-continuation";
@@ -3947,6 +3948,12 @@ export function advanceAgentPlan(world: World, agentEid: number, expected?: Plan
       if (!advanced) {
         if (String(Plan.status[planEid]) !== "completed") return false;
         const agentName = Name.value[agentEid];
+        // Every step advanced on its own successful receipt: keep how it was
+        // done (not a claim that the goal is achieved). See plan-compiler.
+        try {
+          const compiled = compileExecutedPlanToProcedure(world, agentEid, goalEid, planEid);
+          if (compiled.ok) console.log(`[Learning] ${agentName} kept how they did it (executed plan): ${compiled.signature}`);
+        } catch { /* learning never blocks plan completion */ }
 
         // If the goal has a *deterministically evaluable* success contract, do not auto-complete it
         // just because the plan ran out of steps. The GoalEvaluationSystem will complete it based on ECS state.

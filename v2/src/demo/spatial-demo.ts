@@ -56,7 +56,7 @@ import { createTownScenario, type TownFixture } from "./spatial-town-fixtures";
 import { createSpatialTownGrowth, townGrowthSites, TOWN_GROWTH_ATTEMPTS, type TownGrowthAddition, type TownGrowthSnapshot, type TownGrowthSite } from "./spatial-town-growth";
 import { createSpatialTownLife, townEvolutionConfig } from "./spatial-town-life";
 import { createStoryTownScenario } from "./spatial-town-story";
-import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSaltmereAuthorCast } from "./spatial-lovecraft-town";
+import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSaltmereAuthorCast, SALTMERE_SCENARIO_TERMS } from "./spatial-lovecraft-town";
 import { createHouseholdScenario, HOUSEHOLD_GROWTH_SITES } from "./spatial-household";
 import { createHouseholdChallengeScenario } from "./spatial-household-challenge";
 import type { PlanningEvent } from "../cognition/planning-telemetry";
@@ -75,6 +75,8 @@ import { describeSpatialCatalog, getSpatialAssetEntry, loadSpatialAssetCatalog, 
 import { getSpeakingActivity, getUtteranceScript, readLocalSpeechOpportunity, setUtteranceVoiceGate, withinEarshot, type UtteranceVoiceGate } from "../cognition/timed-speech";
 import { setAttentionProvider, type AttentionReading } from "../runtime/attention";
 import { setOffstageHost } from "../runtime/offstage";
+import { setSkillWorldAdapter } from "../learning/world-adapter";
+import type { SkillLibraryConfig } from "../learning/session";
 import { materializeApprovedEntity } from "../engineering/entity-materialization";
 /** How long a controlled body waits for a natural gap before cutting in. */
 const SAY_GAP_WAIT_MS = 3500;
@@ -113,7 +115,12 @@ type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; sce
   /** Explicit check seed only; never selected by the ordinary town UI. */
   townFixture?: TownFixture;
   /** Trusted authored package. It grants no model or builder mutation authority. */
-  world?: SpatialScenarioDefinition };
+  world?: SpatialScenarioDefinition;
+  /** Cross-session skill library: seed residents from it, harvest into it at stop. Off unless set. */
+  skillLibrary?: SkillLibraryConfig;
+  /** Headless skill training (src/learning/train-skills): no spirits, God autopilot or
+   * world evolution, so a session's spend goes to residents' planning and scenes. */
+  training?: boolean };
 const blueprintFor = (options: Options) => options.world?.blueprint ?? (options.scenario === "blackout"
   ? options.layout === "extended" ? extendedBlackoutSpatialBlueprint() : blackoutSpatialBlueprint() : INITIAL_SPATIAL_BLUEPRINT);
 
@@ -196,6 +203,15 @@ export class SpatialDemo {
       return matches[0];
     });
     this.install(this.blueprint, true);
+    // What the skill library may know about this package's things and people.
+    setSkillWorldAdapter(w, {
+      scenarioId: options.skillLibrary?.scenarioId ?? options.world?.id,
+      isScenarioEntity: eid => this.items.has(eid),
+      scenarioVerbs: options.story ? STORY_VERBS : [],
+      scenarioTerms: options.story === "coastal-mystery" ? SALTMERE_SCENARIO_TERMS : [],
+      entityKind: eid => this.visuals.get(eid)?.asset,
+      homeRoom: eid => { const home = options.world?.residents.find(r => r.name === Name.value[eid])?.homeRoomId; return home ? this.byId.get(home) : undefined; },
+    });
     if (options.scenario === "blackout") this.blackout = createBlackout(w, {
       panel: this.byId.get("lighting-panel")!, box: this.byId.get("supply-box")!, lamp: this.byId.get("apartment-lamp")!,
       parts: [this.byId.get("amber-cartridge")!, this.byId.get("blue-cartridge")!],
@@ -428,9 +444,10 @@ export class SpatialDemo {
     const sim = await createSimulation({ name: options.world?.title ?? (blackout ? "Argos · The Blackout" : "Argos · A place to live"), preset: "minimal", enableAI: live,
       ...(options.story === "coastal-mystery" ? { worldSpecification: createLovecraftWorldSpecification(!!options.development) } : {}),
       hostOfficeTools: false, cognitionController: "priority", experienceReconsideration: true, narrativeMind: true,
-      enablePlanning: live, enableReflection: live, enableSpirits: options.evolving === true, enableNarrativeEngine: false,
-      evolution: options.evolving ? options.development ? DEVELOPMENT_EVOLUTION_CONFIG : townEvolutionConfig(!!options.story) : false, codingDaemons: coding,
-      godAutopilot: options.evolving ? { enabled: true, minRunIntervalMs: 30_000, minPriority: "normal", maxMessagesPerRun: 3 } : false, enableServer: false,
+      enablePlanning: live, enableReflection: live, enableSpirits: options.evolving === true && !options.training, enableNarrativeEngine: false,
+      evolution: options.evolving && !options.training ? options.development ? DEVELOPMENT_EVOLUTION_CONFIG : townEvolutionConfig(!!options.story) : false, codingDaemons: coding,
+      godAutopilot: options.evolving && !options.training ? { enabled: true, minRunIntervalMs: 30_000, minPriority: "normal", maxMessagesPerRun: 3 } : false, enableServer: false,
+      ...(options.skillLibrary ? { skillLibrary: { ...options.skillLibrary, scenarioId: options.skillLibrary.scenarioId ?? options.world?.id } } : {}),
       dualLoop: true, ecsTickRate: 10, ecsDeltaMs: 100, maxWorldEntities: options.world?.maxWorldEntities ?? 200,
       rooms: blueprint.rooms.map(r => ({ name: r.name, description: r.description, x: r.entry.x, y: r.entry.y })),
       agents: options.world ? options.world.residents.map(spatialAgentConfig) : [
@@ -1619,6 +1636,9 @@ export class SpatialDemo {
     this.stopped = true;
     const errors: unknown[] = [];
     const cleanup = (run: () => void) => { try { run(); } catch (error) { errors.push(error); } };
+    // Harvest what residents learned before pending work is cancelled, so a
+    // cancelled step is not counted against a skill.
+    if (this.sim.harvestSkillLibrary) cleanup(() => { this.sim.harvestSkillLibrary!(); });
     if (this.timer) clearInterval(this.timer);
     if (this.deadline) clearTimeout(this.deadline);
     cleanup(() => this.houseSpirit?.stop());

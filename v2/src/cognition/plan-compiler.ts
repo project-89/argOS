@@ -1,7 +1,8 @@
 import type { World } from "../ecs/world";
-import { addComponent, addEntity, hasComponent, getRelationTargets } from "bitecs";
-import { Goal, Memory, Plan, PlanningDecision } from "../ecs/components";
+import { addComponent, addEntity, hasComponent, getRelationTargets, query } from "bitecs";
+import { Agent, Goal, Memory, Name, Plan, PlanningDecision } from "../ecs/components";
 import { HasMemory, HasGoal, HasPlan } from "../ecs/relations";
+import { setCompletedGoalPlanListener } from "./plan-state";
 import { ensureGoalSignature, goalSignatureId } from "./goal-contract";
 import {
   getProceduralSkillBySignature,
@@ -252,3 +253,86 @@ export function compileCompletedPlanToProceduralMacro(
     ? { ok: false, reason: "plan too small to compile" }
     : compiled;
 }
+
+// ---------------------------------------------------------------------------
+// "How I did it": executed-plan procedures
+// ---------------------------------------------------------------------------
+
+const compiledPlans = new WeakMap<World, Set<string>>();
+
+/** Compile the steps of a plan that the resident actually executed (each one
+ * advanced only on its own successful native receipt) into a procedure, even
+ * when the goal itself was judged subjectively, offstage, or not at all. This
+ * records how something was done, not that the goal was achieved, so it is
+ * stored as a "__plan_macro__" that is never auto-replayed in this world; the
+ * skill library harvests it (src/learning). Reconciled steps, evidence waits and
+ * pending decisions are not demonstrations and are refused. Once per plan. */
+export function compileExecutedPlanToProcedure(
+  world: World,
+  agentEid: number,
+  goalEid: number,
+  planEid: number,
+): { ok: true; signature: string } | { ok: false; reason: string } {
+  if (!hasComponent(world, planEid, Plan) || !hasComponent(world, goalEid, Goal)) return { ok: false, reason: "missing plan or goal" };
+  if (Plan.goalEid[planEid] !== goalEid || !getRelationTargets(world, agentEid, HasGoal).includes(goalEid)
+    || !getRelationTargets(world, agentEid, HasPlan).includes(planEid)) return { ok: false, reason: "plan/goal ownership mismatch" };
+  if (hasComponent(world, planEid, PlanningDecision)) return { ok: false, reason: "plan holds a pending decision" };
+  const status = String(Plan.status[planEid] || "");
+  if (status !== "completed" && status !== "active") return { ok: false, reason: `plan ${status || "unknown"}` };
+  const key = `${planEid}:${Plan.createdAt[planEid] || 0}`;
+  let seen = compiledPlans.get(world);
+  if (!seen) { seen = new Set(); compiledPlans.set(world, seen); }
+  if (seen.has(key)) return { ok: false, reason: "plan already compiled" };
+
+  let steps: PlanStep[];
+  try {
+    const parsed = JSON.parse(String(Plan.steps[planEid] || "[]"));
+    if (!Array.isArray(parsed)) return { ok: false, reason: "plan steps not an array" };
+    steps = parsed as PlanStep[];
+  } catch { return { ok: false, reason: "invalid plan steps JSON" }; }
+  const executed = status === "completed" ? steps : steps.slice(0, Math.max(0, Math.min(steps.length, Plan.currentStep[planEid] || 0)));
+  if (executed.some(step => !step || step.resolution)) return { ok: false, reason: "plan includes reconciled rather than executed steps" };
+  if (executed.some(step => step.actionType === "wait" || step.waitUntil !== undefined)) return { ok: false, reason: "evidence waits require a condition-preserving procedure format" };
+  const procedureSteps = planStepsToProcedureSteps(executed);
+  if (procedureSteps.filter(step => step.type !== "wait" && step.type !== "think").length < 2) return { ok: false, reason: "too few executed actions to compile" };
+
+  const goalDesc = String(Goal.description[goalEid] || "").trim();
+  if (!goalDesc) return { ok: false, reason: "empty goal description" };
+  seen.add(key);
+  const signature = `plan:${normalizeGoalKey(goalDesc)}|${fnv1a32(JSON.stringify(procedureSteps))}`;
+  const now = Date.now();
+  const existing = getProceduralSkillBySignature(world, agentEid, signature);
+  if (existing) {
+    existing.skill.stats.successes += 1;
+    existing.skill.stats.lastUsedAt = now;
+    Memory.content[existing.memoryEid] = serializeProceduralSkillV1(existing.skill);
+    Memory.lastRecalled[existing.memoryEid] = now;
+    return { ok: true, signature };
+  }
+  const skill: ProceduralSkillV1 = {
+    kind: "procedure_v1", signature, name: `How I: ${goalDesc.slice(0, 80)}`,
+    trigger: { affordance: "__plan_macro__", goal: goalDesc.slice(0, 300) },
+    steps: procedureSteps,
+    stats: { successes: 1, failures: 0, createdAt: now, lastUsedAt: now },
+  };
+  const memoryEid = addEntity(world);
+  addComponent(world, memoryEid, Memory);
+  addComponent(world, agentEid, HasMemory(memoryEid));
+  Memory.type[memoryEid] = "procedural";
+  Memory.content[memoryEid] = serializeProceduralSkillV1(skill);
+  Memory.importance[memoryEid] = 0.5;
+  Memory.emotionalValence[memoryEid] = 0;
+  Memory.timestamp[memoryEid] = now;
+  Memory.lastRecalled[memoryEid] = now;
+  Memory.recallCount[memoryEid] = 0;
+  return { ok: true, signature };
+}
+
+// A goal completed while its plan was mid-way (a subjective or offstage
+// judgement, a social closure, a verified contract): keep the executed prefix.
+setCompletedGoalPlanListener((world, goal, plan) => {
+  const owner = [...query(world, [Agent])].find(agent => getRelationTargets(world, agent, HasPlan).includes(plan));
+  if (owner === undefined) return;
+  const compiled = compileExecutedPlanToProcedure(world, owner, goal, plan);
+  if (compiled.ok) console.log(`[Learning] ${Name.value[owner]} kept how they did it (executed plan): ${compiled.signature}`);
+});

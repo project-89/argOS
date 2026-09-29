@@ -17,6 +17,13 @@ export const LOVECRAFT_TOWN_STYLE = Object.freeze({
   scope: "Walking, looking closely, talking, eating, sitting, phones, the supplies box and whatever objects the story brings. Weather, sounds, arrivals, lights and messages come through the world's existing host grants; new mechanics come through God.",
 });
 
+/** Story names and phrases that only mean something in Saltmere. A learned
+ * skill whose intention or words mention one is scoped to this scenario in the
+ * cross-session skill library (src/learning). */
+export const SALTMERE_SCENARIO_ID = "saltmere-what-the-sea-was-paid-v2";
+export const SALTMERE_SCENARIO_TERMS = Object.freeze(["Saltmere", "Marrow Star", "Three Hooks", "hooked mark", "hooks", "logbook",
+  "what the sea was paid", "sea was paid", "Hale", "Voss", "Wick", "Brand", "Callum", "Agnes"]);
+
 export const LOVECRAFT_TOWN_NARRATOR_PROMPT = `You are THE NARRATOR of Saltmere — the author of a gripping, character-driven coastal mystery. Your residents are real people with secrets and motives; your job is to put pressure on those secrets until something gives, and to keep the uncanny edge alive without ever explaining it.
 
 THE STORY BIBLE — "What the Sea Was Paid" (for your eyes; residents know only their own part)
@@ -325,7 +332,7 @@ function storyProps(scenario: SpatialScenarioDefinition): SpatialProp[] {
 
 export function createLovecraftTownScenario(): SpatialScenarioDefinition {
   const scenario = createTownScenario();
-  scenario.id = "saltmere-what-the-sea-was-paid-v2";
+  scenario.id = SALTMERE_SCENARIO_ID;
   scenario.title = "Argos · Saltmere";
   scenario.blueprint.id = scenario.id;
   const oldPlaces = scenario.blueprint.rooms.map(room => ({ old: room.name, name: PLACES[room.id].name }));

@@ -21,6 +21,12 @@ if (story && (!(town || household) || !evolving)) throw Error("--story requires 
 if (evolving && !(town || household)) throw Error("--evolving requires --town or --household; other spatial worlds retain their existing authority");
 if (town && household || (town || household) && (process.argv.includes("--blackout") || process.argv.includes("--extended-blackout"))) throw Error("Choose one town, household or Blackout scenario");
 if (live && !process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim()) throw new Error("Live NPC cognition requires GOOGLE_GENERATIVE_AI_API_KEY. Omit --live for manual physics testing.");
+// Cross-session skill library (src/learning): off unless --skills [path] or
+// ARGOS_SKILL_LIBRARY is given. Seeds residents with promoted skills at start
+// and harvests what they learned at stop; memories never carry over.
+const skillsFlag = process.argv.indexOf("--skills");
+const skillsArg = skillsFlag >= 0 && process.argv[skillsFlag + 1] && !process.argv[skillsFlag + 1].startsWith("--") ? process.argv[skillsFlag + 1] : undefined;
+const skillLibraryPath = skillsFlag >= 0 ? skillsArg ?? process.env.ARGOS_SKILL_LIBRARY?.trim() ?? "" : process.env.ARGOS_SKILL_LIBRARY?.trim() || undefined;
 const token = randomBytes(24).toString("hex"), port = Number(process.env.ARGOS_SPATIAL_PORT ?? 0);
 if (!Number.isSafeInteger(port) || port < 0 || port > 65535 || port > 0 && port < 1024) throw new Error("Invalid local port");
 await mkdir(resolve("recordings"), { recursive: true });
@@ -33,7 +39,8 @@ const demo = await SpatialDemo.create({ live, evolving, seconds: Number(process.
   ...(town ? { scenario: "town" as const } : {}),
   ...(household ? { scenario: "household" as const } : {}),
   ...(process.argv.includes("--blackout") || process.argv.includes("--extended-blackout") ? { scenario: "blackout" as const } : {}),
-  ...(process.argv.includes("--extended-blackout") ? { layout: "extended" as const } : {}) });
+  ...(process.argv.includes("--extended-blackout") ? { layout: "extended" as const } : {}),
+  ...(skillLibraryPath !== undefined ? { skillLibrary: { path: skillLibraryPath || undefined, seed: true, harvest: true } } : {}) });
 const receiver = await createSpatialDemoApp({ demo, token, directory });
 // Stall log: if the server thread is ever blocked long enough to freeze the
 // viewer, the session's recording folder says when, for how long, and what ran.
