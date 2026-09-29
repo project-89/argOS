@@ -62,9 +62,26 @@ Everything is data (`saltmere-land.ts`), so the Weaver can grow it.
 
 | life | alive | model calls | notes |
 |---|---|---|---|
-| 1 | 10/10 | 61 | town built on day 1 (workshop, net rack, 5 houses) |
-| 2 | 10/10 | 15 | all on day 1; days 2–5: none |
-| 3 | 10/10 | 14 | days 2–5: none |
+| 1 | 10/10 | 53 | town built on day 1–2 (workshop, net rack, 5 houses) |
+| 2 | 10/10 | 18 | almost all on day 1 |
+| 3 | 10/10 | 17 | almost all on day 1 |
+
+## Live result (Gemini 3.8 flash plans every trade, the Weaver grows the world; 3 days × 2 lives)
+
+| life | alive | model calls | by day | built |
+|---|---|---|---|---|
+| 1 | 10/10 | 72 | 70 · 1 · 1 | workshop, net rack, 5 houses (day 1) |
+| 2 | 10/10 | 31 | 28 · 1 · 2 | workshop, net rack, 5 houses (day 1) |
+
+In total: 103 planner calls and about 168k tokens, with 1 malformed reply.
+
+- **The Weaver invented an axe.** Axes ran short (four in the whole town), so
+  it designed a hafted stone axe: knapped from quarry stone and bound to a
+  firewood handle with spun twine at the workbench. The design validated and
+  residents used it.
+- **An earlier live run found a real bug.** A builder died of thirst ten
+  hours into one building job, with coin in hand and water on the stall.
+  Urgent needs now break off work.
 
 Earlier versions died instructively:
 - **Wood ran out on day 1.** Trees now grow back.
