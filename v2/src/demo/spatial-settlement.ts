@@ -24,7 +24,7 @@ const ROOMS: Record<string, Omit<SpatialRoom, "name" | "description">> = {
   spring: { id: "settle-spring", bounds: { minX: 60, minY: 15, maxX: 90, maxY: 40 }, entry: { x: 75, y: 36 }, floor: "#86a07d", environment: "outdoor" },
   quarry: { id: "settle-quarry", bounds: { minX: 100, minY: 5, maxX: 136, maxY: 40 }, entry: { x: 118, y: 36 }, floor: "#9b9a90", environment: "outdoor" },
 };
-const NET_HOUSE: SpatialRoom = { id: "settle-net-house", name: "The Net House", description: "The old communal net house, the one building standing: a long rack for drying and mending nets.",
+const NET_HOUSE: SpatialRoom = { id: "settle-net-house", name: "The Net House", description: "The old communal net house, the one building the sea left standing, its roof torn but holding: a long rack for drying and mending nets, and the old supplies box in the corner.",
   bounds: { minX: 90, minY: 30, maxX: 100, maxY: 40 }, entry: { x: 95, y: 36 }, floor: "#8c9690", environment: "indoor",
   building: { style: "workshop", wallColor: "#a6b0a4", roofColor: "#485d5b", front: "south" } };
 
@@ -63,7 +63,8 @@ function placeThings(land: LandDef): Array<{ thing: LandDef["things"][number]; r
 const ASSET: Record<string, string> = { stall: "market-stall", hearth: "campfire", "workshop-plot": "plot", "house-plot": "plot", "net-rack": "drying-rack" };
 
 export function createSettlementBlueprint(land: LandDef = SALTMERE_LAND): SpatialBlueprint {
-  const rooms: SpatialRoom[] = land.places.filter(p => ROOMS[p.id]).map(p => ({ ...ROOMS[p.id], name: p.name, description: p.description }));
+  const rooms: SpatialRoom[] = land.places.filter(p => ROOMS[p.id]).map(p => ({ ...ROOMS[p.id], name: p.name,
+    description: DROWNED_TOWN.places[p.id as keyof typeof DROWNED_TOWN.places] ?? p.description }));
   rooms.push(structuredClone(NET_HOUSE));
   const props: SpatialProp[] = [], doors: SpatialBlueprint["doors"] = [];
   const add = (prop: Omit<SpatialProp, "elevation" | "rotationY" | "reach"> & Partial<SpatialProp>) =>
@@ -97,6 +98,31 @@ export function createSettlementBlueprint(land: LandDef = SALTMERE_LAND): Spatia
 const PLACE_OF_ROOM = Object.fromEntries(Object.entries(ROOMS).map(([place, room]) => [room.id, place]));
 export const settlementPlaceOfRoom = (roomId: string) => PLACE_OF_ROOM[roomId] ?? (roomId === NET_HOUSE.id ? "common" : undefined);
 
+/** The drowned town. Six weeks ago, the night the Marrow Star talk stirred up
+ * again, the sea rose out of a flat calm and took old Saltmere: the cottages,
+ * the Waking Gull, the harbour. Only the Net House stood. Nobody names what
+ * some of them think they saw in the water; the horror stays at the edges. */
+export const DROWNED_TOWN = {
+  premise: "Six weeks ago the sea rose out of a flat calm at slack water, with no storm and no wind, and took old Saltmere: the cottages, the Waking Gull, the harbour wall. It went back out as quietly as it came. Only the old Net House stood. The survivors sleep in tents on the Common and are rebuilding from bare ground. Some say the sea came for what was taken from it; nobody says what they think they saw moving out past the bar.",
+  places: {
+    common: "The high green where the survivors pitched their tents after the night the sea came. A market stall, a campfire, a chopping stump and staked-out plots where the new town is meant to rise.",
+    shore: "Grey shingle where the harbour wall used to be. The fish run close in again, though some that come up are wrong in ways nobody mentions.",
+    wood: "Birches above the tide line, and brambles. The sea never reached this far.",
+    spring: "The stone-lined spring on the hill. Cold and sweet, and the only water nobody trusts the sea not to have touched.",
+    quarry: "Loose stone at the foot of an old cut face, now the town's only building stone.",
+    field: "A strip of blue-flowering flax on the landward side, spared by the water.",
+  },
+};
+const TRADE_NIGHT: Record<string, string> = {
+  fisher: "I was mending gear on the slip when the water went glass-flat and then came up the slip and kept coming. I ran. I still go out every morning, because the town has to eat.",
+  cook: "I had the Gull's lamps lit when the water came through the door. I lost the kitchen, the tables, everything. I cook over a campfire now.",
+  "net-mender": "The Net House is the only roof left standing. I counted the nets that came back tangled with something that was not weed and did not say so.",
+  woodcutter: "I was up in the birches when it happened and saw the whole of it from above: the water coming in without a wave.",
+  grower: "The flax field is on the landward side, and I stood in it and watched the roofs go under.",
+  forager: "I spent that night pulling people out of the shallows. Some of them I could not reach.",
+  builder: "Everything I ever built in Saltmere is under the water. Now I start again on bare plots, with bare hands.",
+};
+
 /** Where a trade works (a land place id). */
 const WORKPLACE: Record<string, string> = { fisher: "shore", cook: "common", "net-mender": "common", woodcutter: "wood", grower: "field", forager: "wood", builder: "common" };
 
@@ -114,7 +140,7 @@ export function createSettlementScenario(land: LandDef = SALTMERE_LAND): Spatial
       homeRoomId: undefined, phoneId: undefined, phoneContact: undefined,
       initialGoal: { description: r.trade === "builder" ? "Raise the town: a workshop first, then houses so people can leave their tents."
         : `Keep Saltmere supplied as its ${r.trade}: ${duties.map(d => d.item.replace(/-/g, " ")).join(" and ")} on the market stall.`, priority: 6, kind: "custom" },
-      initialObservation: `Dawn on Saltmere Common. The town is tents, the old Net House, a market stall and bare plots; everything else has to be made. You are the town's ${r.trade}.`,
+      initialObservation: `Dawn on Saltmere Common, six weeks after the sea came. The town is tents, the old Net House, a market stall and bare plots; everything else has to be made again. You are the town's ${r.trade} now.`,
       schedule: [
         { name: "work", startHour: 7, duration: 10, location: work, priority: 6, interruptible: true, description: `Work as the town's ${r.trade}.` },
         { name: "supper at the campfire", startHour: 18, duration: 3, location: roomName("common"), priority: 5, interruptible: true, description: "Eat, trade, talk by the fire." },
@@ -122,6 +148,15 @@ export function createSettlementScenario(land: LandDef = SALTMERE_LAND): Spatial
       ],
       needs: { hunger: 20, energy: 90 } };
     resident.role = `${person.role}; the town's ${r.trade}`;
+    // The drowned town: the same people, pasts and secrets, after the night the sea came.
+    resident.systemPrompt = `${resident.systemPrompt ?? ""}\n${DROWNED_TOWN.premise} You live in a tent on the Common now, and you are the town's ${r.trade}. The places in your memories (houses, the Gull, the harbour) are gone.`;
+    if (resident.past) {
+      const night = { period: "six weeks ago, the night the sea came", recollection: TRADE_NIGHT[r.trade] ?? TRADE_NIGHT.builder,
+        emotionalTone: "shaken, grieving, stubborn", importance: .95, selfBelief: "I survived the night the sea came, and I owe the town my work.",
+        meaning: "Old Saltmere is gone; whatever I hid there may be gone too, or may not.", cues: ["the sea", "slack water", "tents", "the Net House"],
+        provenance: "authored-history" as const };
+      resident.past = { ...resident.past, memories: [night, ...[...resident.past.memories].sort((a, b) => b.importance - a.importance)].slice(0, 6) };
+    }
     residents.push(resident);
     const room = blueprint.rooms.find(x => x.id === start.id)!;
     blueprint.spawns.push({ id: person.id, roomId: start.id, name: person.name, assetId: person.assetId,
