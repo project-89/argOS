@@ -14,18 +14,18 @@
 import { getRelationTargets, hasComponent, query } from "bitecs";
 import type { World } from "../../ecs/world";
 import type { SystemRegistry } from "../../ecs/dynamic-systems";
-import { Agent, BehaviorPolicy, Goal, Mind, Name, Room, WorkingMemoryIdentity } from "../../ecs/components";
+import { Agent, BehaviorPolicy, Goal, Mind, Name, Plan, Room, WorkingMemoryIdentity } from "../../ecs/components";
 import { HasGoal, SittingOn } from "../../ecs/relations";
 import { getRoomForEntity } from "../../ecs/location";
 import { readSimulationTime } from "../../ecs/simulation-time";
 import { isSimulationResourceBusy } from "../simulation-timeline";
-import { executeActions } from "../../cognition/cognition-system";
+import { advanceAgentPlan, executeActions } from "../../cognition/cognition-system";
 import type { AgentAction } from "../../cognition/agent-mind";
 import { isSpeaking } from "../../cognition/timed-speech";
 import { getAgentVisualEntities, getAgentWorldCapabilities } from "../../cognition/world-capabilities";
 import { selectProceduralAction, skipLibrarySoftStep, tryStartProcedureExecution } from "../../cognition/procedural-skills";
 import { evaluateBehaviorPolicy } from "../../cognition/behavior-policy";
-import { getNextPlannedAction } from "../../cognition/planning-system";
+import { getCurrentStep, getNextPlannedAction, getPlanForGoal } from "../../cognition/planning-system";
 import { getCurrentActivity } from "../../cognition/schedule-system";
 import { getWorkingMemory } from "../../cognition/working-memory";
 import { getOffstageLife, isOffstage, isOwnMindResident, isStructure, nextDriverDelay, offstageAdmitting, offstageRandom,
@@ -69,9 +69,42 @@ function learnedStep(world: World, eid: number): Choice | undefined {
   }
 }
 
-function planStep(world: World, eid: number): Choice | undefined {
+/** Inner beats (a thought, a pause) are not acts anyone could miss: offstage they
+ * simply pass. Speech waits for a scene to have the person say it. */
+const INNER_BEATS = new Set(["think", "wait", "reflect", "rest", "plan", "remember"]);
+function currentPlanSteps(world: World, eid: number) {
+  return getRelationTargets(world, eid, HasGoal).filter(id => hasComponent(world, id, Goal) && Goal.status[id] === "active")
+    .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0))
+    .flatMap(goalEid => { const planEid = getPlanForGoal(world, eid, goalEid), step = planEid === undefined ? null : getCurrentStep(planEid);
+      return planEid !== undefined && step && String(Plan.status[planEid]) === "active" ? [{ goalEid, planEid, step }] : []; });
+}
+function passInnerBeats(world: World, eid: number) {
+  for (let i = 0; i < 4; i++) {
+    const row = currentPlanSteps(world, eid)[0];
+    if (!row || !INNER_BEATS.has(row.step.actionType)) return;
+    if (!advanceAgentPlan(world, eid, { planEid: row.planEid, goalEid: row.goalEid, currentStep: Plan.currentStep[row.planEid] })) return;
+  }
+}
+/** A scene had this person say something: if their plan was waiting to say it
+ * (to that person, or to anyone), that step is done. Returns whether it advanced. */
+export function advanceOffstageSpeechStep(world: World, eid: number, targetName?: string): boolean {
+  const wanted = targetName?.trim().toLowerCase();
+  for (const row of currentPlanSteps(world, eid)) {
+    if (row.step.actionType !== "speak") continue;
+    const intended = String(row.step.target ?? "").trim().toLowerCase();
+    if (intended && wanted && intended !== wanted) continue;
+    if (advanceAgentPlan(world, eid, { planEid: row.planEid, goalEid: row.goalEid, currentStep: Plan.currentStep[row.planEid] })) { passInnerBeats(world, eid); return true; }
+  }
+  return false;
+}
+
+function planStep(world: World, eid: number): Choice | "hold" | undefined {
+  passInnerBeats(world, eid);
   const goal = topGoal(world, eid);
   const step = (goal !== undefined ? getNextPlannedAction(world, eid, { selectedGoalId: goal }) : null) ?? getNextPlannedAction(world, eid);
+  // Something to say to someone here: stay for the scene that voices it rather
+  // than drifting off on the routine. (An absent listener fails the plan instead.)
+  if (step?.actionType === "speak") return "hold";
   if (!step || PLAN_SKIPS.has(step.actionType)) return;
   return { origin: "plan", action: { type: step.actionType, ...(step.target ? { target: step.target } : {}), ...(step.content ? { content: step.content } : {}) } };
 }
@@ -171,13 +204,13 @@ export function runOffstageDriver(world: World, registry: SystemRegistry): numbe
     if (due === undefined) { life.nextDriverAtSimMs.set(eid, now + Math.round(nextDriverDelay(life) * offstageRandom(life))); continue; }
     if (now < due) continue;
     life.nextDriverAtSimMs.set(eid, now + nextDriverDelay(life));
-    let choice: Choice | "stroll" | undefined;
+    let choice: Choice | "stroll" | "hold" | undefined;
     try {
       choice = queuedSceneStep(world, life, eid) ?? learnedStep(world, eid) ?? planStep(world, eid) ?? scheduleStep(world, eid) ?? idleStep(world, eid, life);
     } catch (error) {
       console.warn(`[Offstage] could not choose for ${Name.value[eid]}: ${error instanceof Error ? error.message : error}`); continue;
     }
-    if (!choice) continue;
+    if (!choice || choice === "hold") continue;
     if (choice === "stroll") {
       if (life.host?.stroll?.(eid)) { life.stats.outcomes.idle.started++; life.stats.outcomes.idle.succeeded++; dispatched++;
         const line = `${Name.value[eid]} (offstage, idle): strolls a few steps`; life.host.record?.("offstage", line); }

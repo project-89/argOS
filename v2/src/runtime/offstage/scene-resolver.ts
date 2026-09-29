@@ -31,6 +31,7 @@ import { commitPreparedAffectUpdate, prepareAffectUpdate, snapshotAffect } from 
 import { getCurrentActivity } from "../../cognition/schedule-system";
 import { getCurrentStep, getPlanForGoal } from "../../cognition/planning-system";
 import { retireGoalPlans } from "../../cognition/plan-state";
+import { advanceOffstageSpeechStep } from "./offstage-driver";
 import { recordGoalAttemptActivity } from "../../cognition/goal-attempt";
 import { getAgentVisualEntities, getAgentWorldCapabilities } from "../../cognition/world-capabilities";
 import { getSpiritSystemState } from "../../spirits/spirit-system";
@@ -144,7 +145,9 @@ function occupantInput(world: World, eid: number, others: number[]) {
     const plan = getPlanForGoal(world, eid, goal), step = plan === undefined ? null : getCurrentStep(plan);
     return { goalId: goal, description: Goal.description[goal], kind: Goal.kind[goal] || "custom", priority: Goal.priority[goal],
       progress: Math.round(Math.max(0, Math.min(100, Goal.progress[goal] || 0))) / 100, progressible: isProgressibleGoal(goal),
-      ...(step ? { nextPlannedStep: clip(step.description, 200) } : {}) };
+      ...(step ? { nextPlannedStep: clip(step.description, 200) } : {}),
+      // What they mean to say next: if the scene has them say it, their plan moves on.
+      ...(step?.actionType === "speak" ? { meansToSay: { to: step.target || "whoever is here", gist: clip(step.content || step.description, 200) } } : {}) };
   });
   const impressions = getAgentImpressions(world, eid).filter(id => otherNames.has(Impression.targetName[id])).slice(-8)
     .map(id => ({ of: Impression.targetName[id], trait: Impression.trait[id], valence: Impression.valence[id] }));
@@ -193,7 +196,7 @@ Answer with JSON only:
  "goalProgress":[{"actor":"<name>","goalId":<id>,"delta":0.0-0.35,"note":"what they got done"}],
  "build":[{"actor":"<name>","goalId":<id>,"assetId":"<catalog assetId>","name":"what it is called","description":"what it looks like","near":"<object in this place, optional>"}],
  "memories":[{"actor":"<name>","text":"first person: what this stretch meant to me","feeling":{"feeling":"one or two words","valence":-1..1,"arousal":0..1}}]}
-Rules: dialogue is the key lines only (they are remembered word for word). actions are what they do next, carried out for real by their bodies; use exact names from the place: "move" goes to one of the place's exits (another place), "interact" uses one of an object's verbs. goalProgress only for goals marked progressible, sized to the hands-on work possible in the elapsed time. build only for a goal whose outcome is a thing in the world and whose progress reaches 1.0 in this scene; use a catalog assetId when one fits, otherwise omit assetId and describe the finished thing. Give every person a memory. Omit anything that did not happen.`;
+Rules: dialogue is the key lines only (they are remembered word for word). actions are what they do next, carried out for real by their bodies; use exact names from the place: "move" goes to one of the place's exits (another place), "interact" uses one of an object's verbs. goalProgress only for goals marked progressible, sized to the hands-on work possible in the elapsed time. build only for a goal whose outcome is a thing in the world and whose progress reaches 1.0 in this scene; use a catalog assetId when one fits, otherwise omit assetId and describe the finished thing. Someone who meansToSay something usually gets it said in this scene, in their own words and way (it moves their plans on), unless the moment genuinely stops them. Give every person a memory. Omit anything that did not happen.`;
 
 // ---------------------------------------------------------------------------
 // Output validation
@@ -332,6 +335,8 @@ function applyScene(world: World, life: OffstageLife, s: ApplyInput): void {
       expectedEndSimMs: Math.round(start + span * (i + 1) / lines.length), completedAtSimMs: Math.round(start + span * (i + 1) / lines.length) };
     const turn = recordCommittedSpeech(world, speaker, line.line, target === undefined ? undefined : Name.value[target], Date.now(), { audience, interval });
     if (!turn) { drop(); return; }
+    // Saying it in the scene is saying it: a plan waiting on this speech moves on.
+    if (isOffstage(world, speaker)) advanceOffstageSpeechStep(world, speaker, target === undefined ? undefined : Name.value[target]);
     life.sceneLines.add(sceneLineKey(Name.value[speaker], turn.content));
     if (life.sceneLines.size > 512) life.sceneLines.delete(life.sceneLines.values().next().value!);
     // A speaker promoted mid-call keeps the heard turn, but a public cue now

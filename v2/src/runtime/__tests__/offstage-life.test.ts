@@ -4,7 +4,7 @@ const generate = jest.fn<(...args: any[]) => Promise<{ text: string }>>();
 jest.unstable_mockModule("ai", () => ({ ...ai, generateText: generate }));
 const { query, addComponent, addEntity } = await import("bitecs");
 const { SpatialDemo } = await import("../../demo/spatial-demo");
-const { Goal, Memory, Name, Position } = await import("../../ecs/components");
+const { Goal, Memory, Name, Plan, Position } = await import("../../ecs/components");
 const { HasMemory } = await import("../../ecs/relations");
 const { getRoomForEntity } = await import("../../ecs/location");
 const { setAttentionProvider } = await import("../attention");
@@ -285,5 +285,37 @@ describe("offstage scene resolver", () => {
     generate.mockImplementationOnce(async () => { d.stop(); return reply; });
     expect(await runOffstageScene(w())).toMatchObject({ status: "stale" });
     expect(getSocialDialogue(w(), mara)).toHaveLength(0);
+  });
+});
+
+describe("offstage plans get past talk", () => {
+  test("inner beats pass on their own; a speak step waits for a scene to have them say it, then the plan moves on", async () => {
+    install(); offstage("Mara", "Ivo");
+    const mara = named("Mara"), ivo = named("Ivo");
+    const goal = customGoal(ivo, "Tell Mara what I saw at the Net House", 0, 90);
+    const plan = createPlanEntity(w(), ivo, goal, { goalDescription: "Tell Mara what I saw at the Net House", steps: [
+      { description: "Steel myself", actionType: "think", content: "If I don't say it now I never will." },
+      { description: "Tell Mara what I saw", actionType: "speak", target: "Mara", content: "I saw Otis at the box." },
+      { description: "Walk to Saltmere Common", actionType: "move", target: "Saltmere Common" }] } as any)!;
+    // Mara has something to ask him too, so she stays rather than keeping her routine.
+    const asking = customGoal(mara, "Ask Ivo about Tuesday", 0, 90);
+    const herPlan = createPlanEntity(w(), mara, asking, { goalDescription: "Ask Ivo about Tuesday", steps: [
+      { description: "Ask Ivo about Tuesday", actionType: "speak", target: "Ivo", content: "Where were you on Tuesday?" }] } as any)!;
+    run(10, () => Plan.currentStep[plan] >= 1);
+    // The thought passed; the plan now waits at the speech rather than stalling or skipping it.
+    expect(Plan.currentStep[plan]).toBe(1);
+    expect(offstageRows().some(row => row.startsWith("Ivo (offstage, plan)"))).toBe(false);
+    trackOffstagePlaces(w(), getOffstageLife(w())!);
+    d.advance(60_000); d.advance(30_000);
+    generate.mockResolvedValueOnce(sceneReply({ summary: "Ivo finally told Mara about Otis and the box.",
+      dialogue: [{ speaker: "Ivo", target: "Mara", line: "Mara. I saw Otis at the Net House box two nights ago." }],
+      memories: [{ actor: "Ivo", text: "I said it. My hands haven't stopped shaking." }, { actor: "Mara", text: "Ivo knew all along." }] }));
+    expect(roomOf(mara)).toBe(roomOf(ivo)); // both held for the talk
+    expect(await runOffstageScene(w())).toMatchObject({ status: "applied" });
+    expect(Plan.currentStep[plan]).toBe(2);
+    expect(String(Plan.status[herPlan])).toBe("active"); // she never got her question in; still waiting to ask
+    expect(getSocialDialogue(w(), mara).some(t => t.speaker === "Ivo" && /Otis/.test(t.content))).toBe(true);
+    run(10, () => offstageRows().some(row => row === "Ivo (offstage, plan): move Saltmere Common"));
+    expect(offstageRows()).toContain("Ivo (offstage, plan): move Saltmere Common");
   });
 });
