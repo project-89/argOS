@@ -44,5 +44,11 @@ describe("autopilot with a fast judge", () => {
     pilot.tick();
     expect(pilot.holds(7)).toBe(true);
     expect(informed).toEqual(['Ada says: "the nets came up with something in them"']);
+    // Not demanding attention now, but it matters a great deal to them: it grips them anyway.
+    const other = new SettlementAutopilot({ ...host, appraise: async () => ({ wake: .59, remember: .8, importance: .99 }) });
+    other.perceive(7, { kind: "cue", source: "Mara", atMs: now, text: "the lid was forced" });
+    await Promise.resolve(); await Promise.resolve();
+    other.tick();
+    expect(other.holds(7)).toBe(true);
   });
 });

@@ -118,7 +118,10 @@ export class SettlementAutopilot {
       this.appraisals.delete(eid);
       if (!a.result) continue;
       if (a.result.remember >= .5) { this.host.remember?.(eid, a.percept.text, a.result.importance); this.note(eid, `remembers: ${a.percept.text.slice(0, 80)} (${a.result.importance.toFixed(2)})`); }
-      if (a.result.wake >= .6 && !this.floors.has(eid)) this.wake(eid, a.percept.text, a.percept.source);
+      // Two ways to look up: it demands attention now, or it plainly matters a great deal to them
+      // (an overheard word about their own secret may not demand attention, but it grips them).
+      const gripping = a.result.importance >= .85 && a.result.remember >= .7;
+      if ((a.result.wake >= .6 || gripping) && !this.floors.has(eid)) this.wake(eid, a.percept.text, a.percept.source);
       else if (a.result.remember < .5) this.note(eid, `lets it pass (${a.percept.text.slice(0, 80)})`);
     }
     for (const [eid, g] of [...this.glances]) {
