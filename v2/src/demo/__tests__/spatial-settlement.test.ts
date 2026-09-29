@@ -201,6 +201,15 @@ test("a conversation's resolve outlives it: goals on the menu, errands for the h
     await life.pursue({ id: mystery, description: "Find out who forced the Net House box before Mara does" });
     expect(d.autopilot!.holds(otis)).toBe(true);
     expect(d.autopilot!.log.at(-1)?.what).toMatch(/looks up: You set out to Find out who forced the Net House box/);
+    // A livelihood presses: hours without turning a hand to the trade send them back to it before any choice.
+    life.lastWorkAt = d.atSimMs - (d as any).settlementDayMs; // a day ago
+    expect(life.workDue()).toBe(true);
+    life.lastWorkAt = d.atSimMs;
+    expect(life.workDue()).toBe(false);
+    // Having set the talk aside, the menu is the day's work and needs — no pursuits, no talk.
+    (d.autopilot as any).setAside.set(otis, d.atSimMs + 60_000);
+    expect(life.menu().map((m: any) => m.label).some((l: string) => /^(pursue|talk|look into|hide|tell|confront)/.test(l))).toBe(false);
+    (d.autopilot as any).setAside.delete(otis);
     // Supper: evening gathers people at the campfire on the Common — a habit, even under a judge that only ever picks rest.
     for (const l of d.tradeLives as any[]) l.chooser = async (_eid: number, menu: string[]) => menu.length - 1;
     const step = async (n: number) => { for (let i = 0; i < n; i++) { d!.advance(100); await new Promise(r => setImmediate(r)); } };

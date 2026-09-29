@@ -28,8 +28,19 @@ if (existsSync(SKILLS)) for (const [t, j] of Object.entries(JSON.parse(readFileS
 else { await runSettlementLife({ days: 3, life: 1, graphs, planner: "manual" }); }
 const jev = JevClient.fromEnv(); if (!jev) { quiet("no TYPESAFE key"); process.exit(1); }
 const plannerStats = { calls: 0, tokensIn: 0, tokensOut: 0, malformed: 0 };
+// Every Gemini request (minds, decision leaves, planner, Weaver) passes through global fetch: count them all.
+const gemini = { calls: 0, failures: 0, tokensIn: 0, tokensOut: 0, thinking: 0 };
+const realFetch = globalThis.fetch;
+globalThis.fetch = (async (input: any, init?: any) => {
+  const response = await realFetch(input, init);
+  if (!String(input?.url ?? input).includes("generativelanguage.googleapis.com")) return response;
+  gemini.calls++; if (!response.ok) gemini.failures++;
+  void response.clone().json().then((j: any) => { const u = j?.usageMetadata ?? {};
+    gemini.tokensIn += u.promptTokenCount ?? 0; gemini.tokensOut += u.candidatesTokenCount ?? 0; gemini.thinking += u.thoughtsTokenCount ?? 0; }).catch(() => undefined);
+  return response;
+}) as typeof fetch;
 const d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: true, seconds: MINUTES * 60 + 120,
-  settlementWork: { graphs, jev, log: (l: string) => { if (/chooses|plan for|learned/.test(l)) out(`${stamp()} ${l}`); },
+  settlementWork: { graphs, jev, log: (l: string) => { if (/chooses|plan for|learned|intention/.test(l)) out(`${stamp()} ${l}`); },
     planner: (trade: string) => geminiPlanner(plannerStats, { persona: `You plan practical steps for a ${trade} in a small coastal town rebuilding after the sea took it. Be brief and exact.`,
       verbs: "buy <item> / sell <item> at the Market stall (target the stall, arg the item), " }) } } as any);
 const stamp = () => `[${(d.atSimMs / 60000).toFixed(1)}m ${d.settlementHour().toFixed(1)}h]`;
@@ -65,6 +76,7 @@ for (const a of d.actors) {
 }
 summary.push(`built ${JSON.stringify(d.recipes!.builtCount())}; made ${JSON.stringify(d.recipes!.tally.made)}; eaten ${JSON.stringify(d.recipes!.tally.eaten)}`);
 summary.push(`Jev ${JSON.stringify(jev.stats)}; planner ${JSON.stringify(plannerStats)}; leaves ${JSON.stringify(getDecisionStats(w))}`);
+summary.push(`Gemini, all uses ${JSON.stringify(gemini)}`);
 summary.push(`skills ${[...graphs].map(([t, g]) => `${t} ${g.skills.size}`).join(", ")}`);
 writeFileSync(SKILLS, JSON.stringify(Object.fromEntries([...graphs].map(([t, g]) => [t, g.toJson()])), null, 1));
 out(summary.join("\n")); quiet(summary.join("\n"));

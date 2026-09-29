@@ -10,7 +10,14 @@
  * now mean to do?") leaves an errand the habit carries out — bring someone
  * something, go somewhere — before it returns to the day's work. The habit's
  * own surprises (a way of working that no longer works, not a shortage) wake
- * the mind too: stop, look, learn. */
+ * the mind too: stop, look, learn.
+ *
+ * A floor is not open-ended. Talk runs in real time while the day runs on the
+ * game clock, so a standoff that never goes quiet would eat the whole day: after
+ * a spell the resident sets it aside and goes back to their work, and for a
+ * while after that only what must be answered (the operator) wakes them — the
+ * rest is still felt, remembered and kept as a concern. Night ends every floor
+ * once the resident is free of it, and they are left to sleep till dawn. */
 import { Name } from "../ecs/components";
 import type { World } from "../ecs/world";
 import { AttentionFilter, touchesCue, type Percept } from "../cognition/autopilot-attention";
@@ -48,7 +55,15 @@ export type AutopilotHost = {
   /** Keep something as a memory without waking the mind. */
   remember?(eid: number, text: string, importance: number): void;
   record(line: string): void;
+  /** Game minutes as real milliseconds (default: a game day per real hour). */
+  gameMinutes?(minutes: number): number;
+  /** Is it night (bedtime) on the settlement clock? */
+  isNight?(): boolean;
+  /** Must this be answered even while they have set things aside (the operator speaking to them)? */
+  alwaysWakes?(eid: number, percept: Percept): boolean;
 };
+/** How long a floor may run before it is set aside, and how long they keep to their work after, in game minutes. */
+export const FLOOR_SPELL_GAME_MINUTES = 90, SET_ASIDE_GAME_MINUTES = 60;
 
 type Floor = { since: number; lastSalientAt: number; reason: string };
 const QUIET_MS = 45_000, GLANCE_GAP_MS = 90_000, RECENT_MIND_MS = 10 * 60_000;
@@ -70,8 +85,14 @@ export class SettlementAutopilot {
   constructor(private readonly host: AutopilotHost) {}
 
   private filter(eid: number) { let f = this.filters.get(eid); if (!f) { f = new AttentionFilter(); this.filters.set(eid, f); } return f; }
-  private note(eid: number, what: string) { this.log.push({ at: this.host.now(), who: Name.value[eid], what }); if (this.log.length > 500) this.log.shift(); }
+  private note(eid: number, what: string) { this.log.push({ at: this.host.now(), who: eid < 0 ? "Saltmere" : Name.value[eid], what }); if (this.log.length > 500) this.log.shift(); }
   holds(eid: number): boolean { return this.floors.has(eid); }
+  /** Until when (sim ms) this resident keeps to their work and bed (things are felt, not answered). */
+  private readonly setAside = new Map<number, number>();
+  private nightNow = false;
+  private gameMs(minutes: number) { return this.host.gameMinutes?.(minutes) ?? minutes * 2_500; }
+  /** Have they set things aside for now (after a long spell, or for the night)? */
+  resting(eid: number): boolean { return this.nightNow || (this.setAside.get(eid) ?? -Infinity) > this.host.now(); }
 
   /** The mind gate for these residents: the foreground runs only with the floor;
    * background digestion while awake or lately awake. Others are unaffected. */
@@ -84,7 +105,7 @@ export class SettlementAutopilot {
   concernsOf(eid: number): readonly Concern[] { return this.concerns.get(eid) ?? []; }
   dropConcern(eid: number, concern: Concern): void { this.concerns.set(eid, (this.concerns.get(eid) ?? []).filter(c => c !== concern)); }
   /** Hand the floor to a resident's mind for a reason of their own (they came to talk, to look into something). */
-  summon(eid: number, reason: string, source = "self"): void { if (this.host.mindAvailable() && !this.floors.has(eid)) this.wake(eid, reason, source); }
+  summon(eid: number, reason: string, source = "self"): void { if (this.host.mindAvailable() && !this.floors.has(eid) && !this.resting(eid)) this.wake(eid, reason, source); }
 
   /** Something reached this resident. */
   perceive(eid: number, percept: Percept): void {
@@ -92,6 +113,11 @@ export class SettlementAutopilot {
     const floor = this.floors.get(eid);
     if (floor) { if (percept.kind !== "speech" || this.filter(eid).novelty(percept) > .5) floor.lastSalientAt = percept.atMs; this.filter(eid).perceive(percept); return; }
     const verdict = this.filter(eid).perceive(percept);
+    // Set aside: still felt and remembered (the judge reads it), not answered — unless it must be.
+    if (this.resting(eid) && !this.host.alwaysWakes?.(eid, percept)) {
+      if (verdict.level !== "notice" && this.host.appraise) this.queueAppraisal(eid, percept, verdict.score);
+      return;
+    }
     // Without a mind to hand the floor to, the judge still reads feeling and memory; nothing is woken.
     if (!this.host.mindAvailable() && !(this.host.appraise && verdict.level !== "notice")) { if (verdict.level !== "notice") this.note(eid, `notices: ${percept.text.slice(0, 100)}`); return; }
     if (verdict.level === "wake" && this.host.appraise && !this.host.mindAvailable()) { this.queueAppraisal(eid, percept, verdict.score); return; }
@@ -162,7 +188,7 @@ export class SettlementAutopilot {
       // (an overheard word about their own secret may not demand attention, but it grips them).
       // Strong feeling demands attention too.
       const gripping = a.result.importance >= .85 && a.result.remember >= .7 || (r.arousal ?? 0) >= .8;
-      if ((a.result.wake >= .6 || gripping) && !this.floors.has(eid)) this.wake(eid, a.percept.text, a.percept.source);
+      if ((a.result.wake >= .6 || gripping) && !this.floors.has(eid) && !this.resting(eid)) this.wake(eid, a.percept.text, a.percept.source);
       else if (a.result.remember < (contentful ? .5 : .75)) this.note(eid, `lets it pass (${a.percept.text.slice(0, 80)})`);
     }
     for (const [eid, g] of [...this.glances]) {
@@ -170,12 +196,23 @@ export class SettlementAutopilot {
       if (poll.status === "pending") continue;
       this.glances.delete(eid);
       // No answer (no model, over budget) means carry on.
-      if (poll.answer.kind === "yes_no" && poll.answer.yes && poll.answer.source === "model") this.wake(eid, g.percept.text, g.percept.source);
+      if (poll.answer.kind === "yes_no" && poll.answer.yes && poll.answer.source === "model" && !this.resting(eid)) this.wake(eid, g.percept.text, g.percept.source);
       else this.note(eid, `glances up and carries on (${g.percept.text.slice(0, 80)})`);
     }
+    const night = !!this.host.isNight?.();
+    if (night && !this.nightNow) this.note(-1, "night falls");
+    this.nightNow = night;
     for (const [eid, floor] of [...this.floors]) {
       this.lastAwake.set(eid, now);
-      if (now - floor.lastSalientAt < QUIET_MS || this.host.engaged(eid)) continue;
+      if (this.host.engaged(eid)) continue;
+      // Night: bed, not more talk. A long spell: set it aside and get back to work.
+      if (night || now - floor.since >= this.gameMs(FLOOR_SPELL_GAME_MINUTES)) {
+        this.floors.delete(eid);
+        if (!night) this.setAside.set(eid, now + this.gameMs(SET_ASIDE_GAME_MINUTES));
+        this.note(eid, night ? "turns in for the night" : "sets it aside for now and goes back to work");
+        continue;
+      }
+      if (now - floor.lastSalientAt < QUIET_MS) continue;
       this.floors.delete(eid);
       const { people, items, places } = this.host.errandOptions(eid);
       const options = [CARRY_ON, ...people.flatMap(p => items.map(i => `bring ${i} to ${p}`)), ...places.map(p => `go to ${p}`)].slice(0, 60);

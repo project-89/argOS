@@ -61,6 +61,8 @@ import { createSettlementScenario } from "./spatial-settlement";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
 import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
 import { SettlementAutopilot, type Appraisal } from "./spatial-autopilot";
+import { activeOwnIntentions, tendIntentions } from "./settlement-intentions";
+import { requestIntentionReconsideration } from "../cognition/goal-lifecycle";
 import { createSpatialBalance } from "./spatial-balance";
 import { commitPreparedAffectUpdate, prepareAffectUpdate, type FacialExpression } from "../cognition/affect-state";
 import type { Percept } from "../cognition/autopilot-attention";
@@ -1152,6 +1154,10 @@ export class SpatialDemo {
       },
       onErrand: (eid, errand) => { this.tradeLives.find(l => l.eid === eid)?.errands.push(errand); },
       mindAvailable: () => w.meta.aiEnabled !== false,
+      gameMinutes: minutes => minutes * this.settlementDayMs / 1440,
+      isNight: () => this.settlementNight(),
+      // The operator is always answered, even by someone who has set the day's talk aside.
+      alwaysWakes: (_eid, percept) => { const body = this.controlledBody(); return body !== undefined && percept.source === Name.value[body]; },
       ...(jev ? { appraise: (eid: number, percept: Percept) => this.appraiseWithJev(jev, eid, percept),
         feel: (eid: number, feeling: string, valence: number, arousal: number, reason: string) => {
           const token = prepareAffectUpdate(w, eid, { feeling, valence: Math.max(-1, Math.min(1, valence)), arousal: Math.max(0, Math.min(1, arousal)),
@@ -1164,6 +1170,15 @@ export class SpatialDemo {
       record: line => this.record("world", line) });
     setMindGate(w, autopilot.gate);
     this.tickListeners.add(() => autopilot.tick());
+    // Their own resolve is tended on the settlement clock: newer overtakes older, quiet resolve is reconsidered, the unreviewed let go.
+    let tendedAt = -Infinity;
+    this.tickListeners.add(() => {
+      if (this.atSimMs - tendedAt < 5_000) return;
+      tendedAt = this.atSimMs;
+      const hour = this.settlementDayMs / 24;
+      for (const eid of managed) for (const t of tendIntentions(w, eid, { keep: 3, quietAfterMs: 8 * hour, letGoAfterMs: 6 * hour }))
+        work.log?.(`[${Name.value[eid]}] intention ${t.outcome === "let go" ? "let go" : "up for reconsideration"}: ${t.description.slice(0, 140)}`);
+    });
     // Speech arrives word by word: attention hears whole lines (a pause of a second and a half ends one).
     const lines = new Map<string, { speaker: number; target?: number; text: string; lastAt: number; listeners: Set<number> }>();
     this.removers.push(subscribeCommittedEvents(w, event => {
@@ -1253,11 +1268,32 @@ export class SpatialDemo {
       feeling: affect ? { feeling: affect.feeling, valence: affect.valence, arousal: affect.arousal, because: affect.reason } : "steady",
       hunger: Math.round(Needs.hunger[eid] ?? 0), coin: this.recipes?.coinsOf(eid) ?? 0,
       holding: listDirectContents(w, eid).map(e => Name.value[e]).slice(0, 10), lately: recent };
+    // In the same call, a reading of each intention they carry: has it run its course, given what has happened lately?
+    const intentions = activeOwnIntentions(w, eid).slice(0, 3);
+    const name = Name.value[eid];
     try {
-      const { answers } = await jev.ask(stateValue, { next: { type: "choice", instructions: `What does ${Name.value[eid]} do next, being who they are and feeling as they do?`,
-        criteria: Object.fromEntries(menu.map((m, i) => [`o${i}`, m])) } });
+      const { answers } = await jev.ask(stateValue, { next: { type: "choice", instructions: `What does ${name} do next, being who they are and feeling as they do?`,
+          criteria: Object.fromEntries(menu.map((m, i) => [`o${i}`, m])) },
+        ...Object.fromEntries(intentions.map(g => [`g${g}`, { type: "noul" as const,
+          instructions: `Given what has happened lately, does ${name} still mean to: ${Goal.description[g]}?`,
+          criteria: { true: "Still unfinished and still wanted", false: "Overtaken by events, already dealt with, or no longer wanted" } }])) });
+      // A fast judge's reading is a reason to reconsider, never proof the thing was done.
+      const dropped = new Set<string>();
+      for (const g of intentions) {
+        const still = answers[`g${g}`]?.noul;
+        if (typeof still === "number" && still < .3 && requestIntentionReconsideration(w, eid, g,
+          "A fast reading of recent events suggests this has run its course. Reconsider whether to keep, defer or release it; nothing is claimed done.")) {
+          dropped.add(Goal.description[g].slice(0, 140));
+          this.options.settlementWork?.log?.(`[${name}] intention up for reconsideration: ${Goal.description[g].slice(0, 140)}`);
+        }
+      }
+      const live = (i: number) => !(menu[i]?.startsWith("pursue: ") && dropped.has(menu[i].slice("pursue: ".length)));
       const index = Number(String(answers.next?.choice ?? "").replace(/^o/, ""));
-      return Number.isInteger(index) && index >= 0 && index < menu.length ? index : undefined;
+      if (Number.isInteger(index) && index >= 0 && index < menu.length && live(index)) return index;
+      // The pick was an intention just put down: take the judge's next most likely choice.
+      const ranked = Object.entries(answers.next?.probabilities ?? {}).map(([k, p]) => [Number(k.replace(/^o/, "")), p] as const)
+        .filter(([i]) => Number.isInteger(i) && i >= 0 && i < menu.length && live(i)).sort((a, b) => b[1] - a[1]);
+      return ranked[0]?.[0];
     } catch { return undefined; }
   }
   /** One Jev call per notable percept: attend now? remember? how much does it matter to this person? */

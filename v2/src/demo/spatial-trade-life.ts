@@ -156,6 +156,8 @@ export function createSpatialSkillEnv(host: SpatialTradeHost, eid: number): Skil
 }
 
 const FOOD = ["cooked-fish", "berries", "raw-fish"];
+/** Game minutes a resident goes without turning a hand to their trade before it calls them back. */
+export const WORK_RHYTHM_GAME_MINUTES = 120;
 
 export class SpatialTradeLife {
   solver: SkillSolver;
@@ -168,7 +170,9 @@ export class SpatialTradeLife {
   constructor(private readonly host: SpatialTradeHost, readonly eid: number, trade: string, graph: SkillGraph, private readonly planner: Planner,
     private readonly log?: (line: string) => void,
     private readonly attention?: { holds(eid: number): boolean; surprised(eid: number, item: string, detail: string): void;
-      concernsOf?(eid: number): readonly Concern[]; dropConcern?(eid: number, c: Concern): void; summon?(eid: number, reason: string): void },
+      concernsOf?(eid: number): readonly Concern[]; dropConcern?(eid: number, c: Concern): void; summon?(eid: number, reason: string): void;
+      /** Set things aside for now (after a long spell of talk, or for the night): no talk or pursuits, just the work. */
+      resting?(eid: number): boolean },
     /** A fast judge choosing what to do next from the menu (given who they are and how they feel). */
     private readonly chooser?: (eid: number, menu: string[]) => Promise<number | undefined>) {
     this.trade = trade;
@@ -280,18 +284,32 @@ export class SpatialTradeLife {
     await this.env.act({ verb: "give", target: errand.item, arg: errand.to });
   }
   private lastChoiceAt = -Infinity;
+  /** When they last turned their hand to their trade (made, sold, built — or tried to). */
+  private lastWorkAt = -Infinity;
+  private hasWork(): boolean {
+    if (this.trade === "builder") return this.host.land.townPlan.some(g => (this.host.recipes.builtCount()[g.kind] ?? 0) < g.count && !this.cooling(`build:${g.kind}`));
+    return (this.host.land.trades.find(t => t.role === this.trade)?.duties ?? []).some(d => this.stallStock(d.item) < d.stock && !this.cooling(`duty:${d.item}`));
+  }
+  /** A livelihood presses: however gripping the day's talk, a few hours without turning a hand to the trade sends them back to it. */
+  private workDue(): boolean { return this.host.now() - this.lastWorkAt >= this.gameMinutes(WORK_RHYTHM_GAME_MINUTES) && this.hasWork(); }
+  private async turnToWork(): Promise<boolean> {
+    this.lastWorkAt = this.host.now();
+    return await this.sell() || await this.work();
+  }
   /** What could be done next, as the judge sees it: the day's work, needs, and what they mean to act on. */
   private menu(): Array<{ label: string; run: () => Promise<boolean> }> {
     const out: Array<{ label: string; run: () => Promise<boolean> }> = [];
     const hunger = Needs.hunger[this.eid] ?? 0;
     if (hunger >= 35) out.push({ label: "eat something", run: () => this.eat() });
     const duties = this.host.land.trades.find(t => t.role === this.trade)?.duties ?? [];
-    if (duties.some(d => this.held(d.item) > (FOOD.includes(d.item) ? 1 : 0))) out.push({ label: "sell what I've made at the stall", run: () => this.sell() });
-    for (const d of duties) if (this.stallStock(d.item) < d.stock) out.push({ label: `make ${d.item.replace(/-/g, " ")} for the stall`, run: () => this.solver.solve(d.item, this.held(d.item) + 1) });
+    if (duties.some(d => this.held(d.item) > (FOOD.includes(d.item) ? 1 : 0))) out.push({ label: "sell what I've made at the stall", run: () => { this.lastWorkAt = this.host.now(); return this.sell(); } });
+    for (const d of duties) if (this.stallStock(d.item) < d.stock) out.push({ label: `make ${d.item.replace(/-/g, " ")} for the stall`, run: () => { this.lastWorkAt = this.host.now(); return this.solver.solve(d.item, this.held(d.item) + 1); } });
     if (this.trade === "builder") for (const g of this.host.land.townPlan) {
       const built = this.host.recipes.builtCount()[g.kind] ?? 0;
-      if (built < g.count) { out.push({ label: `build the ${g.kind}`, run: () => this.solver.solve(g.kind, built + 1) }); break; }
+      if (built < g.count) { out.push({ label: `build the ${g.kind}`, run: () => { this.lastWorkAt = this.host.now(); return this.solver.solve(g.kind, built + 1); } }); break; }
     }
+    // Things set aside for now: the menu is the day's work and needs, not more of the drama.
+    if (this.attention?.resting?.(this.eid)) { out.push({ label: "rest a while", run: async () => { await this.wait(this.gameMinutes(30)); return true; } }); return out; }
     for (const c of this.attention?.concernsOf?.(this.eid) ?? [])
       out.push({ label: `${c.response}: ${c.about.slice(0, 140)}`, run: async () => {
         this.attention?.dropConcern?.(this.eid, c);
@@ -371,10 +389,10 @@ export class SpatialTradeLife {
       if (this.supperTime() && this.atSupper !== (this.host.day?.() ?? -1)) { await this.supper(); continue; }
       const errand = this.errands.shift();
       if (errand) { await this.errand(errand); continue; }
+      if (this.workDue() && await this.turnToWork()) continue;
       if (await this.chooseNext()) continue;
       if ((Needs.hunger[this.eid] ?? 0) >= this.host.land.needs.eatAt && await this.eat()) continue;
-      if (await this.sell()) continue;
-      if (await this.work()) continue;
+      if (await this.turnToWork()) continue;
       await this.wait(this.gameMinutes(20));
     }
   }
