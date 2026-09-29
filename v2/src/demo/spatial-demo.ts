@@ -3,7 +3,7 @@
 import { addComponent, addEntity, entityExists, getRelationTargets, hasComponent, query, removeComponent } from "bitecs";
 import { randomUUID } from "node:crypto";
 import { createSimulation, type ArgosSimulation } from "../index";
-import { Agent, BehaviorPolicy, Container, Description, Impression, Inventory, Mind, Name, Needs, ObjectState, PhysicalObject, Position, Room, Surface, StimulusSource, Thought, WorkingMemoryIdentity } from "../ecs/components";
+import { Agent, BehaviorPolicy, Goal, Container, Description, Impression, Inventory, Mind, Name, Needs, ObjectState, PhysicalObject, Position, Room, Surface, StimulusSource, Thought, WorkingMemoryIdentity } from "../ecs/components";
 import { createAgentEntity, createObjectEntity, createRoomEntity } from "../ecs/prefabs";
 import { getControlledBodies, isOperatorControlled, releaseControl as releaseBody, takeControl as possessBody } from "../ecs/controlled";
 import { getDirectContainer, getRoomForEntity, listDirectContents, setLocatedIn } from "../ecs/location";
@@ -38,7 +38,7 @@ import { createSpatialWorld } from "../world/spatial-world";
 import { executeAffordance } from "../world/effect-executor";
 import { ObjectManager } from "../world/object-manager";
 import { worldSchema } from "../world/schema";
-import { SittingOn } from "../ecs/relations";
+import { HasGoal, SittingOn } from "../ecs/relations";
 import { installOperatorCafe } from "./spatial-growth";
 import { projectSpatialGoals } from "./spatial-goals";
 import { isEntityPresent } from "../ecs/entity-presence";
@@ -1110,6 +1110,19 @@ export class SpatialDemo {
       rooms: () => this.roomViews.map(r => ({ eid: r.id, name: r.name, kind: SALTMERE_LAND.places.find(p => p.name === r.name)?.kind ?? (r.name === "The Net House" ? "net-house" : "") })),
       stall: () => [...this.settlementKinds].find(([, k]) => k === "stall")?.[0],
       isNight: () => this.settlementNight(),
+      hour: () => this.settlementHour(),
+      day: () => Math.floor(this.atSimMs / this.settlementDayMs),
+      campfire: () => [...this.settlementKinds].find(([, k]) => k === "hearth")?.[0],
+      goalsOf: eid => getRelationTargets(w, eid, HasGoal).filter(g => hasComponent(w, g, Goal) && Goal.status[g] === "active"
+          && !/^(Keep Saltmere supplied|Raise the town)/.test(String(Goal.description[g] || "")) && Goal.kind[g] !== "scheduled_activity")
+        .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0))
+        .map(g => ({ id: g, description: String(Goal.description[g] || ""), priority: Goal.priority[g] || 0 })),
+      peopleNear: (eid, metres) => {
+        const room = getRoomForEntity(w, eid);
+        return this.actors.filter(a => a !== eid && getRoomForEntity(w, a) === room)
+          .map(a => ({ eid: a, name: Name.value[a], distance: Math.hypot(Position.x[a] - Position.x[eid], Position.y[a] - Position.y[eid]) }))
+          .filter(p => p.distance <= metres).sort((a, b) => a.distance - b.distance);
+      },
       shelter: eid => { const home = this.recipes!.homeOf(eid); if (home !== undefined) return home;
         const i = SALTMERE_LAND.residents.findIndex(r => r.name === Name.value[eid]);
         return i < 0 ? undefined : [...this.settlementKinds].find(([e, k]) => k === "tent" && Name.value[e] === `Tent ${i + 1}`)?.[0]; },

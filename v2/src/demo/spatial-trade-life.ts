@@ -38,6 +38,15 @@ export type SpatialTradeHost = {
   personNamed(name: string): number | undefined;
   /** Night falls: residents go to their shelter and sleep till dawn. */
   isNight?(): boolean;
+  /** The settlement clock's hour and day (supper at the campfire in the evening). */
+  hour?(): number;
+  day?(): number;
+  /** Where supper is: the campfire. */
+  campfire?(): number | undefined;
+  /** What their own mind wants (active goals, not the day's trade), most pressing first. */
+  goalsOf?(eid: number): Array<{ id: number; description: string; priority: number }>;
+  /** People close by (same place, within a few metres), nearest first. */
+  peopleNear?(eid: number, metres: number): Array<{ eid: number; name: string; distance: number }>;
   shelter?(eid: number): number | undefined;
   /** Called on every simulation tick while subscribed. */
   onTick(listener: () => void): () => void;
@@ -284,8 +293,48 @@ export class SpatialTradeLife {
         this.attention?.dropConcern?.(this.eid, c);
         this.attention?.summon?.(this.eid, `You mean to ${c.response}: ${c.about}`);
         return true; } });
+    // What their own mind set out to do (a conversation's resolve outlives the conversation).
+    for (const goal of (this.host.goalsOf?.(this.eid) ?? []).slice(0, 3))
+      if (!this.cooling(`goal:${goal.id}`)) out.push({ label: `pursue: ${goal.description.slice(0, 140)}`, run: () => this.pursue(goal) });
+    // Evenings gather at the fire; people nearby can fall into talk.
+    if (this.supperTime()) out.push({ label: "go to supper at the campfire", run: () => this.supper() });
+    if (!this.cooling("talk")) for (const p of (this.host.peopleNear?.(this.eid, 12) ?? []).slice(0, 3))
+      out.push({ label: `talk with ${p.name}`, run: () => this.talk(p) });
     out.push({ label: "rest a while", run: async () => { await this.wait(5 * 60_000); return true; } });
     return out;
+  }
+  private supperTime() { const h = this.host.hour?.(); return h !== undefined && h >= 18 && h < 21.5; }
+  private atSupper = -1;
+  /** Walk to the campfire and eat there, where others gather. */
+  private async supper(): Promise<boolean> {
+    const fire = this.host.campfire?.(), room = fire === undefined ? undefined : getRoomForEntity(this.host.world, fire);
+    if (room !== undefined && room !== getRoomForEntity(this.host.world, this.eid)) await this.env.act({ verb: "move", target: Name.value[room] });
+    this.atSupper = this.host.day?.() ?? -1;
+    if ((Needs.hunger[this.eid] ?? 0) >= this.host.land.needs.eatAt / 2) await this.eat();
+    await this.wait(3 * 60_000);
+    return true;
+  }
+  /** Fall into talk: the mind takes the floor with someone at hand. */
+  private async talk(p: { eid: number; name: string }): Promise<boolean> {
+    this.cool("talk", 15 * 60_000);
+    this.attention?.summon?.(this.eid, `${p.name} is right here with you. You fall into talk; say what is on your mind to ${p.name}.`);
+    return true;
+  }
+  /** Pursue one of their own goals: what the habit can do itself (fetch, make, go), it does; the rest wakes the mind for its next step. */
+  private async pursue(goal: { id: number; description: string }): Promise<boolean> {
+    this.cool(`goal:${goal.id}`, 5 * 60_000);
+    const text = goal.description.toLowerCase();
+    // Goods named as whole words, not inside a place's name ("the Net House" is not a net).
+    const bare = this.host.rooms().reduce((t, r) => t.replaceAll(r.name.toLowerCase(), " ").replaceAll(r.name.toLowerCase().replace(/^the /, ""), " "), text);
+    const item = Object.keys(this.host.land.prices).find(k => new RegExp(`\\b(${k}|${k.replace(/-/g, " ")})s?\\b`).test(bare));
+    const person = this.host.peopleNear?.(this.eid, 999)?.find(p => text.includes(p.name.toLowerCase()))
+      ?? (this.host.personNamed ? [...this.host.land.residents.map(r => r.name)].map(n => ({ name: n, eid: this.host.personNamed(n) })).find(p => p.eid !== undefined && text.includes(p.name.toLowerCase())) : undefined);
+    const room = this.host.rooms().find(r => text.includes(r.name.toLowerCase()));
+    if (item && person && /\b(bring|give|take|fetch|hand)\b/.test(text)) { this.errands.push({ kind: "bring", item, to: person.name }); return true; }
+    if (item && /\b(make|get|gather|catch|chop|cook|fetch|find)\b/.test(text)) return this.solver.solve(item, this.held(item) + 1);
+    if (room && /\b(go|walk|return|head)\b/.test(text) && !person) { await this.env.act({ verb: "move", target: room.name }); return true; }
+    this.attention?.summon?.(this.eid, `You set out to ${goal.description}. Take your next step toward it.`);
+    return true;
   }
   /** Let the judge pick when there is a real choice (something on their mind, or several things to do); at most every few minutes. */
   private async chooseNext(): Promise<boolean> {
@@ -315,6 +364,8 @@ export class SpatialTradeLife {
       // The mind has the floor: the habit waits.
       if (this.attention?.holds(this.eid)) { await this.wait(2_000); continue; }
       if (this.host.isNight?.()) { await this.sleep(); continue; }
+      // Supper at the fire once each evening, even without a judge to choose it.
+      if (!this.chooser && this.supperTime() && this.atSupper !== (this.host.day?.() ?? -1)) { await this.supper(); continue; }
       const errand = this.errands.shift();
       if (errand) { await this.errand(errand); continue; }
       if (await this.chooseNext()) continue;

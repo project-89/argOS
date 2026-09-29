@@ -174,3 +174,38 @@ test("the balance spirits watch the walkable town: each dawn a reading, the dail
     void otis;
   } finally { if (previous === undefined) delete process.env.ARGOS_SETTLEMENT_DAY_MINUTES; else process.env.ARGOS_SETTLEMENT_DAY_MINUTES = previous; }
 }, 180_000);
+
+test("a conversation's resolve outlives it: goals on the menu, errands for the habit, the rest wakes the mind; supper gathers at the fire", async () => {
+  const { runSettlementLife } = await import("../../learning/settlement/run-settlement");
+  const { SkillGraph } = await import("../../learning/skill-graph");
+  const { createIntentGoal } = await import("../../cognition/cognition-system");
+  const { getRoomForEntity } = await import("../../ecs/location");
+  const previous = process.env.ARGOS_SETTLEMENT_DAY_MINUTES;
+  process.env.ARGOS_SETTLEMENT_DAY_MINUTES = "6";
+  try {
+    const graphs = new Map<string, InstanceType<typeof SkillGraph>>();
+    await runSettlementLife({ days: 1, life: 1, graphs, planner: "manual" });
+    d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, seconds: 3600,
+      settlementWork: { graphs, jev: false } });
+    const w = d.sim.world;
+    w.meta.aiEnabled = true;
+    await d.start();
+    const otis = d.actors.find(a => Name.value[a] === "Otis")!;
+    const life: any = d.tradeLives.find(l => l.eid === otis);
+    const fetch = createIntentGoal(w, otis, "Bring some raw fish to Leon before dark", 8)!;
+    const mystery = createIntentGoal(w, otis, "Find out who forced the Net House box before Mara does", 9)!;
+    const labels = life.menu().map((m: any) => m.label);
+    expect(labels).toEqual(expect.arrayContaining([expect.stringMatching(/^pursue: Find out who forced/), expect.stringMatching(/^pursue: Bring some raw fish to Leon/)]));
+    await life.pursue({ id: fetch, description: "Bring some raw fish to Leon before dark" });
+    expect(life.errands).toEqual([{ kind: "bring", item: "raw-fish", to: "Leon" }]);
+    await life.pursue({ id: mystery, description: "Find out who forced the Net House box before Mara does" });
+    expect(d.autopilot!.holds(otis)).toBe(true);
+    expect(d.autopilot!.log.at(-1)?.what).toMatch(/looks up: You set out to Find out who forced the Net House box/);
+    // Supper: evening gathers people at the campfire on the Common.
+    const step = async (n: number) => { for (let i = 0; i < n; i++) { d!.advance(100); await new Promise(r => setImmediate(r)); } };
+    await step(2250); // ~20:40 on a six-minute day (walking takes real time)
+    expect(d.settlementHour()).toBeGreaterThan(18);
+    const atCommon = d.actors.filter(a => Name.value[getRoomForEntity(w, a)!] === "Saltmere Common");
+    expect(atCommon.length).toBeGreaterThanOrEqual(6);
+  } finally { if (previous === undefined) delete process.env.ARGOS_SETTLEMENT_DAY_MINUTES; else process.env.ARGOS_SETTLEMENT_DAY_MINUTES = previous; }
+}, 180_000);

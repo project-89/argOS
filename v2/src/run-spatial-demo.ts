@@ -1,5 +1,7 @@
 import "dotenv/config";
 import { randomBytes } from "node:crypto";
+import * as nodeFs from "node:fs";
+const require_fs = () => nodeFs;
 import { appendFile, mkdir, mkdtemp } from "node:fs/promises";
 import { getRunningTaskNames } from "./runtime/async-task-queue";
 import { resolve } from "node:path";
@@ -31,10 +33,11 @@ const skillsFlag = process.argv.indexOf("--skills");
 const skillsArg = skillsFlag >= 0 && process.argv[skillsFlag + 1] && !process.argv[skillsFlag + 1].startsWith("--") ? process.argv[skillsFlag + 1] : undefined;
 const skillLibraryPath = skillsFlag >= 0 ? skillsArg ?? process.env.ARGOS_SKILL_LIBRARY?.trim() ?? "" : process.env.ARGOS_SKILL_LIBRARY?.trim() || undefined;
 /** Trade skill graphs (e.g. from `npm run settlement -- --graphs <path>`); with --live, Gemini fills gaps. */
+let settlementSkills: Map<string, import("./learning/skill-graph").SkillGraph> | undefined;
 async function settlementWork() {
   const { existsSync, readFileSync } = await import("node:fs");
   const { SkillGraph } = await import("./learning/skill-graph");
-  const graphs = new Map<string, InstanceType<typeof SkillGraph>>();
+  const graphs = settlementSkills = new Map<string, InstanceType<typeof SkillGraph>>();
   if (settlementGraphs && existsSync(settlementGraphs))
     for (const [trade, json] of Object.entries(JSON.parse(readFileSync(settlementGraphs, "utf8")))) graphs.set(trade, SkillGraph.fromJson(json as any));
   console.log(`[Settlement] ${graphs.size ? `trade skills from ${settlementGraphs}: ${[...graphs].map(([t, g]) => `${t} ${g.skills.size}`).join(", ")}` : "no trained skills; residents learn as they go"}`);
@@ -60,6 +63,17 @@ const demo = await SpatialDemo.create({ live, evolving, seconds: Number(process.
   ...(process.argv.includes("--extended-blackout") ? { layout: "extended" as const } : {}),
   ...(skillLibraryPath !== undefined ? { skillLibrary: { path: skillLibraryPath || undefined, seed: true, harvest: true } } : {}) });
 const receiver = await createSpatialDemoApp({ demo, token, directory });
+// What residents learned in this walkable session (gaps Gemini filled) goes back to the skills file.
+if (settlementSkills) {
+  const target = settlementGraphs ?? resolve(directory, "settlement-skills.json");
+  demo.onStop(() => {
+    try {
+      const { writeFileSync } = require_fs();
+      writeFileSync(target, JSON.stringify(Object.fromEntries([...settlementSkills!].map(([trade, g]) => [trade, g.toJson()])), null, 1) + "\n");
+      console.log(`[Settlement] trade skills saved to ${target}: ${[...settlementSkills!].map(([t, g]) => `${t} ${g.skills.size}`).join(", ")}`);
+    } catch (error) { console.warn(`[Settlement] could not save trade skills: ${error instanceof Error ? error.message : error}`); }
+  });
+}
 // Stall log: if the server thread is ever blocked long enough to freeze the
 // viewer, the session's recording folder says when, for how long, and what ran.
 {
