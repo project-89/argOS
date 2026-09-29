@@ -25,8 +25,11 @@ test("scenario preflight returns detached complete data, not an alternate contro
 test("explicit town navigation resolution admits bounded land without changing the legacy default", () => {
   const legacy = fixture();
   expect(validateSpatialScenario(legacy).navigationCellSize).toBeUndefined();
+  const huge = fixture(); huge.bounds = { minX: 0, minY: 0, maxX: 200, maxY: 200 };
+  expect(() => validateSpatialScenario(huge)).toThrow("bounded spatial grid"); // 641k cells at .25 m
+  huge.navigationCellSize = 1;
+  expect(validateSpatialScenario(huge).navigationCellSize).toBe(1); // 40k cells at 1 m: a big outdoor world
   const larger = fixture(); larger.bounds = { minX: 0, minY: 0, maxX: 48, maxY: 36 };
-  expect(() => validateSpatialScenario(larger)).toThrow("bounded spatial grid");
   larger.navigationCellSize = .5;
   expect(validateSpatialScenario(larger).navigationCellSize).toBe(.5);
   expect(validateSpatialScenario(larger).bounds).toEqual(larger.bounds);

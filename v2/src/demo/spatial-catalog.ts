@@ -55,7 +55,7 @@ export function installSpatialAsset(asset: SpatialAsset): void {
 }
 
 const id = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
-const number = z.number().finite().min(-128).max(128);
+const number = z.number().finite().min(-256).max(256);
 const point = z.object({ x: number, y: number }).strict();
 const bounds = z.object({ minX: number, minY: number, maxX: number, maxY: number }).strict();
 const roomSchema = z.object({ id, name: z.string().min(1).max(120), description: z.string().max(2000), bounds, entry: point, floor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
@@ -85,10 +85,10 @@ const propSchema = z.object({ id, roomId: id, assetId: id, name: z.string().min(
 const wallSchema = z.object({ id, roomId: id, position: point, halfWidth: z.number().finite().positive().max(16), halfDepth: z.number().finite().positive().max(16), height: z.number().finite().positive().max(4) }).strict();
 // Bounded authored neighborhoods, not permission for unbounded model output.
 // Native construction authority and lifetime entity budgets remain separate.
-const blueprintSchema = z.object({ id, author: z.literal("operator"), rooms: z.array(roomSchema).min(1).max(12),
-  props: z.array(propSchema).max(128), walls: z.array(wallSchema).max(96),
-  doors: z.array(z.object({ id, from: id, to: id, propId: id, position: point, axis: z.enum(["x", "y"]), width: z.number().finite().min(1.2).max(3) }).strict()).max(24),
-  spawns: z.array(z.object({ id, roomId: id, name: z.string().min(1).max(80), assetId: id, position: point }).strict()).max(16) }).strict();
+const blueprintSchema = z.object({ id, author: z.literal("operator"), rooms: z.array(roomSchema).min(1).max(40),
+  props: z.array(propSchema).max(600), walls: z.array(wallSchema).max(300),
+  doors: z.array(z.object({ id, from: id, to: id, propId: id, position: point, axis: z.enum(["x", "y"]), width: z.number().finite().min(1.2).max(8) }).strict()).max(80),
+  spawns: z.array(z.object({ id, roomId: id, name: z.string().min(1).max(80), assetId: id, position: point }).strict()).max(40) }).strict();
 export type SpatialBlueprint = z.infer<typeof blueprintSchema>;
 export type SpatialRoom = SpatialBlueprint["rooms"][number];
 export type SpatialProp = SpatialBlueprint["props"][number];
@@ -212,7 +212,7 @@ export function validateSpatialBlueprint(input: unknown, existingRooms: readonly
   const roomMap = new Map(rooms.map(r => [r.id, r]));
   for (const r of rooms) {
     const b = r.bounds;
-    if (b.maxX <= b.minX || b.maxY <= b.minY || b.maxX - b.minX > 48 || b.maxY - b.minY > 48 || !inside(r.entry, b)) throw new Error("Invalid room geometry or entry");
+    if (b.maxX <= b.minX || b.maxY <= b.minY || b.maxX - b.minX > 160 || b.maxY - b.minY > 160 || !inside(r.entry, b)) throw new Error("Invalid room geometry or entry");
     if (r.building && r.environment !== "indoor") throw Error("Building exteriors require an indoor native footprint");
   }
   for (const r of value.rooms) for (const other of rooms) if (r.id !== other.id && overlaps(r.bounds, other.bounds)) throw new Error("Room interiors overlap");
@@ -270,12 +270,14 @@ export function validateSpatialBlueprint(input: unknown, existingRooms: readonly
   const anchors = [...value.rooms.map(r => r.entry), ...value.spawns.map(s => s.position), ...value.props.flatMap(p => p.interactionAnchors.map(a => ({ x: p.position.x + a.x, y: p.position.y + a.y }))), ...value.doors.map(d => d.position)];
   if (anchors.some(p => !clear(p))) throw new Error("Spawn, entry, doorway or interaction anchor is blocked");
   // Bounded deterministic flood fill catches a decorative but unusable room.
-  const step = .25, snap = (p: SpatialPoint): SpatialPoint => ({ x: Math.round(p.x / step) * step, y: Math.round(p.y / step) * step });
+  // Large outdoor worlds flood at .5 m (the walkable grid there is coarser still).
+  const area = rooms.reduce((n, r) => n + (r.bounds.maxX - r.bounds.minX) * (r.bounds.maxY - r.bounds.minY), 0);
+  const step = area > 4000 ? .5 : .25, snap = (p: SpatialPoint): SpatialPoint => ({ x: Math.round(p.x / step) * step, y: Math.round(p.y / step) * step });
   const key = (p: SpatialPoint) => `${p.x},${p.y}`;
   const queue = [snap(anchors[0])], reached = new Set([key(queue[0])]);
   if (!clear(queue[0])) throw new Error("Room entry has no walkable grid cell");
   for (let i = 0; i < queue.length; i++) {
-    if (queue.length > 32768) throw new Error("Spatial navigation preflight budget exceeded");
+    if (queue.length > 262144) throw new Error("Spatial navigation preflight budget exceeded");
     const p = queue[i];
     for (const d of [{ x: step, y: 0 }, { x: -step, y: 0 }, { x: 0, y: step }, { x: 0, y: -step }]) {
       const next = { x: p.x + d.x, y: p.y + d.y }, k = key(next);

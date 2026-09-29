@@ -51,7 +51,7 @@ import type { SpatialControlView, SpatialOperatorActor, SpatialSceneCue, Spatial
 import { CONTROL_JOG_SPEED, CONTROL_NEARBY_METRES, CONTROL_RUN_SPEED, CONTROL_STEP_METRES, DEFAULT_VISITOR_PERSONA, VISITOR_LIMIT, controlActSchema, controlSaySchema, controlTakeSchema,
   controlVisitorSchema, controlWalkSchema, nativeControlAction, projectHeardSpeech } from "./spatial-control";
 import { createSpatialInterviews } from "./spatial-interview";
-import { spatialAgentConfig, validateSpatialScenario, type SpatialScenarioDefinition } from "./spatial-scenario";
+import { SPATIAL_MAX_GRID_CELLS, spatialAgentConfig, spatialGridCells, validateSpatialScenario, type SpatialScenarioDefinition } from "./spatial-scenario";
 import { createTownScenario, type TownFixture } from "./spatial-town-fixtures";
 import { createSpatialTownGrowth, townGrowthSites, TOWN_GROWTH_ATTEMPTS, type TownGrowthAddition, type TownGrowthSnapshot, type TownGrowthSite } from "./spatial-town-growth";
 import { createSpatialTownLife, townEvolutionConfig } from "./spatial-town-life";
@@ -203,7 +203,9 @@ export class SpatialDemo {
     w.time.simulationHour = evening ? 18 : 15;
     w.time.timeOfDay = evening ? "evening" : "afternoon";
     this.blueprint = blueprintFor(options);
-    this.spatial = createSpatialWorld(w, { bounds: options.world?.bounds ?? { minX: 0, minY: 0, maxX: 16, maxY: 11 }, cellSize: options.world?.navigationCellSize ?? .25, actorRadius: .18, speed: 1.25 });
+    const spatialBounds = options.world?.bounds ?? { minX: 0, minY: 0, maxX: 16, maxY: 11 }, spatialCell = options.world?.navigationCellSize ?? .25;
+    this.spatial = createSpatialWorld(w, { bounds: spatialBounds, cellSize: spatialCell, actorRadius: .18, speed: 1.25,
+      maxCells: Math.max(10_000, Math.min(SPATIAL_MAX_GRID_CELLS, spatialGridCells(spatialBounds, spatialCell))) });
     this.actors = this.blueprint.spawns.map(spawn => {
       const matches = [...query(w, [Agent, Name])].filter(id => Name.value[id] === spawn.name);
       if (matches.length !== 1) throw Error(`Spatial resident must have one native identity: ${spawn.name}`);

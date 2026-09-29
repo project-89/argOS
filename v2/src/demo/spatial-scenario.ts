@@ -39,15 +39,22 @@ export interface SpatialScenarioDefinition {
  * navigation and resident bindings as one package, then detach caller data.
  * The host's bounded navigation grid and per-session construction ceiling cannot be
  * bypassed by a pretty scene or a resident naming an uninstalled object. */
+/** The pathfinder's own ceiling. */
+export const SPATIAL_MAX_GRID_CELLS = 65_536;
+export function spatialGridCells(b: { minX: number; minY: number; maxX: number; maxY: number }, cellSize: number): number {
+  return (Math.floor((b.maxX - b.minX) / cellSize) + 1) * (Math.floor((b.maxY - b.minY) / cellSize) + 1);
+}
 export function validateSpatialScenario(input: SpatialScenarioDefinition): SpatialScenarioDefinition {
   const value = structuredClone(input);
   value.blueprint = validateSpatialBlueprint(value.blueprint);
   const { bounds: b, blueprint, residents } = value;
   const cellSize = value.navigationCellSize ?? .25;
-  if (cellSize !== .25 && cellSize !== .5) throw Error("Unsupported navigation resolution");
+  // 1 m cells serve large outdoor worlds (a 160 m map paths in ~27 ms, measured
+  // 2026-09-29, against ~18 ms for the 48 m town at .5 m).
+  if (cellSize !== .25 && cellSize !== .5 && cellSize !== 1) throw Error("Unsupported navigation resolution");
   if (!value.id?.trim() || !value.title?.trim() || !b || !Object.values(b).every(Number.isFinite)
     || b.maxX <= b.minX || b.maxY <= b.minY
-    || (Math.floor((b.maxX - b.minX) / cellSize) + 1) * (Math.floor((b.maxY - b.minY) / cellSize) + 1) > 10000)
+    || spatialGridCells(b, cellSize) > SPATIAL_MAX_GRID_CELLS)
     throw Error("Scenario exceeds the bounded spatial grid");
   if (!Number.isSafeInteger(value.maxWorldEntities) || value.maxWorldEntities < 1 || value.maxWorldEntities > 1000)
     throw Error("Scenario needs a bounded construction budget");
