@@ -16,7 +16,7 @@ import { addPerception, addThought, getAgentThoughts, type AgentAction } from ".
 import { drainPendingStimuli } from "../cognition/stimulus-queue";
 import { wakeForegroundCognition } from "../cognition/idle-cognition";
 import { snapshotAffect } from "../cognition/affect-state";
-import { getAgentImpressions } from "../cognition/knowledge-graph";
+import { addMemory, getAgentImpressions } from "../cognition/knowledge-graph";
 import { formatPlansForContext } from "../cognition/planning-system";
 import { getSocialDialogue } from "../cognition/social-memory";
 import { getSpiritSystemState } from "../spirits/spirit-system";
@@ -61,6 +61,9 @@ import { createSettlementScenario } from "./spatial-settlement";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
 import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
 import { SettlementAutopilot } from "./spatial-autopilot";
+import type { Percept } from "../cognition/autopilot-attention";
+import { JevClient } from "../llm/jev";
+import { configureDecisionLeaves } from "../cognition/decision-leaves";
 import { setMindGate } from "../runtime/attention";
 import { SkillGraph } from "../learning/skill-graph";
 import type { Planner } from "../learning/skill-runtime";
@@ -126,7 +129,9 @@ type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; sce
   onPlanningEvent?: (event: PlanningEvent) => void;
   story?: "community-drama" | "household" | "coastal-mystery" | "settlement";
   /** Settlement: residents work their trades by habit (skill graphs by trade, e.g. trained headless). */
-  settlementWork?: { graphs: Map<string, SkillGraph>; planner?: (trade: string) => Planner; log?: (line: string) => void };
+  settlementWork?: { graphs: Map<string, SkillGraph>; planner?: (trade: string) => Planner; log?: (line: string) => void;
+    /** Jev judges attention and memory (default: from TYPESAFE_API_KEY when set). */
+    jev?: JevClient };
   /** One explicitly operator-approved generated mechanic; not broad engineering. */
   weatherMechanic?: { directory: string; backend?: "codex" | "gemini" };
   /** Explicit broader engineering profile; not implied by viewing a town. */
@@ -1082,6 +1087,9 @@ export class SpatialDemo {
       onTick: listener => { this.tickListeners.add(listener); return () => { this.tickListeners.delete(listener); }; },
       now: () => this.atSimMs };
     const noPlanner: Planner = async () => [];
+    // A fast judge for attention and memory, when configured.
+    const jev = work.jev ?? JevClient.fromEnv();
+    if (jev) configureDecisionLeaves(w, { jev });
     // Habits run the day; attention decides when a mind looks up.
     const managed = SALTMERE_LAND.residents.map(r => this.actors.find(a => Name.value[a] === r.name)).filter((a): a is number => a !== undefined);
     const residents = this.options.world?.residents ?? [];
@@ -1097,6 +1105,9 @@ export class SpatialDemo {
       },
       onErrand: (eid, errand) => { this.tradeLives.find(l => l.eid === eid)?.errands.push(errand); },
       mindAvailable: () => w.meta.aiEnabled !== false,
+      ...(jev ? { appraise: (eid: number, percept: Percept) => this.appraiseWithJev(jev, eid, percept), remember: (eid: number, text: string, importance: number) => {
+        addMemory(w, eid, { type: "episodic", content: text, importance: Math.max(.1, Math.min(1, importance)), emotionalValence: 0, timestamp: Date.now() });
+      } } : {}),
       record: line => this.record("world", line) });
     setMindGate(w, autopilot.gate);
     this.tickListeners.add(() => autopilot.tick());
@@ -1118,6 +1129,27 @@ export class SpatialDemo {
       this.tradeLives.push(life);
       void life.live().catch(error => console.warn(`[Settlement] ${r.name} stopped working: ${error instanceof Error ? error.message : error}`));
     }
+  }
+  /** One Jev call per notable percept: attend now? remember? how much does it matter to this person? */
+  private async appraiseWithJev(jev: JevClient, eid: number, percept: Percept) {
+    const resident = this.options.world?.residents.find(r => r.name === Name.value[eid]);
+    const life = this.tradeLives.find(l => l.eid === eid);
+    const stateValue = { character: { name: Name.value[eid], role: Agent.role[eid] ?? "", persona: String(Agent.systemPrompt[eid] || "").slice(0, 900),
+        cares_about: [...new Set((resident?.past?.memories ?? []).flatMap(m => m.cues))].slice(0, 12),
+        hides: resident?.past?.secret ? "has a secret they would not want known (see persona)" : "nothing in particular" },
+      doing: life ? `working as the town's ${life.trade}` : "going about their day",
+      just_happened: percept.text };
+    const LEVELS = ["It does not matter to them at all", "A passing detail", "Somewhat notable", "It matters to them", "It matters a great deal to them"];
+    try {
+      const { answers } = await jev.ask(stateValue, {
+        wake: { type: "noul", instructions: `Would ${Name.value[eid]} stop what they are doing and give this their full attention right now?` },
+        remember: { type: "noul", instructions: `Is this something ${Name.value[eid]} would remember later?` },
+        importance: { type: "score", instructions: `How much does this matter to ${Name.value[eid]}, given who they are and what they care about and hide?`, criteria: LEVELS },
+      });
+      const wake = answers.wake?.noul, remember = answers.remember?.noul, score = answers.importance?.score;
+      if (typeof wake !== "number" || typeof remember !== "number") return undefined;
+      return { wake, remember, importance: typeof score === "number" ? score / (LEVELS.length - 1) : .5 };
+    } catch { return undefined; }
   }
   private spawnSettlementItem(actor: number, kind: string): number | undefined {
     const w = this.sim.world;

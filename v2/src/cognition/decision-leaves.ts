@@ -28,6 +28,7 @@ import { extractJSON } from "../llm/json-extract";
 import { getSocialDialogue } from "./social-memory";
 import { getAgentVisualEntities } from "./world-capabilities";
 import { readAttention } from "../runtime/attention";
+import type { JevClient } from "../llm/jev";
 import type { DecisionFeatures } from "../learning/slot-rules";
 
 export type DecisionRequest =
@@ -59,7 +60,9 @@ export const DEFAULT_DECISION_LEAF_CONFIG: DecisionLeafConfig = { timeoutMs: 6_0
 
 type Slot = { key: string; actorKey: string; fingerprint: string; startedAtSimMs: number; answer?: DecisionAnswer; promise?: Promise<DecisionAnswer> };
 type State = { slots: Map<string, Slot>; inFlight: number; calls: number[]; log: DecisionLogRow[]; stats: DecisionStats;
-  generate?: DecisionGenerator; config: DecisionLeafConfig };
+  generate?: DecisionGenerator; config: DecisionLeafConfig;
+  /** Jev answers the closed questions (pick, yes/no) with calibrated probabilities; words stay with the language model. */
+  jev?: JevClient };
 export type DecisionStats = { calls: number; model: number; fallback: number; tokensIn: number; tokensOut: number; distilled: number };
 export type DecisionGenerator = (input: { system: string; prompt: string; maxOutputTokens: number; abortSignal: AbortSignal }) =>
   Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number } }>;
@@ -75,11 +78,12 @@ function state(world: World): State {
   return s;
 }
 
-export function configureDecisionLeaves(world: World, config: Partial<DecisionLeafConfig> & { generate?: DecisionGenerator }): void {
+export function configureDecisionLeaves(world: World, config: Partial<DecisionLeafConfig> & { generate?: DecisionGenerator; jev?: JevClient }): void {
   const s = state(world);
-  const { generate, ...rest } = config;
+  const { generate, jev, ...rest } = config;
   s.config = { ...s.config, ...rest };
   if (generate) s.generate = generate;
+  if (jev) s.jev = jev;
 }
 export function getDecisionLog(world: World): readonly DecisionLogRow[] { return state(world).log; }
 export function getDecisionStats(world: World): DecisionStats { return { ...state(world).stats }; }
@@ -89,7 +93,7 @@ function apiKey(): boolean {
   return !!String(process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
 }
 function modelAvailable(world: World, s: State): boolean {
-  return world.meta.aiEnabled !== false && (!!s.generate || apiKey());
+  return world.meta.aiEnabled !== false && (!!s.generate || !!s.jev || apiKey());
 }
 
 export function fallbackAnswer(request: DecisionRequest): DecisionAnswer {
@@ -165,7 +169,32 @@ function withinBudget(s: State): boolean {
   return s.inFlight < s.config.maxInFlight && s.calls.length < s.config.maxPerMinute;
 }
 
+/** A closed question as a Jev call: the character and scene as state. */
+async function askJev(world: World, eid: number, request: Exclude<DecisionRequest, { kind: "say" }>, jev: JevClient, s: State): Promise<DecisionAnswer | null> {
+  const persona = clip(String(Agent.systemPrompt[eid] || ""), 700);
+  const stateValue = { character: { name: Name.value[eid], role: Agent.role[eid] ?? "", persona }, scene: scene(world, eid, 4) };
+  const tokensBefore = jev.stats.inputTokens + jev.stats.outputTokens;
+  const response = request.kind === "pick"
+    ? await jev.ask(stateValue, { answer: { type: "choice", instructions: `${request.question} Choose as ${Name.value[eid]} would.`,
+      criteria: Object.fromEntries(request.options.map((o, i) => [`o${i}`, o])) } })
+    : await jev.ask(stateValue, { answer: { type: "noul", instructions: `${request.question} Answer as ${Name.value[eid]} would.` } });
+  s.stats.tokensIn += jev.stats.inputTokens + jev.stats.outputTokens - tokensBefore;
+  const answer = response.answers.answer;
+  if (request.kind === "pick") {
+    const index = Number(String(answer?.choice ?? "").replace(/^o/, ""));
+    return Number.isInteger(index) && index >= 0 && index < request.options.length ? { kind: "pick", index, source: "model" } : null;
+  }
+  return typeof answer?.noul === "number" ? { kind: "yes_no", yes: answer.noul >= .5, source: "model" } : null;
+}
+
 async function callModel(world: World, eid: number, request: DecisionRequest, s: State): Promise<DecisionAnswer> {
+  if (s.jev && request.kind !== "say") {
+    s.inFlight++; s.calls.push(Date.now()); s.stats.calls++;
+    try { const answer = await askJev(world, eid, request, s.jev, s); if (answer) { s.stats.model++; return answer; } }
+    catch { /* the fallback answer stands */ } finally { s.inFlight--; }
+    s.stats.fallback++;
+    return fallbackAnswer(request);
+  }
   const { system, prompt, maxOutputTokens } = decisionPrompt(world, eid, request);
   s.inFlight++; s.calls.push(Date.now()); s.stats.calls++;
   const abortSignal = AbortSignal.timeout(s.config.timeoutMs);

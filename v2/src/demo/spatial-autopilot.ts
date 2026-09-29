@@ -35,6 +35,11 @@ export type AutopilotHost = {
   onErrand(eid: number, errand: Errand): void;
   /** Is there a mind to hand the floor to (a live model)? Without one, perception is only noted. */
   mindAvailable(): boolean;
+  /** A fast judge (Jev): does this call for the mind now, is it worth remembering, how much does it matter?
+   * Replaces the yes/no glance when present. Probabilities in [0, 1]; importance in [0, 1]. */
+  appraise?(eid: number, percept: Percept): Promise<{ wake: number; remember: number; importance: number } | undefined>;
+  /** Keep something as a memory without waking the mind. */
+  remember?(eid: number, text: string, importance: number): void;
   record(line: string): void;
 };
 
@@ -48,6 +53,7 @@ export class SettlementAutopilot {
   private readonly lastAwake = new Map<number, number>();
   private readonly lastGlance = new Map<number, number>();
   private readonly glances = new Map<number, { slot: string; request: { kind: "yes_no"; question: string }; percept: Percept }>();
+  private readonly appraisals = new Map<number, { percept: Percept; result: undefined | { wake: number; remember: number; importance: number } | null }>();
   private readonly errandAsks = new Map<number, { slot: string; request: { kind: "pick"; question: string; options: string[] } }>();
   readonly log: Array<{ at: number; who: string; what: string }> = [];
   private sequence = 0;
@@ -72,7 +78,12 @@ export class SettlementAutopilot {
     const verdict = this.filter(eid).perceive(percept);
     if (!this.host.mindAvailable()) { if (verdict.level !== "notice") this.note(eid, `notices: ${percept.text.slice(0, 100)}`); return; }
     if (verdict.level === "wake") this.wake(eid, percept.text, percept.source);
-    else if (verdict.level === "glance" && !this.glances.has(eid) && this.host.now() - (this.lastGlance.get(eid) ?? -Infinity) > GLANCE_GAP_MS) {
+    else if (verdict.level === "glance" && this.host.appraise && !this.appraisals.has(eid)) {
+      const pending = { percept, result: undefined as undefined | { wake: number; remember: number; importance: number } | null };
+      this.appraisals.set(eid, pending);
+      this.host.appraise(eid, percept).then(r => { pending.result = r ?? null; }, () => { pending.result = null; });
+    }
+    else if (verdict.level === "glance" && !this.host.appraise && !this.glances.has(eid) && this.host.now() - (this.lastGlance.get(eid) ?? -Infinity) > GLANCE_GAP_MS) {
       this.lastGlance.set(eid, this.host.now());
       const request = { kind: "yes_no" as const, question: `While you work, you notice: ${percept.text}. Do you stop what you are doing to deal with it?` };
       this.glances.set(eid, { slot: `glance:${++this.sequence}`, request, percept });
@@ -102,6 +113,14 @@ export class SettlementAutopilot {
   /** Each tick: settle glances, hand back quiet floors, settle errands. */
   tick(): void {
     const now = this.host.now();
+    for (const [eid, a] of [...this.appraisals]) {
+      if (a.result === undefined) continue;
+      this.appraisals.delete(eid);
+      if (!a.result) continue;
+      if (a.result.remember >= .5) { this.host.remember?.(eid, a.percept.text, a.result.importance); this.note(eid, `remembers: ${a.percept.text.slice(0, 80)} (${a.result.importance.toFixed(2)})`); }
+      if (a.result.wake >= .6 && !this.floors.has(eid)) this.wake(eid, a.percept.text, a.percept.source);
+      else if (a.result.remember < .5) this.note(eid, `lets it pass (${a.percept.text.slice(0, 80)})`);
+    }
     for (const [eid, g] of [...this.glances]) {
       const poll = requestDecision(this.host.world, eid, g.slot, g.request);
       if (poll.status === "pending") continue;

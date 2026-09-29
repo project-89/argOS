@@ -138,3 +138,20 @@ describe("slot hardening", () => {
     expect(distillPickRule(varied)).toBeUndefined();
   });
 });
+
+describe("decision leaves answered by Jev", () => {
+  test("pick becomes a Choice and yes/no a Noul over the character and scene; words stay with the language model", async () => {
+    const { JevClient } = await import("../../llm/jev");
+    const bodies: any[] = [];
+    const fetcher = (async (_url: any, init: any) => { const body = JSON.parse(String(init.body)); bodies.push(body);
+      const q = body.questions.answer;
+      return new Response(JSON.stringify({ model: "jev", answers: { answer: q.type === "choice" ? { type: "choice", choice: "o1", confidence: .8 } : { type: "noul", noul: .2 } } }), { status: 200 }); }) as typeof fetch;
+    const f = fixture(() => { throw new Error("no language model call expected"); });
+    configureDecisionLeaves(f.world, { jev: new JevClient({ apiKey: "k", fetch: fetcher }) });
+    expect(await decideNow(f.world, f.ada, "p", { kind: "pick", question: "Who first?", options: ["Wren", "Otis"] })).toEqual({ kind: "pick", index: 1, source: "model" });
+    expect(await decideNow(f.world, f.ada, "q", { kind: "yes_no", question: "Open the box?" })).toEqual({ kind: "yes_no", yes: false, source: "model" });
+    expect(bodies[0].questions.answer).toMatchObject({ type: "choice", criteria: { o0: "Wren", o1: "Otis" } });
+    expect(bodies[0].state.character.name).toBe("Ada");
+    expect(f.calls).toHaveLength(0);
+  });
+});
