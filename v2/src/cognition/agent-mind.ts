@@ -880,7 +880,7 @@ ${formatSocialMemoryContext(world, eid)}`;
 export function fastReplyPrompt(name: string, address: { speaker: string; content: string }, validTypes: readonly string[]): string {
   return `${address.speaker} just said to you: ${JSON.stringify(address.content)}
 
-Answer as ${name} would, right now, in your own voice — usually 1 to 3 sentences. Be yourself:
+Answer as ${name} would, right now, in your own voice — a sentence or two, as people really talk. Be yourself:
 warm, guarded, curt, curious, evasive, teasing or hostile, whatever this person and this moment
 call for, given what you want and what you're hiding. Most people answer when spoken to directly,
 even briefly; you can still deflect, refuse or walk away if that is truly you.
@@ -1442,8 +1442,8 @@ HOW THINGS WORK
 - What others say is their claim. Believe it, doubt it, test it — as you would.
 - Asked something you don't know? Say so, speculate out loud, or ask or inspect first.
   Saying something happened doesn't make it so — lying on purpose is a different matter.
-- Speaking: say what ${name} would really say, in your own voice — usually 1 to 3
-  sentences. Subtext, evasion, humor, heat and tenderness all belong. You don't
+- Speaking: say what ${name} would really say, in your own voice — usually a sentence or two,
+  as people really talk; a longer speech only when the moment truly calls for it. Subtext, evasion, humor, heat and tenderness all belong. You don't
   need to wrap up politely; you can walk off, change the subject or keep pushing.
   Conversation now: ${speechOpportunity.available ? "you can speak" : `someone else has the floor (${speechOpportunity.reason})`}.
   To cut in anyway, set speechMode:"interrupt" on speak.${speakingAtRequest ? `
