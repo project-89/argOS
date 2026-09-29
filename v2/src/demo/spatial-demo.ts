@@ -1078,6 +1078,13 @@ export class SpatialDemo {
     p.publicDetail = `Wrote ${Name.value[note]}.`;
     return { success: true, detail: `You wrote ${Name.value[note]} and are holding it. It says: ${JSON.stringify(text)}` };
   }
+  /** The settlement's day: one game day per real hour by default (ARGOS_SETTLEMENT_DAY_MINUTES). Dawn at 6. */
+  private get settlementDayMs() { return Math.max(1, Number(process.env.ARGOS_SETTLEMENT_DAY_MINUTES ?? 60)) * 60_000; }
+  settlementHour(): number { return (SALTMERE_LAND.night.dawnHour + this.atSimMs / this.settlementDayMs * 24) % 24; }
+  settlementNight(): boolean { const h = this.settlementHour(), n = SALTMERE_LAND.night; return h >= n.bedHour || h < n.wakeHour; }
+  private settlementMsUntilDawn(): number { const h = this.settlementHour(); return ((SALTMERE_LAND.night.wakeHour - h + 24) % 24) / 24 * this.settlementDayMs; }
+  /** 0 at night, 1 at midday; smooth dawn and dusk. */
+  private settlementDaylight(): number { const h = this.settlementHour(); return Math.max(0, Math.min(1, Math.sin(Math.PI * (h - 5) / 16) * 1.4)); }
   /** Hand residents what they carry (a fisher's net, a woodcutter's axe) and, if
    * asked, start their trades by habit. */
   private startSettlementWork() {
@@ -1092,6 +1099,10 @@ export class SpatialDemo {
       kindOf: eid => this.settlementKinds.get(eid),
       rooms: () => this.roomViews.map(r => ({ eid: r.id, name: r.name, kind: SALTMERE_LAND.places.find(p => p.name === r.name)?.kind ?? (r.name === "The Net House" ? "net-house" : "") })),
       stall: () => [...this.settlementKinds].find(([, k]) => k === "stall")?.[0],
+      isNight: () => this.settlementNight(),
+      shelter: eid => { const home = this.recipes!.homeOf(eid); if (home !== undefined) return home;
+        const i = SALTMERE_LAND.residents.findIndex(r => r.name === Name.value[eid]);
+        return i < 0 ? undefined : [...this.settlementKinds].find(([e, k]) => k === "tent" && Name.value[e] === `Tent ${i + 1}`)?.[0]; },
       personNamed: name => this.actors.find(a => Name.value[a].toLowerCase() === name.trim().toLowerCase()),
       onTick: listener => { this.tickListeners.add(listener); return () => { this.tickListeners.delete(listener); }; },
       now: () => this.atSimMs };
@@ -1245,7 +1256,12 @@ export class SpatialDemo {
         this.sim.god.registry.byName.set(Name.value[plot], plot);
         this.announcePhysicalChange(plot, `${Name.value[plot]} now stands here.`, "new building");
       },
-      record: line => this.record("world", line) });
+      record: line => this.record("world", line),
+      shelterOf: actor => { const home = recipes.homeOf(actor); if (home !== undefined) return home;
+        const i = SALTMERE_LAND.residents.findIndex(r => r.name === Name.value[actor]);
+        return i < 0 ? undefined : [...this.settlementKinds].find(([e, k]) => k === "tent" && Name.value[e] === `Tent ${i + 1}`)?.[0]; },
+      houseless: () => this.actors.filter(a => SALTMERE_LAND.residents.some(r => r.name === Name.value[a]) && recipes.homeOf(a) === undefined),
+      msUntilDawn: () => this.settlementMsUntilDawn() });
     for (const [eid, kind] of this.settlementKinds) {
       const thing = SALTMERE_LAND.things.find(t => t.kind === kind && Name.value[eid] === t.name);
       recipes.installSource(eid, thing?.uses);
@@ -1940,8 +1956,9 @@ export class SpatialDemo {
     return { sourceId: this.sourceId, atSimMs: this.atSimMs, tick: w.time.tick, running: this.running, status: this.stopped ? "stopped" : this.started ? "running" : "ready", mode: this.live ? "live" : "manual",
       rooms: structuredClone(this.roomViews), entities, actors, events: structuredClone(this.events.slice(-100)),
       ...(this.blackout ? { scenario: this.blackout.view() } : this.options.world ? { scenario: { id: this.options.scenario === "household" ? "household" as const : "town" as const,
-        title: this.options.world.title, phase: this.options.scenario === "household" ? "authored household" : this.options.story === "coastal-mystery" ? "authored coastal mystery" : "authored neighborhood",
-        ...(this.options.story === "coastal-mystery" ? { theme: "lovecraft" as const } : {}) } } : {}),
+        title: this.options.world.title, phase: this.options.scenario === "household" ? "authored household" : this.options.story === "coastal-mystery" ? "authored coastal mystery" : this.options.story === "settlement" ? "the drowned town" : "authored neighborhood",
+        ...(this.options.story === "coastal-mystery" || this.options.story === "settlement" ? { theme: "lovecraft" as const } : {}),
+        ...(this.recipes ? { hour: +this.settlementHour().toFixed(2), daylight: +this.settlementDaylight().toFixed(2) } : {}) } } : {}),
       ...(this.houseSpirit ? { worldControl: this.houseSpirit.view() } : {}),
       ...(this.townLife ? { townLife: this.townLife.view(), weather: this.townLife.weatherView() } : {}),
       ...(this.godConsole && this.options.development ? { development: this.godConsole.view() } : {}),

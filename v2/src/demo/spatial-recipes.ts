@@ -35,6 +35,12 @@ export type SpatialRecipeHost = {
   handOver(item: number, actor: number): boolean;
   /** A finished structure: change the plot's look. */
   raised(plot: number, structure: LandStructure, count: number): void;
+  /** Where this resident sleeps: their house once they have one, else their tent. */
+  shelterOf?(actor: number): number | undefined;
+  /** Residents without a house yet, in order. */
+  houseless?(): number[];
+  /** Milliseconds until dawn (sleep lasts until then). */
+  msUntilDawn?(): number;
   record(line: string): void;
 };
 
@@ -44,6 +50,10 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
   const { world: w, land } = host;
   const uses = new Map<number, number>(), wear = new Map<number, number>(), plotParts = new Map<number, string[]>(), plotBusy = new Set<number>();
   const coins = new Map<number, number>(), builtCount: Record<string, number> = {};
+  /** Houses by resident, and how rested last night left them (work goes at this speed). */
+  const homes = new Map<number, number>(), rest = new Map<number, number>();
+  const restOf = (actor: number) => rest.get(actor) ?? 1;
+  const shelterRest = (kind: string | undefined) => land.shelter.find(x => x.kind === kind)?.rest ?? 1;
   let treasury = land.treasury;
   const hand = (actor: number) => listDirectContents(w, actor).filter(e => entityExists(w, e));
   const held = (actor: number, kind: string) => hand(actor).filter(e => host.kindOf(e) === kind);
@@ -65,6 +75,7 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
     /** Install a limited source's uses (from the land data). */
     installSource(eid: number, thingUses: number | undefined) { if (thingUses !== undefined) uses.set(eid, thingUses); },
     coinsOf, treasury: () => treasury, builtCount: () => ({ ...builtCount }),
+    homeOf: (actor: number) => homes.get(actor), restOf,
     /** A limited source with uses left (a tree not yet felled). */
     usable,
 
@@ -76,6 +87,7 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
       if (kind === "stall") verbs.push("buy", "sell");
       const food = land.foods.find(f => f.kind === kind);
       if (food && getDirectContainer(w, target) === actor) verbs.push(food.thirst && !food.hunger ? "drink" : "eat");
+      if ((kind === "tent" || kind === "house") && host.shelterOf?.(actor) === target) verbs.push("sleep");
       return [...new Set(verbs)];
     },
 
@@ -83,6 +95,10 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
       { ok: true; operation: RecipeOperation; durationMs: number } | { ok: false; reason: string } {
       const kind = host.kindOf(target), arg = argument.trim().toLowerCase();
       const op: RecipeOperation = { actor, actorKey: host.key(actor), target, targetKey: host.key(target), verb, argument: arg, gives: {}, took: [], tools: [] };
+      if (verb === "sleep") {
+        if (host.shelterOf?.(actor) !== target) return { ok: false, reason: "That is not where you sleep." };
+        return { ok: true, operation: op, durationMs: Math.max(60_000, host.msUntilDawn?.() ?? 60_000) };
+      }
       if (verb === "eat" || verb === "drink") {
         const food = land.foods.find(f => f.kind === kind);
         if (!food || getDirectContainer(w, target) !== actor) return { ok: false, reason: "Hold it first." };
@@ -120,7 +136,7 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
         if (lack) return { ok: false, reason: `The ${part.part} needs ${lack.count} more ${lack.kind}.` };
         for (const [k, n] of Object.entries(part.needs)) op.took.push(...held(actor, k).slice(0, n));
         op.build = { structure, part: part.part };
-        return { ok: true, operation: op, durationMs: part.durationS * 1000 / 10 };
+        return { ok: true, operation: op, durationMs: part.durationS * 1000 / 10 / restOf(actor) };
       }
       const recipe: LandRecipe | undefined = recipesAt(kind).find(r => r.verb === verb && (!r.product || !arg || r.product === arg || Object.keys(r.gives).includes(arg)));
       if (!recipe) {
@@ -133,7 +149,7 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
       for (const [k, n] of Object.entries(recipe.needs ?? {})) op.took.push(...held(actor, k).slice(0, n));
       op.gives = { ...recipe.gives }; op.tools = [...(recipe.tools ?? [])];
       // Game time: a recipe's minutes pass ten times faster than the land's accounting.
-      return { ok: true, operation: op, durationMs: (recipe.durationS ?? 120) * 1000 / 10 };
+      return { ok: true, operation: op, durationMs: (recipe.durationS ?? 120) * 1000 / 10 / restOf(actor) };
     },
 
     /** Still possible at completion? (materials still in hand, source not taken meanwhile) */
@@ -146,6 +162,11 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
 
     commit(op: RecipeOperation): { success: boolean; detail: string } {
       const actorName = Name.value[op.actor];
+      if (op.verb === "sleep") {
+        const kind = host.kindOf(op.target);
+        rest.set(op.actor, shelterRest(kind));
+        return { success: true, detail: `You slept till dawn in ${kind === "house" ? "the house" : "your tent"}.` };
+      }
       if (op.food) {
         for (const e of op.took) host.consume(e);
         if (hasComponent(w, op.actor, Needs) && op.food.hunger) Needs.hunger[op.actor] = Math.max(0, (Needs.hunger[op.actor] ?? 0) - op.food.hunger);
@@ -169,6 +190,11 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
           builtCount[op.build.structure.kind] = (builtCount[op.build.structure.kind] ?? 0) + 1;
           host.setKind(op.target, op.build.structure.becomes);
           host.raised(op.target, op.build.structure, builtCount[op.build.structure.kind]);
+          // A new house takes in whoever is still sleeping in a tent.
+          const sleeps = land.shelter.find(x => x.kind === op.build!.structure.becomes)?.sleeps ?? 0;
+          for (const resident of (host.houseless?.() ?? []).filter(r => !homes.has(r)).slice(0, sleeps)) {
+            homes.set(resident, op.target); host.record(`${Name.value[resident]} moves out of a tent into ${Name.value[op.target]}.`);
+          }
           plotParts.delete(op.target);
           host.record(`${actorName} finished the ${op.build.structure.name.toLowerCase()}.`);
           return { success: true, detail: `You built the ${op.build.part}: the ${op.build.structure.name} is finished.` };

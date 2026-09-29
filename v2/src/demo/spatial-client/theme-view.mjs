@@ -15,6 +15,22 @@ export function worldTheme(scenario) {
 /** Theme changes illumination only. Actual weather keeps its own ordering and
  * remains the sole source of cloud count, rain and native surface wetness. */
 export function sceneLighting(scenario, weather) {
+  const day = daylightOf(scenario), lit = sceneLightingAtNoon(scenario, weather);
+  if (day === undefined) return lit;
+  // Night: dim and blue; dawn and dusk blend between.
+  return { keyColor: mix(lit.keyColor, '#7f96c8', 1 - day), keyIntensity: lit.keyIntensity * (.12 + .88 * day),
+    skyColor: mix(lit.skyColor, '#3c4f78', 1 - day), skyIntensity: lit.skyIntensity * (.3 + .7 * day), groundColor: mix(lit.groundColor, '#2a2f3a', 1 - day) };
+}
+/** The settlement's daylight (0 night … 1 midday), when the world reports one. */
+export function daylightOf(scenario) {
+  const d = scenario?.daylight;
+  return typeof d === 'number' && Number.isFinite(d) ? Math.max(0, Math.min(1, d)) : undefined;
+}
+function mix(a, b, t) {
+  const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)), x = p(a), y = p(b);
+  return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('');
+}
+function sceneLightingAtNoon(scenario, weather) {
   const condition = weather?.condition ?? 'clear';
   if (worldTheme(scenario)) return {
     keyColor: condition === 'clear' ? '#ecc8a2' : '#a6bbc7',

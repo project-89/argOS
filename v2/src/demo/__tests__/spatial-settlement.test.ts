@@ -120,3 +120,34 @@ test("autopilot: spoken to, a fisher looks up (habit pauses, only his mind may t
   expect(fish(leon)).toBeGreaterThan(leonFish);
   expect(d.autopilot!.holds(otis)).toBe(false);
 }, 180_000);
+
+test("night: residents walk to their tents at bedtime, sleep till dawn, and the world reports its daylight", async () => {
+  const { runSettlementLife } = await import("../../learning/settlement/run-settlement");
+  const { SkillGraph } = await import("../../learning/skill-graph");
+  const { getWorkingMemory } = await import("../../cognition/working-memory");
+  const previous = process.env.ARGOS_SETTLEMENT_DAY_MINUTES;
+  process.env.ARGOS_SETTLEMENT_DAY_MINUTES = "6"; // a game day in six minutes: night at 4 min, dawn at 6
+  try {
+    const graphs = new Map<string, InstanceType<typeof SkillGraph>>();
+    await runSettlementLife({ days: 1, life: 1, graphs, planner: "manual" });
+    d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, seconds: 3600,
+      settlementWork: { graphs, jev: false } });
+    await d.start();
+    const w = d.sim.world;
+    const step = async (n: number) => { for (let i = 0; i < n; i++) { d!.advance(100); await new Promise(r => setImmediate(r)); } };
+    expect(d.snapshot().scenario).toMatchObject({ theme: "lovecraft", phase: "the drowned town" });
+    expect((d.snapshot().scenario as any).daylight).toBeGreaterThan(0);
+    await step(2700); // 22:15
+    expect(d.settlementNight()).toBe(true);
+    expect((d.snapshot().scenario as any).daylight).toBe(0);
+    await step(600);
+    const noor = d.actors.find(a => Name.value[a] === "Noor")!;
+    const { getRoomForEntity } = await import("../../ecs/location");
+    expect(Name.value[getRoomForEntity(w, noor)!]).toBe("Saltmere Common");
+    await step(700); // past dawn
+    expect(d.settlementNight()).toBe(false);
+    const slept = d.actors.filter(a => getWorkingMemory(w, a).receipts.some(r => /slept till dawn in your tent/.test(r.summary)));
+    expect(slept.length).toBeGreaterThanOrEqual(6);
+    expect(d.recipes!.restOf(slept[0])).toBe(.8); // a tent: a little slower today
+  } finally { if (previous === undefined) delete process.env.ARGOS_SETTLEMENT_DAY_MINUTES; else process.env.ARGOS_SETTLEMENT_DAY_MINUTES = previous; }
+}, 180_000);

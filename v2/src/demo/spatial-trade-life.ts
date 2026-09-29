@@ -36,6 +36,9 @@ export type SpatialTradeHost = {
   rooms(): Array<{ eid: number; name: string; kind: string }>;
   stall(): number | undefined;
   personNamed(name: string): number | undefined;
+  /** Night falls: residents go to their shelter and sleep till dawn. */
+  isNight?(): boolean;
+  shelter?(eid: number): number | undefined;
   /** Called on every simulation tick while subscribed. */
   onTick(listener: () => void): () => void;
   now(): number;
@@ -159,7 +162,7 @@ export class SpatialTradeLife {
     this.env = createSpatialSkillEnv(host, eid);
     this.solver = new SkillSolver(this.env, graph, planner, { maxPlannerCalls: 40, log: log ? line => log(`[${Name.value[eid]}] ${line}`) : undefined,
       // The habit yields at its next act when the mind has the floor (or hunger bites).
-      interrupt: () => this.stopped || (Needs.hunger[eid] ?? 0) >= 85 || !!this.attention?.holds(eid),
+      interrupt: () => this.stopped || (Needs.hunger[eid] ?? 0) >= 85 || !!this.attention?.holds(eid) || !!this.host.isNight?.(),
       onSurprise: (item, _skill, detail) => this.attention?.surprised(eid, item, detail) });
   }
   get stats(): SolveStats { return this.solver.stats; }
@@ -269,10 +272,20 @@ export class SpatialTradeLife {
     await pick.run();
     return true;
   }
+  /** Bed: walk to your tent (or house) and sleep till dawn. */
+  private async sleep(): Promise<void> {
+    const shelter = this.host.shelter?.(this.eid);
+    if (shelter === undefined) { await this.wait(60_000); return; }
+    const room = getRoomForEntity(this.host.world, shelter);
+    if (room !== undefined && room !== getRoomForEntity(this.host.world, this.eid)) await this.env.act({ verb: "move", target: Name.value[room] });
+    const slept = await this.env.act({ verb: "sleep", target: Name.value[shelter] });
+    if (!slept.ok) await this.wait(60_000);
+  }
   async live(): Promise<void> {
     while (!this.stopped && entityExists(this.host.world, this.eid)) {
       // The mind has the floor: the habit waits.
       if (this.attention?.holds(this.eid)) { await this.wait(2_000); continue; }
+      if (this.host.isNight?.()) { await this.sleep(); continue; }
       const errand = this.errands.shift();
       if (errand) { await this.errand(errand); continue; }
       if (await this.chooseNext()) continue;

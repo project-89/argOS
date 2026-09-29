@@ -719,7 +719,7 @@ function fitWorldLighting() {
 function syncTownWeather(snapshot) {
   const weather = weatherPresentation(snapshot);
   const theme = worldTheme(snapshot.scenario), lighting = sceneLighting(snapshot.scenario, weather);
-  const signature = JSON.stringify([snapshot.sourceId, theme?.id, weather, snapshot.rooms.map(room => [room.id, room.bounds, room.environment, !!room.building])]);
+  const signature = JSON.stringify([snapshot.sourceId, theme?.id, weather, Math.round((snapshot.scenario?.daylight ?? 1) * 20), snapshot.rooms.map(room => [room.id, room.bounds, room.environment, !!room.building])]);
   if (signature === weatherSignature) return;
   weatherSignature = signature;
   const condition = weather?.condition ?? 'clear';
