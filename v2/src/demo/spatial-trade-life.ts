@@ -41,6 +41,8 @@ export type SpatialTradeHost = {
   /** The settlement clock's hour and day (supper at the campfire in the evening). */
   hour?(): number;
   day?(): number;
+  /** Real milliseconds per game day (waits and rests are in game time). */
+  dayMs?(): number;
   /** Where supper is: the campfire. */
   campfire?(): number | undefined;
   /** What their own mind wants (active goals, not the day's trade), most pressing first. */
@@ -197,6 +199,8 @@ export class SpatialTradeLife {
       skillRuns: all.reduce((n, x) => n + x.skillRuns, 0), skillFailures: all.reduce((n, x) => n + x.skillFailures, 0) };
   }
   private held(kind: string) { return this.env.have()[kind] ?? 0; }
+  /** Game minutes as real milliseconds (a game day per real hour by default). */
+  private gameMinutes(minutes: number): number { return minutes * (this.host.dayMs?.() ?? 3_600_000) / 1440; }
   /** Real milliseconds spent waiting with nothing to do (the spirits watch idleness). */
   idleMs = 0;
   private wait(ms: number): Promise<void> {
@@ -300,7 +304,7 @@ export class SpatialTradeLife {
     if (this.supperTime()) out.push({ label: "go to supper at the campfire", run: () => this.supper() });
     if (!this.cooling("talk")) for (const p of (this.host.peopleNear?.(this.eid, 12) ?? []).slice(0, 3))
       out.push({ label: `talk with ${p.name}`, run: () => this.talk(p) });
-    out.push({ label: "rest a while", run: async () => { await this.wait(5 * 60_000); return true; } });
+    out.push({ label: "rest a while", run: async () => { await this.wait(this.gameMinutes(60)); return true; } });
     return out;
   }
   private supperTime() { const h = this.host.hour?.(); return h !== undefined && h >= 18 && h < 21.5; }
@@ -311,7 +315,7 @@ export class SpatialTradeLife {
     if (room !== undefined && room !== getRoomForEntity(this.host.world, this.eid)) await this.env.act({ verb: "move", target: Name.value[room] });
     this.atSupper = this.host.day?.() ?? -1;
     if ((Needs.hunger[this.eid] ?? 0) >= this.host.land.needs.eatAt / 2) await this.eat();
-    await this.wait(3 * 60_000);
+    await this.wait(this.gameMinutes(45));
     return true;
   }
   /** Fall into talk: the mind takes the floor with someone at hand. */
@@ -372,7 +376,7 @@ export class SpatialTradeLife {
       if ((Needs.hunger[this.eid] ?? 0) >= this.host.land.needs.eatAt && await this.eat()) continue;
       if (await this.sell()) continue;
       if (await this.work()) continue;
-      await this.wait(60_000);
+      await this.wait(this.gameMinutes(20));
     }
   }
 }

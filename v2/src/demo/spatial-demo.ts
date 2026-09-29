@@ -1112,6 +1112,7 @@ export class SpatialDemo {
       isNight: () => this.settlementNight(),
       hour: () => this.settlementHour(),
       day: () => Math.floor(this.atSimMs / this.settlementDayMs),
+      dayMs: () => this.settlementDayMs,
       campfire: () => [...this.settlementKinds].find(([, k]) => k === "hearth")?.[0],
       goalsOf: eid => getRelationTargets(w, eid, HasGoal).filter(g => hasComponent(w, g, Goal) && Goal.status[g] === "active"
           && !/^(Keep Saltmere supplied|Raise the town)/.test(String(Goal.description[g] || "")) && Goal.kind[g] !== "scheduled_activity")
