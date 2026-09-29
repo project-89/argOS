@@ -27,7 +27,7 @@ type Result = TimedSpeechResult;
 type Word = { text: string; offsetMs: number };
 type Utterance = {
   actorKey: string; room: number; roomKey: string; generation: object | undefined;
-  executionId: string; start: number; end: number; words: Word[]; emitted: number;
+  executionId: string; start: number; end: number; words: Word[]; emitted: number; addresseeId?: number;
   heard: Map<number, { key: string; count: number }>; cancelEvents: Array<() => void>;
   fragment?(fragment: SpeechFragment): void; finish(result: Result): void; abandon(): void;
 };
@@ -44,14 +44,14 @@ const clearingVoices = new WeakSet<World>();
  * simulation time on the shared timeline. Worlds without a gate are unchanged. */
 export type UtteranceVoiceGate = (speakerEid: number, executionId: string, text: string)
   => Promise<{ durationMs: number } | undefined> | undefined;
-export const VOICE_GATE_CAP_MS = 2500;
+export const VOICE_GATE_CAP_MS = 2000;
 export const VOICE_GATE_SCALE = { min: 0.6, max: 1.8 } as const;
 const voiceGates = new WeakMap<World, UtteranceVoiceGate>();
 export function setUtteranceVoiceGate(world: World, gate: UtteranceVoiceGate | undefined): void {
   if (gate) voiceGates.set(world, gate); else voiceGates.delete(world);
 }
 const speechEpochs = new WeakMap<World, number>();
-type TurnEnd = { roomKey: string; actorId: number; actorKey: string; atSimMs: number };
+type TurnEnd = { roomKey: string; actorId: number; actorKey: string; atSimMs: number; addresseeId?: number };
 const recentTurns = new WeakMap<World, Map<number, TurnEnd>>();
 
 /** Voices carry a speaking distance in worlds that set one (spatial towns): a
@@ -101,6 +101,9 @@ export function reviseConversationTurn(world: World, eid: number): void {
 }
 export function releaseConversationTurn(world: World, eid: number): void { turnRequests.get(world)?.delete(eid); }
 export const SPEECH_HANDOFF_GAP_MS = 250;
+/** How long the person a line was addressed to holds first claim on the reply,
+ * and the beat others leave them before speaking. */
+export const SELECTED_SPEAKER_WINDOW_MS = 8_000, SELECTED_SPEAKER_BEAT_MS = 2_500;
 export const SPEECH_REPEAT_GAP_MS = 1750;
 export type SpeechFloorMode = "conversational" | "urgent";
 export interface LocalSpeechOpportunity {
@@ -134,7 +137,15 @@ export function readLocalSpeechOpportunity(world: World, eid: number,
   if (speakers.length) return result("another_speaker", speakers.map(([speaker]) => speaker).sort((a, b) => a - b),
     Math.min(...speakers.map(([, row]) => row.end)) + SPEECH_HANDOFF_GAP_MS);
   const recent = recentTurns.get(world)?.get(room);
-  if (canHear) {
+  // Selected next speaker: whoever the last line was addressed to answers next.
+  // They skip the queue; everyone else within earshot gives them a beat.
+  const selected = recent && recent.roomKey === roomKey && recent.addresseeId !== undefined
+    && now >= recent.atSimMs && now - recent.atSimMs <= SELECTED_SPEAKER_WINDOW_MS ? recent.addresseeId : undefined;
+  const selectedHere = selected !== undefined && selected !== eid && entityExists(world, selected) && Agent.active[selected]
+    && getRoomForEntity(world, selected) === room && withinEarshot(world, eid, selected);
+  if (canHear && selectedHere && now - recent!.atSimMs < SELECTED_SPEAKER_BEAT_MS)
+    return result("queued_turn", [], recent!.atSimMs + SELECTED_SPEAKER_BEAT_MS);
+  if (canHear && selected !== eid) {
     const next = [...turnRequests.get(world)?.entries() ?? []]
       .filter(([actor, row]) => row.room === room && withinEarshot(world, eid, actor) && turnCurrent(world, actor, row))
       .sort((a, b) => a[1].since - b[1].since)[0];
@@ -195,7 +206,8 @@ function retire(world: World, eid: number, row: Utterance, result?: Result) {
   if (row.emitted > 0 && entityExists(world, row.room) && hasComponent(world, row.room, WorkingMemoryIdentity)
     && WorkingMemoryIdentity.id[row.room] === row.roomKey) {
     let turns = recentTurns.get(world); if (!turns) { turns = new Map(); recentTurns.set(world, turns); }
-    turns.set(row.room, { roomKey: row.roomKey, actorId: eid, actorKey: row.actorKey, atSimMs: readSimulationTime(world) });
+    turns.set(row.room, { roomKey: row.roomKey, actorId: eid, actorKey: row.actorKey, atSimMs: readSimulationTime(world),
+      ...(row.addresseeId !== undefined ? { addresseeId: row.addresseeId } : {}) });
   }
   if (result) row.finish(result); else row.abandon();
 }
@@ -236,7 +248,7 @@ function emitWord(world: World, eid: number, row: Utterance, index: number) {
 }
 export function beginTimedSpeech(world: World, eid: number, content: string, executionId: string,
   finish: Utterance["finish"], abandon: () => void,
-  options: { fragment?: Utterance["fragment"]; floor?: SpeechFloorMode; maxDurationMs?: number } = {}): boolean {
+  options: { fragment?: Utterance["fragment"]; floor?: SpeechFloorMode; maxDurationMs?: number; addresseeId?: number } = {}): boolean {
   const words = speechWords(content);
   if (options.maxDurationMs !== undefined && (!Number.isFinite(options.maxDurationMs) || options.maxDurationMs <= 0))
     throw new RangeError("Speech unit duration must be positive finite simulation milliseconds");
@@ -263,7 +275,8 @@ export function beginTimedSpeech(world: World, eid: number, content: string, exe
   const start = readSimulationTime(world);
   const row: Utterance = { actorKey: workingMemoryEntityRef(world, eid)!.key, room, roomKey: workingMemoryEntityRef(world, room)!.key,
     generation: getAgentWorldCapabilityGeneration(world, eid), executionId, start, end: start + words.at(-1)!.offsetMs,
-    words, emitted: 0, heard: new Map(), cancelEvents: [], fragment: options.fragment, finish, abandon };
+    words, emitted: 0, heard: new Map(), cancelEvents: [], fragment: options.fragment, finish, abandon,
+    ...(options.addresseeId !== undefined ? { addresseeId: options.addresseeId } : {}) };
   rows.set(eid, row);
   releaseConversationTurn(world, eid);
   // Waiting behind an earlier author's turn must not consume the free-floor

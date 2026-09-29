@@ -2414,6 +2414,10 @@ export function executeActions(
               wakeForegroundCognition(world, eid);
             }, () => { operationRows.delete(executionId); publishSpeechTerminal(false); }, {
               floor: replacingSpeech || speechAction.speechMode === "interrupt" ? "urgent" : "conversational",
+              // Who this line is addressed to (by name, in the same room) becomes the selected next speaker.
+              ...(() => { const room = getRoomForEntity(world, eid), name = speechAction.target;
+                const addresseeId = name ? [...query(world, [Agent, Name])].find(id => id !== eid && Name.value[id] === name && getRoomForEntity(world, id) === room) : undefined;
+                return addresseeId !== undefined ? { addresseeId } : {}; })(),
               fragment: fragment => {
               for (const heard of recordHeardSpeechFragment(world, eid, fragment, speechAction.target))
                 queueStimulus(world, { targetEid: heard.eid, type: "speech_fragment", modality: "auditory", content: heard.content, source: Name.value[eid], hearing: heard.hearing });

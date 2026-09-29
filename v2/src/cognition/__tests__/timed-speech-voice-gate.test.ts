@@ -59,7 +59,7 @@ test("a gated utterance holds the voice and floor, then starts when its audio re
   expect(f.fragments.at(-1)!.heardAtSimMs).toBe(1200 + authored);
 });
 
-test("audio that never arrives: the line starts at the 2500 ms simulated cap, unscaled", async () => {
+test("audio that never arrives: the line starts at the simulated cap, unscaled", async () => {
   const audio = deferred<{ durationMs: number } | undefined>();
   const f = fixture(() => audio.promise);
   f.speak();
