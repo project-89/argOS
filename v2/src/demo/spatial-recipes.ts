@@ -65,6 +65,8 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
     /** Install a limited source's uses (from the land data). */
     installSource(eid: number, thingUses: number | undefined) { if (thingUses !== undefined) uses.set(eid, thingUses); },
     coinsOf, treasury: () => treasury, builtCount: () => ({ ...builtCount }),
+    /** A limited source with uses left (a tree not yet felled). */
+    usable,
 
     verbs(actor: number, target: number): string[] {
       const kind = host.kindOf(target);

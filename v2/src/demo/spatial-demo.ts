@@ -59,6 +59,9 @@ import { createStoryTownScenario } from "./spatial-town-story";
 import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSaltmereAuthorCast, SALTMERE_SCENARIO_TERMS } from "./spatial-lovecraft-town";
 import { createSettlementScenario } from "./spatial-settlement";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
+import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
+import { SkillGraph } from "../learning/skill-graph";
+import type { Planner } from "../learning/skill-runtime";
 import { SALTMERE_LAND } from "../learning/settlement/saltmere-land";
 import { createHouseholdScenario, HOUSEHOLD_GROWTH_SITES } from "./spatial-household";
 import { createHouseholdChallengeScenario } from "./spatial-household-challenge";
@@ -120,6 +123,8 @@ type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; sce
   /** Host-only diagnostic sink. Never included in a resident's context. */
   onPlanningEvent?: (event: PlanningEvent) => void;
   story?: "community-drama" | "household" | "coastal-mystery" | "settlement";
+  /** Settlement: residents work their trades by habit (skill graphs by trade, e.g. trained headless). */
+  settlementWork?: { graphs: Map<string, SkillGraph>; planner?: (trade: string) => Planner; log?: (line: string) => void };
   /** One explicitly operator-approved generated mechanic; not broad engineering. */
   weatherMechanic?: { directory: string; backend?: "codex" | "gemini" };
   /** Explicit broader engineering profile; not implied by viewing a town. */
@@ -149,6 +154,9 @@ export class SpatialDemo {
   /** Settlement kinds of entities (a tree, a log, the stall). */
   readonly settlementKinds = new Map<number, string>();
   private settlementItems = 0;
+  private readonly tickListeners = new Set<() => void>();
+  /** Residents working their trades by habit (settlementWork). */
+  readonly tradeLives: SpatialTradeLife[] = [];
   private settlementSink?: number;
   /** Author-staged sounds, arrivals, lights and phone texts (shared Narrator/God budget). */
   readonly narrativeEvents?: ReturnType<typeof createSpatialNarrativeEvents>;
@@ -1052,14 +1060,35 @@ export class SpatialDemo {
     p.publicDetail = `Wrote ${Name.value[note]}.`;
     return { success: true, detail: `You wrote ${Name.value[note]} and are holding it. It says: ${JSON.stringify(text)}` };
   }
-  /** The settlement's crafts: kinds, sources, items made in hand, the stall, raised buildings. */
-  private installSettlement() {
+  /** Hand residents what they carry (a fisher's net, a woodcutter's axe) and, if
+   * asked, start their trades by habit. */
+  private startSettlementWork() {
     const w = this.sim.world;
-    const recipes = createSpatialRecipes({ world: w, land: SALTMERE_LAND,
+    for (const r of SALTMERE_LAND.residents) {
+      const actor = this.actors.find(a => Name.value[a] === r.name);
+      if (actor !== undefined) for (const kind of r.carries ?? []) this.spawnSettlementItem(actor, kind);
+    }
+    const work = this.options.settlementWork;
+    if (!work || !this.recipes) return;
+    const host: SpatialTradeHost = { world: w, registry: this.sim.god.systemRegistry, land: SALTMERE_LAND, recipes: this.recipes,
       kindOf: eid => this.settlementKinds.get(eid),
-      setKind: (eid, kind) => { this.settlementKinds.set(eid, kind); },
-      key: eid => this.key(eid),
-      spawnInHand: (actor, kind) => {
+      rooms: () => this.roomViews.map(r => ({ eid: r.id, name: r.name, kind: SALTMERE_LAND.places.find(p => p.name === r.name)?.kind ?? (r.name === "The Net House" ? "net-house" : "") })),
+      stall: () => [...this.settlementKinds].find(([, k]) => k === "stall")?.[0],
+      onTick: listener => { this.tickListeners.add(listener); return () => { this.tickListeners.delete(listener); }; },
+      now: () => this.atSimMs };
+    const noPlanner: Planner = async () => [];
+    for (const r of SALTMERE_LAND.residents) {
+      const actor = this.actors.find(a => Name.value[a] === r.name);
+      if (actor === undefined) continue;
+      let graph = work.graphs.get(r.trade);
+      if (!graph) { graph = new SkillGraph(); work.graphs.set(r.trade, graph); }
+      const life = new SpatialTradeLife(host, actor, r.trade, graph, work.planner?.(r.trade) ?? noPlanner, work.log);
+      this.tradeLives.push(life);
+      void life.live().catch(error => console.warn(`[Settlement] ${r.name} stopped working: ${error instanceof Error ? error.message : error}`));
+    }
+  }
+  private spawnSettlementItem(actor: number, kind: string): number | undefined {
+    const w = this.sim.world;
         const number = ++this.settlementItems, asset = SPATIAL_ASSETS[kind] ?? SPATIAL_ASSETS.trinket;
         const item = new ObjectManager(w).spawn("object", { name: `${kind.split("-").map(p => p[0].toUpperCase() + p.slice(1)).join(" ")} ${number}`,
           description: `A ${kind.replace(/-/g, " ")}.`, containedIn: getRoomForEntity(w, actor)!, state: "normal" });
@@ -1072,7 +1101,16 @@ export class SpatialDemo {
         if (!tryAddToInventory(w, actor, item).success) return undefined;
         tryHoldCarriedItem(w, actor, item);
         return item;
-      },
+      }
+
+  /** The settlement's crafts: kinds, sources, items made in hand, the stall, raised buildings. */
+  private installSettlement() {
+    const w = this.sim.world;
+    const recipes = createSpatialRecipes({ world: w, land: SALTMERE_LAND,
+      kindOf: eid => this.settlementKinds.get(eid),
+      setKind: (eid, kind) => { this.settlementKinds.set(eid, kind); },
+      key: eid => this.key(eid),
+      spawnInHand: (actor, kind) => this.spawnSettlementItem(actor, kind),
       consume: item => {
         // Used up: out of the world (kept as an entity in a sink, not recycled mid-session).
         this.settlementSink ??= createRoomEntity(w, { name: "(used up)", description: "Consumed materials." });
@@ -1140,6 +1178,7 @@ export class SpatialDemo {
   private integrate() {
     this.reviewDevelopmentEffects();
     if (!this.running) return;
+    for (const listener of [...this.tickListeners]) { try { listener(); } catch (error) { console.warn(`[Settlement] tick listener: ${error instanceof Error ? error.message : error}`); } }
     this.weatherMechanic?.syncInputs(); this.weatherMechanic?.collect();
     this.blackout?.derive();
     this.announceCircuitChanges();
@@ -1664,6 +1703,7 @@ export class SpatialDemo {
   async start() {
     if (this.stopped) throw new Error("This session ended; relaunch for a new world");
     if (this.started) return; this.started = true;
+    if (this.recipes) this.startSettlementWork();
     setAttentionProvider(this.sim.world, eid => this.attentionFor(eid));
     // Offstage life (runtime/offstage): unobserved residents' scenes show in the
     // event feed; finished projects build through the same growth path as spirits.
@@ -1715,6 +1755,8 @@ export class SpatialDemo {
   onStop(listener: () => void) { this.stopListeners.add(listener); return () => this.stopListeners.delete(listener); }
   stop() {
     if (this.stopped) return;
+    for (const life of this.tradeLives) life.stopped = true;
+    this.tickListeners.clear();
     // Stop is revocation, not an actor action. It may run in the very task being
     // cancelled. Fence reentrancy immediately and complete every cleanup stage
     // before reporting consumer errors; none may strand the native runtime.

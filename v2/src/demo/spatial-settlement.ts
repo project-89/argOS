@@ -8,7 +8,7 @@
  * The residents are Saltmere's own people (personas, pasts and secrets from
  * the coastal-mystery cast), each with a trade; their crafts are installed by
  * spatial-recipes.ts from the same recipe data. */
-import type { SpatialBlueprint, SpatialProp, SpatialRoom } from "./spatial-catalog";
+import { SPATIAL_ASSETS, type SpatialBlueprint, type SpatialProp, type SpatialRoom } from "./spatial-catalog";
 import type { SpatialResident, SpatialScenarioDefinition } from "./spatial-scenario";
 import { createLovecraftTownScenario } from "./spatial-lovecraft-town";
 import { SALTMERE_LAND, type LandDef } from "../learning/settlement/saltmere-land";
@@ -80,9 +80,17 @@ export function createSettlementBlueprint(land: LandDef = SALTMERE_LAND): Spatia
   way("common-spring", "settle-common", "settle-spring", 75, 40, "y", 8, { x: 0, y: 1 });
   way("field-quarry", "settle-field", "settle-quarry", 118, 40, "y", 8, { x: 0, y: 1 });
   way("net-house-door", "settle-common", "settle-net-house", 95, 40, "y", 2, { x: 0, y: 1 });
-  for (const { thing, roomId, x, y, anchor } of placeThings(land))
-    add({ id: `thing-${thing.id}`, roomId, assetId: ASSET[thing.kind] ?? thing.kind, name: thing.kind === "net-rack" && thing.name === NET_HOUSE.name ? "Net House rack" : thing.name,
-      description: `${thing.name}${thing.uses !== undefined ? "" : ""}.`, position: { x, y }, interactionAnchors: [anchor] });
+  for (const { thing, roomId, x, y, anchor } of placeThings(land)) {
+    const assetId = ASSET[thing.kind] ?? thing.kind, collider = SPATIAL_ASSETS[assetId]?.collider;
+    // On 1 m walking cells a place to stand must clear the footprint by more than a cell.
+    // Several places to stand, one per side, so one person idling cannot block a station.
+    const room = rooms.find(r => r.id === roomId)!.bounds;
+    const w = (collider?.halfWidth ?? .4) + 1.3, h = (collider?.halfDepth ?? .4) + 1.3;
+    const sides = [{ x: 0, y: Math.sign(anchor.y || -1) * h }, { x: 0, y: -Math.sign(anchor.y || -1) * h }, { x: w, y: 0 }, { x: -w, y: 0 }]
+      .filter(p => x + p.x > room.minX + .6 && x + p.x < room.maxX - .6 && y + p.y > room.minY + .6 && y + p.y < room.maxY - .6);
+    add({ id: `thing-${thing.id}`, roomId, assetId, name: thing.kind === "net-rack" && thing.name === NET_HOUSE.name ? "Net House rack" : thing.name,
+      description: `${thing.name}.`, position: { x, y }, interactionAnchors: sides.length ? sides : [anchor] });
+  }
   return { id: SETTLEMENT_SCENARIO_ID, author: "operator", rooms, props, walls: [], doors, spawns: [] };
 }
 

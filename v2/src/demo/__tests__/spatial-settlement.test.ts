@@ -34,17 +34,16 @@ test("walk, fetch an axe, chop, split and sell — timed in the walkable world, 
     for (let k = 0; k < 20; k++) d!.advance(100);
     return i / 10;
   };
-  act({ type: "move", target: "Saltmere Common" });
-  act({ type: "pickup", target: "Old axe" });
-  act({ type: "move", target: "Birch Wood" });
-  expect(hand()).toEqual(["Old axe"]);
+  // A woodcutter starts with an axe; the spare axes lie on the Common.
+  expect(hand()).toEqual([expect.stringMatching(/^Axe \d+$/)]);
   const seconds = act({ type: "interact", target: "Birch 1", content: "chop" });
   expect(seconds).toBeGreaterThanOrEqual(30);
-  expect(hand()).toEqual(["Old axe", "Log 1"]);
+  const log = hand().find(n => n.startsWith("Log"))!;
+  expect(log).toBeDefined();
   act({ type: "move", target: "Saltmere Common" });
   act({ type: "interact", target: "Chopping stump", content: "split" });
   expect(hand().filter(n => n.startsWith("Firewood"))).toHaveLength(4);
-  expect(hand()).not.toContain("Log 1");
+  expect(hand()).not.toContain(log);
   act({ type: "interact", target: "Market stall", content: "sell firewood" });
   expect(hand().filter(n => n.startsWith("Firewood"))).toHaveLength(3);
   expect(d.recipes!.coinsOf(eli)).toBe(11);
@@ -56,3 +55,23 @@ test("walk, fetch an axe, chop, split and sell — timed in the walkable world, 
   expect(getWorkingMemory(w, tess).receipts.filter(r => r.kind === "action").at(-1)?.summary).toMatch(/you need 3 more raw-fish/);
   void Needs;
 }, 60_000);
+
+test("trades trained headless carry into the walkable world: the town stocks its stall and raises a workshop with no model", async () => {
+  const { runSettlementLife } = await import("../../learning/settlement/run-settlement");
+  const { SkillGraph } = await import("../../learning/skill-graph");
+  const graphs = new Map<string, InstanceType<typeof SkillGraph>>();
+  await runSettlementLife({ days: 2, life: 1, graphs, planner: "manual" });
+  let asked = 0;
+  d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, seconds: 3600,
+    settlementWork: { graphs, planner: () => async () => { asked++; return []; } } });
+  await d.start();
+  for (let i = 0; i < 36_000 && !(d.recipes!.builtCount().workshop >= 1); i++) { d.advance(100); await new Promise(r => setImmediate(r)); }
+  const w = d.sim.world;
+  const stall = [...d.settlementKinds].find(([, k]) => k === "stall")![0];
+  const stock = listDirectContents(w, stall).map(e => d!.settlementKinds.get(e));
+  expect(stock).toEqual(expect.arrayContaining(["raw-fish", "firewood"]));
+  expect(d.recipes!.builtCount().workshop).toBe(1);
+  expect(d.tradeLives.some(l => l.stats.skillRuns > 5)).toBe(true);
+  expect(d.recipes!.coinsOf(d.actors.find(a => Name.value[a] === "Otis")!)).toBeGreaterThan(12); // he sold fish
+  void asked; // gaps the headless training did not cover ask a (here empty) planner; nothing is invented
+}, 180_000);
