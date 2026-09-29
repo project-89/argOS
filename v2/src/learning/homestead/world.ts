@@ -12,6 +12,7 @@ import { startCommittedEvents, stopCommittedEvents } from "../../runtime/committ
 import type { HomesteadDef, RecipeDef, Stock, StructureDef } from "./recipes";
 import type { Ref } from "../skill-graph";
 import type { SkillEnv } from "../skill-runtime";
+import type { RecipeWorld, WovenPatch } from "../../spirits/recipe-weaver";
 
 export type Act = { verb: string; target?: string; arg?: string };
 export type ActResult = {
@@ -26,11 +27,11 @@ export type ActResult = {
 
 const title = (kind: string) => kind.charAt(0).toUpperCase() + kind.slice(1);
 
-export class Homestead implements SkillEnv {
+export class Homestead implements SkillEnv, RecipeWorld {
   readonly world: World;
   readonly resident: number;
   readonly rooms = new Map<string, number>();       // place id -> room
-  readonly placeKinds = new Map<number, string>();  // room -> place kind
+  readonly placeKinds_ = new Map<number, string>();  // room -> place kind
   private readonly uses = new Map<number, number>(); // thing -> uses left
   /** Structure facts: "cabin.foundation", "cabin". */
   readonly facts = new Set<string>();
@@ -46,7 +47,7 @@ export class Homestead implements SkillEnv {
     this.usedUp = createRoomEntity(this.world, { name: "(used up)", description: "Outside the world: consumed materials." });
     for (const place of def.places) {
       const room = createRoomEntity(this.world, { name: place.name, description: place.description });
-      this.rooms.set(place.id, room); this.placeKinds.set(room, place.kind);
+      this.rooms.set(place.id, room); this.placeKinds_.set(room, place.kind);
     }
     for (const thing of def.things) {
       const eid = createObjectEntity(this.world, { name: thing.name, roomId: this.rooms.get(thing.place)!, portable: !!thing.portable });
@@ -71,6 +72,22 @@ export class Homestead implements SkillEnv {
     if (thing.uses !== undefined) this.uses.set(eid, thing.uses);
     return eid;
   }
+  // RecipeWorld: what the Weaver reads, and how it grows this land.
+  placeKinds(): string[] { return [...new Set(this.placeKinds_.values())]; }
+  thingKinds(): string[] {
+    return [...new Set([...this.rooms.values()].flatMap(r => listDirectContents(this.world, r)).filter(e => !PhysicalObject.portable[e]).map(e => this.kindOf(e)).filter(Boolean))];
+  }
+  obtainableKinds(): string[] {
+    const lying = [...this.rooms.values()].flatMap(r => listDirectContents(this.world, r)).filter(e => PhysicalObject.portable[e]).map(e => this.kindOf(e));
+    return [...new Set([...lying, ...this.recipes.flatMap(r => Object.keys(r.gives ?? {}))].filter(Boolean))];
+  }
+  apply(patch: WovenPatch): void {
+    for (const thing of patch.things) {
+      const place = this.def.places.find(p => p.kind === thing.placeKind);
+      if (place) this.addThing({ id: `${thing.kind}-${this.steps}`, name: thing.name, kind: thing.kind, place: place.id, uses: thing.uses, portable: thing.portable });
+    }
+    for (const recipe of patch.recipes) this.addRecipe(recipe);
+  }
   recipesView(): readonly RecipeDef[] { return this.recipes; }
   structuresView(): readonly StructureDef[] { return this.structures; }
   addStructure(structure: StructureDef): void { this.structures.push({ ...structure, parts: structure.parts.map(p => ({ ...p })) }); }
@@ -80,7 +97,7 @@ export class Homestead implements SkillEnv {
   // -------------------------------------------------------------------------
   kindOf(eid: number): string { return String(ObjectType.typeId[eid] || ""); }
   room(): number { return getRoomForEntity(this.world, this.resident)!; }
-  placeKind(room = this.room()): string { return this.placeKinds.get(room) ?? ""; }
+  placeKind(room = this.room()): string { return this.placeKinds_.get(room) ?? ""; }
   hand(): number[] { return listDirectContents(this.world, this.resident).filter(eid => entityExists(this.world, eid)); }
   /** Items in hand by kind, plus standing facts (built parts, finished structures). */
   have(): Stock {
@@ -97,7 +114,7 @@ export class Homestead implements SkillEnv {
   /** Everything a resident may read: where they are, what is here, the places, their hand, and the world's manual. */
   observation(): string {
     const here = this.thingsHere().map(eid => `${Name.value[eid]} (${this.kindOf(eid)}${this.uses.has(eid) ? `, ${this.uses.get(eid)} left` : ""})`);
-    const places = [...this.rooms.entries()].map(([, room]) => `${Name.value[room]} (${this.placeKinds.get(room)})`);
+    const places = [...this.rooms.entries()].map(([, room]) => `${Name.value[room]} (${this.placeKinds_.get(room)})`);
     const have = Object.entries(this.have()).map(([k, n]) => `${k} ×${n}`);
     return [
       `You are in ${Name.value[this.room()]} (${this.placeKind()}). Here: ${here.join(", ") || "nothing"}.`,
@@ -126,7 +143,7 @@ export class Homestead implements SkillEnv {
       return eid === undefined ? undefined : Name.value[eid];
     }
     if ("where" in ref) { const room = this.roomsWith(ref.where)[0]; return room === undefined ? undefined : Name.value[room]; }
-    const room = this.placeKind() === ref.place ? this.room() : [...this.rooms.values()].find(r => this.placeKinds.get(r) === ref.place);
+    const room = this.placeKind() === ref.place ? this.room() : [...this.rooms.values()].find(r => this.placeKinds_.get(r) === ref.place);
     return room === undefined ? undefined : Name.value[room];
   }
   approach(ref: Ref): boolean {
@@ -149,7 +166,7 @@ export class Homestead implements SkillEnv {
       const room = this.resolveRoom(action.target);
       const following = next && next.verb !== "move" ? this.anywhere(next.target) : undefined;
       if (following !== undefined && room !== undefined && listDirectContents(this.world, room).includes(following)) return { verb, target: { where: this.kindOf(following) } };
-      return { verb, ...(room !== undefined ? { target: { place: this.placeKinds.get(room)! } } : {}) };
+      return { verb, ...(room !== undefined ? { target: { place: this.placeKinds_.get(room)! } } : {}) };
     }
     const target = this.anywhere(action.target);
     return { verb, ...(target !== undefined ? { target: { thing: this.kindOf(target) } } : {}), ...arg };
@@ -172,7 +189,7 @@ export class Homestead implements SkillEnv {
     const wanted = text?.trim().toLowerCase();
     if (!wanted) return undefined;
     const rooms = [...this.rooms.values()];
-    return rooms.find(r => String(Name.value[r]).toLowerCase() === wanted) ?? rooms.find(r => this.placeKinds.get(r) === wanted);
+    return rooms.find(r => String(Name.value[r]).toLowerCase() === wanted) ?? rooms.find(r => this.placeKinds_.get(r) === wanted);
   }
   /** Used up: consumed items go to a sink outside the land (entity ids are not
    * recycled mid-life, which bitecs relations do not tolerate well). */

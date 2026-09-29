@@ -10,10 +10,10 @@ import "dotenv/config";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { reportGap } from "../../spirits/observation-aggregator";
+import { lackedItems, reportResourceGap, weaveForGap, type WeaverGenerator, type WeaverStats, type WovenPatch } from "../../spirits/recipe-weaver";
 import { SkillGraph, countActs } from "../skill-graph";
 import { SkillSolver, type Planner } from "../skill-runtime";
-import { GROWTH_PATCHES, HOMESTEAD, RAFT, variantHomestead, type HomesteadDef } from "./recipes";
+import { FIXED_ROPE_PATCH, HOMESTEAD, RAFT, variantHomestead } from "./recipes";
 import { Homestead } from "./world";
 import { geminiPlanner, manualPlanner, type GeminiPlannerStats } from "./planners";
 
@@ -29,54 +29,50 @@ export const CURRICULUM: Life[] = [
 export type LifeReport = { life: number; goal: string; land: string; done: boolean; plannerCalls: number; acts: number;
   skillRuns: number; skillFailures: number; learned: number; graphSize: number; gaps: string[]; grew: string[] };
 
-/** Apply what the world has grown so far to a fresh land's definition. */
-function grownDef(base: HomesteadDef, grown: readonly string[]): HomesteadDef {
-  const def = structuredClone(base);
-  const firstPlaceOf = (kind: string) => def.places.find(p => p.kind === kind)?.id;
-  for (const item of grown) {
-    const patch = GROWTH_PATCHES[item];
-    if (!patch) continue;
-    // Patches name kinds of place ("woods"); land them in this land's place of that kind.
-    def.things.push(...patch.things.map(t => ({ ...t, id: `${t.id}-${def.id}`, place: firstPlaceOf(t.place) ?? t.place })));
-    def.recipes.push(...patch.recipes);
-  }
-  return def;
-}
+export type WeaverMode = "fixed" | "gemini" | { generate: WeaverGenerator };
 
-export async function runCurriculum(options: { planner: "manual" | "gemini"; lives?: Life[]; graph?: SkillGraph; log?: (line: string) => void;
-  maxPlannerCalls?: number }): Promise<{ reports: LifeReport[]; graph: SkillGraph; gemini?: GeminiPlannerStats }> {
+export async function runCurriculum(options: { planner: "manual" | "gemini"; weaver?: WeaverMode; lives?: Life[]; graph?: SkillGraph;
+  log?: (line: string) => void; maxPlannerCalls?: number }):
+  Promise<{ reports: LifeReport[]; graph: SkillGraph; gemini?: GeminiPlannerStats; weaver: WeaverStats; grown: WovenPatch[] }> {
   const graph = options.graph ?? new SkillGraph();
   const gemini: GeminiPlannerStats = { calls: 0, tokensIn: 0, tokensOut: 0, malformed: 0 };
-  const grown: string[] = [];
+  const weaver: WeaverStats = { designs: 0, applied: 0, rejected: [], tokensIn: 0, tokensOut: 0 };
+  const mode = options.weaver ?? "fixed";
+  const grown: WovenPatch[] = [];
   const reports: LifeReport[] = [];
   let land: Homestead | undefined;
   const planner: Planner = options.planner === "gemini" ? geminiPlanner(gemini, { log: options.log }) : manualPlanner(() => land!);
   for (const life of options.lives ?? CURRICULUM) {
     graph.lives++;
-    const base = life.land === "home" ? HOMESTEAD : variantHomestead();
-    land = new Homestead(grownDef(base, grown));
+    land = new Homestead(life.land === "home" ? HOMESTEAD : variantHomestead());
+    for (const patch of grown) land.apply(patch); // what the world has grown stays grown
     if (life.commission === "raft") land.addStructure(RAFT); // God commissions a raft
     const before = graph.skills.size;
     const gaps: string[] = [], grew: string[] = [];
+    const current = land;
     const solver = new SkillSolver(land, graph, planner, { life: graph.lives, maxPlannerCalls: options.maxPlannerCalls ?? 40, log: options.log,
-      onGap: (item, detail) => { gaps.push(item); reportGap("homestead", "resource_gap", `Residents lack ${item}`, detail, "medium", land!.world); } });
+      onGap: (item, detail) => { gaps.push(item); reportResourceGap(current.world, item, detail, "homestead"); } });
     let done = await solver.solve(life.goal, 1);
-    // The world grows where residents keep lacking something nothing gives.
-    for (const item of gaps.filter(item => GROWTH_PATCHES[item] && !grown.includes(item))) {
-      const patch = GROWTH_PATCHES[item];
-      for (const thing of patch.things) land.addThing({ ...thing, place: land.def.places.find(p => p.kind === thing.place)?.id ?? thing.place });
-      for (const recipe of patch.recipes) land.addRecipe(recipe);
-      grown.push(item); grew.push(item);
-      solver.clearGap(item); solver.clearGap(life.goal);
-      options.log?.(`world grew: ${patch.reason}`);
+    // The Weaver reads the board and grows the world where residents keep lacking something.
+    // Structures are commissioned, not woven: only lacked materials are the Weaver's.
+    const structural = (item: string) => current.structuresView().some(s => s.kind === item || item.startsWith(`${s.kind}.`));
+    for (const item of lackedItems(land.world).filter(item => !grown.some(p => p.item === item) && !structural(item))) {
+      const detail = `A resident needed ${item} for "${life.goal}" and nothing in this world gives it.`;
+      const woven = mode === "fixed"
+        ? (item === "rope" ? (land.apply(FIXED_ROPE_PATCH), { ok: true as const, patch: FIXED_ROPE_PATCH }) : { ok: false as const, reason: "no fixed design" })
+        : await weaveForGap(item, detail, land, { stats: weaver, ...(mode === "gemini" ? {} : { generate: mode.generate }) });
+      if (!woven.ok) { options.log?.(`the Weaver could not provide ${item}: ${woven.reason}`); continue; }
+      grown.push(woven.patch); grew.push(item);
+      solver.clearGap(item);
+      options.log?.(`world grew (${item}): ${woven.patch.reason} — ${woven.patch.recipes.map(r => r.hint).join("; ")}`);
     }
-    if (!done && grew.length) done = await solver.solve(life.goal, 1);
+    if (!done && grew.length) { solver.clearGap(life.goal); done = await solver.solve(life.goal, 1); }
     reports.push({ life: graph.lives, goal: life.goal, land: land.def.id, done, plannerCalls: solver.stats.plannerCalls, acts: solver.stats.acts,
       skillRuns: solver.stats.skillRuns, skillFailures: solver.stats.skillFailures, learned: graph.skills.size - before, graphSize: graph.skills.size,
       gaps: [...new Set(gaps)], grew });
     land.stop();
   }
-  return { reports, graph, gemini: options.planner === "gemini" ? gemini : undefined };
+  return { reports, graph, gemini: options.planner === "gemini" ? gemini : undefined, weaver, grown };
 }
 
 export function formatReports(reports: LifeReport[]): string {
@@ -95,12 +91,14 @@ async function main(argv: string[]) {
   const verbose = argv.includes("--verbose");
   const originalLog = console.log;
   console.log = (...args: unknown[]) => { if (verbose) originalLog(...args); }; // engine chatter off
-  const { reports, gemini } = await runCurriculum({ planner: live ? "gemini" : "manual", graph, maxPlannerCalls: live ? 30 : 40,
+  const { reports, gemini, weaver, grown } = await runCurriculum({ planner: live ? "gemini" : "manual", weaver: live ? "gemini" : "fixed", graph, maxPlannerCalls: live ? 30 : 40,
     log: verbose ? line => originalLog(line) : undefined });
   console.log = originalLog;
   console.log(`Homestead curriculum — planner: ${live ? "Gemini (live)" : "manual stand-in (offline)"}\n`);
   console.log(formatReports(reports));
-  if (gemini) console.log(`\nGemini: ${gemini.calls} calls, ${gemini.tokensIn}/${gemini.tokensOut} tokens in/out, ${gemini.malformed} malformed`);
+  if (gemini) console.log(`\nGemini planner: ${gemini.calls} calls, ${gemini.tokensIn}/${gemini.tokensOut} tokens in/out, ${gemini.malformed} malformed`);
+  console.log(`Weaver: ${weaver.designs} designs, ${weaver.applied} applied, ${weaver.rejected.length} refused${weaver.rejected.length ? ` (${weaver.rejected.map(r => `${r.item}: ${r.reason}`).join("; ")})` : ""}`);
+  for (const patch of grown) console.log(`  grew ${patch.item}: ${patch.reason}\n    ${patch.things.map(t => `${t.name} (${t.kind}) in the ${t.placeKind}${t.uses ? `, ${t.uses} uses` : ""}`).join("; ")}\n    ${patch.recipes.map(r => r.hint).join("; ")}`);
   console.log(`\nSkills (${graph.skills.size}):`);
   for (const skill of graph.skills.values())
     console.log(`  ${skill.id}  gives ${JSON.stringify(skill.effect.gives)}  needs ${JSON.stringify(skill.effect.needs)}  uses ${skill.effect.requires.join(",") || "-"}  acts ${countActs(skill.tree)}  ${skill.stats.successes}/${skill.stats.runs} ok`);

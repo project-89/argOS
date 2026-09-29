@@ -1,3 +1,5 @@
+import type { WovenPatch } from "../../spirits/recipe-weaver";
+
 /** The homestead: a small world whose making is real. Everything is data —
  * places, things, what each verb needs and gives, what structures are made of —
  * so the world can grow (a spirit adds a recipe or a resource) and residents
@@ -33,6 +35,8 @@ export type RecipeDef = {
   spends?: boolean;
   /** One line a resident would read about it (the only recipe knowledge a planner gets). */
   hint: string;
+  /** Simulated seconds it takes (timed worlds). */
+  durationS?: number;
 };
 
 /** A structure is built in parts, in order, at a site; each part is a recipe. */
@@ -113,16 +117,13 @@ export const RAFT: StructureDef = { kind: "raft", name: "Raft", site: "building-
 ] };
 
 /** What the world can grow when residents keep lacking something no recipe
- * gives. In the full engine a gap report reaches the Watcher and the Weaver
- * designs the mechanic; here the patches are fixed data (a stand-in). */
-export type GrowthPatch = { reason: string; things: ThingDef[]; recipes: RecipeDef[] };
-export const GROWTH_PATCHES: Record<string, GrowthPatch> = {
-  rope: {
-    reason: "Residents keep needing rope and nothing here gives it: flax now grows in the woods, and a workbench can spin it.",
-    things: [{ id: "flax", name: "Flax patch", kind: "flax", place: "woods", uses: 8 }],
-    recipes: [
-      { verb: "gather", at: "flax", gives: { flax: 1 }, spends: true, hint: "gather flax from a flax patch: 1 flax" },
-      { verb: "craft", at: "workbench", product: "rope", needs: { flax: 2 }, gives: { rope: 1 }, hint: "craft rope at a workbench: 2 flax → 1 rope" },
-    ],
-  },
+ * gives: the Weaver designs it (spirits/recipe-weaver.ts). This fixed design
+ * stands in for the Weaver offline. */
+export const FIXED_ROPE_PATCH: WovenPatch = {
+  item: "rope", reason: "Flax now grows in the woods, and a workbench can spin it into rope.",
+  things: [{ name: "Flax patch", kind: "flax", placeKind: "woods", uses: 8 }],
+  recipes: [
+    { verb: "gather", at: "flax", gives: { flax: 1 }, spends: true, hint: "gather at a flax: 1 flax" },
+    { verb: "craft", at: "workbench", product: "rope", needs: { flax: 2 }, gives: { rope: 1 }, hint: "craft rope at a workbench: 2 flax → 1 rope" },
+  ],
 };
