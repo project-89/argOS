@@ -40,7 +40,9 @@ export type Planner = (request: PlanRequest) => Promise<PlannedStep[]>;
 
 export type SolveStats = { plannerCalls: number; acts: number; skillRuns: number; skillFailures: number; learned: string[]; gaps: string[] };
 export type SolverOptions = { maxDepth?: number; maxPlannerCalls?: number; maxIterations?: number; life?: number;
-  onGap?: (item: string, detail: string) => void; log?: (line: string) => void };
+  onGap?: (item: string, detail: string) => void; log?: (line: string) => void;
+  /** Checked before every act: true abandons the current work (something more urgent, like thirst). */
+  interrupt?: () => boolean };
 
 /** One plan's own record: its acts, and what those acts themselves took and
  * gave (not what sub-goals made along the way — that is their skills' effect). */
@@ -67,13 +69,14 @@ export class SkillSolver {
   /** Get to at least `count` of `item`. */
   async solve(item: string, count: number, depth = 0, stack: string[] = []): Promise<boolean> {
     if (this.have(item) >= count) return true;
-    if (depth > this.maxDepth || this.stats.gaps.includes(item) || this.env.unsolvable?.(item)) return false;
+    if (depth > this.maxDepth || this.stats.gaps.includes(item) || this.env.unsolvable?.(item) || this.options.interrupt?.()) return false;
     const path = [...stack, item];
     // A skill already running further up (mine needs a pickaxe needs a stone) is not a way out here.
     const failed = new Set<string>(this.active);
     const failures: string[] = [];
     let stalls = 0, scarce = false;
     for (let i = 0; i < this.maxIterations && this.have(item) < count; i++) {
+      if (this.options.interrupt?.()) return false; // broken off, not a gap
       const before = this.have(item);
       const skill = this.graph.producers(item).find(s => !failed.has(s.id));
       if (skill) {
@@ -105,6 +108,7 @@ export class SkillSolver {
     }
     if (this.have(item) >= count) return true;
     if (scarce) { this.scarcity = true; return false; } // not a gap in the world's making, only in its stock
+    if (this.options.interrupt?.()) return false;
     const detail = `Could not get ${count} ${item} (have ${this.have(item)}). ${failures.slice(-3).join(" ")}`.trim();
     if (!this.stats.gaps.includes(item)) { this.stats.gaps.push(item); this.options.onGap?.(item, detail); }
     return false;
@@ -168,9 +172,12 @@ export class SkillSolver {
       const before = this.env.have(), outcome = await this.env.act(step);
       this.stats.acts++;
       if (outcome.ok) direct = stockDelta(before, this.env.have());
+      // Coin is a side effect (pay), not what a way of making things makes.
+      if (outcome.ok) for (const kind of Object.keys(direct.gained)) if (this.env.unsolvable?.(kind)) delete direct.gained[kind];
       if (outcome.ok && frame) { addStock(frame.gives, direct.gained); addStock(frame.needs, direct.lost); }
       return outcome;
     };
+    if (this.options.interrupt?.()) { this.scarcity = true; return { ok: false, summary: "Interrupted by something more urgent.", scarce: true }; }
     let result = await act();
     if (!result.ok && result.scarce) this.scarcity = true;
     // Walking is native: a target that stands elsewhere is walked to.

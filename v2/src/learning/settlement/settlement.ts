@@ -279,7 +279,8 @@ export class Settlement implements RecipeWorld {
       const done = this.plotParts.get(target) ?? [];
       const next = structure.parts.find(p => !done.includes(p.part));
       const part = structure.parts.find(p => p.part === arg) ?? next;
-      if (!part || !next) return { ok: true, durationS: 1, finish: () => ({ ok: true, summary: "Already built." }) };
+      // Resuming after a break: parts already standing are simply done.
+      if (!part || !next || done.includes(part.part)) return { ok: true, durationS: 1, finish: () => ({ ok: true, summary: "Already built." }) };
       const owner = this.plotOwner.get(target);
       if (this.plotBusy.has(target) || (owner !== undefined && owner !== eid && !this.byEid.get(owner)?.dead))
         return fail(`Someone else is building on ${Name.value[target]}.`, { scarce: true });

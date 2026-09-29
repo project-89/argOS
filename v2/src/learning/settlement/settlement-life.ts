@@ -22,16 +22,21 @@ const FOOD_ORDER = ["cooked-fish", "berries", "raw-fish"];
 const SELF_PROVIDED = new Set(["water", "berries"]);
 const COOLDOWN_S = 3600;
 const LARDER = 2;
+const URGENT = 75;
 
 export class ResidentLife {
   readonly solver: SkillSolver;
   private readonly cooldown = new Map<string, number>();
+  /** Getting food or water now: needs must not interrupt it. */
+  private meeting = false;
   stopped = false;
   constructor(private readonly town: Settlement, readonly me: ResidentState, private readonly options: LifeOptions) {
     let graph = options.graphs.get(me.trade);
     if (!graph) { graph = new SkillGraph(); options.graphs.set(me.trade, graph); }
     this.solver = new SkillSolver(town.envFor(me.eid), graph, options.planner(me.trade), { life: options.life, maxPlannerCalls: 60,
       onGap: (item, detail) => options.onGap?.(me, item, detail),
+      // Urgent thirst or hunger breaks off work (except the work of getting food or water).
+      interrupt: () => !this.meeting && (me.thirst >= URGENT || me.hunger >= URGENT),
       log: options.log ? line => options.log!(`[${me.name}] ${line}`) : undefined });
   }
   get stats(): SolveStats { return this.solver.stats; }
@@ -59,6 +64,10 @@ export class ResidentLife {
   }
   /** Drink or eat: hand, stall, or make it. */
   private async consume(kinds: string[], verb: "eat" | "drink"): Promise<boolean> {
+    this.meeting = true;
+    try { return await this.consumeInner(kinds, verb); } finally { this.meeting = false; }
+  }
+  private async consumeInner(kinds: string[], verb: "eat" | "drink"): Promise<boolean> {
     for (const kind of kinds) if (this.held(kind) > 0) return (await this.act(verb, kind)).ok;
     const cheapest = Math.min(...kinds.filter(k => (this.town.stallStock()[k] ?? 0) > 0).map(k => this.town.def.prices[k] ?? Infinity));
     if (Number.isFinite(cheapest) && this.me.coins < cheapest) await this.raiseCoin(cheapest);
