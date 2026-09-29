@@ -39,6 +39,7 @@ import { configureWorldConstructionBudget, getWorldConstructionStatus } from "./
 import { startCommittedEvents, stopCommittedEvents } from "./runtime/committed-events";
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "./ecs/prefabs";
 import { isOperatorControlled } from "./ecs/controlled";
+import { attentionCadenceOpen, backgroundPriorityFor, foregroundPriorityFor } from "./runtime/attention";
 import { initializeRegistry } from "./ecs/component-registry";
 import { createGodAgent, godCommand, getWorldState, tickWorld, runWorldTickAt, updateGlobalTime, type GodAgentState, type GodAgentConfig } from "./god/god-agent";
 import { createPrebakePreset, getAvailablePresets, type PrebakePreset } from "./god/system-baker";
@@ -1138,6 +1139,7 @@ Do NOT explain — just create everything using your tools.`;
               // reserved, so world-building cannot occupy the entire AI queue.
               const enrolled = new Set<number>();
               const modelDemand = new Set<number>(), deliberating = new Set<number>();
+              const lastForegroundSimMs = new Map<number, number>();
               registerFastSystem(runtime, {
                 name: "CognitionEnrollment",
                 execute: () => {
@@ -1146,12 +1148,15 @@ Do NOT explain — just create everything using your tools.`;
                     enrolled.add(eid);
                     registerAIOperation(runtime!, {
                       name: `AgentCognition:${eid}`, interval: 1, priority: "high", lane: "foreground",
+                      // Scarce thinking goes first to whoever the observer is with.
+                      priorityOf: () => foregroundPriorityFor(world, eid),
                       ready: () => modelDemand.has(eid) && entityExists(world, eid) && Agent.active[eid] && isForegroundActorAvailable(world, eid)
+                        && attentionCadenceOpen(world, eid, lastForegroundSimMs, hasPendingCognitionStimuli(world, eid) || hasDueAttentionSignal(world, eid))
                         && isForegroundCognitionReady(world, eid, { hasQueuedStimuli: hasPendingCognitionStimuli(world, eid),
                           hasPendingStimuli: hasPendingCognitionStimuli(world, eid) || hasUnintegratedAttention(world, eid, false),
                           hasDueAttention: hasDueAttentionSignal(world, eid) }),
                       execute: async () => {
-                        deliberating.add(eid);
+                        deliberating.add(eid); lastForegroundSimMs.set(eid, readStoryTime(world));
                         try {
                           const thoughtCursor = captureThoughtPublication(world, eid);
                           const actions = await runCognitionCycle(world, god.systemRegistry, { tick: runtime!.tick, enablePlanning: false, agentEids: [eid] });
@@ -1172,30 +1177,30 @@ Do NOT explain — just create everything using your tools.`;
                       // own planning, goal review and reflection wait until release.
                       const ownMind = () => active() && !isOperatorControlled(world, eid);
                       if (config.enableExperienceAppraisal !== false) registerAIOperation(runtime!, {
-                        name: `AgentAppraisal:${eid}`, interval: 1, priority: "high", lane: "subconscious",
+                        name: `AgentAppraisal:${eid}`, interval: 1, priority: "high", lane: "subconscious", priorityOf: () => backgroundPriorityFor(world, eid, "high"),
                         ready: () => active() && hasExperienceAppraisal(world, eid),
                         execute: () => appraiseWithThoughtPublication(eid),
                       });
                       if (config.enableReflection !== false) initializeReflectionState(world, eid);
                       if (config.enableReflection !== false) registerAIOperation(runtime!, {
-                        name: `AgentCoordinationReview:${eid}`, interval: 2, priority: "normal", lane: "subconscious",
+                        name: `AgentCoordinationReview:${eid}`, interval: 2, priority: "normal", lane: "subconscious", priorityOf: () => backgroundPriorityFor(world, eid, "normal"),
                         ready: () => ownMind() && hasPendingCoordinationReview(world, eid),
                         execute: () => runCoordinationReview(world, eid),
                       });
                       if (config.enablePlanning !== false) {
                         registerAIOperation(runtime!, {
-                          name: `AgentPlanning:${eid}`, interval: 1, priority: "high", lane: "subconscious",
+                          name: `AgentPlanning:${eid}`, interval: 1, priority: "high", lane: "subconscious", priorityOf: () => backgroundPriorityFor(world, eid, "high"),
                           ready: () => ownMind() && !hasPendingPersonalGoalReview(world, eid) && hasPendingPlanning(world, eid, { focusActiveGoal: true, background: true }),
                           execute: () => runPlanningSystem(world, { agentEids: [eid], focusActiveGoal: true, background: true }),
                         });
                       }
                       registerAIOperation(runtime!, {
-                        name: `AgentPersonalReview:${eid}`, interval: 1, priority: "high", lane: "subconscious",
+                        name: `AgentPersonalReview:${eid}`, interval: 1, priority: "high", lane: "subconscious", priorityOf: () => backgroundPriorityFor(world, eid, "high"),
                         ready: () => ownMind() && hasPendingPersonalGoalReview(world, eid),
                         execute: () => runAgentSubconscious(world, eid, { enableReflection: config.enableReflection }),
                       });
                       registerAIOperation(runtime!, {
-                        name: `AgentSubconscious:${eid}`, interval: 5, priority: "normal", lane: "subconscious",
+                        name: `AgentSubconscious:${eid}`, interval: 5, priority: "normal", lane: "subconscious", priorityOf: () => backgroundPriorityFor(world, eid, "normal"),
                         ready: () => ownMind() && !hasPendingPersonalGoalReview(world, eid) && hasSubconsciousWork(world, eid, { enableReflection: config.enableReflection }),
                         execute: () => runAgentSubconscious(world, eid, { enableReflection: config.enableReflection }),
                       });

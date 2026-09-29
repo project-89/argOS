@@ -502,6 +502,12 @@ export function getQueueStats(): TaskQueueStats {
   };
 }
 
+/** Names of tasks currently holding a slot (diagnostics only). */
+export function getRunningTaskNames(): string[] {
+  if (!globalQueue) return [];
+  return [...globalQueue.runningTasks].map(id => globalQueue!.tasks.get(id)?.name ?? id);
+}
+
 /**
  * Get all pending task names
  */

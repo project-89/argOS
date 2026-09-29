@@ -264,6 +264,8 @@ export function createSpatialWorld(world: World, options: {
   /** Walk to a transient ground point through the same planner, speed, collision,
    * seat egress, arrival and room-membership logic as any approach. The point
    * is not an entity; the admitted destination is the room that contains it. */
+  /** Per-body walking speed (m/s), e.g. an operator's jog or run. Residents keep the default. */
+  const actorSpeeds = new Map<number, number>();
   function requestWalk(actor: number, point: SpatialPoint, onFinish?: (outcome: SpatialOutcome) => void): SpatialAdmission {
     const refused = admissible(actor); if (refused) return refused;
     if (!validSpatialPoint(point) || !insideSpatialRect(point, bounds)) return { ok: false, reason: "outside_world" };
@@ -310,6 +312,12 @@ export function createSpatialWorld(world: World, options: {
     },
     requestApproach: request,
     requestWalk,
+    /** Set (or clear with undefined) a body's walking speed in metres per second. */
+    setActorSpeed(actor: number, metresPerSecond: number | undefined) {
+      if (metresPerSecond === undefined) { actorSpeeds.delete(actor); return; }
+      if (!Number.isFinite(metresPerSecond) || metresPerSecond <= 0 || metresPerSecond > 8) throw new Error("Invalid walking speed");
+      actorSpeeds.set(actor, metresPerSecond);
+    },
     /** The farthest standable point up to `distance` along a direction from the
      * actor, stepping back toward the actor; undefined when even a short step is blocked. */
     walkPointToward(actor: number, direction: SpatialPoint, distance = 1.2): SpatialPoint | undefined {
@@ -345,7 +353,7 @@ export function createSpatialWorld(world: World, options: {
           && getRoomForEntity(world, row.actor) === row.actorRoom && liveRoom(row.actorRoom)?.key === row.actorRoomKey;
         if (!current() || row.signal?.aborted || !actorCurrent || atSimMs < row.lastAt) { finish(row, "failed", "stale_actor_or_source"); continue; }
         if (!destinationCurrent(row)) { finish(row, "failed", "target_changed"); continue; }
-        let travel = (atSimMs - row.lastAt) / 1000 * speed; row.lastAt = atSimMs;
+        let travel = (atSimMs - row.lastAt) / 1000 * (actorSpeeds.get(row.actor) ?? speed); row.lastAt = atSimMs;
         let exit = egress.get(row.actor);
         if (exit && !seatCurrent(row.actor, exit, row.actorPosition)) { egress.delete(row.actor); exit = undefined; }
         let shape = geometry(exit);

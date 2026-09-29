@@ -11,6 +11,7 @@
  * Daemons are lightweight observers using the flash model for efficiency.
  */
 
+import { readAttention } from "../runtime/attention";
 import { generateText } from "ai";
 import { randomUUID } from "node:crypto";
 import { query, entityExists, hasComponent } from "bitecs";
@@ -2051,6 +2052,9 @@ export async function whisperInnerVoice(
   options: { pressing?: string } = {}
 ): Promise<DaemonWhisper | null> {
   assertSimulationTaskActive();
+  // Offstage minds keep living on their own cadence; the model-voiced inner voice
+  // is spent where the observer is. A Narrator nudge (pressing) still gets through.
+  if (!options.pressing && readAttention(world, daemon.agentEid).tier === "offstage") return null;
   const scope = captureWhisperScope(world, daemon, whisperObservation(daemon), registry);
   if (!scope.current()) return null;
   const idle = isDaemonAgentIdle(world, daemon.agentEid), ledger = readDaemonStoryLedger(spiritRegistry, daemon.agentName);

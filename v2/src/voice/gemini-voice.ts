@@ -6,6 +6,9 @@ import { googleProviderFetch } from "../llm/google-transport";
 export const VOICE_MODELS = {
   /** Found via ListModels 2026-09-28: models/gemini-3.8-flash-tts (generateContent + Interactions). */
   tts: process.env.ARGOS_TTS_MODEL || "gemini-3.8-flash-tts",
+  /** In-world resident dialogue (positional voices). Lite measured ~35% faster
+   * for 12–21 word lines (README, 2026-09-28); God and interviews stay on `tts`. */
+  dialogue: process.env.ARGOS_TTS_DIALOGUE_MODEL || "gemini-3.8-flash-lite-tts",
   /** Audio understanding through generateContent; 3.8 transcribe/live models are bidi-only. */
   stt: process.env.ARGOS_STT_MODEL || "gemini-3.8-flash",
 };
@@ -27,7 +30,8 @@ export class VoiceError extends Error {
   constructor(message: string, readonly status: number, readonly retryAfterSeconds?: number) { super(message); this.name = "VoiceError"; }
 }
 
-export type SynthesisRequest = { text: string; voiceName: string; style?: string; signal?: AbortSignal };
+/** `model` overrides the client's TTS model for one line (server-chosen, never client input). */
+export type SynthesisRequest = { text: string; voiceName: string; style?: string; model?: string; signal?: AbortSignal };
 export type SynthesisResult = { wav: Buffer; sampleRate: number; channels: number; durationMs: number };
 export type TranscriptionRequest = { audio: Buffer; mimeType: string; signal?: AbortSignal };
 export interface VoiceClient {
@@ -159,15 +163,16 @@ export function createGeminiVoiceClient(options: GeminiVoiceOptions): VoiceClien
   }
 
   return {
-    async synthesize({ text, voiceName, style, signal }) {
+    async synthesize({ text, voiceName, style, model, signal }) {
       const line = text.trim();
       if (!line || line.length > VOICE_LIMITS.maxLineChars) throw new VoiceError(`A spoken line must have 1–${VOICE_LIMITS.maxLineChars} characters`, 400);
       if (!/^[A-Za-z]{2,32}$/.test(voiceName)) throw new VoiceError("Invalid voice name", 400);
+      if (model !== undefined && !/^[\w.-]{1,80}$/.test(model)) throw new VoiceError("Invalid voice model", 400);
       const direction = style?.trim().slice(0, VOICE_LIMITS.maxStyleChars);
       // Gemini 3.8 TTS treats text as a verbatim transcript; delivery goes in
       // speech_metadata.style. store:false keeps lines out of server-side history.
       const json = await post("interactions", {
-        model: ttsModel, store: false,
+        model: model ?? ttsModel, store: false,
         input: [{ type: "user_input", content: [{ type: "text", text: line,
           ...(direction ? { annotations: [{ type: "speech_metadata", style: direction }] } : {}) }] }],
         response_format: { type: "audio", mime_type: "audio/wav" },

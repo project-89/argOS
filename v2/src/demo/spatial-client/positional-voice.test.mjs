@@ -76,6 +76,32 @@ test('audio arriving after 70% of the utterance has been spoken is dropped', asy
   assert.ok(!h.requests.includes('old'));
 });
 
+test('a voice-gated line (drawing breath, then started when its audio is ready) plays at once, not as stale', async () => {
+  // Seen while the speaker draws breath: provisional end = start + 2.5 s cap + 1.8x the authored 3 s.
+  const h = harness({ sim: 1000 });
+  h.voices.sync([row('g1', 'leon', { startedAtSimMs: 1000, expectedEndSimMs: 1000 + 2500 + 5400 })]);
+  await flush();
+  assert.deepEqual(h.requests, ['g1']);
+  // The breath lasts the whole cap; the audio lands just as the line really starts (3.5 s → 6.5 s).
+  h.setSim(3500);
+  h.voices.sync([row('g1', 'leon', { startedAtSimMs: 3500, expectedEndSimMs: 6500 })]);
+  assert.equal(utteranceProgress({ startedAtSimMs: 3500, expectedEndSimMs: 6500 }, 3500), 0);
+  h.arrive('g1'); await flush();
+  assert.deepEqual(h.plays.map(p => p.id), ['g1'], 'ready at line start: played immediately');
+  // Audio arriving before the viewer saw the real start still plays (provisional window is never >70% at the cap).
+  const k = harness({ sim: 1000 });
+  k.voices.sync([row('g2', 'mara', { startedAtSimMs: 1000, expectedEndSimMs: 1000 + 2500 + 1.8 * 800 })]);
+  await flush(); k.setSim(3500); k.arrive('g2'); await flush();
+  assert.deepEqual(k.plays.map(p => p.id), ['g2']);
+  // Without the start refresh a gated line that began late would look stale; with it, it does not.
+  const m = harness({ sim: 1000 });
+  m.voices.sync([row('g3', 'tess', { startedAtSimMs: 1000, expectedEndSimMs: 4000 })]);
+  await flush(); m.setSim(4200);
+  m.voices.sync([row('g3', 'tess', { startedAtSimMs: 3500, expectedEndSimMs: 6500 })]);
+  m.arrive('g3'); await flush();
+  assert.deepEqual(m.plays.map(p => p.id), ['g3']);
+});
+
 test('at most three voices at once, one per speaker; the next waits for a slot', async () => {
   const h = harness();
   h.voices.sync([row('a1', 'a', { distance: 1 }), row('a2', 'a', { distance: 1, startedAtSimMs: 1100 }), row('b1', 'b', { distance: 2 }),

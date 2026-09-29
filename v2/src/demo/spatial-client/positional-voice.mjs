@@ -129,7 +129,11 @@ export function createUtteranceVoices({ request, play, stop = () => {}, simNow =
       for (const row of speaking) {
         if (!validRow(row)) continue;
         const known = items.get(row.executionId);
-        if (known) { known.distance = row.distance; known.addressedToYou = !!row.addressedToYou; if (Number.isFinite(row.expectedEndSimMs)) known.expectedEndSimMs = row.expectedEndSimMs; continue; }
+        // A voice-gated line reports its real start once its audio is ready
+        // (it "draws breath" first), so timing is refreshed, not fixed at first sight.
+        if (known) { known.distance = row.distance; known.addressedToYou = !!row.addressedToYou;
+          if (Number.isFinite(row.startedAtSimMs)) known.startedAtSimMs = row.startedAtSimMs;
+          if (Number.isFinite(row.expectedEndSimMs)) known.expectedEndSimMs = row.expectedEndSimMs; continue; }
         if (seen.has(row.executionId)) continue;
         remember(row.executionId);
         if (blocked()) continue;

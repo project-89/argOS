@@ -33,6 +33,23 @@ type Utterance = {
 };
 const voices = new WeakMap<World, Map<number, Utterance>>();
 const clearingVoices = new WeakSet<World>();
+
+/** Optional voice gate (default off). A host that renders residents' voices can
+ * return a promise of a line's audio; the speaker then "draws breath": the
+ * utterance is admitted and holds the voice and floor as usual, but its first
+ * word waits until the audio is ready (or VOICE_GATE_CAP_MS of simulated time,
+ * whichever is first), and word timing is stretched to the audio's duration so
+ * text and voice finish together. Returning undefined leaves the line ungated.
+ * The promise settles in wall time; the start is then scheduled at the current
+ * simulation time on the shared timeline. Worlds without a gate are unchanged. */
+export type UtteranceVoiceGate = (speakerEid: number, executionId: string, text: string)
+  => Promise<{ durationMs: number } | undefined> | undefined;
+export const VOICE_GATE_CAP_MS = 2500;
+export const VOICE_GATE_SCALE = { min: 0.6, max: 1.8 } as const;
+const voiceGates = new WeakMap<World, UtteranceVoiceGate>();
+export function setUtteranceVoiceGate(world: World, gate: UtteranceVoiceGate | undefined): void {
+  if (gate) voiceGates.set(world, gate); else voiceGates.delete(world);
+}
 const speechEpochs = new WeakMap<World, number>();
 type TurnEnd = { roomKey: string; actorId: number; actorKey: string; atSimMs: number };
 const recentTurns = new WeakMap<World, Map<number, TurnEnd>>();
@@ -252,14 +269,61 @@ export function beginTimedSpeech(world: World, eid: number, content: string, exe
   // Waiting behind an earlier author's turn must not consume the free-floor
   // authoring grace. Extend only still-live requests when a real voice starts;
   // expired tickets never resurrect, and the total 30-second bound still holds.
+  extendTurnHolds(world, room, row.end);
+  const gate = voiceGates.get(world);
+  if (!gate || !drawBreath(world, eid, row, gate, content, options.maxDurationMs)) scheduleWords(world, eid, row);
+  return true;
+}
+function extendTurnHolds(world: World, room: number, end: number) {
   for (const [actor, request] of turnRequests.get(world) ?? []) {
     if (request.room === room && turnCurrent(world, actor, request))
-      request.holdUntil = Math.max(request.holdUntil, row.end + SPEECH_HANDOFF_GAP_MS + 3000);
+      request.holdUntil = Math.max(request.holdUntil, end + SPEECH_HANDOFF_GAP_MS + 3000);
   }
+}
+function scheduleWords(world: World, eid: number, row: Utterance) {
+  const { start, words } = row;
   for (let index = 0; index < words.length; index++) row.cancelEvents.push(scheduleSimulationEvent(world, {
     atSimMs: start + words[index].offsetMs, phase: "speech", run: () => emitWord(world, eid, row, index),
     cancel: () => { if (voices.get(world)?.get(eid) === row) retire(world, eid, row); },
   }));
+}
+/** Ask the gate for this line's audio. Returns false when the line is ungated
+ * (words are scheduled now, exactly as without a gate). Otherwise the row keeps
+ * its voice and floor with no words scheduled; `begin` schedules them once, at
+ * the simulation time the audio arrives or at the cap. A row that was retired,
+ * interrupted or replaced meanwhile never starts. */
+function drawBreath(world: World, eid: number, row: Utterance, gate: UtteranceVoiceGate, content: string,
+  maxDurationMs: number | undefined): boolean {
+  let pending: ReturnType<UtteranceVoiceGate>;
+  try { pending = gate(eid, row.executionId, content); } catch { pending = undefined; }
+  if (voices.get(world)?.get(eid) !== row) return true; // settled synchronously by the gate: nothing to schedule
+  if (!pending || typeof (pending as Promise<unknown>).then !== "function") return false;
+  const authored = row.words.at(-1)!.offsetMs;
+  // Provisional end while drawing breath: the latest this line could finish.
+  row.end = row.start + VOICE_GATE_CAP_MS + authored * VOICE_GATE_SCALE.max;
+  extendTurnHolds(world, row.room, row.end);
+  let begun = false;
+  const begin = (durationMs?: number) => {
+    if (begun) return; begun = true;
+    cancelCap();
+    if (voices.get(world)?.get(eid) !== row) return;
+    if (!voiceCurrent(world, eid, row)) { retire(world, eid, row); return; }
+    const now = readSimulationTime(world);
+    let scale = durationMs !== undefined && Number.isFinite(durationMs) && durationMs > 0
+      ? Math.min(VOICE_GATE_SCALE.max, Math.max(VOICE_GATE_SCALE.min, durationMs / authored)) : 1;
+    if (maxDurationMs !== undefined) scale = Math.min(scale, Math.max(1, maxDurationMs / authored));
+    if (scale !== 1) {
+      let previous = 0;
+      row.words = row.words.map(word => ({ text: word.text, offsetMs: previous = Math.max(previous + 1, Math.round(word.offsetMs * scale)) }));
+    }
+    row.start = now; row.end = now + row.words.at(-1)!.offsetMs;
+    extendTurnHolds(world, row.room, row.end);
+    scheduleWords(world, eid, row);
+  };
+  const cancelCap = scheduleSimulationEvent(world, { atSimMs: row.start + VOICE_GATE_CAP_MS, phase: "speech", run: () => begin(),
+    cancel: () => { if (!begun && voices.get(world)?.get(eid) === row) retire(world, eid, row); } });
+  row.cancelEvents.push(cancelCap);
+  (pending as Promise<{ durationMs: number } | undefined>).then(audio => begin(audio?.durationMs), () => begin());
   return true;
 }
 /** Deliberately end the current voice, never its body work. A stale cognitive

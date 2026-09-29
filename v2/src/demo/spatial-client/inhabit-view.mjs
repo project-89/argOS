@@ -26,7 +26,9 @@ export function createInhabitView({ el, controls, notify, getNode, voice, uttera
   const held = new Set(), subtitles = createSubtitleQueue({ maxVisible: 2 });
   let addressedKeys = new Set();
   const desiredPosition = new THREE.Vector3(), desiredTarget = new THREE.Vector3(), currentTarget = new THREE.Vector3();
-  const sender = createWalkSender({ hz: 6, send: vector => controls.walk(vector.dx, vector.dy).catch(error => {
+  // Shift runs; otherwise the body jogs. Tracked from key events, not held keys.
+  let running = false;
+  const sender = createWalkSender({ hz: 6, send: vector => controls.walk(vector.dx, vector.dy, running).catch(error => {
     if (performance.now() - walkError > 4000) { walkError = performance.now(); notify(error.status === 404 ? 'Walking isn’t available on this server yet.' : error.message, true); }
   }) });
 
@@ -303,7 +305,8 @@ export function createInhabitView({ el, controls, notify, getNode, voice, uttera
     /** Returns true when the key was consumed. `typing` = focus in a text field. */
     keydown(event, { typing = false } = {}) {
       if (!active || typing) return false;
-      if (MOVEMENT_CODES.includes(event.code)) { held.add(event.code); event.preventDefault(); return true; }
+      if (event.key === 'Shift') running = true;
+      if (MOVEMENT_CODES.includes(event.code)) { held.add(event.code); running = event.shiftKey; event.preventDefault(); return true; }
       if (verbMenuOpen) {
         const verb = verbFromKey(options, event.code);
         if (verb) { event.preventDefault(); void perform(verb.verb); return true; }
@@ -320,8 +323,8 @@ export function createInhabitView({ el, controls, notify, getNode, voice, uttera
         default: return false;
       }
     },
-    keyup(event) { if (held.delete(event.code)) return true; return false; },
-    blur() { held.clear(); },
+    keyup(event) { if (event.key === 'Shift') running = false; if (held.delete(event.code)) return true; return false; },
+    blur() { held.clear(); running = false; },
     say,
     openTalk,
     talkTarget: () => talkRow ?? talkTarget(control?.nearby),

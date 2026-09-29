@@ -23,8 +23,8 @@ const envInt = (name: string, fallback: number) => {
   const value = Number(process.env[name]); return Number.isInteger(value) && value >= 0 ? value : fallback;
 };
 
-export function voiceCacheKey(voice: string, style: string, text: string) {
-  return createHash("sha256").update(JSON.stringify([voice, style, text.trim()])).digest("hex");
+export function voiceCacheKey(voice: string, style: string, text: string, model?: string) {
+  return createHash("sha256").update(JSON.stringify(model ? [voice, style, text.trim(), model] : [voice, style, text.trim()])).digest("hex");
 }
 
 /** Bounded by entry count and total bytes; Map iteration order is recency. */
@@ -91,8 +91,9 @@ export class VoiceService {
       cache: { entries: this.cache.size, bytes: this.cache.totalBytes }, inFlight: this.slots.inFlight };
   }
 
-  async speak(request: { text: string; voice: string; style: string; signal?: AbortSignal }): Promise<SpeakResult> {
-    const key = voiceCacheKey(request.voice, request.style, request.text);
+  /** `model` picks a TTS model for this line (e.g. the dialogue model); omitted = the client's default. */
+  async speak(request: { text: string; voice: string; style: string; model?: string; signal?: AbortSignal }): Promise<SpeakResult> {
+    const key = voiceCacheKey(request.voice, request.style, request.text, request.model);
     const hit = this.cache.get(key);
     if (hit) return { ...hit, cached: true };
     const shared = this.pending.get(key);
@@ -101,7 +102,8 @@ export class VoiceService {
     // Reserve before queueing so concurrent callers cannot overspend; a failed
     // or cancelled call (no audio produced) releases its reservation.
     this.synthesisUsed++;
-    const work = this.slots.run(() => this.options.client.synthesize({ text: request.text, voiceName: request.voice, style: request.style }), request.signal)
+    const work = this.slots.run(() => this.options.client.synthesize({ text: request.text, voiceName: request.voice, style: request.style,
+      ...(request.model ? { model: request.model } : {}) }), request.signal)
       .catch(error => { this.synthesisUsed--; throw error; });
     this.pending.set(key, work);
     try {

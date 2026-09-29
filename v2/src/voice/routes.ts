@@ -5,6 +5,8 @@ import { timingSafeEqual } from "node:crypto";
 import { hasComponent } from "bitecs";
 import { z } from "zod";
 import { Agent, Appearance, Name } from "../ecs/components";
+import type { UtteranceVoiceGate } from "../cognition/timed-speech";
+import { readAttention } from "../runtime/attention";
 import { GOD_VOICE, VoiceCastBook, type PersonaInput, type VoiceCast } from "./casting";
 import { createGeminiVoiceClient, parseWav, VOICE_LIMITS, VOICE_MODELS, VoiceError, type VoiceClient } from "./gemini-voice";
 import { VoiceService, type SpeakResult } from "./voice-service";
@@ -19,6 +21,8 @@ export type VoiceDemoView = {
   audibleUtterance?: (executionId: string) => { text: string; speakerKey: string } | undefined;
   /** Called when a line starts within the body's earshot, so its voice can be rendered early. */
   onUtteranceInEarshot?: (executionId: string, speakerKey: string) => void;
+  /** Present when the demo lets voice hold a presence speaker's first word until its audio is ready. */
+  setUtteranceVoiceGate?: (gate: UtteranceVoiceGate | undefined) => void;
 };
 
 export type VoiceRouteOptions = {
@@ -73,6 +77,18 @@ function fail(res: any, error: unknown) {
   if (error instanceof z.ZodError) return void res.status(400).json({ error: error.issues[0]?.message && error.issues[0].code === "custom" ? error.issues[0].message : "Invalid request" });
   console.error("[Voice] Unexpected failure", error instanceof Error ? error.message : error);
   res.status(500).json({ error: "Voice failed" });
+}
+
+/** The timed-speech gate for a listening client: audio duration for presence
+ * speakers the controlled body can hear, undefined (ungated) otherwise. */
+export function voiceGateFor(demo: VoiceDemoView, listening: () => boolean,
+  render: (executionId: string, text: string, speakerKey: string) => Promise<SpeakResult> | undefined): UtteranceVoiceGate {
+  return (speakerEid, executionId, text) => {
+    if (!listening() || readAttention(demo.sim.world, speakerEid).tier !== "presence") return undefined;
+    const speakerKey = demo.visuals.get(speakerEid)?.key;
+    if (!speakerKey || demo.audibleUtterance?.(executionId)?.speakerKey !== speakerKey) return undefined;
+    return render(executionId, text, speakerKey)?.then(audio => ({ durationMs: audio.durationMs }), () => undefined);
+  };
 }
 
 export function mountVoiceRoutes(app: Pick<express.Express, "get" | "post">, options: VoiceRouteOptions) {
@@ -147,13 +163,15 @@ export function mountVoiceRoutes(app: Pick<express.Express, "get" | "post">, opt
   // Lines within earshot start synthesizing as they begin; the client's request
   // joins that work, so a listener hears a line as it is spoken, not after.
   const inFlight = new Map<string, Promise<SpeakResult>>();
-  const render = (executionId: string) => {
+  // In-world lines use the (faster) dialogue model; God and interviews use /speak.
+  const render = (executionId: string, text?: string, speakerKey?: string) => {
     const existing = inFlight.get(executionId); if (existing) return existing;
-    const line = demo.audibleUtterance?.(executionId), cast = line && castFor(line.speakerKey);
+    const line = text !== undefined && speakerKey !== undefined ? { text, speakerKey } : demo.audibleUtterance?.(executionId);
+    const cast = line && castFor(line.speakerKey);
     if (!line || !cast || !service) return undefined;
-    const job = service.speak({ text: line.text.slice(0, VOICE_LIMITS.maxLineChars), voice: cast.voice, style: cast.style });
+    const job = service.speak({ text: line.text.slice(0, VOICE_LIMITS.maxLineChars), voice: cast.voice, style: cast.style, model: VOICE_MODELS.dialogue });
     inFlight.set(executionId, job);
-    job.catch(() => {}).finally(() => setTimeout(() => inFlight.delete(executionId), 60_000));
+    job.catch(() => {}).finally(() => setTimeout(() => inFlight.delete(executionId), 60_000).unref?.());
     while (inFlight.size > 48) inFlight.delete(inFlight.keys().next().value!);
     return job;
   };
@@ -164,6 +182,11 @@ export function mountVoiceRoutes(app: Pick<express.Express, "get" | "post">, opt
     (demo as { onUtteranceInEarshot?: (id: string, key: string) => void }).onUtteranceInEarshot = id => {
       if (Date.now() < listeningUntil) void render(id)?.catch(() => {});
     };
+    // Voice and speech together: while someone is listening, a resident in the
+    // observer's presence draws breath until their line's audio is ready (timed
+    // speech caps the wait), so the viewer can play it as the words begin. The
+    // observer's own body and lines the body cannot hear are never held.
+    demo.setUtteranceVoiceGate?.(voiceGateFor(demo, () => Date.now() < listeningUntil, render));
   }
   app.post("/api/voice/utterance", guard, enabled, json, async (req: any, res: any) => {
     try {

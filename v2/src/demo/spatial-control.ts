@@ -15,9 +15,11 @@ export const controlVisitorSchema = z.object({ name: line(40).refine(s => /^[\p{
   persona: line(1200).optional() }).strict();
 export const controlTakeSchema = z.object({ actorKey: key }).strict();
 export const controlWalkSchema = z.union([
-  z.object({ x: coordinate, y: coordinate }).strict(),
-  z.object({ dx: coordinate, dy: coordinate }).strict().refine(v => Math.hypot(v.dx, v.dy) > 1e-6, "A direction needs length"),
+  z.object({ x: coordinate, y: coordinate, run: z.boolean().optional() }).strict(),
+  z.object({ dx: coordinate, dy: coordinate, run: z.boolean().optional() }).strict().refine(v => Math.hypot(v.dx, v.dy) > 1e-6, "A direction needs length"),
 ]);
+/** A controlled body jogs by default and runs while the player holds Shift. */
+export const CONTROL_JOG_SPEED = 2.5, CONTROL_RUN_SPEED = 4;
 export const controlActSchema = z.object({ type: z.string().trim().min(1).max(40).regex(/^[a-z_]+$/), targetKey: key.optional(),
   content: line(500).optional() }).strict();
 export const controlSaySchema = z.object({ text: line(500), targetKey: key.optional() }).strict();

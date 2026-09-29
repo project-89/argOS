@@ -28,7 +28,7 @@ import {
 } from "./knowledge-graph";
 import { addMemory } from "./knowledge-graph";
 import { formatSocialMemoryContext, formatSocialGoalsForReview, getSocialDialogue, getSocialSpeechFragments, reviewSocialGoal } from "./social-memory";
-import { getSpeakingActivity, readLocalSpeechOpportunity } from "./timed-speech";
+import { getSpeakingActivity, readLocalSpeechOpportunity, withinEarshot } from "./timed-speech";
 import { formatWorkingMemoryContext, getWorkingMemory, workingMemoryEntityRef } from "./working-memory";
 import { getCommittedEvents, startCommittedEvents } from "../runtime/committed-events";
 import { captureHeardAppraisal, prepareHeardAppraisal } from "./heard-appraisal";
@@ -838,6 +838,60 @@ function buildSocialContext(world: World, agentEid: number, othersInRoom: string
   return lines.join("\n");
 }
 
+/** The newest line spoken directly to this person that they have not answered,
+ * from someone still within earshot. */
+export function pendingDirectAddress(world: World, eid: number): { speaker: string; content: string } | undefined {
+  const name = Name.value[eid], now = readSimulationTime(world), turns = getSocialDialogue(world, eid);
+  const at = (turn: (typeof turns)[number]) => turn.simulation?.completedAtSimMs ?? turn.atSimMs ?? 0;
+  const lastOwn = Math.max(-Infinity, ...turns.filter(turn => turn.own).map(at));
+  const pending = turns.filter(turn => !turn.own && turn.target === name && at(turn) > lastOwn && now - at(turn) <= 25_000)
+    .sort((a, b) => at(b) - at(a))[0];
+  if (!pending) return;
+  const speaker = [...query(world, [Agent, Name])].find(id => Name.value[id] === pending.speaker && Agent.active[id]);
+  if (speaker === undefined || getRoomForEntity(world, speaker) !== getRoomForEntity(world, eid) || !withinEarshot(world, eid, speaker)) return;
+  return { speaker: pending.speaker, content: pending.content };
+}
+
+/** The character, their mood and wants, the scene and the conversation — the
+ * parts of their mind a spoken reply draws on. */
+export function buildFastReplyContext(world: World, eid: number, speaker: string): string {
+  const name = Name.value[eid], role = Agent.role[eid], room = getRoomForEntity(world, eid);
+  const others = getAgentVisualEntities(world, eid).filter(id => id !== eid && hasComponent(world, id, Agent)).map(id => Name.value[id]).filter(Boolean);
+  return `You are ${name}${role ? `, ${role}` : ""}.
+
+WHO YOU ARE:
+${Agent.systemPrompt[eid]}
+${formatCharacterMotivations(world, eid)}
+
+${formatIdentityAnchors(world, eid, speaker)}
+${formatAffectContext(world, eid)}
+
+WHAT YOU WANT RIGHT NOW:
+${formatActiveIntentions(world, eid)}
+
+WHERE YOU ARE: ${room !== undefined ? Name.value[room] : "somewhere"}; with you: ${others.length ? others.join(", ") : "no one else"}.
+
+THE PEOPLE AROUND YOU:
+${buildSocialContext(world, eid, others)}
+
+${formatSocialMemoryContext(world, eid)}`;
+}
+
+export function fastReplyPrompt(name: string, address: { speaker: string; content: string }, validTypes: readonly string[]): string {
+  return `${address.speaker} just said to you: ${JSON.stringify(address.content)}
+
+Answer as ${name} would, right now, in your own voice — usually 1 to 3 sentences. Be yourself:
+warm, guarded, curt, curious, evasive, teasing or hostile, whatever this person and this moment
+call for, given what you want and what you're hiding. Most people answer when spoken to directly,
+even briefly; you can still deflect, refuse or walk away if that is truly you.
+
+Respond with JSON only:
+{"control":{"version":2,"purpose":"why I answer this way","goalId":null,"localDependencies":[]},
+ "action":{"type":"speak","target":${JSON.stringify(address.speaker)},"content":"what you say"},
+ "innerThought":"optional: what you really think"}
+If you would rather act than speak, use another action type (${validTypes.join(", ")}) with an exact target name.`;
+}
+
 /** Read-only diagnostic projection of the exact context supplied to cognition. */
 export function buildAgentContext(world: World, eid: number): string {
   const shownActionReceipts = getWorkingMemory(world, eid).receipts.filter(r => r.kind === "action").slice(-8).map(r => r.id);
@@ -1466,11 +1520,20 @@ ${formatActivityReview(activityReviewContext)}
 
 `;
 
-  const mm = buildUserContentWithImages(world, eid, prompt);
+  // Someone has just spoken to this person directly and they haven't answered:
+  // a lean, conversational decision (same contract, same admission) so a reply
+  // comes in seconds. Only when no mandatory review must ride on this response.
+  const directAddress = world.meta.fastReplies ? pendingDirectAddress(world, eid) : undefined;
+  const fastReply = directAddress && !activityReviewContext && chosenNextPurpose?.status !== "ready"
+    && !formatDueAttentionReview(world, eid).trim() ? directAddress : undefined;
+  const decisionPrompt = fastReply ? fastReplyPrompt(name, fastReply, validTypes) : prompt;
+  const decisionSystem = fastReply ? buildFastReplyContext(world, eid, fastReply.speaker)
+    : `${context}\n\n${formatForegroundRejectionRecovery(world, eid)}`;
+  const mm = buildUserContentWithImages(world, eid, decisionPrompt);
   const userContent = mm.content;
-  const loggedPrompt = mm.attached.length ? `${prompt}
+  const loggedPrompt = mm.attached.length ? `${decisionPrompt}
 
-[Images attached: ${mm.attached.join(", ")}]` : prompt;
+[Images attached: ${mm.attached.join(", ")}]` : decisionPrompt;
   const deadline = AbortSignal.timeout(8000);
   const decisionSignal = AbortSignal.any([deadline, ...[guard.signal, getSimulationTaskSignal()].filter((signal): signal is AbortSignal => !!signal)]);
   let rejectionPhase: ForegroundRejectionReason = "provider_error";
@@ -1507,7 +1570,7 @@ ${formatActivityReview(activityReviewContext)}
       maxRetries: 0,
       maxOutputTokens: 1800,
       providerOptions: { google: { thinkingConfig: { thinkingLevel: "low" } } },
-      system: `${context}\n\n${formatForegroundRejectionRecovery(world, eid)}`,
+      system: decisionSystem,
       messages: [
         {
           role: "user" as const,

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp } from "node:fs/promises";
+import { getRunningTaskNames } from "./runtime/async-task-queue";
 import { resolve } from "node:path";
 import { SpatialDemo } from "./demo/spatial-demo";
 import { createSpatialDemoApp } from "./demo/spatial-server";
@@ -34,6 +35,18 @@ const demo = await SpatialDemo.create({ live, evolving, seconds: Number(process.
   ...(process.argv.includes("--blackout") || process.argv.includes("--extended-blackout") ? { scenario: "blackout" as const } : {}),
   ...(process.argv.includes("--extended-blackout") ? { layout: "extended" as const } : {}) });
 const receiver = await createSpatialDemoApp({ demo, token, directory });
+// Stall log: if the server thread is ever blocked long enough to freeze the
+// viewer, the session's recording folder says when, for how long, and what ran.
+{
+  let last = performance.now();
+  setInterval(() => {
+    const now = performance.now(), lag = now - last - 250; last = now;
+    if (lag < 750) return;
+    const row = { at: new Date().toISOString(), lagMs: Math.round(lag), simMs: demo.snapshot().atSimMs, running: getRunningTaskNames() };
+    console.warn(`[Stall] server thread blocked ${row.lagMs} ms (running: ${row.running.join(", ") || "none"})`);
+    void appendFile(resolve(directory, "stalls.jsonl"), JSON.stringify(row) + "\n").catch(() => {});
+  }, 250).unref();
+}
 const server = receiver.app.listen(port, "127.0.0.1", () => {
   const address = server.address(); if (!address || typeof address === "string") throw new Error("Missing local address");
   console.log(`SPATIAL_DEMO_READY http://127.0.0.1:${address.port}/#${token}`);

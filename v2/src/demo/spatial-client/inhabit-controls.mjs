@@ -109,7 +109,7 @@ export function createBodyControls({ api }) {
     visitor: (details = {}) => post('/api/control/visitor', details),
     take: actorKey => post('/api/control/take', { actorKey }),
     release: () => post('/api/control/release', {}),
-    walk: (dx, dy) => post('/api/control/walk', { dx, dy }),
+    walk: (dx, dy, run = false) => post('/api/control/walk', { dx, dy, ...(run ? { run: true } : {}) }),
     walkTo: (x, y) => post('/api/control/walk', { x, y }),
     interact: (verb, targetKey, content) => post('/api/control/act', { type: verb, ...(targetKey ? { targetKey } : {}), ...(content ? { content } : {}) }),
     say: (text, targetKey) => post('/api/control/say', { text, ...(targetKey ? { targetKey } : {}) }),

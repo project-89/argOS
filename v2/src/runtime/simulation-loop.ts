@@ -94,6 +94,8 @@ export type AIOperation = {
   name: string;
   execute: () => Promise<any>;
   priority?: TaskPriority;
+  /** Optional dynamic priority, read when the operation is queued (e.g. by observer attention). */
+  priorityOf?: () => TaskPriority;
   lane?: TaskLane;
   /** Checked both at enqueue and dispatch; must be a read-only readiness probe. */
   ready?: () => boolean;
@@ -445,7 +447,7 @@ function checkAIOperations(state: SimulationState): void {
         state.settlingOperations.add(operation);
         return operation;
       }, {
-        priority: op.priority || "normal",
+        priority: (() => { try { return op.priorityOf?.(); } catch { return undefined; } })() ?? op.priority ?? "normal",
         lane: op.lane,
         scope: state.scopeId,
         onComplete: (result) => {

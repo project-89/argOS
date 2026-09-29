@@ -7,8 +7,8 @@ operator can talk by voice. Contract: `src/demo/INHABIT-CONTRACT.md` (Voice).
 
 | Use | Model id | Method | Notes |
 | --- | --- | --- | --- |
-| Text-to-speech | `gemini-3.8-flash-tts` | Interactions API `POST /v1beta/interactions` (also lists `generateContent`) | 3.8-generation TTS. Override with `ARGOS_TTS_MODEL`. |
-| (alternative) | `gemini-3.8-flash-lite-tts` | same | Cheaper; not used by default. |
+| Text-to-speech (God, interviews, `/speak`) | `gemini-3.8-flash-tts` | Interactions API `POST /v1beta/interactions` (also lists `generateContent`) | 3.8-generation TTS. Override with `ARGOS_TTS_MODEL`. |
+| Text-to-speech (in-world resident lines, `/utterance`) | `gemini-3.8-flash-lite-tts` | same | Faster (see latency below). Override with `ARGOS_TTS_DIALOGUE_MODEL`. |
 | Speech-to-text | `gemini-3.8-flash` | `generateContent` with inline audio | Override with `ARGOS_STT_MODEL`. `gemini-3.5-transcribe-live` and `gemini-3.8-live` are bidi (Live) only. |
 
 Older TTS ids still listed: `gemini-3.1-flash-tts-preview`, `gemini-3.1-flash-tts-eap`,
@@ -68,6 +68,68 @@ Errors are JSON `{ error, retryAfterSeconds? }`:
 - Ask only for lines that will play. Cached repeats are free and do not use budget.
 - WAV transcription was checked live. Browser `audio/webm;codecs=opus` is
   passed through to Gemini as `audio/webm` but has not been checked live yet.
+
+## Voice and speech together (voice gate)
+
+Measured in a live run: a resident's audio arrived 4.5–8.5 s after the line
+started, while lines last about 3–5 s, so the viewer dropped most of it as stale.
+Two changes fix this:
+
+1. **Faster dialogue model.** `/api/voice/utterance` renders with
+   `VOICE_MODELS.dialogue` (`gemini-3.8-flash-lite-tts` by default). God and the
+   interview chair keep `gemini-3.8-flash-tts` via `/speak`. The model is part of
+   the cache key.
+2. **Speakers draw breath.** `setUtteranceVoiceGate(world, gate)` in
+   `src/cognition/timed-speech.ts` is off by default. When the gate returns a
+   promise, the utterance is admitted immediately and holds the voice and floor.
+   Its first word waits until the audio resolves, or for
+   `VOICE_GATE_CAP_MS` = 2500 simulated ms, whichever is first. Resolution
+   arrives in wall time, and the start is then scheduled at the current
+   simulation time on the shared timeline. Word offsets are scaled to the audio
+   duration, clamped to 0.6x–1.8x of the authored duration, so text and voice
+   finish together. While the speaker draws breath, `getSpeakingActivity`
+   reports a provisional `expectedEndSimMs` (start + cap + 1.8x authored). It
+   reports the real `startedAtSimMs` / `expectedEndSimMs` once the line starts.
+   An utterance that is cancelled, interrupted, cleared or replaced never starts
+   later. If the gate declines, throws or rejects, the line keeps authored
+   timing.
+
+`mountVoiceRoutes` registers the gate through `demo.setUtteranceVoiceGate`
+(`SpatialDemo` exposes it). The gate is active only when all of these hold:
+
+- a client asked for line audio within `LISTENING_WINDOW_MS`;
+- the speaker's `readAttention` tier is `presence`;
+- the controlled body can actually hear the line (`audibleUtterance`), which
+  excludes the operator's own body and Watch mode.
+
+The client's `/utterance` request joins the same in-flight render. The viewer
+(`positional-voice.mjs`) refreshes both `startedAtSimMs` and `expectedEndSimMs`
+on each snapshot, so audio that is ready at line start plays at once.
+
+### TTS latency (2026-09-28, 6 real calls, unary Interactions API, same client)
+
+Style direction: a Saltmere persona line, as cast.
+
+| Line (words) | Authored | flash-tts latency | flash audio | flash-lite-tts latency | lite audio |
+| --- | --- | --- | --- | --- | --- |
+| Mara, 12 words | 5.46 s | 3.52 s | 3.80 s | 2.85 s | 4.28 s |
+| Leon, 21 words | 8.94 s | 4.62 s | 7.96 s | 3.03 s | 8.24 s |
+| Ivo, 14 words | 6.26 s | 3.76 s | 5.48 s | 1.89 s | 4.44 s |
+| **Mean** | | **3.97 s** | | **2.59 s** (about 35% faster) | |
+
+Both models produced complete 24 kHz WAV with plausible pacing: lite's audio
+lengths are within 0.5 s of flash for the same text. Nobody has listened to
+compare the quality by ear yet. Lite still sometimes misses the 2.5 s cap; the
+line then starts on time with authored pacing, and its audio arrives about 0.5 s
+into the line, well inside the viewer's 70% staleness window.
+
+**Streaming:** ListModels lists only `generateContent`, `countTokens` and
+`batchGenerateContent` for both TTS models. It does not list
+`streamGenerateContent`, but it omits that for the text models too, so this
+check does not settle whether streaming is supported. Streaming was not tested
+with a paid call. If it works, streaming the first audio chunk would cut the
+breath further. That would need the viewer to play chunked PCM, which it does
+not do today.
 
 ## Saltmere cast (deterministic)
 

@@ -14,6 +14,14 @@ test("identical lines are served from cache without spending budget", async () =
   expect(voiceCacheKey("Kore", "s", "hi")).not.toBe(voiceCacheKey("Puck", "s", "hi"));
 });
 
+test("the model is part of the cache key and reaches the client only when chosen", async () => {
+  const { client, calls } = fakeClient(), service = new VoiceService({ client });
+  await service.speak({ text: "Hello, love.", voice: "Kore", style: "brisk", model: "gemini-3.8-flash-lite-tts" });
+  expect((await service.speak({ text: "Hello, love.", voice: "Kore", style: "brisk" })).cached).toBe(false);
+  expect(calls.synthesize.map(c => c.model)).toEqual(["gemini-3.8-flash-lite-tts", undefined]);
+  expect(voiceCacheKey("Kore", "s", "hi", "m")).not.toBe(voiceCacheKey("Kore", "s", "hi"));
+});
+
 test("the session budget refuses new lines once spent but keeps cached ones; failures are refunded", async () => {
   let fail = true;
   const { client } = fakeClient({ synthesize: async () => { if (fail) throw new VoiceError("rate", 429, 3); return { wav: pcmToWav(tone(10)), sampleRate: 24_000, channels: 1, durationMs: 10 }; } });

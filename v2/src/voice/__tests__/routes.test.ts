@@ -1,6 +1,7 @@
 import express from "express";
 import type { Server } from "node:http";
-import { parseWav, pcmToWav, VoiceError } from "../gemini-voice";
+import { parseWav, pcmToWav, VOICE_MODELS, VoiceError } from "../gemini-voice";
+import { setAttentionProvider } from "../../runtime/attention";
 import { GOD_VOICE } from "../casting";
 import { mountVoiceRoutes, type VoiceRouteOptions } from "../routes";
 import { VoiceService } from "../voice-service";
@@ -129,4 +130,63 @@ test("a line within earshot is voiced once, early, and only while the body can h
   expect((await call("/api/voice/utterance", { body: { executionId: "someone-else" } })).status).toBe(403);
   audible = false;
   expect((await call("/api/voice/utterance", { body: { executionId: "exec-2" } })).status).toBe(403);
+});
+
+describe("voice gate: presence speakers draw breath until their audio is ready", () => {
+  const leonKey = "actor:leon", line = "The sea takes what it's given.";
+  function gatedDemo() {
+    const demo: any = saltmereDemo(), gates: any[] = [];
+    const leon = [...demo.visuals].find(([, v]: any) => v.key === leonKey)![0] as number;
+    const mara = [...demo.visuals].find(([, v]: any) => v.key === "actor:mara")![0] as number;
+    // The controlled body (Mara) hears Leon's line; her own line is not "audible" to herself.
+    demo.audibleUtterance = (id: string) => id === "leon-1" ? { text: line, speakerKey: leonKey } : undefined;
+    demo.setUtteranceVoiceGate = (gate: any) => gates.push(gate);
+    return { demo, gates, leon, mara };
+  }
+
+  test("registered once; renders with the dialogue model only while a client listens; the client joins that render", async () => {
+    const { demo, gates, leon } = gatedDemo();
+    const { client, calls } = fakeClient();
+    const { call } = await serve({ demo, client });
+    expect(gates).toHaveLength(1);
+    const gate = gates[0];
+    expect(gate(leon, "leon-1", line)).toBeUndefined(); // nobody listening: never held, nothing spent
+    expect(calls.synthesize).toHaveLength(0);
+    await call("/api/voice/utterance", { body: { executionId: "missed" } }); // a client starts listening
+    const pending = gate(leon, "leon-1", line);
+    expect(pending).toBeInstanceOf(Promise);
+    await expect(pending).resolves.toEqual({ durationMs: 100 });
+    expect(calls.synthesize).toEqual([expect.objectContaining({ text: line, model: VOICE_MODELS.dialogue })]);
+    const res = await call("/api/voice/utterance", { body: { executionId: "leon-1" } });
+    expect(res.status).toBe(200); expect(res.headers.get("x-audio-duration-ms")).toBe("100");
+    expect(calls.synthesize).toHaveLength(1);
+    // God (and interviews) keep the default model.
+    await call("/api/voice/speak", { body: { text: "Hello, little world.", voice: "god" } });
+    expect(calls.synthesize[1]).not.toHaveProperty("model");
+  });
+
+  test("periphery/offstage speakers, the observer's own body and inaudible lines are never gated", async () => {
+    const { demo, gates, leon, mara } = gatedDemo();
+    const { client, calls } = fakeClient();
+    const { call } = await serve({ demo, client });
+    await call("/api/voice/utterance", { body: { executionId: "missed" } });
+    const gate = gates[0];
+    let tier: "presence" | "periphery" | "offstage" = "periphery";
+    setAttentionProvider(demo.sim.world, () => ({ tier }));
+    expect(gate(leon, "leon-1", line)).toBeUndefined();
+    tier = "offstage"; expect(gate(leon, "leon-1", line)).toBeUndefined();
+    tier = "presence";
+    expect(gate(mara, "mara-1", "My own words.")).toBeUndefined(); // the body's own line
+    expect(gate(leon, "leon-2", line)).toBeUndefined();            // not within the body's earshot
+    expect(calls.synthesize).toHaveLength(0);
+    expect(gate(leon, "leon-1", line)).toBeInstanceOf(Promise);
+  });
+
+  test("a failed render resolves to undefined so the line starts at once", async () => {
+    const { demo, gates, leon } = gatedDemo();
+    const { client } = fakeClient({ synthesize: async () => { throw new VoiceError("Voice provider error 503", 502, 5); } });
+    const { call } = await serve({ demo, client });
+    await call("/api/voice/utterance", { body: { executionId: "missed" } });
+    await expect(gates[0](leon, "leon-1", line)).resolves.toBeUndefined();
+  });
 });

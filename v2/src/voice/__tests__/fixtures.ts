@@ -25,9 +25,10 @@ export function tone(ms: number, sampleRate = 24_000) {
 }
 
 export function fakeClient(overrides: Partial<VoiceClient> = {}) {
-  const calls = { synthesize: [] as Array<{ text: string; voiceName: string; style?: string }>, transcribe: 0 };
+  const calls = { synthesize: [] as Array<{ text: string; voiceName: string; style?: string; model?: string }>, transcribe: 0 };
   const client: VoiceClient = {
-    synthesize: async request => { calls.synthesize.push({ text: request.text, voiceName: request.voiceName, style: request.style });
+    synthesize: async request => { calls.synthesize.push({ text: request.text, voiceName: request.voiceName, style: request.style,
+      ...(request.model ? { model: request.model } : {}) });
       return { wav: pcmToWav(tone(100)), sampleRate: 24_000, channels: 1, durationMs: 100 }; },
     transcribe: async () => { calls.transcribe++; return "the sea takes what it's given"; },
     ...overrides,

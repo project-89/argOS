@@ -59,6 +59,19 @@ describe("Gemini voice client (mock fetch)", () => {
       annotations: [{ type: "speech_metadata", style: "Old and lyrical." }] });
   });
 
+  test("a line can name its own TTS model (dialogue model); malformed model ids are refused offline", async () => {
+    const models: string[] = [], wav = pcmToWav(tone(50));
+    const client = createGeminiVoiceClient({ apiKey: "k", ttsModel: "gemini-3.8-flash-tts", fetch: async (_url, init) => {
+      models.push(JSON.parse(String(init!.body)).model);
+      return response(200, { steps: [{ type: "model_output", content: [{ type: "audio", mime_type: "audio/wav", data: wav.toString("base64") }] }] });
+    } });
+    await client.synthesize({ text: "Hi", voiceName: "Kore", model: "gemini-3.8-flash-lite-tts" });
+    await client.synthesize({ text: "Hi", voiceName: "Kore" });
+    expect(models).toEqual(["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"]);
+    await expect(client.synthesize({ text: "Hi", voiceName: "Kore", model: "../x?y" })).rejects.toMatchObject({ status: 400 });
+    expect(models).toHaveLength(2);
+  });
+
   test("also accepts generateContent-style inline PCM", async () => {
     const pcm = tone(300);
     const client = createGeminiVoiceClient({ apiKey: "k", fetch: async () => response(200,

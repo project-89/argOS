@@ -48,7 +48,7 @@ import { createSpatialWorldControl } from "./spatial-world-control";
 import { INITIAL_SPATIAL_BLUEPRINT, CAFE_SPATIAL_BLUEPRINT, SPATIAL_ASSETS, validateSpatialBlueprint, blackoutSpatialBlueprint, extendedBlackoutSpatialBlueprint,
   type SpatialBlueprint, type SpatialPoint } from "./spatial-catalog";
 import type { SpatialControlView, SpatialOperatorActor, SpatialSceneCue, SpatialViewEntity, SpatialViewState } from "./spatial-contract";
-import { CONTROL_NEARBY_METRES, CONTROL_STEP_METRES, DEFAULT_VISITOR_PERSONA, VISITOR_LIMIT, controlActSchema, controlSaySchema, controlTakeSchema,
+import { CONTROL_JOG_SPEED, CONTROL_NEARBY_METRES, CONTROL_RUN_SPEED, CONTROL_STEP_METRES, DEFAULT_VISITOR_PERSONA, VISITOR_LIMIT, controlActSchema, controlSaySchema, controlTakeSchema,
   controlVisitorSchema, controlWalkSchema, nativeControlAction, projectHeardSpeech } from "./spatial-control";
 import { createSpatialInterviews } from "./spatial-interview";
 import { spatialAgentConfig, validateSpatialScenario, type SpatialScenarioDefinition } from "./spatial-scenario";
@@ -72,13 +72,16 @@ import { assertSpatialDevelopmentRelease, SPATIAL_DEVELOPMENT_LIMITS, SPATIAL_DE
 import { createSpatialGodConsole, type SpatialOmniscience } from "./spatial-god-console";
 import { DEVELOPMENT_EVOLUTION_CONFIG } from "./spatial-town-life";
 import { getSpatialAssetEntry, loadSpatialAssetCatalog, spatialAssetModel } from "./spatial-asset-registry";
-import { getSpeakingActivity, getUtteranceScript, readLocalSpeechOpportunity, withinEarshot } from "../cognition/timed-speech";
+import { getSpeakingActivity, getUtteranceScript, readLocalSpeechOpportunity, setUtteranceVoiceGate, withinEarshot, type UtteranceVoiceGate } from "../cognition/timed-speech";
+import { setAttentionProvider, type AttentionReading } from "../runtime/attention";
 /** How long a controlled body waits for a natural gap before cutting in. */
 const SAY_GAP_WAIT_MS = 3500;
 /** How far a voice carries in the spatial town. */
 export const SPEECH_EARSHOT_METRES = 9;
 /** Conversation distance: coming this close is noticed; moving past the reset distance re-arms it. */
 const APPROACH_METRES = 2, APPROACH_RESET_METRES = 3, APPROACH_NOTICE_WINDOW_MS = 45_000;
+/** Beyond earshot but this close is periphery; farther (or another building) is offstage. */
+const PERIPHERY_METRES = 25, ADDRESSED_WINDOW_MS = 30_000;
 
 type Pending = { actor: number; actorKey: string; target: number; targetKey: string; sourceId: string;
   action: AgentAction; verb: string; startedAt: number; due?: number; container?: number; containerKey?: string;
@@ -161,6 +164,7 @@ export class SpatialDemo {
   private pausedState = false;
   /** Bodies the operator brought in. They have no mind of their own (no Mind component). */
   readonly visitors = new Set<number>();
+  private readonly addressedByObserver = new Map<number, number>();
   private readonly approachPairs = new Map<string, { near: boolean; toldAtSimMs: number }>();
   private readonly lastBodyPositions = new Map<number, { x: number; y: number }>();
   private readonly pendingSays: Array<{ actor: number; text: string; targetKey?: string; queuedAtSimMs: number }> = [];
@@ -287,6 +291,8 @@ export class SpatialDemo {
       } } });
     this.removers.push(subscribeCommittedEvents(w, event => {
       if (event.kind !== "speech" || !event.text) return;
+      // Answering the operator's body ends that resident's "addressed" priority.
+      if (event.targetId !== undefined && event.targetId === this.controlledBody()) this.addressedByObserver.delete(event.actorId);
       // Native timed speech arrives word by word. Coalesce only the committed
       // slices from the same speaker/execution, never a future script.
       const key = `${event.actorKey}:${event.executionId}`;
@@ -439,6 +445,8 @@ export class SpatialDemo {
     // Voices carry about nine metres here: a conversation on the far side of the
     // Common is not heard by everyone on it, and does not hold everyone's floor.
     sim.world.meta.speechEarshotMetres = SPEECH_EARSHOT_METRES;
+    // Someone spoken to directly answers from a lean conversational decision.
+    sim.world.meta.fastReplies = true;
     try { const demo = new SpatialDemo(sim, { ...options, seconds });
       projectWeatherInputs = () => demo.weatherMechanic?.syncInputs();
       projectDevelopmentInputs = () => demo.developmentInputs?.syncInputs();
@@ -1251,7 +1259,7 @@ export class SpatialDemo {
   releaseControl() {
     const w = this.sim.world, released: string[] = [];
     for (const actor of getControlledBodies(w)) {
-      this.stopWalk(actor);
+      this.stopWalk(actor); this.spatial.setActorSpeed(actor, undefined);
       releaseBody(w, actor);
       if (!this.actors.includes(actor)) continue;
       released.push(this.key(actor));
@@ -1265,7 +1273,9 @@ export class SpatialDemo {
   walk(input: unknown): { ok: boolean; reason?: string } {
     const request = controlWalkSchema.parse(input), actor = this.requireControlled(), w = this.sim.world;
     if (this.pausedState) return { ok: false, reason: "paused" };
-    const point = "dx" in request ? this.spatial.walkPointToward(actor, { x: request.dx, y: request.dy }, CONTROL_STEP_METRES) : { x: request.x, y: request.y };
+    const step = request.run ? CONTROL_STEP_METRES * CONTROL_RUN_SPEED / CONTROL_JOG_SPEED : CONTROL_STEP_METRES;
+    const point = "dx" in request ? this.spatial.walkPointToward(actor, { x: request.dx, y: request.dy }, step) : { x: request.x, y: request.y };
+    this.spatial.setActorSpeed(actor, request.run ? CONTROL_RUN_SPEED : CONTROL_JOG_SPEED);
     if (!point) return { ok: false, reason: "blocked" };
     this.stopWalk(actor); this.interruptWork(actor, "You walked away before finishing.");
     const execution = `walk:${randomUUID()}`;
@@ -1295,6 +1305,9 @@ export class SpatialDemo {
   say(input: unknown) {
     const request = controlSaySchema.parse(input), actor = this.requireControlled();
     if (this.pausedState) throw Error("The world is paused");
+    // Whoever the operator addresses gets first claim on thinking until they answer.
+    const addressee = request.targetKey ? this.actors.find(id => this.visuals.get(id)?.key === request.targetKey) : undefined;
+    if (addressee !== undefined) this.addressedByObserver.set(addressee, this.atSimMs);
     if (readLocalSpeechOpportunity(this.sim.world, actor).available && !this.pendingSays.length) {
       this.dispatch(this.key(actor), "speak", request.targetKey, request.text);
       return { ok: true };
@@ -1338,6 +1351,18 @@ export class SpatialDemo {
       if (was && visual && Math.hypot(p.x - was.x, p.y - was.y) > 1e-3) visual.rotationY = Math.atan2(p.x - was.x, p.y - was.y);
       this.lastBodyPositions.set(id, { x: p.x, y: p.y });
     }
+  }
+  /** The observer is the body the operator controls. Without one (Watch mode) the
+   * whole world keeps full fidelity, exactly as before. */
+  private attentionFor(eid: number): AttentionReading {
+    const observer = this.controlledBody(), w = this.sim.world;
+    if (observer === undefined || eid === observer) return { tier: "presence" };
+    const addressed = this.addressedByObserver.get(eid);
+    const addressedByObserver = addressed !== undefined && this.atSimMs - addressed <= ADDRESSED_WINDOW_MS;
+    const sameRoom = getRoomForEntity(w, eid) === getRoomForEntity(w, observer);
+    const distance = Math.hypot(Position.x[eid] - Position.x[observer], Position.y[eid] - Position.y[observer]);
+    const tier = sameRoom && distance <= SPEECH_EARSHOT_METRES ? "presence" : distance <= PERIPHERY_METRES ? "periphery" : "offstage";
+    return { tier: addressedByObserver ? "presence" : tier, distance: Number.isFinite(distance) ? distance : undefined, addressedByObserver };
   }
   private flushPendingSays() {
     const next = this.pendingSays[0]; if (!next) return;
@@ -1390,6 +1415,8 @@ export class SpatialDemo {
   }
   /** Voice hook: set by the voice routes to pre-synthesize lines the body will hear. */
   onUtteranceInEarshot?: (executionId: string, speakerKey: string) => void;
+  /** Voice hook: the voice routes register a gate so a presence speaker's first word waits for its audio (src/voice/routes.ts). */
+  setUtteranceVoiceGate(gate: UtteranceVoiceGate | undefined) { setUtteranceVoiceGate(this.sim.world, gate); }
   /** The script of an utterance the controlled body can hear right now, for voicing it. */
   audibleUtterance(executionId: string): { text: string; speakerKey: string } | undefined {
     const actor = this.controlledBody(); if (actor === undefined) return;
@@ -1505,6 +1532,7 @@ export class SpatialDemo {
   async start() {
     if (this.stopped) throw new Error("This session ended; relaunch for a new world");
     if (this.started) return; this.started = true;
+    setAttentionProvider(this.sim.world, eid => this.attentionFor(eid));
     try {
       if (this.weatherMechanic) {
         const status = this.sim.getCodingStatus()!;
