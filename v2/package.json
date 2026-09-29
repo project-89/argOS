@@ -49,6 +49,7 @@
     "demo:godai:hard": "tsx src/behavioral-tests/19-unified-api-full-stress-test.ts --duration=0.25 --hardTask=full --hardTaskTimeoutMs=30000",
     "typecheck": "tsc --noEmit",
     "train:skills": "tsx src/learning/train-skills.ts",
+    "homestead": "tsx src/learning/homestead/run-homestead.ts",
     "extract-sprites": "tsx src/scripts/extract-sprites.ts"
   },
   "dependencies": {
