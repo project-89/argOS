@@ -16,9 +16,23 @@
 import type { WovenPatch, WeaverGenerator, WeaverStats } from "../../spirits/recipe-weaver";
 import { reportGapObservation } from "../../spirits/observation-aggregator";
 import { reportResourceGap, weaveForGap } from "../../spirits/recipe-weaver";
-import type { Settlement } from "./settlement";
-import type { ResidentLife } from "./settlement-life";
-import type { Stock } from "./saltmere-land";
+import type { World } from "../../ecs/world";
+import type { SettlementTally } from "./settlement";
+import type { LandDef, Stock } from "./saltmere-land";
+
+/** What the spirits read and adjust. The headless Settlement meets it; the
+ * walkable settlement has an adapter (demo/spatial-balance.ts). Times in
+ * game seconds. */
+export interface BalanceResident { eid: number; trade: string; hunger: number; coins: number; idleS: number; dead?: boolean }
+export interface BalanceTown {
+  world: World; def: LandDef; tally: SettlementTally; treasury: number; now: number; builtCount: Stock;
+  residents: readonly BalanceResident[]; alive(): BalanceResident[];
+  sourceReserves(): Record<string, { left: number; gives: string[] }>;
+  equip(eid: number, trade: string): string[];
+}
+/** A town the Weaver can also grow (both settlements are). */
+export type GrowableBalanceTown = BalanceTown & import("../../spirits/recipe-weaver").RecipeWorld;
+export interface BalanceLife { me: { eid: number; trade: string; dead?: boolean; name?: string }; changeTrade(trade: string): void }
 
 export type Reading = { day: number; alive: number; foodIndex: number; stockouts: Stock; gluts: Stock; bought: Stock;
   /** What each trade's work failed for want of. */
@@ -35,8 +49,8 @@ export class BalanceSpirits {
   private readonly movedAt = new Map<number, number>();
   readonly readings: Reading[] = [];
   private readonly basePrices: Stock;
-  private last: { at: number; tally: Settlement["tally"]; treasury: number; idle: Map<number, number>; reserves: Record<string, number> };
-  constructor(private readonly town: Settlement, private readonly lives: () => ResidentLife[],
+  private last: { at: number; tally: SettlementTally; treasury: number; idle: Map<number, number>; reserves: Record<string, number> };
+  constructor(private readonly town: GrowableBalanceTown, private readonly lives: () => BalanceLife[],
     private readonly options: { weave?: "gemini" | { generate: WeaverGenerator }; weaverStats?: WeaverStats; grown?: WovenPatch[] } = {}) {
     this.basePrices = { ...town.def.prices };
     this.last = this.snapshot();
@@ -64,7 +78,7 @@ export class BalanceSpirits {
     }
     for (const k of Object.keys(idleByTrade)) idleByTrade[k] = +Math.min(1, idleByTrade[k] / counts[k]).toFixed(2);
     const drop = this.last.treasury - t.treasury;
-    const reading: Reading = { day, alive: t.alive().length, foodIndex: +(need ? hungerMet / need : 1).toFixed(2),
+    const reading: Reading = { day, alive: t.alive().length, foodIndex: +this.fed(need ? hungerMet / need : 1).toFixed(2),
       stockouts: diff(t.tally.stockouts, prev.stockouts), gluts: diff(t.tally.gluts, prev.gluts), bought: diff(t.tally.bought, prev.bought),
       lacking: Object.fromEntries(Object.entries(t.tally.lacking).map(([trade, k]) => [trade, diff(k, prev.lacking?.[trade] ?? {})])),
       reserveDays, treasury: t.treasury, treasuryRunwayDays: drop > 0 ? +(t.treasury / drop).toFixed(1) : Infinity, idleByTrade };
@@ -88,7 +102,7 @@ export class BalanceSpirits {
     const idleByTrade: Record<string, number> = {}, counts: Record<string, number> = {};
     for (const r of t.alive()) { idleByTrade[r.trade] = (idleByTrade[r.trade] ?? 0) + (r.idleS - (last.idle.get(r.eid) ?? 0)) / (hours * 3600); counts[r.trade] = (counts[r.trade] ?? 0) + 1; }
     for (const k of Object.keys(idleByTrade)) idleByTrade[k] = Math.min(1, idleByTrade[k] / counts[k]);
-    const reading: Reading = { day, alive: t.alive().length, foodIndex: need ? met / need : 1, stockouts: diff(t.tally.stockouts, last.stockouts), gluts: {}, bought: {},
+    const reading: Reading = { day, alive: t.alive().length, foodIndex: this.fed(need ? met / need : 1), stockouts: diff(t.tally.stockouts, last.stockouts), gluts: {}, bought: {},
       lacking: Object.fromEntries(Object.entries(t.tally.lacking).map(([trade, k]) => [trade, diff(k, last.lacking?.[trade] ?? {})])),
       reserveDays: {}, treasury: t.treasury, treasuryRunwayDays: Infinity, idleByTrade };
     // A few hours are noisy (meals come in bursts): act only on a clear crisis, food eaten well below need and food running out.
@@ -97,6 +111,12 @@ export class BalanceSpirits {
     return this.interventions.slice(before);
   }
 
+  /** Eating less than the day's need is no crisis while people are not hungry (they eat when hunger comes). */
+  private fed(index: number): number {
+    const alive = this.town.alive();
+    const hungry = alive.length ? alive.reduce((n, r) => n + r.hunger, 0) / alive.length : 0;
+    return hungry < this.town.def.needs.eatAt ? Math.max(index, 1) : index;
+  }
   /** Dawn: read yesterday, then act on it. */
   async dawn(day: number): Promise<Intervention[]> {
     const before = this.interventions.length, r = this.read(day), t = this.town;

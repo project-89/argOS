@@ -61,6 +61,7 @@ import { createSettlementScenario } from "./spatial-settlement";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
 import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
 import { SettlementAutopilot, type Appraisal } from "./spatial-autopilot";
+import { createSpatialBalance } from "./spatial-balance";
 import { commitPreparedAffectUpdate, prepareAffectUpdate, type FacialExpression } from "../cognition/affect-state";
 import type { Percept } from "../cognition/autopilot-attention";
 import { JevClient } from "../llm/jev";
@@ -170,6 +171,8 @@ export class SpatialDemo {
   /** Settlement kinds of entities (a tree, a log, the stall). */
   readonly settlementKinds = new Map<number, string>();
   private settlementItems = 0;
+  /** This session's land (prices, recipes, shares change as the spirits and Weaver work). */
+  readonly settlementLand = structuredClone(SALTMERE_LAND);
   private readonly tickListeners = new Set<() => void>();
   /** Residents working their trades by habit (settlementWork). */
   readonly tradeLives: SpatialTradeLife[] = [];
@@ -351,7 +354,12 @@ export class SpatialDemo {
     registerSystem(sim.god.systemRegistry, { name: "SpatialNeeds", description: "Authored real-time afternoon need rates: hunger +10/hour, energy -5/hour",
       pseudocode: "Integrate bounded needs by elapsed world hours, never rendering or tick count", active: true, frequency: 0, lastRun: 0,
       compiledFn: (_world, ctx) => { for (const actor of this.actors) if (isEntityPresent(w, actor)) {
-        Needs.hunger[actor] = Math.min(100, Needs.hunger[actor] + 10 * ctx.delta / 3_600_000);
+        // The settlement's hunger follows its own clock (a game day per real hour by default), slower asleep.
+        // The settlement's hunger follows the pace people can work at in the walkable world (walking is real
+        // time), not the fast day/night clock: ARGOS_SETTLEMENT_HUNGER_PACE per real hour, slower asleep.
+        const settle = this.options.story === "settlement", perRealHour = settle
+          ? this.settlementHungerPace * ((this.recipes?.asleep(actor) ?? false) ? SALTMERE_LAND.night.asleepNeedFactor : 1) : 10;
+        Needs.hunger[actor] = Math.min(100, Needs.hunger[actor] + perRealHour * ctx.delta / 3_600_000);
         Needs.energy[actor] = Math.max(0, Needs.energy[actor] - 5 * ctx.delta / 3_600_000);
       } } });
     this.removers.push(subscribeCommittedEvents(w, event => {
@@ -457,7 +465,7 @@ export class SpatialDemo {
     // An explicit spending bound, not a default: unset sessions still run 10 minutes
     // (30 in development). Inhabiting and interviewing need room, and pausing no
     // longer consumes session time, so an operator may ask for up to an hour.
-    if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > 3600) throw new Error("Session duration must be between 10 seconds and 60 minutes (ARGOS_SPATIAL_SECONDS)");
+    if (!Number.isSafeInteger(seconds) || seconds < 10 || seconds > 14_400) throw new Error("Session duration must be between 10 seconds and 4 hours (ARGOS_SPATIAL_SECONDS)");
     if (options.development && (!options.evolving || options.scenario !== "town" || options.weatherMechanic || options.world
       || !options.development.directory?.trim())) throw Error("World development requires its evolving authored town and release directory, without the single-weather canary");
     if (options.world && options.scenario === "blackout") throw Error("Custom spatial worlds cannot substitute for the Blackout fixture");
@@ -1078,6 +1086,8 @@ export class SpatialDemo {
     p.publicDetail = `Wrote ${Name.value[note]}.`;
     return { success: true, detail: `You wrote ${Name.value[note]} and are holding it. It says: ${JSON.stringify(text)}` };
   }
+  /** Hunger per real hour in the settlement (about three proper meals an hour of real work). */
+  get settlementHungerPace() { return Math.max(1, Number(process.env.ARGOS_SETTLEMENT_HUNGER_PACE ?? 40)); }
   /** The settlement's day: one game day per real hour by default (ARGOS_SETTLEMENT_DAY_MINUTES). Dawn at 6. */
   private get settlementDayMs() { return Math.max(1, Number(process.env.ARGOS_SETTLEMENT_DAY_MINUTES ?? 60)) * 60_000; }
   settlementHour(): number { return (SALTMERE_LAND.night.dawnHour + this.atSimMs / this.settlementDayMs * 24) % 24; }
@@ -1095,7 +1105,7 @@ export class SpatialDemo {
     }
     const work = this.options.settlementWork;
     if (!work || !this.recipes) return;
-    const host: SpatialTradeHost = { world: w, registry: this.sim.god.systemRegistry, land: SALTMERE_LAND, recipes: this.recipes,
+    const host: SpatialTradeHost = { world: w, registry: this.sim.god.systemRegistry, land: this.settlementLand, recipes: this.recipes,
       kindOf: eid => this.settlementKinds.get(eid),
       rooms: () => this.roomViews.map(r => ({ eid: r.id, name: r.name, kind: SALTMERE_LAND.places.find(p => p.name === r.name)?.kind ?? (r.name === "The Net House" ? "net-house" : "") })),
       stall: () => [...this.settlementKinds].find(([, k]) => k === "stall")?.[0],
@@ -1121,7 +1131,7 @@ export class SpatialDemo {
         const since = this.atSimMs - 120_000, me = Name.value[eid];
         const people = [...new Set(getSocialDialogue(w, eid).filter(t => (t.simulation?.completedAtSimMs ?? t.atSimMs ?? 0) >= since)
           .map(t => t.own ? t.target : t.speaker).filter((n): n is string => !!n && n !== me))].slice(0, 3);
-        return { people, items: Object.keys(SALTMERE_LAND.prices), places: this.roomViews.map(r => r.name) };
+        return { people, items: Object.keys(this.settlementLand.prices), places: this.roomViews.map(r => r.name) };
       },
       onErrand: (eid, errand) => { this.tradeLives.find(l => l.eid === eid)?.errands.push(errand); },
       mindAvailable: () => w.meta.aiEnabled !== false,
@@ -1167,6 +1177,56 @@ export class SpatialDemo {
       this.tradeLives.push(life);
       void life.live().catch(error => console.warn(`[Settlement] ${r.name} stopped working: ${error instanceof Error ? error.message : error}`));
     }
+    // The spirits keep the town in balance: a dawn reading each game day, watches through it.
+    const land = this.settlementLand, recipes = this.recipes;
+    const kinds = () => [...this.settlementKinds];
+    const balance = this.settlementBalance = createSpatialBalance({ world: w, land, recipes, lives: () => this.tradeLives,
+      hungerPerGameHour: () => this.settlementHungerPace * this.settlementDayMs / 86_400_000,
+      graphFor: trade => { let g = work.graphs.get(trade); if (!g) { g = new SkillGraph(); work.graphs.set(trade, g); } return g; },
+      dayMs: () => this.settlementDayMs, realNow: () => this.atSimMs,
+      equip: (eid, trade) => {
+        const duties = land.trades.find(t => t.role === trade)?.duties.map(d => d.item) ?? [];
+        const tools = [...new Set(land.recipes.filter(rc => duties.some(d => (rc.gives[d] ?? 0) > 0)).flatMap(rc => rc.tools ?? []))];
+        const given: string[] = [];
+        for (const tool of tools) {
+          if (listDirectContents(w, eid).some(e => this.settlementKinds.get(e) === tool)) continue;
+          const spare = kinds().find(([e, k]) => k === tool && !this.actors.includes(getDirectContainer(w, e) ?? -1))?.[0];
+          if (spare !== undefined && recipes.handOverTool(spare, eid)) given.push(tool);
+        }
+        return given;
+      },
+      manual: () => land.recipes.map(rc => `${rc.verb}${rc.product ? ` ${rc.product}` : ""} at a ${rc.at}`),
+      placeKinds: () => [...new Set(land.places.map(p => p.kind))],
+      thingKinds: () => [...new Set(kinds().filter(([e]) => !PhysicalObject.portable[e]).map(([, k]) => k))],
+      obtainableKinds: () => [...new Set([...kinds().filter(([e]) => PhysicalObject.portable[e]).map(([, k]) => k), ...land.recipes.flatMap(rc => Object.keys(rc.gives)), ...land.wear.map(x => x.becomes)])],
+      apply: patch => {
+        for (const rc of patch.recipes) land.recipes.push({ ...rc });
+        for (const thing of patch.things) this.spawnSettlementThing(thing.name, thing.kind, thing.placeKind, thing.uses, !!thing.portable);
+        for (const k of patch.recipes.flatMap(rc => Object.keys(rc.gives))) land.prices[k] ??= 2;
+        this.record("world", `The land changes: ${patch.reason}`);
+      },
+      regrowing: () => kinds().flatMap(([eid, kind]) => { const t = SALTMERE_LAND.things.find(x => x.kind === kind && x.name === Name.value[eid]); return t?.regrow ? [{ eid, regrow: t.regrow, cap: t.uses }] : []; }),
+      record: line => this.record("world", line) }, { weave: this.live ? "gemini" : undefined });
+    this.tickListeners.add(() => balance.tick(this.settlementNight()));
+  }
+  /** The balance spirits of the walkable settlement. */
+  settlementBalance?: ReturnType<typeof createSpatialBalance>;
+  /** A new source the Weaver grew: a simple shape in a place of that kind. */
+  private spawnSettlementThing(name: string, kind: string, placeKind: string, uses: number | undefined, portable: boolean): number | undefined {
+    const w = this.sim.world, place = this.settlementLand.places.find(p => p.kind === placeKind);
+    const room = place ? this.roomViews.find(r => r.name === place.name) : undefined;
+    if (!room) return undefined;
+    const eid = new ObjectManager(w).spawn("object", { name, description: `${name}.`, containedIn: room.id, state: "normal" });
+    if (eid === null) return undefined;
+    const x = room.bounds.x + room.bounds.width * (.3 + .4 * Math.random()), y = room.bounds.z + room.bounds.depth * (.3 + .4 * Math.random());
+    this.position(eid, x, y); PhysicalObject.portable[eid] = portable; this.settlementKinds.set(eid, kind);
+    const asset = SPATIAL_ASSETS[kind] ?? SPATIAL_ASSETS.bramble;
+    this.visuals.set(eid, { key: this.key(eid), asset: asset.id, size: asset.size, color: asset.color, lift: 0 });
+    const anchors = [{ x: 0, y: -1.8 }, { x: 0, y: 1.8 }];
+    this.propAnchors.set(eid, anchors); this.spatial.registerTarget(eid, { anchors });
+    this.sim.god.registry.byName.set(name, eid); this.sim.god.registry.byId.set(eid, name);
+    this.recipes?.installSource(eid, uses);
+    return eid;
   }
   /** Jev picks what a resident on autopilot does next, from the menu, as that person would. */
   private async chooseWithJev(jev: JevClient, eid: number, menu: string[]): Promise<number | undefined> {
@@ -1236,7 +1296,7 @@ export class SpatialDemo {
   /** The settlement's crafts: kinds, sources, items made in hand, the stall, raised buildings. */
   private installSettlement() {
     const w = this.sim.world;
-    const recipes = createSpatialRecipes({ world: w, land: SALTMERE_LAND,
+    const recipes = createSpatialRecipes({ world: w, land: this.settlementLand,
       kindOf: eid => this.settlementKinds.get(eid),
       setKind: (eid, kind) => { this.settlementKinds.set(eid, kind); },
       key: eid => this.key(eid),
@@ -1261,7 +1321,8 @@ export class SpatialDemo {
         const i = SALTMERE_LAND.residents.findIndex(r => r.name === Name.value[actor]);
         return i < 0 ? undefined : [...this.settlementKinds].find(([e, k]) => k === "tent" && Name.value[e] === `Tent ${i + 1}`)?.[0]; },
       houseless: () => this.actors.filter(a => SALTMERE_LAND.residents.some(r => r.name === Name.value[a]) && recipes.homeOf(a) === undefined),
-      msUntilDawn: () => this.settlementMsUntilDawn() });
+      msUntilDawn: () => this.settlementMsUntilDawn(),
+      gameSpeed: () => 86_400_000 / this.settlementDayMs });
     for (const [eid, kind] of this.settlementKinds) {
       const thing = SALTMERE_LAND.things.find(t => t.kind === kind && Name.value[eid] === t.name);
       recipes.installSource(eid, thing?.uses);

@@ -147,28 +147,52 @@ export function createSpatialSkillEnv(host: SpatialTradeHost, eid: number): Skil
 const FOOD = ["cooked-fish", "berries", "raw-fish"];
 
 export class SpatialTradeLife {
-  readonly solver: SkillSolver;
+  solver: SkillSolver;
+  trade: string;
   stopped = false;
   private readonly env: SkillEnv;
   private readonly cooldown = new Map<string, number>();
   /** Errands the resident's mind chose (bring someone something, go somewhere): done before the day's work. */
   readonly errands: Errand[] = [];
-  constructor(private readonly host: SpatialTradeHost, readonly eid: number, readonly trade: string, graph: SkillGraph, planner: Planner,
+  constructor(private readonly host: SpatialTradeHost, readonly eid: number, trade: string, graph: SkillGraph, private readonly planner: Planner,
     private readonly log?: (line: string) => void,
     private readonly attention?: { holds(eid: number): boolean; surprised(eid: number, item: string, detail: string): void;
       concernsOf?(eid: number): readonly Concern[]; dropConcern?(eid: number, c: Concern): void; summon?(eid: number, reason: string): void },
     /** A fast judge choosing what to do next from the menu (given who they are and how they feel). */
     private readonly chooser?: (eid: number, menu: string[]) => Promise<number | undefined>) {
-    this.env = createSpatialSkillEnv(host, eid);
-    this.solver = new SkillSolver(this.env, graph, planner, { maxPlannerCalls: 40, log: log ? line => log(`[${Name.value[eid]}] ${line}`) : undefined,
-      // The habit yields at its next act when the mind has the floor (or hunger bites).
-      interrupt: () => this.stopped || (Needs.hunger[eid] ?? 0) >= 85 || !!this.attention?.holds(eid) || !!this.host.isNight?.(),
+    this.trade = trade;
+    const env = createSpatialSkillEnv(host, eid), act = env.act.bind(env);
+    // Failures for want of something tell the spirits where the chain is short.
+    env.act = async action => { const r = await act(action); if (!r.ok && r.missing) host.recipes.lacked(this.trade, r.missing.kind); return r; };
+    this.env = env;
+    this.solver = this.makeSolver(graph, planner);
+  }
+  private makeSolver(graph: SkillGraph, planner: Planner): SkillSolver {
+    const eid = this.eid, log = this.log;
+    return new SkillSolver(this.env, graph, planner, { maxPlannerCalls: 40, log: log ? line => log(`[${Name.value[eid]}] ${line}`) : undefined,
+      // The habit yields at its next act when the mind has the floor (or hunger bites, or night falls).
+      // Getting food is exempt from hunger's own break-off (else the starving could never forage).
+      interrupt: () => this.stopped || (!this.feeding && (Needs.hunger[eid] ?? 0) >= 85) || !!this.attention?.holds(eid) || !!this.host.isNight?.(),
       onSurprise: (item, _skill, detail) => this.attention?.surprised(eid, item, detail) });
   }
-  get stats(): SolveStats { return this.solver.stats; }
+  /** The Steward moved them: they take up another trade and learn it with that trade's graph. */
+  private readonly earlierStats: SolveStats[] = [];
+  changeTrade(trade: string, graph: SkillGraph, planner: Planner = this.planner): void {
+    this.earlierStats.push(this.solver.stats);
+    this.trade = trade; this.cooldown.clear();
+    this.solver = this.makeSolver(graph, planner);
+  }
+  get stats(): SolveStats {
+    const all = [...this.earlierStats, this.solver.stats];
+    return { ...this.solver.stats, plannerCalls: all.reduce((n, x) => n + x.plannerCalls, 0), acts: all.reduce((n, x) => n + x.acts, 0),
+      skillRuns: all.reduce((n, x) => n + x.skillRuns, 0), skillFailures: all.reduce((n, x) => n + x.skillFailures, 0) };
+  }
   private held(kind: string) { return this.env.have()[kind] ?? 0; }
+  /** Real milliseconds spent waiting with nothing to do (the spirits watch idleness). */
+  idleMs = 0;
   private wait(ms: number): Promise<void> {
     const until = this.host.now() + ms;
+    this.idleMs += ms;
     return new Promise(resolve => { const stop = this.host.onTick(() => { if (this.stopped || this.host.now() >= until) { stop(); resolve(); } }); });
   }
   private cooling(key: string) { return (this.cooldown.get(key) ?? -Infinity) > this.host.now(); }
@@ -181,7 +205,12 @@ export class SpatialTradeLife {
     if (room !== undefined && getRoomForEntity(this.host.world, this.eid) !== room) await this.env.act({ verb: "move", target: Name.value[room] });
   }
 
+  private feeding = false;
   private async eat(): Promise<boolean> {
+    this.feeding = true;
+    try { return await this.eatInner(); } finally { this.feeding = false; }
+  }
+  private async eatInner(): Promise<boolean> {
     for (const kind of FOOD) if (this.held(kind) > 0) return (await this.env.act({ verb: "eat", target: kind })).ok;
     for (const kind of FOOD) {
       const price = this.host.land.prices[kind] ?? Infinity;
@@ -289,7 +318,7 @@ export class SpatialTradeLife {
       const errand = this.errands.shift();
       if (errand) { await this.errand(errand); continue; }
       if (await this.chooseNext()) continue;
-      if ((Needs.hunger[this.eid] ?? 0) >= 55 && await this.eat()) continue;
+      if ((Needs.hunger[this.eid] ?? 0) >= this.host.land.needs.eatAt && await this.eat()) continue;
       if (await this.sell()) continue;
       if (await this.work()) continue;
       await this.wait(60_000);

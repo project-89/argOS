@@ -151,3 +151,26 @@ test("night: residents walk to their tents at bedtime, sleep till dawn, and the 
     expect(d.recipes!.restOf(slept[0])).toBe(.8); // a tent: a little slower today
   } finally { if (previous === undefined) delete process.env.ARGOS_SETTLEMENT_DAY_MINUTES; else process.env.ARGOS_SETTLEMENT_DAY_MINUTES = previous; }
 }, 180_000);
+
+test("the balance spirits watch the walkable town: each dawn a reading, the daily share paid, the land growing back", async () => {
+  const { runSettlementLife } = await import("../../learning/settlement/run-settlement");
+  const { SkillGraph } = await import("../../learning/skill-graph");
+  const previous = process.env.ARGOS_SETTLEMENT_DAY_MINUTES;
+  process.env.ARGOS_SETTLEMENT_DAY_MINUTES = "4";
+  try {
+    const graphs = new Map<string, InstanceType<typeof SkillGraph>>();
+    await runSettlementLife({ days: 1, life: 1, graphs, planner: "manual" });
+    d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, seconds: 3600,
+      settlementWork: { graphs, jev: false } });
+    await d.start();
+    const otis = d.actors.find(a => Name.value[a] === "Otis")!;
+    const step = async (n: number) => { for (let i = 0; i < n; i++) { d!.advance(100); await new Promise(r => setImmediate(r)); } };
+    await step(2500); // past the first game dawn (4 real minutes)
+    const readings = d.settlementBalance!.interventions().filter(i => i.spirit === "Watcher");
+    expect(readings.length).toBeGreaterThanOrEqual(1);
+    expect(readings[0].what).toMatch(/ate \d+% of need/);
+    expect(d.settlementBalance!.spirits.readings[0].idleByTrade).toHaveProperty("fisher");
+    expect(d.recipes!.tally.made["raw-fish"] ?? 0).toBeGreaterThan(0);
+    void otis;
+  } finally { if (previous === undefined) delete process.env.ARGOS_SETTLEMENT_DAY_MINUTES; else process.env.ARGOS_SETTLEMENT_DAY_MINUTES = previous; }
+}, 180_000);
