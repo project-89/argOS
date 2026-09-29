@@ -9,11 +9,14 @@ import { createSpatialDemoApp } from "./demo/spatial-server";
 const live = process.argv.includes("--live");
 const development = process.argv.includes("--develop");
 const lovecraft = process.argv.includes("--lovecraft");
-const town = process.argv.includes("--town") || lovecraft || development;
+// Saltmere Settlement: bare land, tents and trades (optionally a trained skill file: --settlement graphs.json).
+const settlementFlag = process.argv.indexOf("--settlement"), settlement = settlementFlag >= 0;
+const settlementGraphs = settlement && process.argv[settlementFlag + 1] && !process.argv[settlementFlag + 1].startsWith("--") ? process.argv[settlementFlag + 1] : undefined;
+const town = process.argv.includes("--town") || lovecraft || development || settlement;
 const householdChallenge = process.argv.includes("--household-challenge");
 const household = process.argv.includes("--household") || householdChallenge;
-const evolving = process.argv.includes("--evolving") || lovecraft || development;
-const story = process.argv.includes("--story") || lovecraft;
+const evolving = process.argv.includes("--evolving") || lovecraft || development || settlement;
+const story = process.argv.includes("--story") || lovecraft || settlement;
 const weatherMechanic = process.argv.includes("--weather-mechanic");
 if (development && weatherMechanic) throw Error("Choose broader --develop or the --weather-mechanic canary, not both");
 if (weatherMechanic && (!(town || householdChallenge) || !evolving)) throw Error("--weather-mechanic requires --town or --household-challenge with --evolving");
@@ -27,6 +30,20 @@ if (live && !process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim()) throw new Error("
 const skillsFlag = process.argv.indexOf("--skills");
 const skillsArg = skillsFlag >= 0 && process.argv[skillsFlag + 1] && !process.argv[skillsFlag + 1].startsWith("--") ? process.argv[skillsFlag + 1] : undefined;
 const skillLibraryPath = skillsFlag >= 0 ? skillsArg ?? process.env.ARGOS_SKILL_LIBRARY?.trim() ?? "" : process.env.ARGOS_SKILL_LIBRARY?.trim() || undefined;
+/** Trade skill graphs (e.g. from `npm run settlement -- --graphs <path>`); with --live, Gemini fills gaps. */
+async function settlementWork() {
+  const { existsSync, readFileSync } = await import("node:fs");
+  const { SkillGraph } = await import("./learning/skill-graph");
+  const graphs = new Map<string, InstanceType<typeof SkillGraph>>();
+  if (settlementGraphs && existsSync(settlementGraphs))
+    for (const [trade, json] of Object.entries(JSON.parse(readFileSync(settlementGraphs, "utf8")))) graphs.set(trade, SkillGraph.fromJson(json as any));
+  console.log(`[Settlement] ${graphs.size ? `trade skills from ${settlementGraphs}: ${[...graphs].map(([t, g]) => `${t} ${g.skills.size}`).join(", ")}` : "no trained skills; residents learn as they go"}`);
+  if (!live) return { graphs };
+  const { geminiPlanner } = await import("./learning/homestead/planners");
+  const stats = { calls: 0, tokensIn: 0, tokensOut: 0, malformed: 0 };
+  return { graphs, planner: (trade: string) => geminiPlanner(stats, { persona: `You plan practical steps for a ${trade} in a small coastal town that must feed and build itself. Be brief and exact.`,
+    verbs: "buy <item> / sell <item> at the Market stall (target the stall, arg the item), " }) };
+}
 const token = randomBytes(24).toString("hex"), port = Number(process.env.ARGOS_SPATIAL_PORT ?? 0);
 if (!Number.isSafeInteger(port) || port < 0 || port > 65535 || port > 0 && port < 1024) throw new Error("Invalid local port");
 await mkdir(resolve("recordings"), { recursive: true });
@@ -35,7 +52,8 @@ const demo = await SpatialDemo.create({ live, evolving, seconds: Number(process.
   ...(development ? { development: { directory: resolve(directory, "development-builds") } } : {}),
   ...(householdChallenge ? { householdChallenge: true } : {}),
   ...(weatherMechanic ? { weatherMechanic: { directory: process.env.ARGOS_WEATHER_RELEASE_DIRECTORY?.trim() || resolve(directory, "weather-build") } } : {}),
-  ...(story ? { story: lovecraft ? "coastal-mystery" as const : household ? "household" as const : "community-drama" as const } : {}),
+  ...(story ? { story: settlement ? "settlement" as const : lovecraft ? "coastal-mystery" as const : household ? "household" as const : "community-drama" as const } : {}),
+  ...(settlement ? { settlementWork: await settlementWork() } : {}),
   ...(town ? { scenario: "town" as const } : {}),
   ...(household ? { scenario: "household" as const } : {}),
   ...(process.argv.includes("--blackout") || process.argv.includes("--extended-blackout") ? { scenario: "blackout" as const } : {}),
