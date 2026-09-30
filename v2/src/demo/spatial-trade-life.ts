@@ -207,11 +207,12 @@ export class SpatialTradeLife {
   private held(kind: string) { return this.env.have()[kind] ?? 0; }
   /** Game minutes as real milliseconds (a game day per real hour by default). */
   private gameMinutes(minutes: number): number { return minutes * (this.host.dayMs?.() ?? 3_600_000) / 1440; }
-  /** Real milliseconds spent waiting with nothing to do (the spirits watch idleness). */
+  /** Real milliseconds spent waiting with nothing to do (the spirits watch idleness). Talk, supper, rest
+   * and bed are not idleness: a fisher caught up in the day's drama has not run out of work. */
   idleMs = 0;
-  private wait(ms: number): Promise<void> {
+  private wait(ms: number, idle = false): Promise<void> {
     const until = this.host.now() + ms;
-    this.idleMs += ms;
+    if (idle) this.idleMs += ms;
     return new Promise(resolve => { const stop = this.host.onTick(() => { if (this.stopped || this.host.now() >= until) { stop(); resolve(); } }); });
   }
   private cooling(key: string) { return (this.cooldown.get(key) ?? -Infinity) > this.host.now(); }
@@ -397,7 +398,7 @@ export class SpatialTradeLife {
       if (await this.chooseNext()) continue;
       if ((Needs.hunger[this.eid] ?? 0) >= this.host.land.needs.eatAt && await this.eat()) continue;
       if (await this.turnToWork()) continue;
-      await this.wait(this.gameMinutes(20));
+      await this.wait(this.gameMinutes(20), true); // nothing to do: this is idleness
     }
   }
 }

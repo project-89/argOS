@@ -201,6 +201,12 @@ test("a conversation's resolve outlives it: goals on the menu, errands for the h
     await life.pursue({ id: mystery, description: "Find out who forced the Net House box before Mara does" });
     expect(d.autopilot!.holds(otis)).toBe(true);
     expect(d.autopilot!.log.at(-1)?.what).toMatch(/looks up: You set out to Find out who forced the Net House box/);
+    // Holding the floor is not idleness (the spirits must not read a day of talk as a trade without work).
+    const idleBefore = life.idleMs;
+    void life.wait(60_000); // how the habit waits while the mind holds the floor, at supper, at rest
+    expect(life.idleMs).toBe(idleBefore);
+    void life.wait(1_000, true); // only nothing-to-do counts
+    expect(life.idleMs).toBe(idleBefore + 1_000);
     // A thread set aside for review stays on the menu; pursuing it is taking it up again (retained, not claimed done).
     const { createGeneratedIntention, requestIntentionReconsideration } = await import("../../cognition/goal-lifecycle");
     const thread = createGeneratedIntention(w, otis, { description: "Learn what Harlan Pryce wrote to Leon", priority: 7, kind: "social" }, "foreground")!;
