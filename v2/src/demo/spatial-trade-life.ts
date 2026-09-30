@@ -192,6 +192,8 @@ export class SpatialTradeLife {
       // The habit yields at its next act when the mind has the floor (or hunger bites, or night falls).
       // Getting food is exempt from hunger's own break-off (else the starving could never forage).
       interrupt: () => this.interrupted(),
+      // What they could not get at all, and why (the spirits also see it through the lacking tally).
+      onGap: (item, detail) => log?.(`[${Name.value[eid]}] gap: ${item} — ${detail.slice(0, 220)}`),
       onSurprise: (item, _skill, detail) => this.attention?.surprised(eid, item, detail) });
   }
   /** The habit yields at its next act: the mind has the floor, hunger bites, night falls. A solve broken off this way is not a failure. */

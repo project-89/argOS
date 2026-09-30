@@ -56,7 +56,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   return response;
 }) as typeof fetch;
 const d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: true, seconds: MINUTES * 60 + 120,
-  settlementWork: { graphs, jev, habits, log: (l: string) => { if (/chooses|plan for|learned|intention|habit|pressed|takes up/.test(l)) out(`${stamp()} ${l}`); },
+  settlementWork: { graphs, jev, habits, log: (l: string) => { if (/chooses|plan for|learned|intention|habit|pressed|takes up|gap:/.test(l)) out(`${stamp()} ${l}`); },
     planner: (trade: string) => geminiPlanner(plannerStats, { persona: `You plan practical steps for a ${trade} in a small coastal town rebuilding after the sea took it. Be brief and exact.`,
       verbs: "buy <item> / sell <item> at the Market stall (target the stall, arg the item), " }) } } as any);
 const stamp = () => `[${(d.atSimMs / 60000).toFixed(1)}m ${d.settlementHour().toFixed(1)}h]`;
