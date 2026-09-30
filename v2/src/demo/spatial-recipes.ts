@@ -29,6 +29,8 @@ export type SpatialRecipeHost = {
   key(eid: number): string;
   /** A new item of this kind in the actor's hand. */
   spawnInHand(actor: number, kind: string): number | undefined;
+  /** Free hands (inventory slots) this actor has left. */
+  freeHands?(actor: number): number;
   /** Take an item out of the world (used up). */
   consume(item: number): void;
   /** Put an item on the stall. */
@@ -194,6 +196,9 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
       if (recipe.spends && !usable(target)) return { ok: false, reason: `${Name.value[target]} is spent for now.` };
       const lack = lacking(actor, recipe.needs, recipe.tools);
       if (lack) return { ok: false, reason: `To ${verb}${recipe.product ? ` ${recipe.product}` : ""} you need ${lack.count} more ${lack.kind}.` };
+      // What it makes must have somewhere to go (what it uses up frees hands first).
+      const making = Object.values(recipe.gives).reduce((a, b) => a + b, 0), freed = Object.values(recipe.needs ?? {}).reduce((a, b) => a + b, 0);
+      if (host.freeHands && host.freeHands(actor) + freed < making) return { ok: false, reason: "Your hands are full — sell or set something down first." };
       for (const [k, n] of Object.entries(recipe.needs ?? {})) op.took.push(...held(actor, k).slice(0, n));
       op.gives = { ...recipe.gives }; op.tools = [...(recipe.tools ?? [])];
       // Game time: a recipe's minutes pass ten times faster than the land's accounting.

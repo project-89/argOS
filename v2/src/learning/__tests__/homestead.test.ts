@@ -128,4 +128,14 @@ describe("short of materials is not a surprise", () => {
     expect(surprises).toEqual([]);
     expect(solver.stats.gaps).toEqual(["stone"]);
   });
+  test("a planned way that runs into a spent tree is short, not a gap in knowing how", async () => {
+    const env = { have: () => ({}), observation: () => "A stump and a felled birch.", bind: () => undefined, abstract: (a: any) => ({ verb: a.verb, arg: a.arg }), approach: () => false,
+      act: (a: { verb: string }) => a.verb === "split" ? { ok: false, summary: "To split you need 1 more log.", missing: { kind: "log", count: 1 } }
+        : { ok: false, summary: "Birch 1 is spent for now.", scarce: true } };
+    const planner = async (r: { goal: { item: string } }) => r.goal.item === "firewood" ? [{ verb: "split", target: "Chopping stump" }] : [{ verb: "chop", target: "Birch 1" }];
+    const gaps: string[] = [];
+    const solver = new SkillSolver(env as any, new SkillGraph(), planner as any, { onGap: item => gaps.push(item) });
+    expect(await solver.solve("firewood", 1)).toBe(false);
+    expect(gaps).toEqual([]);
+  });
 });

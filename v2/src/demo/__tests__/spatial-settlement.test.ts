@@ -39,6 +39,13 @@ test("resuming a house walks past the parts already standing (no surprise), and 
   const again = recipes.prepare(ivo, plot, "build", house.parts[0].part);
   expect(again.ok).toBe(true);
   if (again.ok) expect(recipes.commit(again.operation)).toEqual({ success: true, detail: `The ${house.parts[0].part} already stands.` });
+  // Hands full: a gathering act does not start (never a made thing with nowhere to go).
+  const { Inventory } = await import("../../ecs/components");
+  const bramble = [...(d as any).settlementKinds].find(([, k]: [number, string]) => k === "bramble")[0] as number;
+  const slots = Inventory.maxSlots[ivo]; Inventory.maxSlots[ivo] = 0;
+  const full = recipes.prepare(ivo, bramble, "pick", "berries");
+  Inventory.maxSlots[ivo] = slots;
+  expect(full).toEqual({ ok: false, reason: "Your hands are full — sell or set something down first." });
   const next = recipes.prepare(ivo, plot, "build", house.parts[1].part);
   expect(next.ok).toBe(false);
   if (!next.ok) expect(next.reason).toMatch(new RegExp(`The ${house.parts[1].part} needs`));
@@ -50,6 +57,7 @@ test("a failed act's words: short of something (and how many), or scarce — nev
   expect(readFailure("You hold no firewood.")).toEqual({ missing: { kind: "firewood", count: 1 } });
   expect(readFailure("Birch 1 is spent for now.")).toEqual({ scarce: true });
   expect(readFailure("You can't chop here.")).toEqual({});
+  expect(readFailure("Your hands are full — sell or set something down first.")).toEqual({ scarce: true });
 });
 
 test("walk, fetch an axe, chop, split and sell — timed in the walkable world, goods appearing in hand", async () => {

@@ -7,7 +7,7 @@ import { Agent, BehaviorPolicy, Goal, Container, Description, Impression, Invent
 import { createAgentEntity, createObjectEntity, createRoomEntity } from "../ecs/prefabs";
 import { getControlledBodies, isOperatorControlled, releaseControl as releaseBody, takeControl as possessBody } from "../ecs/controlled";
 import { getDirectContainer, getRoomForEntity, listDirectContents, setLocatedIn } from "../ecs/location";
-import { tryAddToInventory, tryRemoveFromInventory } from "../ecs/inventory";
+import { getInventoryItems, tryAddToInventory, tryRemoveFromInventory } from "../ecs/inventory";
 import { attachToEntity, extendDynamicComponent, getComponent } from "../ecs/component-registry";
 import { readSimulationTime } from "../ecs/simulation-time";
 import { registerSystem } from "../ecs/dynamic-systems";
@@ -1445,7 +1445,12 @@ export class SpatialDemo {
         this.sim.god.registry.byName.set(Name.value[item], item); this.sim.god.registry.byId.set(item, Name.value[item]);
         this.visuals.set(item, { key: this.key(item), asset: asset.id, size: asset.size, color: asset.color, lift: 0 });
         this.propAnchors.set(item, [{ x: 0, y: 0 }]); this.spatial.registerTarget(item, { anchors: [{ x: 0, y: 0 }] });
-        if (!tryAddToInventory(w, actor, item).success) return undefined;
+        if (!tryAddToInventory(w, actor, item).success) {
+          // Nowhere to put it: nothing was made (never an orphan lying about).
+          this.settlementSink ??= createRoomEntity(w, { name: "(used up)", description: "Consumed materials." });
+          setLocatedIn(w, item, this.settlementSink); this.visuals.delete(item); this.settlementKinds.delete(item);
+          return undefined;
+        }
         tryHoldCarriedItem(w, actor, item);
         return item;
       }
@@ -1458,6 +1463,7 @@ export class SpatialDemo {
       setKind: (eid, kind) => { this.settlementKinds.set(eid, kind); },
       key: eid => this.key(eid),
       spawnInHand: (actor, kind) => this.spawnSettlementItem(actor, kind),
+      freeHands: actor => Math.max(0, (Inventory.maxSlots[actor] ?? 0) - getInventoryItems(w, actor).length),
       consume: item => {
         // Used up: out of the world (kept as an entity in a sink, not recycled mid-session).
         this.settlementSink ??= createRoomEntity(w, { name: "(used up)", description: "Consumed materials." });

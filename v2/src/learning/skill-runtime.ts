@@ -111,8 +111,11 @@ export class SkillSolver {
       if (scarce && this.soughtAlternative.has(item)) break;
       if (scarce) this.soughtAlternative.add(item);
       if (this.stats.plannerCalls >= this.maxPlannerCalls) break;
+      this.scarcity = false; this.shortOf = undefined;
       const learned = await this.plan(item, count, depth, path, failures);
       if (this.have(item) > before) { stalls = 0; continue; }
+      // The plan ran into a shortage (a spent tree, a material nobody could get): short, not a gap in knowing how.
+      if (!learned && (this.scarcity || this.shortOf)) { scarce = true; if (this.soughtAlternative.has(item)) break; this.soughtAlternative.add(item); }
       if (!learned && ++stalls >= 2) break;
     }
     if (this.have(item) >= count) return true;

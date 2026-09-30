@@ -58,7 +58,7 @@ export type SpatialTradeHost = {
 };
 
 // Shortages and transient hiccups (an interrupted walk, a busy body) are not surprises about how the world works.
-const FAIL_PATTERNS = { scarce: /spent|has no |cannot pay|costs \d+; you have|has enough|already building|no longer|is gone|invalidated|changed before completion|already occupied|No reachable path/i,
+const FAIL_PATTERNS = { scarce: /spent|has no |cannot pay|costs \d+; you have|has enough|already building|no longer|is gone|invalidated|changed before completion|already occupied|No reachable path|hands are full/i,
   missing: /(?:you need|needs) (\d+) more ([a-z][a-z-]*)/i,
   /** "You hold no firewood." (selling or giving what you have not got): one missing. */
   holdNone: /you hold no ([a-z][a-z-]*)/i };
