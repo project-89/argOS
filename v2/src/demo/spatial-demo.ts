@@ -1318,12 +1318,13 @@ export class SpatialDemo {
     const affect = snapshotAffect(this.sim.world, eid);
     const mood = !affect ? "even" : affect.arousal >= .7 ? "stirred" : affect.valence < -.3 ? "low" : affect.valence > .3 ? "high" : "even";
     const life = this.tradeLives.find(l => l.eid === eid);
-    const situation = `choosing|${life?.trade ?? "?"}|${this.dayPart()}|${mood}|${[...new Set(kinds.map(k => k.kind))].sort().join(",")}`;
+    // Coarse on purpose (trade, time of day, mood): keyed on the exact menu, a situation hardly ever came round again.
+    const situation = `choosing|${life?.trade ?? "?"}|${this.dayPart()}|${mood}`;
     const habit = routine ? habits.use(who, situation) : undefined;
     if (habit && habit !== "check") {
       const index = kinds.findIndex(k => k.kind === habit.choice);
       if (index >= 0) { this.options.settlementWork?.log?.(`[${who}] by habit: ${menu[index]}`); return index; }
-      habits.broke(who, situation);
+      // Not on offer this time (the stall is full, say): ask the judge; the habit stands.
     }
     const candidate = routine ? habits.candidate(who, situation) : undefined;
     const picked = await this.chooseWithJev(jev, eid, menu, candidate);

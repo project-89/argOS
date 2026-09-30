@@ -90,7 +90,9 @@ export const LULL_MS = 12_000;
 type Floor = { since: number; lastSalientAt: number; reason: string; nextThoughtAt: number };
 /** Real ms a mind with the floor waits after a decision when nothing new has reached it. */
 export const THINK_GAP_MS = 15_000;
-const QUIET_MS = 45_000, GLANCE_GAP_MS = 90_000, RECENT_MIND_MS = 10 * 60_000;
+/** Background minds (goal-forming, appraisal, reflection, planning) run while the floor is held and for a short digest after:
+ * left open for ten minutes, a town woken every few minutes formed goals twice a minute per resident (a third of all spend). */
+const QUIET_MS = 45_000, GLANCE_GAP_MS = 90_000, RECENT_MIND_MS = 2 * 60_000;
 const CARRY_ON = "carry on with my work";
 
 export class SettlementAutopilot {

@@ -135,3 +135,15 @@ test("spoken to while working: routine talk is answered in passing (and becomes 
   expect(appraised.length).toBe(judged + 1);
   expect(autopilot.holds(otis)).toBe(true);
 });
+
+test("background minds run with the floor and for a short digest after, not for the rest of the day", () => {
+  const { autopilot, otis, say, pass } = fixture();
+  expect(autopilot.gate.background(otis)).toBe(false);
+  say("Ivo", "Morning.");
+  expect(autopilot.gate.background(otis)).toBe(true);
+  pass(50_000); // quiet: the floor is handed back
+  expect(autopilot.holds(otis)).toBe(false);
+  expect(autopilot.gate.background(otis)).toBe(true); // digesting
+  pass(2 * 60_000);
+  expect(autopilot.gate.background(otis)).toBe(false);
+});
