@@ -87,6 +87,18 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
     /** Install a limited source's uses (from the land data). */
     installSource(eid: number, thingUses: number | undefined) { if (thingUses !== undefined) uses.set(eid, thingUses); },
     coinsOf, treasury: () => treasury, builtCount: () => ({ ...builtCount }),
+    /** Parts standing on a plot (a foundation, a frame). */
+    partsOn: (plot: number): readonly string[] => plotParts.get(plot) ?? [],
+    /** Building progress as stock, as the headless town counts it: the parts standing on the most advanced
+     * unfinished plot of each structure ("house.foundation": 1), so a learned way that ensures a part sees it. */
+    progress(): Record<string, number> {
+      const best = new Map<string, string[]>();
+      for (const [plot, parts] of plotParts) {
+        const structure = structureOn(host.kindOf(plot));
+        if (structure && parts.length > (best.get(structure.kind)?.length ?? 0)) best.set(structure.kind, parts);
+      }
+      return Object.fromEntries([...best].flatMap(([kind, parts]) => parts.map(part => [`${kind}.${part}`, 1])));
+    },
     homeOf: (actor: number) => homes.get(actor), restOf, tally,
     asleep: (actor: number) => sleeping.has(actor),
     /** The town's purse: a daily share to someone, or an adjustment. */

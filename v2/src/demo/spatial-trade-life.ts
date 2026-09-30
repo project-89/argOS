@@ -59,7 +59,16 @@ export type SpatialTradeHost = {
 
 // Shortages and transient hiccups (an interrupted walk, a busy body) are not surprises about how the world works.
 const FAIL_PATTERNS = { scarce: /spent|has no |cannot pay|costs \d+; you have|has enough|already building|no longer|is gone|invalidated|changed before completion|already occupied|No reachable path/i,
-  missing: /(?:you need|needs) (\d+) more ([a-z][a-z-]*)/i };
+  missing: /(?:you need|needs) (\d+) more ([a-z][a-z-]*)/i,
+  /** "You hold no firewood." (selling or giving what you have not got): one missing. */
+  holdNone: /you hold no ([a-z][a-z-]*)/i };
+
+/** What a failed act's words say: short of something (and how many), or scarce. */
+export function readFailure(summary: string): { missing?: { kind: string; count: number }; scarce?: true } {
+  const counted = FAIL_PATTERNS.missing.exec(summary), none = FAIL_PATTERNS.holdNone.exec(summary);
+  const missing = counted ? { kind: counted[2], count: Number(counted[1]) } : none ? { kind: none[1], count: 1 } : undefined;
+  return { ...(missing ? { missing } : {}), ...(FAIL_PATTERNS.scarce.test(summary) ? { scarce: true as const } : {}) };
+}
 
 /** A resident's body as a skill environment. */
 export function createSpatialSkillEnv(host: SpatialTradeHost, eid: number): SkillEnv {
@@ -73,12 +82,14 @@ export function createSpatialSkillEnv(host: SpatialTradeHost, eid: number): Skil
   const named = (text: string | undefined, among: number[]) => {
     const wanted = text?.trim().toLowerCase();
     if (!wanted) return undefined;
-    return among.find(e => String(Name.value[e] || "").toLowerCase() === wanted) ?? among.find(e => host.kindOf(e) === wanted);
+    // A kind of plot means the one furthest along: carry on the house already begun, not a second one.
+    return among.find(e => String(Name.value[e] || "").toLowerCase() === wanted)
+      ?? among.filter(e => host.kindOf(e) === wanted).sort((a, b) => host.recipes.partsOn(b).length - host.recipes.partsOn(a).length)[0];
   };
   const roomWith = (kind: string) => host.rooms().find(r => usableThings(r.eid).some(e => host.kindOf(e) === kind));
   const env: SkillEnv = {
     have() {
-      const stock: Record<string, number> = { ...host.recipes.builtCount() };
+      const stock: Record<string, number> = { ...host.recipes.builtCount(), ...host.recipes.progress() };
       for (const e of hand()) { const k = host.kindOf(e); if (k) stock[k] = (stock[k] ?? 0) + 1; }
       stock.coin = host.recipes.coinsOf(eid);
       return stock;
@@ -119,7 +130,7 @@ export function createSpatialSkillEnv(host: SpatialTradeHost, eid: number): Skil
         host.recipes.context(eid)].join("\n");
     },
     bind(ref: Ref) {
-      if ("thing" in ref) { const e = usableThings(roomOf()).find(x => host.kindOf(x) === ref.thing); return e === undefined ? undefined : Name.value[e]; }
+      if ("thing" in ref) { const e = named(ref.thing, usableThings(roomOf())); return e === undefined ? undefined : Name.value[e]; }
       const room = "where" in ref ? (usableThings(roomOf()).some(e => host.kindOf(e) === ref.where) ? host.rooms().find(r => r.eid === roomOf()) : roomWith(ref.where))
         : host.rooms().find(r => r.kind === ref.place);
       return room?.name;
@@ -147,12 +158,11 @@ export function createSpatialSkillEnv(host: SpatialTradeHost, eid: number): Skil
   };
   const toResult = (summary: string, ok: boolean, action: Act): ActResult => {
     if (ok) return { ok, summary };
-    const miss = FAIL_PATTERNS.missing.exec(summary);
     if (/not currently accessible|not here/i.test(summary) && action.target) {
       const room = host.rooms().find(r => named(action.target, things(r.eid)) !== undefined);
       if (room) return { ok, summary, elsewhere: room.name };
     }
-    return { ok, summary, ...(miss ? { missing: { kind: miss[2], count: Number(miss[1]) } } : {}), ...(FAIL_PATTERNS.scarce.test(summary) ? { scarce: true } : {}) };
+    return { ok, summary, ...readFailure(summary) };
   };
   return env;
 }

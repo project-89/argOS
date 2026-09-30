@@ -24,7 +24,7 @@ test("the settlement is a big outdoor world on 1 m cells, with the Saltmere cast
 });
 
 test("resuming a house walks past the parts already standing (no surprise), and the next part still needs its materials", async () => {
-  d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false });
+  d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, settlementWork: { graphs: new Map(), jev: false } });
   await d.start();
   const ivo = d.actors.find(a => Name.value[a] === "Ivo")!, recipes = d.recipes!;
   const plot = [...(d as any).settlementKinds].find(([, k]: [number, string]) => k === "house-plot")[0] as number;
@@ -32,12 +32,24 @@ test("resuming a house walks past the parts already standing (no surprise), and 
   // The foundation went up before the drama pulled him away.
   expect(recipes.commit({ actor: ivo, actorKey: "", target: plot, targetKey: "", verb: "build", argument: "foundation", gives: {}, took: [], tools: [],
     build: { structure: house, part: house.parts[0].part } }).success).toBe(true);
+  // A learned house ensures its parts: the standing foundation counts, as it does in the headless town.
+  const env = (d.tradeLives.find(l => l.eid === ivo) as any).env;
+  expect(env.have()[`house.${house.parts[0].part}`]).toBe(1);
+  expect(recipes.progress()).toEqual({ [`house.${house.parts[0].part}`]: 1 });
   const again = recipes.prepare(ivo, plot, "build", house.parts[0].part);
   expect(again.ok).toBe(true);
   if (again.ok) expect(recipes.commit(again.operation)).toEqual({ success: true, detail: `The ${house.parts[0].part} already stands.` });
   const next = recipes.prepare(ivo, plot, "build", house.parts[1].part);
   expect(next.ok).toBe(false);
   if (!next.ok) expect(next.reason).toMatch(new RegExp(`The ${house.parts[1].part} needs`));
+});
+
+test("a failed act's words: short of something (and how many), or scarce — never a surprise about how the world works", async () => {
+  const { readFailure } = await import("../spatial-trade-life");
+  expect(readFailure("The frame needs 4 more planks.")).toEqual({ missing: { kind: "planks", count: 4 } });
+  expect(readFailure("You hold no firewood.")).toEqual({ missing: { kind: "firewood", count: 1 } });
+  expect(readFailure("Birch 1 is spent for now.")).toEqual({ scarce: true });
+  expect(readFailure("You can't chop here.")).toEqual({});
 });
 
 test("walk, fetch an axe, chop, split and sell — timed in the walkable world, goods appearing in hand", async () => {
