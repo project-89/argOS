@@ -50,7 +50,8 @@ export function createSpatialBalance(host: SpatialBalanceHost, options: { weave?
     manual: host.manual, placeKinds: host.placeKinds, thingKinds: host.thingKinds, obtainableKinds: host.obtainableKinds, apply: host.apply,
   };
   const lives = (): BalanceLife[] => host.lives().map(life => ({ me: { eid: life.eid, get trade() { return life.trade; }, name: Name.value[life.eid] },
-    changeTrade: (trade: string) => life.changeTrade(trade, host.graphFor(trade)) }));
+    changeTrade: (trade: string) => life.changeTrade(trade, host.graphFor(trade)),
+    press: (reason: string) => life.press(host.dayMs(), reason) }));
   const spirits = new BalanceSpirits(town, lives, { weave: options.weave, weaverStats: options.weaverStats });
   let lastDay = Math.floor(host.realNow() / host.dayMs()), lastWatch = Math.floor(host.realNow() / (host.dayMs() / 4));
   let busy = false;

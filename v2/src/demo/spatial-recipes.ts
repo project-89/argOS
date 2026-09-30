@@ -16,7 +16,9 @@ import type { LandDef, LandRecipe, LandStructure } from "../learning/settlement/
 
 export type RecipeOperation = { actor: number; actorKey: string; target: number; targetKey: string; verb: string; argument: string;
   gives: Record<string, number>; took: number[]; tools: string[]; food?: LandDef["foods"][number]; trade?: { kind: string; price: number; item?: number };
-  build?: { structure: LandStructure; part: string } };
+  build?: { structure: LandStructure; part: string };
+  /** A part that already stands: resuming a build walks past it (as the headless town does). */
+  standing?: string };
 
 export type SpatialRecipeHost = {
   world: World;
@@ -55,7 +57,7 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
   /** What happened, for the spirits who keep the town in balance (same shape as the headless settlement's tally). */
   const tally = { made: {} as Record<string, number>, sold: {} as Record<string, number>, bought: {} as Record<string, number>, eaten: {} as Record<string, number>,
     built: {} as Record<string, number>, failures: 0, acts: 0, stockouts: {} as Record<string, number>, gluts: {} as Record<string, number>,
-    spent: {} as Record<string, number>, lacking: {} as Record<string, Record<string, number>> };
+    spent: {} as Record<string, number>, lacking: {} as Record<string, Record<string, number>>, parts: {} as Record<string, number> };
   const add = (into: Record<string, number>, kind: string, n = 1) => { into[kind] = (into[kind] ?? 0) + n; };
   const sleeping = new Set<number>();
   /** Houses by resident, and how rested last night left them (work goes at this speed). */
@@ -162,7 +164,8 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
         if (!structure) return { ok: false, reason: "Nothing is built here." };
         const done = plotParts.get(target) ?? [], next = structure.parts.find(p => !done.includes(p.part));
         const part = structure.parts.find(p => p.part === arg) ?? next;
-        if (!part || !next || done.includes(part.part)) return { ok: false, reason: "That part already stands." };
+        // Resuming after a break: a part already standing is simply done, not a failure to stop and look at.
+        if (!part || !next || done.includes(part.part)) { op.standing = part?.part ?? arg; return { ok: true, operation: op, durationMs: 500 }; }
         if (part !== next) return { ok: false, reason: `Build the ${next.part} first.` };
         if (plotBusy.has(target)) return { ok: false, reason: "Someone is already building here." };
         const lack = lacking(actor, part.needs);
@@ -216,10 +219,11 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
         coins.set(op.actor, coinsOf(op.actor) - op.trade.price); treasury += op.trade.price; add(tally.bought, op.trade.kind);
         return { success: true, detail: `You bought ${op.trade.kind} for ${op.trade.price} coin (now ${coinsOf(op.actor)}).` };
       }
+      if (op.standing) return { success: true, detail: `The ${op.standing} already stands.` };
       if (op.build) {
         for (const e of op.took) host.consume(e);
         const parts = [...(plotParts.get(op.target) ?? []), op.build.part];
-        plotParts.set(op.target, parts); plotBusy.delete(op.target);
+        plotParts.set(op.target, parts); plotBusy.delete(op.target); add(tally.parts, op.build.structure.kind);
         const pay = Math.min(land.buildPay, treasury); coins.set(op.actor, coinsOf(op.actor) + pay); treasury -= pay;
         if (parts.length === op.build.structure.parts.length) {
           builtCount[op.build.structure.kind] = (builtCount[op.build.structure.kind] ?? 0) + 1; add(tally.built, op.build.structure.kind);

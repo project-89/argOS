@@ -39,7 +39,9 @@ export type SettlementTally = { made: Stock; sold: Stock; bought: Stock; eaten: 
   /** What acts failed for want of, by kind and by the trade that wanted it. */
   lacking: Record<string, Stock>;
   /** Uses taken from limited sources, by source kind. */
-  spent: Stock };
+  spent: Stock;
+  /** Structure parts raised (a foundation, a roof), by structure kind: building progress short of a finished house. */
+  parts: Stock };
 
 export class Settlement implements RecipeWorld {
   readonly world: World;
@@ -64,7 +66,7 @@ export class Settlement implements RecipeWorld {
   treasury: number;
   now = 0;
   readonly events: SettlementEvent[] = [];
-  readonly tally: SettlementTally = { made: {}, sold: {}, bought: {}, eaten: {}, built: {}, failures: 0, acts: 0, stockouts: {}, gluts: {}, spent: {}, lacking: {} };
+  readonly tally: SettlementTally = { made: {}, sold: {}, bought: {}, eaten: {}, built: {}, failures: 0, acts: 0, stockouts: {}, gluts: {}, spent: {}, lacking: {}, parts: {} };
 
   constructor(readonly def: LandDef) {
     this.world = createArgosWorld(`Settlement ${def.id}`);
@@ -353,7 +355,7 @@ export class Settlement implements RecipeWorld {
       return { ok: true, durationS: part.durationS / me.rest, finish: () => {
         this.plotBusy.delete(target!);
         const parts = [...(this.plotParts.get(target!) ?? []), part.part];
-        this.plotParts.set(target!, parts);
+        this.plotParts.set(target!, parts); this.add(this.tally.parts, structure.kind);
         me.coins += Math.min(this.def.buildPay, this.treasury); this.treasury = Math.max(0, this.treasury - this.def.buildPay);
         if (parts.length === structure.parts.length) {
           this.add(this.builtCount, structure.kind);

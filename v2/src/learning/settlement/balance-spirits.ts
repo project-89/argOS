@@ -9,6 +9,9 @@
  *   the treasury's runway.
  * - The Steward moves hands: when the town ate badly or a good kept running
  *   out, one idle resident takes up the trade that is short (and learns it).
+ *   When the town plan stands unfinished and nothing went up yesterday, it
+ *   follows the builders' wants upstream, or adds idle hands to building, and
+ *   presses the builders to put building first for the day.
  * - The Weaver is told when a source is running down, and may grow another.
  *
  * All of it is deterministic and bounded (one move a day, prices within
@@ -32,11 +35,15 @@ export interface BalanceTown {
 }
 /** A town the Weaver can also grow (both settlements are). */
 export type GrowableBalanceTown = BalanceTown & import("../../spirits/recipe-weaver").RecipeWorld;
-export interface BalanceLife { me: { eid: number; trade: string; dead?: boolean; name?: string }; changeTrade(trade: string): void }
+export interface BalanceLife { me: { eid: number; trade: string; dead?: boolean; name?: string }; changeTrade(trade: string): void;
+  /** Put the trade first for a while (the town is waiting on it); lives without habits to press may omit it. */
+  press?(reason: string): void }
 
 export type Reading = { day: number; alive: number; foodIndex: number; stockouts: Stock; gluts: Stock; bought: Stock;
   /** What each trade's work failed for want of. */
   lacking?: Record<string, Stock>;
+  /** Structure parts raised yesterday, by structure kind. */
+  parts?: Stock;
   reserveDays: Record<string, number>; treasury: number; treasuryRunwayDays: number; idleByTrade: Record<string, number> };
 export type Intervention = { day: number; spirit: "Watcher" | "Lawgiver" | "Steward" | "Weaver"; what: string };
 
@@ -81,6 +88,7 @@ export class BalanceSpirits {
     const reading: Reading = { day, alive: t.alive().length, foodIndex: +this.fed(need ? hungerMet / need : 1).toFixed(2),
       stockouts: diff(t.tally.stockouts, prev.stockouts), gluts: diff(t.tally.gluts, prev.gluts), bought: diff(t.tally.bought, prev.bought),
       lacking: Object.fromEntries(Object.entries(t.tally.lacking).map(([trade, k]) => [trade, diff(k, prev.lacking?.[trade] ?? {})])),
+      parts: diff(t.tally.parts ?? {}, prev.parts ?? {}),
       reserveDays, treasury: t.treasury, treasuryRunwayDays: drop > 0 ? +(t.treasury / drop).toFixed(1) : Infinity, idleByTrade };
     this.readings.push(reading);
     return reading;
@@ -148,6 +156,7 @@ export class BalanceSpirits {
     else if (r.treasuryRunwayDays > 12 && r.foodIndex < 0.85) { t.def.dailyShare += 2; this.note(day, "Lawgiver", `people are going hungry and the treasury can bear it — daily share up to ${t.def.dailyShare}`); }
 
     this.steward(day, r);
+    this.buildWatch(day, r);
 
     // The Weaver: a source running down.
     for (const [kind, days] of Object.entries(r.reserveDays)) {
@@ -187,6 +196,32 @@ export class BalanceSpirits {
         this.note(day, "Steward", `${candidate.me.name} leaves ${from} (${Math.round((r.idleByTrade[from] ?? 0) * 100)}% idle) to ${short.trade}: ${short.why}${tools.length ? ` (given ${tools.join(", ")})` : ""}`);
       }
     }
+  }
+
+  /** The town plan stands unfinished and nothing went up yesterday: send hands where the builders are short, or to building,
+   * and press the builders to put it first today. Once a day, after the food Steward. */
+  private buildWatch(day: number, r: Reading): void {
+    const t = this.town, unfinished = t.def.townPlan.find(g => (t.builtCount[g.kind] ?? 0) < g.count);
+    if (!unfinished || Object.values(r.parts ?? {}).some(n => n > 0)) return;
+    const builders = this.lives().filter(l => !l.me.dead && l.me.trade === "builder");
+    const moved = this.interventions.some(i => i.day === day && i.spirit === "Steward");
+    if (!moved) {
+      const short = this.bottleneck("builder", r, `no ${unfinished.kind} went up yesterday`);
+      const food = new Set(Object.values(FOOD_TRADES));
+      const candidate = this.lives().filter(l => !l.me.dead && l.me.trade !== short.trade && l.me.trade !== "builder"
+          && !(food.has(l.me.trade) && r.foodIndex < 1.2) && (this.movedAt.get(l.me.eid) ?? -Infinity) < t.now - 86_400
+          && this.lives().filter(o => !o.me.dead && o.me.trade === l.me.trade).length > 1)
+        .sort((a, b) => (r.idleByTrade[b.me.trade] ?? 0) - (r.idleByTrade[a.me.trade] ?? 0))[0];
+      if (candidate && (r.idleByTrade[candidate.me.trade] ?? 0) >= 0.3) {
+        const from = candidate.me.trade;
+        candidate.changeTrade(short.trade); this.movedAt.set(candidate.me.eid, t.now);
+        const tools = t.equip(candidate.me.eid, short.trade);
+        this.note(day, "Steward", `${candidate.me.name} leaves ${from} (${Math.round((r.idleByTrade[from] ?? 0) * 100)}% idle) to ${short.trade}: ${short.why}${tools.length ? ` (given ${tools.join(", ")})` : ""}`);
+      }
+    }
+    const pressed = builders.filter(l => l.press);
+    for (const l of pressed) l.press!(`the town is waiting on the ${unfinished.kind}`);
+    if (pressed.length) this.note(day, "Steward", `no ${unfinished.kind} went up yesterday — ${pressed.map(l => l.me.name).join(" and ")} to put building first today`);
   }
 
   /** The trade whose goods these are. */

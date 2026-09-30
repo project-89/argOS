@@ -104,6 +104,25 @@ describe("the balance spirits", () => {
     expect(moved.what).toMatch(/^(Eli|Sera) leaves woodcutter \(95% idle\) to net-mender/);
   });
 
+  test("the Steward watches the building: nothing went up yesterday, so idle hands go where builders are short, and builders are pressed", () => {
+    const t = town();
+    const pressed: string[] = [];
+    const withPress = () => lives(t).map((l: any) => ({ ...l, press: (why: string) => pressed.push(`${l.me.name}: ${why}`) }));
+    const spirits = new BalanceSpirits(t, withPress);
+    // Builders idle for want of planks: hands go to the woodcutters; the builders are pressed.
+    // (A well-fed town can spare a fisher; a trade is never emptied.)
+    const r = reading({ parts: {}, foodIndex: 1.3, idleByTrade: { builder: 0.7, fisher: 0.8, woodcutter: 0.1 }, lacking: { builder: { planks: 3 } } });
+    (spirits as any).buildWatch(2, r);
+    const notes = spirits.interventions.filter(i => i.spirit === "Steward").map(i => i.what);
+    expect(notes[0]).toMatch(/^(Otis|Leon) leaves fisher \(80% idle\) to woodcutter: builders stood idle for want of planks \(3×\)/);
+    expect(notes[1]).toMatch(/^no workshop went up yesterday — Ivo and Mara to put building first today$/);
+    expect(pressed).toEqual(["Ivo: the town is waiting on the workshop", "Mara: the town is waiting on the workshop"]);
+    // A day with a part raised: nothing to do.
+    const before = spirits.interventions.length;
+    (spirits as any).buildWatch(3, reading({ parts: { workshop: 1 }, idleByTrade: { forager: 0.9 } }));
+    expect(spirits.interventions.length).toBe(before);
+  });
+
   test("the Lawgiver prices shortage up and glut down, and never cuts the share below subsistence while people go hungry", async () => {
     const t = town();
     const spirits = new BalanceSpirits(t, () => lives(t));

@@ -160,6 +160,8 @@ export function createSpatialSkillEnv(host: SpatialTradeHost, eid: number): Skil
 const FOOD = ["cooked-fish", "berries", "raw-fish"];
 /** Game minutes a resident goes without turning a hand to their trade before it calls them back. */
 export const WORK_RHYTHM_GAME_MINUTES = 120;
+/** ...and when the Steward has pressed them (the town is waiting on their work). */
+export const PRESSED_RHYTHM_GAME_MINUTES = 45;
 
 export class SpatialTradeLife {
   solver: SkillSolver;
@@ -294,7 +296,16 @@ export class SpatialTradeLife {
     return (this.host.land.trades.find(t => t.role === this.trade)?.duties ?? []).some(d => this.stallStock(d.item) < d.stock && !this.cooling(`duty:${d.item}`));
   }
   /** A livelihood presses: however gripping the day's talk, a few hours without turning a hand to the trade sends them back to it. */
-  private workDue(): boolean { return this.host.now() - this.lastWorkAt >= this.gameMinutes(WORK_RHYTHM_GAME_MINUTES) && this.hasWork(); }
+  private workDue(): boolean {
+    const rhythm = this.host.now() < this.pressedUntil ? PRESSED_RHYTHM_GAME_MINUTES : WORK_RHYTHM_GAME_MINUTES;
+    return this.host.now() - this.lastWorkAt >= this.gameMinutes(rhythm) && this.hasWork();
+  }
+  private pressedUntil = -Infinity;
+  /** The Steward presses: for this long (real ms), the trade calls them back sooner. */
+  press(forMs: number, reason: string): void {
+    this.pressedUntil = this.host.now() + forMs;
+    this.log?.(`[${Name.value[this.eid]}] pressed to put ${this.trade === "builder" ? "building" : "the trade"} first: ${reason}`);
+  }
   private async turnToWork(): Promise<boolean> {
     this.lastWorkAt = this.host.now();
     return await this.sell() || await this.work();

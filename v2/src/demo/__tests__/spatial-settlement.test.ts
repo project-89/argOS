@@ -23,6 +23,23 @@ test("the settlement is a big outdoor world on 1 m cells, with the Saltmere cast
   expect(s.residents.every(r => r.homeRoomId === undefined)).toBe(true);
 });
 
+test("resuming a house walks past the parts already standing (no surprise), and the next part still needs its materials", async () => {
+  d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false });
+  await d.start();
+  const ivo = d.actors.find(a => Name.value[a] === "Ivo")!, recipes = d.recipes!;
+  const plot = [...(d as any).settlementKinds].find(([, k]: [number, string]) => k === "house-plot")[0] as number;
+  const house = d.settlementLand.structures.find(s => s.kind === "house")!;
+  // The foundation went up before the drama pulled him away.
+  expect(recipes.commit({ actor: ivo, actorKey: "", target: plot, targetKey: "", verb: "build", argument: "foundation", gives: {}, took: [], tools: [],
+    build: { structure: house, part: house.parts[0].part } }).success).toBe(true);
+  const again = recipes.prepare(ivo, plot, "build", house.parts[0].part);
+  expect(again.ok).toBe(true);
+  if (again.ok) expect(recipes.commit(again.operation)).toEqual({ success: true, detail: `The ${house.parts[0].part} already stands.` });
+  const next = recipes.prepare(ivo, plot, "build", house.parts[1].part);
+  expect(next.ok).toBe(false);
+  if (!next.ok) expect(next.reason).toMatch(new RegExp(`The ${house.parts[1].part} needs`));
+});
+
 test("walk, fetch an axe, chop, split and sell — timed in the walkable world, goods appearing in hand", async () => {
   d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false });
   await d.start();
