@@ -116,4 +116,16 @@ describe("short of materials is not a surprise", () => {
     expect(gaps).toEqual(["stone"]); // the real gap: nobody knows how to get stone
     expect([...graph.skills.values()][0].stats.failures).toBe(0); // the way of building is sound
   });
+  test("the same when the way says so up front: an ensure for stone that cannot be met is a shortage, not a surprise", async () => {
+    const env = { have: () => ({}), act: () => ({ ok: true, summary: "Built." }), observation: () => "A bare plot.", bind: () => "House plot 1",
+      abstract: (a: any) => ({ verb: a.verb, target: { thing: "house-plot" }, arg: a.arg }), approach: () => true };
+    const graph = new SkillGraph();
+    graph.learn({ item: "house", count: 1 }, { kind: "seq", children: [{ kind: "ensure", item: "stone", count: 4 },
+      { kind: "act", verb: "build", target: { thing: "house-plot" }, arg: "foundation" }] }, { needs: { stone: 4 }, requires: [], gives: { house: 1 } }, 0);
+    const surprises: string[] = [];
+    const solver = new SkillSolver(env as any, graph, async () => [], { onSurprise: item => surprises.push(item) });
+    expect(await solver.solve("house", 1)).toBe(false);
+    expect(surprises).toEqual([]);
+    expect(solver.stats.gaps).toEqual(["stone"]);
+  });
 });

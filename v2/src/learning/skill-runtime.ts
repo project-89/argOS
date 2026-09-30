@@ -215,7 +215,12 @@ export class SkillSolver {
       for (const child of node.children) if (!(await this.runNode(child, depth, path))) return false;
       return true;
     }
-    if (node.kind === "ensure") return this.solve(node.item, node.count, depth + 1, path);
+    if (node.kind === "ensure") {
+      // A material the way needs could not be got: the way is short, not wrong.
+      const ok = await this.solve(node.item, node.count, depth + 1, path);
+      if (!ok && !this.options.interrupt?.()) this.shortOf = node.item;
+      return ok;
+    }
     // Not here: walk to where one is (walking is native, not part of the skill).
     if (node.target && "thing" in node.target && !this.env.bind(node.target) && await this.env.approach(node.target)) this.stats.acts++;
     const target = node.target ? this.env.bind(node.target) : undefined;
