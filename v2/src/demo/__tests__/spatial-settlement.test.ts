@@ -231,6 +231,11 @@ test("a conversation's resolve outlives it: goals on the menu, errands for the h
     expect(life.menu().map((m: any) => m.label)).toEqual(expect.arrayContaining(["pursue: Learn what Harlan Pryce wrote to Leon"]));
     await life.pursue({ id: thread, description: "Learn what Harlan Pryce wrote to Leon", paused: true });
     expect(Goal.status[thread]).toBe("active");
+    // His work broken off while the mind has the floor is not a failure: no cooldown, he takes it up again after.
+    expect(d.autopilot!.holds(otis)).toBe(true);
+    life.cooldown.clear();
+    expect(await life.work()).toBe(false);
+    expect([...life.cooldown.keys()].filter((k: string) => k.startsWith("duty:"))).toEqual([]);
     (d.autopilot as any).floors.delete(otis);
     // A livelihood presses: hours without turning a hand to the trade send them back to it before any choice.
     life.cooldown.clear(); // his own loop may have just tried and failed (no model offline)

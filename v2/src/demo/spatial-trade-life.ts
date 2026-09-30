@@ -191,8 +191,12 @@ export class SpatialTradeLife {
     return new SkillSolver(this.env, graph, planner, { maxPlannerCalls: 40, log: log ? line => log(`[${Name.value[eid]}] ${line}`) : undefined,
       // The habit yields at its next act when the mind has the floor (or hunger bites, or night falls).
       // Getting food is exempt from hunger's own break-off (else the starving could never forage).
-      interrupt: () => this.stopped || (!this.feeding && (Needs.hunger[eid] ?? 0) >= 85) || !!this.attention?.holds(eid) || !!this.host.isNight?.(),
+      interrupt: () => this.interrupted(),
       onSurprise: (item, _skill, detail) => this.attention?.surprised(eid, item, detail) });
+  }
+  /** The habit yields at its next act: the mind has the floor, hunger bites, night falls. A solve broken off this way is not a failure. */
+  private interrupted(): boolean {
+    return this.stopped || (!this.feeding && (Needs.hunger[this.eid] ?? 0) >= 85) || !!this.attention?.holds(this.eid) || !!this.host.isNight?.();
   }
   /** The Steward moved them: they take up another trade and learn it with that trade's graph. */
   private readonly earlierStats: SolveStats[] = [];
@@ -243,7 +247,7 @@ export class SpatialTradeLife {
       }
     }
     if (!this.cooling("forage") && await this.solver.solve("berries", this.held("berries") + 1)) return (await this.env.act({ verb: "eat", target: "berries" })).ok;
-    this.cool("forage");
+    if (!this.interrupted()) this.cool("forage");
     return false;
   }
   private async sell(): Promise<boolean> {
@@ -266,7 +270,8 @@ export class SpatialTradeLife {
         if (built >= goal.count) continue;
         if (this.cooling(`build:${goal.kind}`)) return false;
         if (await this.solver.solve(goal.kind, built + 1)) return true;
-        this.cool(`build:${goal.kind}`);
+        // Broken off (someone spoke to them, night fell) is not a failure: no cooling, they take it up again.
+        if (!this.interrupted()) this.cool(`build:${goal.kind}`);
         return false;
       }
       return false;
@@ -274,6 +279,7 @@ export class SpatialTradeLife {
     for (const duty of this.host.land.trades.find(t => t.role === this.trade)?.duties ?? []) {
       if (this.stallStock(duty.item) >= duty.stock || this.cooling(`duty:${duty.item}`)) continue;
       if (await this.solver.solve(duty.item, this.held(duty.item) + 1)) return true;
+      if (this.interrupted()) return false;
       this.cool(`duty:${duty.item}`);
     }
     return false;
