@@ -57,6 +57,8 @@ export class SkillSolver {
   private readonly active = new Set<string>();
   /** Set when an act failed for want of goods (not knowledge) since the last check. */
   private scarcity = false;
+  /** Set when an act lacked a material that could not be got (short of stone for a foundation) since the last check. */
+  private shortOf?: string;
   /** What the world said the last time an act failed. */
   private lastFailure?: string;
   private readonly soughtAlternative = new Set<string>();
@@ -84,7 +86,7 @@ export class SkillSolver {
       const before = this.have(item);
       const skill = this.graph.producers(item).find(s => !failed.has(s.id));
       if (skill) {
-        this.scarcity = false;
+        this.scarcity = false; this.shortOf = undefined;
         this.stats.skillRuns++; skill.stats.runs++;
         this.log(`${"  ".repeat(depth)}skill ${skill.id} for ${item} (${this.have(item)}/${count})`);
         this.active.add(skill.id);
@@ -98,6 +100,8 @@ export class SkillSolver {
         failed.add(skill.id);
         // Short of goods is not a failure of the skill, and asking how will not help.
         if (this.scarcity) { scarce = true; failures.push(`The usual way (${skill.id}) is short of goods right now.`); continue; }
+        // Short of a material nobody could get: the way is sound; asking how, or looking up in surprise, will not help.
+        if (this.shortOf) { scarce = true; failures.push(`The usual way (${skill.id}) is short of ${this.shortOf}.`); continue; }
         skill.stats.failures++; this.stats.skillFailures++;
         failures.push(`The usual way (${skill.id}) did not work this time.`);
         if (!this.options.interrupt?.()) this.options.onSurprise?.(item, skill.id, this.lastFailure ?? "it did not work this time");
@@ -193,7 +197,7 @@ export class SkillSolver {
     }
     for (let attempt = 0; !result.ok && result.missing && attempt < 3; attempt++) {
       const need = result.missing, total = this.have(need.kind) + need.count;
-      if (!(await this.solve(need.kind, total, depth + 1, path))) return result;
+      if (!(await this.solve(need.kind, total, depth + 1, path))) { this.shortOf = need.kind; return result; }
       frame?.acts.push({ node: { kind: "ensure", item: need.kind, count: total } });
       if (shape.target && "thing" in shape.target) await this.env.approach(shape.target);
       result = await act();

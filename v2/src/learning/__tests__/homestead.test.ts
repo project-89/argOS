@@ -94,3 +94,26 @@ describe("the curriculum", () => {
     expect(getObservationsByCategory("resource_gap", h.world).some(o => /rope/.test(o.title))).toBe(true);
   });
 });
+
+describe("short of materials is not a surprise", () => {
+  test("a learned house whose foundation lacks stone nobody can get: short, not a failed way — no surprise, no gap for the house", async () => {
+    const stock: Record<string, number> = {};
+    const env = {
+      have: () => ({ ...stock }),
+      act: (a: { verb: string; arg?: string }) => a.verb === "build" && !(stock.stone >= 2)
+        ? { ok: false, summary: "The foundation needs 2 more stone.", missing: { kind: "stone", count: 2 } }
+        : { ok: true, summary: "Built." },
+      observation: () => "A bare plot.", bind: () => "House plot 1", abstract: (a: any) => ({ verb: a.verb, target: { thing: "house-plot" }, arg: a.arg }),
+      approach: () => true,
+    };
+    const graph = new SkillGraph();
+    graph.learn({ item: "house", count: 1 }, { kind: "act", verb: "build", target: { thing: "house-plot" }, arg: "foundation" },
+      { needs: { stone: 2 }, requires: [], gives: { house: 1 } }, 0);
+    const surprises: string[] = [], gaps: string[] = [];
+    const solver = new SkillSolver(env as any, graph, async () => [], { onSurprise: (item, _id, detail) => surprises.push(`${item}: ${detail}`), onGap: item => gaps.push(item) });
+    expect(await solver.solve("house", 1)).toBe(false);
+    expect(surprises).toEqual([]);
+    expect(gaps).toEqual(["stone"]); // the real gap: nobody knows how to get stone
+    expect([...graph.skills.values()][0].stats.failures).toBe(0); // the way of building is sound
+  });
+});
