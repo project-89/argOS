@@ -62,6 +62,7 @@ import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
 import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
 import { SettlementAutopilot, type Appraisal } from "./spatial-autopilot";
 import { activeOwnIntentions, tendIntentions } from "./settlement-intentions";
+import { setGodTriage, subscribeGodAutopilotReviews, type GodAutopilotMessage } from "../god/god-autopilot";
 import { pendingIntentionReview, requestIntentionReconsideration } from "../cognition/goal-lifecycle";
 import { captureGoalReviewContext, prepareGoalReview } from "../cognition/goal-pursuit";
 import { createSpatialBalance } from "./spatial-balance";
@@ -1144,6 +1145,16 @@ export class SpatialDemo {
     // A fast judge for attention and memory, when configured.
     const jev = work.jev === false ? undefined : work.jev ?? JevClient.fromEnv();
     if (jev) configureDecisionLeaves(w, { jev });
+    // Jev in front of God: only reports worth God's attention now reach the full review.
+    if (jev) {
+      const lately: string[] = [];
+      this.removers.push(subscribeGodAutopilotReviews(this.sim.god, review => {
+        for (const m of review.before) lately.push(`${review.result.reason === "triaged" ? "passed over" : review.result.executed ? "acted on" : "tried"}: ${m.fromName} — ${m.subject}`.slice(0, 200));
+        lately.splice(0, Math.max(0, lately.length - 6));
+      }));
+      setGodTriage(this.sim.god, message => this.triageForGod(jev, message, lately));
+      this.removers.push(() => setGodTriage(this.sim.god, undefined));
+    }
     // Habits run the day; attention decides when a mind looks up.
     const managed = SALTMERE_LAND.residents.map(r => this.actors.find(a => Name.value[a] === r.name)).filter((a): a is number => a !== undefined);
     const residents = this.options.world?.residents ?? [];
@@ -1264,6 +1275,29 @@ export class SpatialDemo {
     this.sim.god.registry.byName.set(name, eid); this.sim.god.registry.byId.set(eid, name);
     this.recipes?.installSource(eid, uses);
     return eid;
+  }
+  /** God's triage stats (reports taken up, passed over, unanswered). */
+  readonly godTriage = { taken: 0, passed: 0, unanswered: 0 };
+  /** Jev reads a spirit's report as God would: step in now, or leave it (routine, redundant, or better left to the residents)? */
+  private async triageForGod(jev: JevClient, message: GodAutopilotMessage, lately: readonly string[]): Promise<{ act: boolean; why?: string } | undefined> {
+    const tally = this.recipes?.tally;
+    const stateValue = {
+      god: "The god of a small drowned-and-rebuilding coastal town. Acts through the world (an event, a found object, a build), never by commanding people. Acts sparingly: the residents' own choices carry the story.",
+      report: { from: message.fromName, domain: message.domain, priority: message.priority, subject: message.subject, content: message.content.slice(0, 1200),
+        ...(message.data?.proposal ? { proposal: String(message.data.proposal.name ?? message.data.proposal.id) } : {}) },
+      world: { hour: +this.settlementHour().toFixed(1), night: this.settlementNight(), built: this.recipes?.builtCount() ?? {},
+        ran_out_today: tally?.stockouts ?? {} },
+      god_lately: lately,
+    };
+    try {
+      const { answers } = await jev.ask(stateValue, { act: { type: "noul",
+        instructions: "Should God step in now in response to this report?",
+        criteria: { true: "Acting now would clearly help the story or the people, and nothing like it was just done", false: "Routine, redundant with what God just did, already handled, or better left to the residents" } } });
+      const act = answers.act?.noul;
+      if (typeof act !== "number") { this.godTriage.unanswered++; return undefined; }
+      if (act >= .5) this.godTriage.taken++; else this.godTriage.passed++;
+      return { act: act >= .5, why: `Jev ${act.toFixed(2)}` };
+    } catch { this.godTriage.unanswered++; return undefined; }
   }
   /** Jev picks what a resident on autopilot does next, from the menu, as that person would. */
   private async chooseWithJev(jev: JevClient, eid: number, menu: string[]): Promise<number | undefined> {

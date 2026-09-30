@@ -110,6 +110,15 @@ const DEFAULT_CONFIG: GodAutopilotConfig = {
   minReviewWindowMs: 10_000,
 };
 
+/** A fast judge in front of God's review: reads one report and says whether God should take it up now.
+ * Declined reports leave the inbox without inference (a judgment, never an action or an acknowledgement
+ * of anything done); an unanswered triage falls through to the full review. Urgent reports are never triaged. */
+export type GodTriage = (message: GodAutopilotMessage) => Promise<{ act: boolean; why?: string } | undefined>;
+const triages = new WeakMap<GodAgentState, GodTriage>();
+export function setGodTriage(god: GodAgentState, triage: GodTriage | undefined): void {
+  if (triage) triages.set(god, triage); else triages.delete(god);
+}
+
 const admissions=new WeakMap<GodAutopilotMessage,()=>boolean>();
 const reviewWindows = new WeakMap<GodAutopilotMessage, (headroomMs: number) => boolean>();
 const seen=new WeakMap<GodAgentState,Map<string,()=>boolean>>();
@@ -346,6 +355,20 @@ export async function runGodAutopilotCycle(
   // not invalidate a newer report's entire tool context. Retain all unselected
   // receipts for later review or ordinary expiry; this is not acknowledgement.
   const batch = [first];
+  const triage = triages.get(god);
+  if (triage && first.priority !== "urgent") {
+    running.add(god);
+    let verdict: Awaited<ReturnType<GodTriage>>;
+    try { verdict = await triage(first); } catch { verdict = undefined; } finally { running.delete(god); }
+    if (verdict && !verdict.act) {
+      state.inbox = state.inbox.filter(m => m.id !== first.id);
+      const at = readSimulationTime(god.world);
+      const result: AutopilotRunResult = { ran: true, reason: "triaged", messagesConsidered: inbox.length, messagesIncluded: 1, executed: false, ...deferred };
+      publishReview(god, { sourceId: getCommittedEvents(god.world).sourceId, startedAtSimMs: at, completedAtSimMs: at, before: [first], result });
+      return result;
+    }
+    if (!currentMessage(first)) return { ran: false, reason: "expired_during_triage", messagesConsidered: inbox.length, messagesIncluded: 0, executed: false, ...deferred };
+  }
   const command = buildAutopilotCommand(batch);
 
   const signal=getSimulationTaskSignal();

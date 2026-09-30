@@ -5,6 +5,8 @@ import {
   enqueueSpiritMessages,
   initializeGodAutopilot,
   runGodAutopilotCycle,
+  setGodTriage,
+  subscribeGodAutopilotReviews,
 } from "../god/god-autopilot";
 import type { DivineMessage } from "../spirits/types";
 
@@ -74,5 +76,30 @@ describe("GodAI autopilot", () => {
     expect(seen[1]).not.toContain("low content");
     // Only the non-eligible message remains after both independent reviews.
     expect(god.autopilot?.inbox.map((m) => m.id)).toEqual(["m_low"]);
+  });
+
+  it("a fast triage in front of God: passed-over reports leave without inference, taken ones and urgent ones reach the review, silence falls through", async () => {
+    const world = createArgosWorld("TriageWorld");
+    initializePrefabs(world);
+    const god = createGodAgent(world, { name: "God", worldName: "TriageWorld", narrative: "" });
+    initializeGodAutopilot(god, { enabled: true, minRunIntervalMs: 0, minPriority: "normal", maxMessagesPerRun: 1, maxInboxSize: 50 });
+    const judged: string[] = [];
+    setGodTriage(god, async m => { judged.push(m.id); return m.subject === "routine" ? { act: false, why: "routine" } : m.subject === "silent" ? undefined : { act: true }; });
+    const reviews: string[] = [];
+    subscribeGodAutopilotReviews(god, r => { reviews.push(`${r.before[0].id}:${r.result.reason ?? (r.result.executed ? "executed" : "failed")}`); });
+    const messages = [msg({ id: "a", priority: "normal", subject: "routine", timestamp: Date.now() - 3 }), msg({ id: "b", priority: "high", subject: "a storm is coming", timestamp: Date.now() - 2 }),
+      msg({ id: "c", priority: "urgent", subject: "routine", timestamp: Date.now() - 1 }), msg({ id: "d", priority: "normal", subject: "silent" })];
+    messages.forEach(m => m.to = god.eid);
+    enqueueSpiritMessages(god, messages, eid => `Spirit#${eid}`);
+    const sent: string[] = [];
+    const run = () => runGodAutopilotCycle(god, { executeCommand: async command => { sent.push(command); } });
+    expect(await run()).toMatchObject({ executed: true });   // c: urgent, never triaged
+    expect(await run()).toMatchObject({ executed: true });   // b: taken
+    expect(await run()).toMatchObject({ executed: true });   // d: no answer, falls through
+    expect(await run()).toMatchObject({ ran: true, reason: "triaged", executed: false }); // a: passed over
+    expect(sent).toHaveLength(3);
+    expect(judged).toEqual(["b", "d", "a"]);
+    expect(god.autopilot!.inbox).toHaveLength(0);
+    expect(reviews).toEqual(["c:executed", "b:executed", "d:executed", "a:triaged"]);
   });
 });

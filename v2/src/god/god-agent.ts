@@ -8349,7 +8349,8 @@ export async function godThink(
         messages: baseMessages,
         // Retries must retain exactly the same authority boundary.
         tools: restricted || attempt === 1 ? tools : coreTools,
-        stopWhen: stepCountIs(15),
+        // A spirit's report is one look and one act, not an open session.
+        stopWhen: stepCountIs(spiritGrowth ? 6 : 15),
         temperature: attempt === 1 ? 0.6 : 0.2,
         ...(options.surface?.signal ? { abortSignal: options.surface.signal } : {}),
       });
