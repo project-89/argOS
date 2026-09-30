@@ -9,6 +9,7 @@ import { SpatialDemo } from "./spatial-demo";
 import { runSettlementLife } from "../learning/settlement/run-settlement";
 import { SkillGraph } from "../learning/skill-graph";
 import { JevClient } from "../llm/jev";
+import { HabitBook } from "../cognition/habit-book";
 import { geminiPlanner } from "../learning/homestead/planners";
 import { Goal, Name, Needs } from "../ecs/components";
 import { HasGoal } from "../ecs/relations";
@@ -26,6 +27,8 @@ const quiet = console.log; console.log = () => {}; console.warn = () => {}; cons
 const graphs = new Map<string, SkillGraph>();
 if (existsSync(SKILLS)) for (const [t, j] of Object.entries(JSON.parse(readFileSync(SKILLS, "utf8")))) graphs.set(t, SkillGraph.fromJson(j as any));
 else { await runSettlementLife({ days: 3, life: 1, graphs, planner: "manual" }); }
+const HABITS = SKILLS.replace(/(\.json)?$/, ".habits.json");
+const habits = existsSync(HABITS) ? HabitBook.fromJson(JSON.parse(readFileSync(HABITS, "utf8"))) : new HabitBook();
 const jev = JevClient.fromEnv(); if (!jev) { quiet("no TYPESAFE key"); process.exit(1); }
 const plannerStats = { calls: 0, tokensIn: 0, tokensOut: 0, malformed: 0 };
 // Every Gemini request (minds, decision leaves, planner, Weaver) passes through global fetch: count them all.
@@ -53,7 +56,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   return response;
 }) as typeof fetch;
 const d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: true, seconds: MINUTES * 60 + 120,
-  settlementWork: { graphs, jev, log: (l: string) => { if (/chooses|plan for|learned|intention/.test(l)) out(`${stamp()} ${l}`); },
+  settlementWork: { graphs, jev, habits, log: (l: string) => { if (/chooses|plan for|learned|intention|habit|pressed|takes up/.test(l)) out(`${stamp()} ${l}`); },
     planner: (trade: string) => geminiPlanner(plannerStats, { persona: `You plan practical steps for a ${trade} in a small coastal town rebuilding after the sea took it. Be brief and exact.`,
       verbs: "buy <item> / sell <item> at the Market stall (target the stall, arg the item), " }) } } as any);
 const stamp = () => `[${(d.atSimMs / 60000).toFixed(1)}m ${d.settlementHour().toFixed(1)}h]`;
@@ -90,9 +93,12 @@ for (const a of d.actors) {
 summary.push(`built ${JSON.stringify(d.recipes!.builtCount())}; made ${JSON.stringify(d.recipes!.tally.made)}; eaten ${JSON.stringify(d.recipes!.tally.eaten)}`);
 summary.push(`Jev ${JSON.stringify(jev.stats)}; planner ${JSON.stringify(plannerStats)}; leaves ${JSON.stringify(getDecisionStats(w))}`);
 summary.push(`Gemini, all uses ${JSON.stringify(gemini)}`);
+const passing = (d.autopilot?.log ?? []).filter(l => l.what.startsWith("answers in passing"));
+summary.push(`habits ${habits.count()} written (${JSON.stringify(habits.stats)}); answered in passing ${passing.length} (${passing.filter(l => /by habit/.test(l.what)).length} by habit); God triage ${JSON.stringify(d.godTriage)}`);
 if (ATTRIBUTE) summary.push("Gemini by caller:\n" + [...byCaller].sort((a, b) => b[1].tokensIn - a[1].tokensIn).slice(0, 25)
   .map(([k, v]) => `  ${v.calls} calls, ${(v.tokensIn / 1e6).toFixed(2)}M in — ${k}`).join("\n"));
 summary.push(`skills ${[...graphs].map(([t, g]) => `${t} ${g.skills.size}`).join(", ")}`);
 writeFileSync(SKILLS, JSON.stringify(Object.fromEntries([...graphs].map(([t, g]) => [t, g.toJson()])), null, 1));
+writeFileSync(HABITS, JSON.stringify(habits.toJson(), null, 1));
 out(summary.join("\n")); quiet(summary.join("\n"));
 d.stop(); process.exit(0);

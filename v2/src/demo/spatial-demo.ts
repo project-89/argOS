@@ -67,9 +67,10 @@ import { pendingIntentionReview, requestIntentionReconsideration } from "../cogn
 import { captureGoalReviewContext, prepareGoalReview } from "../cognition/goal-pursuit";
 import { createSpatialBalance } from "./spatial-balance";
 import { commitPreparedAffectUpdate, prepareAffectUpdate, type FacialExpression } from "../cognition/affect-state";
-import type { Percept } from "../cognition/autopilot-attention";
+import { touchesCue, type Percept } from "../cognition/autopilot-attention";
+import { HabitBook } from "../cognition/habit-book";
 import { JevClient } from "../llm/jev";
-import { configureDecisionLeaves } from "../cognition/decision-leaves";
+import { configureDecisionLeaves, decideNow } from "../cognition/decision-leaves";
 import { setMindGate } from "../runtime/attention";
 import { SkillGraph } from "../learning/skill-graph";
 import type { Planner } from "../learning/skill-runtime";
@@ -145,7 +146,9 @@ type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; sce
   /** Settlement: residents work their trades by habit (skill graphs by trade, e.g. trained headless). */
   settlementWork?: { graphs: Map<string, SkillGraph>; planner?: (trade: string) => Planner; log?: (line: string) => void;
     /** Jev judges attention and memory (default: from TYPESAFE_API_KEY when set; false turns it off). */
-    jev?: JevClient | false };
+    jev?: JevClient | false;
+    /** Habits the residents have formed (carried across sessions by name); a fresh book when omitted. */
+    habits?: HabitBook };
   /** One explicitly operator-approved generated mechanic; not broad engineering. */
   weatherMechanic?: { directory: string; backend?: "codex" | "gemini" };
   /** Explicit broader engineering profile; not implied by viewing a town. */
@@ -1158,6 +1161,8 @@ export class SpatialDemo {
     // Habits run the day; attention decides when a mind looks up.
     const managed = SALTMERE_LAND.residents.map(r => this.actors.find(a => Name.value[a] === r.name)).filter((a): a is number => a !== undefined);
     const residents = this.options.world?.residents ?? [];
+    const habits = this.habits = work.habits ?? new HabitBook();
+    let passingSeq = 0;
     const autopilot = this.autopilot = new SettlementAutopilot({ world: w, now: () => this.atSimMs, managed: () => managed,
       cuesOf: eid => { const r = residents.find(x => x.name === Name.value[eid]); return [...new Set([...(r?.past?.memories ?? []).flatMap(m => m.cues), "Marrow Star", "the sea"])]; },
       inform: (eid, source, text) => this.tell(eid, source, text),
@@ -1174,6 +1179,24 @@ export class SpatialDemo {
       isNight: () => this.settlementNight(),
       // The operator is always answered, even by someone who has set the day's talk aside.
       alwaysWakes: (_eid, percept) => { const body = this.controlledBody(); return body !== undefined && percept.source === Name.value[body]; },
+      habits,
+      // Being spoken to, as a routine moment: who, where, when — never when it touches what they care about or hide.
+      situationOf: (eid, percept) => {
+        const r = residents.find(x => x.name === Name.value[eid]);
+        const cues = [...new Set([...(r?.past?.memories ?? []).flatMap(m => m.cues), "Marrow Star", "the sea"])];
+        if (touchesCue(percept.text, cues)) return undefined;
+        const room = getRoomForEntity(w, eid);
+        return `spoken to|by ${percept.source}|at ${room !== undefined ? Name.value[room] : "?"}|${this.dayPart()}`;
+      },
+      answerInPassing: (eid, percept) => {
+        const speaker = percept.source, slot = `passing:${++passingSeq}`;
+        void decideNow(w, eid, slot, { kind: "say", to: speaker, allowSilence: true,
+          gist: `Answer ${speaker} in passing — briefly, in your own way — and carry on with what you are doing.` }).then(answer => {
+          // A fallback would speak the gist itself: only a voiced line is said.
+          if (answer.kind !== "say" || answer.source !== "model" || !answer.line || !this.running || !entityExists(w, eid)) return;
+          executeActions(w, [{ eid, action: { type: "speak", target: speaker, content: answer.line } as AgentAction }], this.sim.god.systemRegistry);
+        }).catch(() => undefined);
+      },
       ...(jev ? { appraise: (eid: number, percept: Percept) => this.appraiseWithJev(jev, eid, percept),
         feel: (eid: number, feeling: string, valence: number, arousal: number, reason: string) => {
           const token = prepareAffectUpdate(w, eid, { feeling, valence: Math.max(-1, Math.min(1, valence)), arousal: Math.max(0, Math.min(1, arousal)),
@@ -1221,7 +1244,7 @@ export class SpatialDemo {
       let graph = work.graphs.get(r.trade);
       if (!graph) { graph = new SkillGraph(); work.graphs.set(r.trade, graph); }
       const life = new SpatialTradeLife(host, actor, r.trade, graph, work.planner?.(r.trade) ?? noPlanner, work.log, autopilot,
-        jev ? (eid, menu) => this.chooseWithJev(jev, eid, menu) : undefined);
+        jev ? (eid, menu) => this.chooseByHabitOrJev(jev, eid, menu) : undefined);
       this.tradeLives.push(life);
       void life.live().catch(error => console.warn(`[Settlement] ${r.name} stopped working: ${error instanceof Error ? error.message : error}`));
     }
@@ -1276,6 +1299,44 @@ export class SpatialDemo {
     this.recipes?.installSource(eid, uses);
     return eid;
   }
+  /** Habits the residents have formed (routine choices, answering in passing). */
+  habits?: HabitBook;
+  private dayPart(): string { const h = this.settlementHour(); return h < 11 ? "morning" : h < 15 ? "midday" : h < 18 ? "afternoon" : "evening"; }
+  /** A menu label's kind: routine (make X, sell, build X, eat, rest, talk) or drama (a pursuit or concern) — never habitual. */
+  private static choiceKind(label: string): { kind: string; drama: boolean } {
+    if (/^pursue: /.test(label) || /^(look into it|tell someone|confront someone|hide it|leave|carry on): /.test(label)) return { kind: label, drama: true };
+    if (/^talk with /.test(label)) return { kind: "talk", drama: false };
+    const make = /^make (.+) for the stall$/.exec(label), build = /^build the (.+)$/.exec(label);
+    if (make) return { kind: `make ${make[1]}`, drama: false };
+    if (build) return { kind: `build ${build[1]}`, drama: false };
+    return { kind: ({ "eat something": "eat", "sell what I've made at the stall": "sell", "rest a while": "rest" } as Record<string, string>)[label] ?? label, drama: false };
+  }
+  /** The chooser, learning: a routine moment met the same way often enough (and judged settled) is done by habit, without asking. */
+  private async chooseByHabitOrJev(jev: JevClient, eid: number, menu: string[]): Promise<number | undefined> {
+    const kinds = menu.map(l => SpatialDemo.choiceKind(l)), who = Name.value[eid], habits = this.habits!;
+    const routine = !kinds.some(k => k.drama);
+    const affect = snapshotAffect(this.sim.world, eid);
+    const mood = !affect ? "even" : affect.arousal >= .7 ? "stirred" : affect.valence < -.3 ? "low" : affect.valence > .3 ? "high" : "even";
+    const life = this.tradeLives.find(l => l.eid === eid);
+    const situation = `choosing|${life?.trade ?? "?"}|${this.dayPart()}|${mood}|${[...new Set(kinds.map(k => k.kind))].sort().join(",")}`;
+    const habit = routine ? habits.use(who, situation) : undefined;
+    if (habit && habit !== "check") {
+      const index = kinds.findIndex(k => k.kind === habit.choice);
+      if (index >= 0) { this.options.settlementWork?.log?.(`[${who}] by habit: ${menu[index]}`); return index; }
+      habits.broke(who, situation);
+    }
+    const candidate = routine ? habits.candidate(who, situation) : undefined;
+    const picked = await this.chooseWithJev(jev, eid, menu, candidate);
+    if (picked === undefined || !routine) return picked?.index;
+    const kind = kinds[picked.index].kind;
+    if (habit === "check") habits.checked(who, situation, kind);
+    habits.record(who, situation, kind);
+    if (candidate && candidate === kind && (picked.settled ?? 0) >= .6) {
+      habits.write(who, situation, kind, this.atSimMs);
+      this.options.settlementWork?.log?.(`[${who}] habit written: ${kind} (${situation})`);
+    }
+    return picked.index;
+  }
   /** God's triage stats (reports taken up, passed over, unanswered). */
   readonly godTriage = { taken: 0, passed: 0, unanswered: 0 };
   /** Jev reads a spirit's report as God would: step in now, or leave it (routine, redundant, or better left to the residents)? */
@@ -1300,7 +1361,7 @@ export class SpatialDemo {
     } catch { this.godTriage.unanswered++; return undefined; }
   }
   /** Jev picks what a resident on autopilot does next, from the menu, as that person would. */
-  private async chooseWithJev(jev: JevClient, eid: number, menu: string[]): Promise<number | undefined> {
+  private async chooseWithJev(jev: JevClient, eid: number, menu: string[], habitCandidate?: string): Promise<{ index: number; settled?: number } | undefined> {
     const w = this.sim.world, affect = snapshotAffect(w, eid);
     const recent = (this.autopilot?.log ?? []).filter(l => l.who === Name.value[eid]).slice(-4).map(l => l.what);
     const stateValue = { character: { name: Name.value[eid], role: Agent.role[eid] ?? "", persona: String(Agent.systemPrompt[eid] || "").slice(0, 900) },
@@ -1315,7 +1376,9 @@ export class SpatialDemo {
           criteria: Object.fromEntries(menu.map((m, i) => [`o${i}`, m])) },
         ...Object.fromEntries(intentions.map(g => [`g${g}`, { type: "noul" as const,
           instructions: `Given what has happened lately, does ${name} still mean to: ${Goal.description[g]}?`,
-          criteria: { true: "Still unfinished and still wanted", false: "Overtaken by events, already dealt with, or no longer wanted" } }])) });
+          criteria: { true: "Still unfinished and still wanted", false: "Overtaken by events, already dealt with, or no longer wanted" } }])),
+        // Writing to the behaviour tree: is this choice, in moments like this, a settled habit of theirs?
+        ...(habitCandidate ? { settled: { type: "noul" as const, instructions: `In ordinary moments like this one, is choosing to ${habitCandidate} a settled habit for ${name} — something they do without deciding?` } } : {}) });
       // A fast judge's reading is a reason to reconsider, never proof the thing was done.
       const dropped = new Set<string>();
       for (const g of intentions) {
@@ -1327,12 +1390,13 @@ export class SpatialDemo {
         }
       }
       const live = (i: number) => !(menu[i]?.startsWith("pursue: ") && dropped.has(menu[i].slice("pursue: ".length)));
+      const settled = typeof answers.settled?.noul === "number" ? answers.settled.noul : undefined;
       const index = Number(String(answers.next?.choice ?? "").replace(/^o/, ""));
-      if (Number.isInteger(index) && index >= 0 && index < menu.length && live(index)) return index;
+      if (Number.isInteger(index) && index >= 0 && index < menu.length && live(index)) return { index, settled };
       // The pick was an intention just put down: take the judge's next most likely choice.
       const ranked = Object.entries(answers.next?.probabilities ?? {}).map(([k, p]) => [Number(k.replace(/^o/, "")), p] as const)
         .filter(([i]) => Number.isInteger(i) && i >= 0 && i < menu.length && live(i)).sort((a, b) => b[1] - a[1]);
-      return ranked[0]?.[0];
+      return ranked[0] ? { index: ranked[0][0], settled } : undefined;
     } catch { return undefined; }
   }
   /** One Jev call per notable percept: attend now? remember? how much does it matter to this person? */

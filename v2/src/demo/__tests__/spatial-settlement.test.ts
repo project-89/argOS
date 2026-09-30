@@ -251,3 +251,35 @@ test("a conversation's resolve outlives it: goals on the menu, errands for the h
     expect(atCommon.length).toBeGreaterThanOrEqual(6);
   } finally { if (previous === undefined) delete process.env.ARGOS_SETTLEMENT_DAY_MINUTES; else process.env.ARGOS_SETTLEMENT_DAY_MINUTES = previous; }
 }, 180_000);
+
+test("routine choices become habits: after the judge keeps choosing the same and agrees it is settled, the habit chooses without asking; drama always asks", async () => {
+  const { JevClient } = await import("../../llm/jev");
+  const asked: any[] = [];
+  const fakeFetch = async (_url: unknown, init: any) => {
+    const body = JSON.parse(init.body);
+    // Only this test's own choices are counted (residents' loops, appraisals and triage use the judge too).
+    if (!body.questions.next || !(body.questions.next.criteria as Record<string, string>)["o0"]?.startsWith("make raw fish") || body.state?.character?.name !== "Otis")
+      return new Response(JSON.stringify({ model: "jev", answers: {} }), { status: 200 });
+    asked.push(body.questions);
+    const rest = Object.entries(body.questions.next.criteria as Record<string, string>).find(([, v]) => v === "rest a while")![0];
+    return new Response(JSON.stringify({ model: "jev", answers: { next: { type: "choice", choice: rest }, ...(body.questions.settled ? { settled: { type: "noul", noul: .9 } } : {}) } }), { status: 200 });
+  };
+  const jev = new JevClient({ apiKey: "test", fetch: fakeFetch as typeof fetch });
+  d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, seconds: 600,
+    settlementWork: { graphs: new Map(), jev } });
+  await d.start();
+  const otis = d.actors.find(a => Name.value[a] === "Otis")!;
+  const menu = ["make raw fish for the stall", "sell what I've made at the stall", "rest a while"];
+  const choose = (m: string[]) => (d as any).chooseByHabitOrJev(jev, otis, m) as Promise<number | undefined>;
+  for (let i = 0; i < 3; i++) expect(await choose(menu)).toBe(2);
+  expect(asked.map(q => !!q.settled)).toEqual([false, false, false]);
+  expect(await choose(menu)).toBe(2); // a candidate now: the judge is asked whether it is settled, in the same call
+  expect(asked[3].settled).toBeDefined();
+  expect(Object.values(d.habits!.of("Otis"))).toEqual(["rest"]);
+  const before = asked.length;
+  expect(await choose(menu)).toBe(2); // by habit: no call
+  expect(asked.length).toBe(before);
+  // Something on his mind: never by habit.
+  expect(await choose([...menu, "pursue: Find out who forced the Net House box"])).toBe(2);
+  expect(asked.length).toBe(before + 1);
+});

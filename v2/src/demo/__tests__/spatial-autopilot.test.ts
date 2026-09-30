@@ -100,3 +100,38 @@ test("a woken mind is paced: it answers what is new at once, and does not spin w
   pass(THINK_GAP_MS);
   expect(autopilot.gate.foreground(otis)).toBe(true); // a pause: he may think again
 });
+
+test("spoken to while working: routine talk is answered in passing (and becomes a habit); what matters looks up; secrets are never habitual", async () => {
+  const { HabitBook } = await import("../../cognition/habit-book");
+  const { IN_PASSING } = await import("../spatial-autopilot");
+  const world = createArgosWorld("Saltmere passing"); initializePrefabs(world); world.meta.aiEnabled = false; startCommittedEvents(world);
+  const room = createRoomEntity(world, { name: "Saltmere Common" });
+  const otis = createAgentEntity(world, { name: "Otis", role: "fisher", systemPrompt: "A fisher.", roomId: room });
+  let now = 0;
+  const appraised: string[] = [], passed: string[] = [], habits = new HabitBook({ minCount: 3, minShare: .8, checkEvery: 99, maxMisses: 2 });
+  const autopilot = new SettlementAutopilot({ world, now: () => now, managed: () => [otis], cuesOf: () => ["Net House"],
+    inform: () => undefined, engaged: () => false, errandOptions: () => ({ people: [], items: [], places: [] }), onErrand: () => undefined,
+    mindAvailable: () => true, record: () => undefined, gameMinutes: m => m * 1000, habits,
+    appraise: async (_eid, p) => { appraised.push(p.text); const grave = /box/.test(p.text); return { wake: grave ? .8 : .2, remember: .3, importance: grave ? .9 : .2 }; },
+    situationOf: (_eid, p) => /Net House/.test(p.text) ? undefined : `spoken to|by ${p.source}|at Saltmere Common|morning`,
+    answerInPassing: (_eid, p) => passed.push(p.text) });
+  const say = async (text: string) => {
+    now += 5000; autopilot.perceive(otis, { kind: "addressed", source: "Tess", text: `Tess says to you: "${text}"`, atMs: now });
+    await new Promise(r => setImmediate(r)); autopilot.tick();
+  };
+  await say("Morning, love. Good catch?");
+  expect(autopilot.holds(otis)).toBe(false); // not woken
+  expect(passed).toHaveLength(1);
+  await say("Tide's up early."); await say("Bring me two for the pot?");
+  expect(habits.of("Otis")).toEqual({ "spoken to|by Tess|at Saltmere Common|morning": IN_PASSING });
+  // Now a habit: answered in passing without asking the judge.
+  const judged = appraised.length;
+  await say("Mind the wet stones.");
+  expect(appraised.length).toBe(judged);
+  expect(passed).toHaveLength(4);
+  expect(autopilot.log.at(-1)?.what).toMatch(/^answers in passing \(by habit\)/);
+  // What touches his secret is never met by habit: the judge reads it, and it matters.
+  await say("What did you take out of the Net House box?");
+  expect(appraised.length).toBe(judged + 1);
+  expect(autopilot.holds(otis)).toBe(true);
+});

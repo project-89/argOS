@@ -12,6 +12,14 @@
  * own surprises (a way of working that no longer works, not a shortage) wake
  * the mind too: stop, look, learn.
  *
+ * Being spoken to in passing need not take the whole mind. When a judge and a
+ * voice for small replies are configured, the judge reads what was said: if it
+ * matters (it grips them, stirs them, or touches what they care about or hide)
+ * the mind looks up; if it is routine, they answer in passing — a line from
+ * the cheap say leaf — and keep working. Routine that keeps recurring with the
+ * same person in the same place becomes a habit (habit-book.ts): answered in
+ * passing without asking the judge, checked now and then.
+ *
  * A floor is not open-ended. Talk runs in real time while the day runs on the
  * game clock, so a standoff that never goes quiet would eat the whole day: after
  * a spell the resident sets it aside at the next lull (never later than twice
@@ -24,6 +32,7 @@ import type { World } from "../ecs/world";
 import { AttentionFilter, touchesCue, type Percept } from "../cognition/autopilot-attention";
 import { requestDecision } from "../cognition/decision-leaves";
 import type { MindGate } from "../runtime/attention";
+import type { HabitBook } from "../cognition/habit-book";
 
 export type Errand = { kind: "bring"; item: string; to: string } | { kind: "go"; place: string };
 /** What a moment stirs and what the resident wants to do about it (from the fast judge). */
@@ -62,7 +71,15 @@ export type AutopilotHost = {
   isNight?(): boolean;
   /** Must this be answered even while they have set things aside (the operator speaking to them)? */
   alwaysWakes?(eid: number, percept: Percept): boolean;
+  /** Answer in passing (a short line from the say leaf) and carry on. With `situationOf` and `habits`, routine talk becomes habit. */
+  answerInPassing?(eid: number, percept: Percept): void;
+  /** A routine situation for being spoken to (who, where, when), or undefined when it touches what they care about or hide. */
+  situationOf?(eid: number, percept: Percept): string | undefined;
+  habits?: HabitBook;
 };
+/** The habit-book choices for being spoken to. */
+export const IN_PASSING = "answer in passing", LOOK_UP = "look up";
+type Route = { situation?: string; check: boolean };
 /** How long a floor runs before it may be set aside (at the next lull), and how long they keep to their work after, in game minutes.
  * Past twice the spell it is set aside even mid-exchange. */
 export const FLOOR_SPELL_GAME_MINUTES = 90, SET_ASIDE_GAME_MINUTES = 60;
@@ -83,6 +100,8 @@ export class SettlementAutopilot {
   private readonly lastGlance = new Map<number, number>();
   private readonly glances = new Map<number, { slot: string; request: { kind: "yes_no"; question: string }; percept: Percept }>();
   private readonly appraisals = new Map<number, { percept: Percept; result: undefined | Appraisal | null }>();
+  /** Spoken-to moments awaiting the judge's routing (look up, or answer in passing). */
+  private readonly routes = new WeakMap<Percept, Route>();
   /** The most salient moment that arrived while an appraisal was running: judged next, not dropped. */
   private readonly nextAppraisal = new Map<number, { percept: Percept; score: number }>();
   private readonly concerns = new Map<number, Concern[]>();
@@ -129,12 +148,15 @@ export class SettlementAutopilot {
     const verdict = this.filter(eid).perceive(percept);
     // Set aside: still felt and remembered (the judge reads it), not answered — unless it must be.
     if (this.resting(eid) && !this.host.alwaysWakes?.(eid, percept)) {
+      // By day, someone who has set the talk aside still answers when spoken to — in passing, without taking it up again.
+      if (!this.nightNow && percept.kind === "addressed" && this.host.answerInPassing && this.host.mindAvailable()) this.passing(eid, percept, "set aside");
       if (verdict.level !== "notice" && this.host.appraise) this.queueAppraisal(eid, percept, verdict.score);
       return;
     }
     // Without a mind to hand the floor to, the judge still reads feeling and memory; nothing is woken.
     if (!this.host.mindAvailable() && !(this.host.appraise && verdict.level !== "notice")) { if (verdict.level !== "notice") this.note(eid, `notices: ${percept.text.slice(0, 100)}`); return; }
     if (verdict.level === "wake" && this.host.appraise && !this.host.mindAvailable()) { this.queueAppraisal(eid, percept, verdict.score); return; }
+    if (verdict.level === "wake" && this.routeSpoken(eid, percept, verdict.score)) return;
     if (verdict.level === "wake") this.wake(eid, percept.text, percept.source);
     else if (verdict.level === "glance" && this.host.appraise) this.queueAppraisal(eid, percept, verdict.score);
     else if (verdict.level === "glance" && !this.host.appraise && !this.glances.has(eid) && this.host.now() - (this.lastGlance.get(eid) ?? -Infinity) > GLANCE_GAP_MS) {
@@ -156,6 +178,20 @@ export class SettlementAutopilot {
     this.perceive(eid, { kind: "surprise", source: `habit:${item}`, atMs: this.host.now(), text: `your usual way of getting ${item} did not work — ${detail.slice(0, 200)}` });
   }
 
+  /** Spoken to while working: by habit, answer in passing; otherwise let the judge route it. True when handled here. */
+  private routeSpoken(eid: number, percept: Percept, score: number): boolean {
+    if (!["addressed", "named"].includes(percept.kind) || !this.host.appraise || !this.host.answerInPassing || this.host.alwaysWakes?.(eid, percept)) return false;
+    const situation = this.host.situationOf?.(eid, percept), who = Name.value[eid];
+    const habit = situation && this.host.habits ? this.host.habits.use(who, situation) : undefined;
+    if (habit && habit !== "check" && habit.choice === IN_PASSING) { this.passing(eid, percept, "by habit"); return true; }
+    this.routes.set(percept, { situation, check: habit === "check" });
+    this.queueAppraisal(eid, percept, score);
+    return true;
+  }
+  private passing(eid: number, percept: Percept, how: string): void {
+    this.note(eid, `answers in passing${how ? ` (${how})` : ""}: ${percept.text.slice(0, 100)}`);
+    this.host.answerInPassing!(eid, percept);
+  }
   private queueAppraisal(eid: number, percept: Percept, score: number): void {
     if (!this.appraisals.has(eid)) { this.startAppraisal(eid, percept); return; }
     const waiting = this.nextAppraisal.get(eid);
@@ -202,6 +238,19 @@ export class SettlementAutopilot {
       // (an overheard word about their own secret may not demand attention, but it grips them).
       // Strong feeling demands attention too.
       const gripping = a.result.importance >= .85 && a.result.remember >= .7 || (r.arousal ?? 0) >= .8;
+      const route = this.routes.get(a.percept);
+      if (route) {
+        // Spoken to: it matters, or it is routine talk to answer in passing. The judge's reading is recorded toward a habit.
+        const matters = a.result.wake >= .6 || gripping || a.result.importance >= .6;
+        const choice = matters ? LOOK_UP : IN_PASSING, who = Name.value[eid], habits = this.host.habits;
+        if (route.situation && habits) {
+          if (route.check) habits.checked(who, route.situation, choice);
+          habits.record(who, route.situation, choice);
+          if (habits.candidate(who, route.situation) === IN_PASSING) { habits.write(who, route.situation, IN_PASSING, now); this.note(eid, `makes a habit of answering in passing (${route.situation})`); }
+        }
+        if (!matters && !this.floors.has(eid)) { this.passing(eid, a.percept, ""); continue; }
+        if (matters && !this.floors.has(eid) && !this.resting(eid)) { this.wake(eid, a.percept.text, a.percept.source); continue; }
+      }
       if ((a.result.wake >= .6 || gripping) && !this.floors.has(eid) && !this.resting(eid)) this.wake(eid, a.percept.text, a.percept.source);
       else if (a.result.remember < (contentful ? .5 : .75)) this.note(eid, `lets it pass (${a.percept.text.slice(0, 80)})`);
     }
