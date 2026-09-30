@@ -31,12 +31,25 @@ const plannerStats = { calls: 0, tokensIn: 0, tokensOut: 0, malformed: 0 };
 // Every Gemini request (minds, decision leaves, planner, Weaver) passes through global fetch: count them all.
 const gemini = { calls: 0, failures: 0, tokensIn: 0, tokensOut: 0, thinking: 0 };
 const realFetch = globalThis.fetch;
+const ATTRIBUTE = process.env.ARGOS_ATTRIBUTE_LLM === "1";
+const byCaller = new Map<string, { calls: number; tokensIn: number }>();
+const callerOf = (stack: string, body: unknown) => {
+  const frames = stack.split("\n").map(l => /src\/((?!llm\/)[\w\-/]+\.ts):(\d+)/.exec(l)).filter(Boolean).map(m => `${m![1]}:${m![2]}`)
+    .filter(f => !f.startsWith("demo/settlement-live-session"));
+  let head = "";
+  try { const j = JSON.parse(String(body)); head = String(j?.systemInstruction?.parts?.[0]?.text ?? j?.contents?.[0]?.parts?.[0]?.text ?? "").replace(/\s+/g, " ").slice(0, 70); } catch { /* not JSON */ }
+  return `${frames.slice(0, 2).join(" < ") || "?"} | ${head}`;
+};
 globalThis.fetch = (async (input: any, init?: any) => {
+  const stack = ATTRIBUTE ? new Error().stack ?? "" : "";
   const response = await realFetch(input, init);
   if (!String(input?.url ?? input).includes("generativelanguage.googleapis.com")) return response;
   gemini.calls++; if (!response.ok) gemini.failures++;
+  // Who asked: the nearest caller in our source (outside the LLM plumbing) and how its instructions open.
+  const key = ATTRIBUTE ? callerOf(stack, init?.body) : "";
   void response.clone().json().then((j: any) => { const u = j?.usageMetadata ?? {};
-    gemini.tokensIn += u.promptTokenCount ?? 0; gemini.tokensOut += u.candidatesTokenCount ?? 0; gemini.thinking += u.thoughtsTokenCount ?? 0; }).catch(() => undefined);
+    gemini.tokensIn += u.promptTokenCount ?? 0; gemini.tokensOut += u.candidatesTokenCount ?? 0; gemini.thinking += u.thoughtsTokenCount ?? 0;
+    if (ATTRIBUTE) { const b = byCaller.get(key) ?? { calls: 0, tokensIn: 0 }; b.calls++; b.tokensIn += u.promptTokenCount ?? 0; byCaller.set(key, b); } }).catch(() => undefined);
   return response;
 }) as typeof fetch;
 const d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: true, seconds: MINUTES * 60 + 120,
@@ -77,6 +90,8 @@ for (const a of d.actors) {
 summary.push(`built ${JSON.stringify(d.recipes!.builtCount())}; made ${JSON.stringify(d.recipes!.tally.made)}; eaten ${JSON.stringify(d.recipes!.tally.eaten)}`);
 summary.push(`Jev ${JSON.stringify(jev.stats)}; planner ${JSON.stringify(plannerStats)}; leaves ${JSON.stringify(getDecisionStats(w))}`);
 summary.push(`Gemini, all uses ${JSON.stringify(gemini)}`);
+if (ATTRIBUTE) summary.push("Gemini by caller:\n" + [...byCaller].sort((a, b) => b[1].tokensIn - a[1].tokensIn).slice(0, 25)
+  .map(([k, v]) => `  ${v.calls} calls, ${(v.tokensIn / 1e6).toFixed(2)}M in — ${k}`).join("\n"));
 summary.push(`skills ${[...graphs].map(([t, g]) => `${t} ${g.skills.size}`).join(", ")}`);
 writeFileSync(SKILLS, JSON.stringify(Object.fromEntries([...graphs].map(([t, g]) => [t, g.toJson()])), null, 1));
 out(summary.join("\n")); quiet(summary.join("\n"));

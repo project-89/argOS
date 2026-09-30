@@ -39,7 +39,7 @@ import { configureWorldConstructionBudget, getWorldConstructionStatus } from "./
 import { startCommittedEvents, stopCommittedEvents } from "./runtime/committed-events";
 import { initializePrefabs, createAgentEntity, createRoomEntity, createObjectEntity } from "./ecs/prefabs";
 import { isOperatorControlled } from "./ecs/controlled";
-import { attentionCadenceOpen, backgroundAllowed, backgroundPriorityFor, foregroundAllowed, foregroundPriorityFor } from "./runtime/attention";
+import { attentionCadenceOpen, backgroundAllowed, backgroundPriorityFor, foregroundAllowed, foregroundPriorityFor, noteForegroundTurn } from "./runtime/attention";
 import { attachSkillLibrary, type SkillHarvestReport, type SkillLibraryConfig, type SkillLibrarySession } from "./learning/session";
 import { hasDueOffstageScene, installOffstageLife, noteForegroundDecisionStarted, offstageForegroundReady, reflectionFor,
   runOffstageDriver, runOffstageScene, type OffstageConfig } from "./runtime/offstage";
@@ -1183,6 +1183,7 @@ Do NOT explain — just create everything using your tools.`;
                           hasDueAttention: hasDueAttentionSignal(world, eid) }),
                       execute: async () => {
                         deliberating.add(eid); lastForegroundSimMs.set(eid, readStoryTime(world));
+                        noteForegroundTurn(world, eid); // a gate budgeting turns (autopilot floors) spends one
                         noteForegroundDecisionStarted(world, eid); // consumes an offstage urgency, if any
                         try {
                           const thoughtCursor = captureThoughtPublication(world, eid);

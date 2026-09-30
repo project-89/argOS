@@ -69,7 +69,10 @@ export const FLOOR_SPELL_GAME_MINUTES = 90, SET_ASIDE_GAME_MINUTES = 60;
 /** A lull: this long (real ms) with nothing salient reaching them. An accusation is answered before they walk away. */
 export const LULL_MS = 12_000;
 
-type Floor = { since: number; lastSalientAt: number; reason: string };
+/** A floor carries a budget of mind turns: something new to respond to earns more; an idle mind does not spin. */
+type Floor = { since: number; lastSalientAt: number; reason: string; turns: number };
+/** Turns on waking (look up, respond, follow through), per new thing said to them / otherwise salient, and the most banked. */
+export const WAKE_TURNS = 3, ADDRESSED_TURNS = 2, SALIENT_TURNS = 1, MAX_TURNS = 4;
 const QUIET_MS = 45_000, GLANCE_GAP_MS = 90_000, RECENT_MIND_MS = 10 * 60_000;
 const CARRY_ON = "carry on with my work";
 
@@ -101,9 +104,12 @@ export class SettlementAutopilot {
   /** The mind gate for these residents: the foreground runs only with the floor;
    * background digestion while awake or lately awake. Others are unaffected. */
   readonly gate: MindGate = {
-    foreground: eid => !this.host.managed().includes(eid) || this.floors.has(eid),
+    foreground: eid => !this.host.managed().includes(eid) || (this.floors.get(eid)?.turns ?? 0) > 0,
     background: eid => !this.host.managed().includes(eid) || this.floors.has(eid) || this.host.now() - (this.lastAwake.get(eid) ?? -Infinity) < RECENT_MIND_MS,
+    foregroundTurn: eid => { const floor = this.floors.get(eid); if (floor) floor.turns = Math.max(0, floor.turns - 1); },
   };
+  /** Mind turns left on this resident's floor (0 without one). */
+  turnsLeft(eid: number): number { return this.floors.get(eid)?.turns ?? 0; }
 
   /** What the resident means to act on (newest last); taken when the habit chooses. */
   concernsOf(eid: number): readonly Concern[] { return this.concerns.get(eid) ?? []; }
@@ -115,7 +121,13 @@ export class SettlementAutopilot {
   perceive(eid: number, percept: Percept): void {
     if (!this.host.managed().includes(eid)) return;
     const floor = this.floors.get(eid);
-    if (floor) { if (percept.kind !== "speech" || this.filter(eid).novelty(percept) > .5) floor.lastSalientAt = percept.atMs; this.filter(eid).perceive(percept); return; }
+    if (floor) {
+      if (percept.kind !== "speech" || this.filter(eid).novelty(percept) > .5) {
+        floor.lastSalientAt = percept.atMs;
+        floor.turns = Math.min(MAX_TURNS, floor.turns + (percept.kind === "addressed" ? ADDRESSED_TURNS : SALIENT_TURNS));
+      }
+      this.filter(eid).perceive(percept); return;
+    }
     const verdict = this.filter(eid).perceive(percept);
     // Set aside: still felt and remembered (the judge reads it), not answered — unless it must be.
     if (this.resting(eid) && !this.host.alwaysWakes?.(eid, percept)) {
@@ -159,7 +171,7 @@ export class SettlementAutopilot {
   private wake(eid: number, text: string, source: string): void {
     if (!this.host.mindAvailable()) return;
     const now = this.host.now();
-    this.floors.set(eid, { since: now, lastSalientAt: now, reason: text });
+    this.floors.set(eid, { since: now, lastSalientAt: now, reason: text, turns: WAKE_TURNS });
     this.lastAwake.set(eid, now);
     this.note(eid, `looks up: ${text}`);
     this.host.inform(eid, source, text);
@@ -217,7 +229,8 @@ export class SettlementAutopilot {
         this.note(eid, night ? "turns in for the night" : "sets it aside for now and goes back to work");
         continue;
       }
-      if (now - floor.lastSalientAt < QUIET_MS) continue;
+      // Quiet — or nothing left to say and a lull: hand the floor back.
+      if (now - floor.lastSalientAt < (floor.turns > 0 ? QUIET_MS : LULL_MS)) continue;
       this.floors.delete(eid);
       const { people, items, places } = this.host.errandOptions(eid);
       const options = [CARRY_ON, ...people.flatMap(p => items.map(i => `bring ${i} to ${p}`)), ...places.map(p => `go to ${p}`)].slice(0, 60);

@@ -1,7 +1,7 @@
 import { createArgosWorld } from "../../ecs/world";
 import { createAgentEntity, createRoomEntity, initializePrefabs } from "../../ecs/prefabs";
 import { startCommittedEvents } from "../../runtime/committed-events";
-import { FLOOR_SPELL_GAME_MINUTES, SET_ASIDE_GAME_MINUTES, SettlementAutopilot } from "../spatial-autopilot";
+import { ADDRESSED_TURNS, FLOOR_SPELL_GAME_MINUTES, LULL_MS, MAX_TURNS, SET_ASIDE_GAME_MINUTES, SettlementAutopilot, WAKE_TURNS } from "../spatial-autopilot";
 
 /** A game minute is a real second here. */
 function fixture() {
@@ -83,3 +83,25 @@ test("a floor with no lull at all is still set aside at twice the spell", () => 
   expect(autopilot.holds(otis)).toBe(false);
   expect(autopilot.resting(otis)).toBe(true);
 });
+
+test("a woken mind has a budget of turns: it answers what is new, and does not spin when nothing is", () => {
+  const { autopilot, otis, ivo, say, pass } = fixture();
+  expect(autopilot.gate.foreground(ivo)).toBe(true); // not on autopilot: unaffected
+  expect(autopilot.gate.foreground(otis)).toBe(false); // on autopilot, asleep at the wheel
+  say("Ivo", "What did you carry out of the Net House?");
+  expect(autopilot.turnsLeft(otis)).toBe(WAKE_TURNS);
+  for (let i = 0; i < WAKE_TURNS; i++) { expect(autopilot.gate.foreground(otis)).toBe(true); autopilot.gate.foregroundTurn!(otis); }
+  expect(autopilot.gate.foreground(otis)).toBe(false); // said their piece: no more thinking until something new
+  expect(autopilot.holds(otis)).toBe(true); // still here, listening
+  say("Ivo", "Answer me.");
+  expect(autopilot.turnsLeft(otis)).toBe(ADDRESSED_TURNS);
+  for (let i = 0; i < 5; i++) say("Ivo", `Answer me ${i}.`);
+  expect(autopilot.turnsLeft(otis)).toBe(MAX_TURNS); // banked, not unbounded
+  // Spent, and a lull: the floor is handed back well before the long quiet.
+  for (let i = 0; i < MAX_TURNS; i++) autopilot.gate.foregroundTurn!(otis);
+  pass(LULL_MS - 1000);
+  expect(autopilot.holds(otis)).toBe(true);
+  pass(2000);
+  expect(autopilot.holds(otis)).toBe(false);
+});
+

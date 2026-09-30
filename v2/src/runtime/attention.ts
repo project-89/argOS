@@ -74,7 +74,9 @@ export function backgroundPriorityFor(world: World, eid: number, base: TaskPrior
  * (appraisal, planning, review, reflection) only while the mind is or was
  * recently awake. Without a gate everything is allowed (unchanged behaviour).
  * A resident spoken to directly is always allowed to answer. */
-export type MindGate = { foreground(eid: number): boolean; background(eid: number): boolean };
+export type MindGate = { foreground(eid: number): boolean; background(eid: number): boolean;
+  /** A foreground decision is starting for this resident (a gate may budget turns). */
+  foregroundTurn?(eid: number): void };
 const gates = new WeakMap<World, MindGate>();
 export function setMindGate(world: World, gate: MindGate | undefined): void {
   if (gate) gates.set(world, gate); else gates.delete(world);
@@ -83,6 +85,10 @@ export function foregroundAllowed(world: World, eid: number): boolean {
   const gate = gates.get(world);
   if (!gate || readAttention(world, eid).addressedByObserver) return true;
   try { return gate.foreground(eid); } catch { return true; }
+}
+/** Tell the gate a foreground decision has begun (the runtime calls this as it dispatches one). */
+export function noteForegroundTurn(world: World, eid: number): void {
+  try { gates.get(world)?.foregroundTurn?.(eid); } catch { /* A host's bookkeeping never blocks a decision. */ }
 }
 export function backgroundAllowed(world: World, eid: number): boolean {
   const gate = gates.get(world);
