@@ -24,8 +24,11 @@ test("a standoff that never goes quiet is set aside after a spell: back to work,
   const { autopilot, otis, say, pass, informed, clock } = fixture();
   say("Ivo", "What did you carry out of the Net House?");
   expect(autopilot.holds(otis)).toBe(true);
-  // Ivo keeps at him every twenty seconds: the floor never goes quiet, yet it ends after the spell.
-  pass(FLOOR_SPELL_GAME_MINUTES * 1000 + 1000, 1000, () => { if (clock.now % 20_000 === 0) say("Ivo", "Answer me."); });
+  // Ivo keeps at him every twenty seconds: the floor never goes quiet (45 s), yet after the spell it ends at the next lull.
+  const pressing = () => { if (clock.now % 20_000 === 0) say("Ivo", "Answer me."); };
+  pass(FLOOR_SPELL_GAME_MINUTES * 1000, 1000, pressing);
+  expect(autopilot.holds(otis)).toBe(true); // the spell is up, but Ivo spoke ten seconds ago: answer first
+  pass(2000, 1000, pressing);
   expect(autopilot.holds(otis)).toBe(false);
   expect(autopilot.log.at(-1)?.what).toBe("sets it aside for now and goes back to work");
   expect(autopilot.resting(otis)).toBe(true);
@@ -43,7 +46,7 @@ test("a standoff that never goes quiet is set aside after a spell: back to work,
 test("the set-aside spell ends: an hour of work later, being spoken to wakes the mind again", () => {
   const { autopilot, otis, say, pass, clock } = fixture();
   say("Ivo", "A word.");
-  pass(FLOOR_SPELL_GAME_MINUTES * 1000 + 1000, 1000, () => { if (clock.now % 20_000 === 0) say("Ivo", "Answer me."); });
+  pass(FLOOR_SPELL_GAME_MINUTES * 1000 + 3000, 1000, () => { if (clock.now % 20_000 === 0) say("Ivo", "Answer me."); });
   expect(autopilot.resting(otis)).toBe(true);
   pass(SET_ASIDE_GAME_MINUTES * 1000);
   expect(autopilot.resting(otis)).toBe(false);
@@ -69,4 +72,14 @@ test("night ends the floor once they are free of it, and they are left to sleep 
   pass(1000);
   say("Ivo", "Morning. We're not done.");
   expect(autopilot.holds(otis)).toBe(true);
+});
+
+test("a floor with no lull at all is still set aside at twice the spell", () => {
+  const { autopilot, otis, say, pass, clock } = fixture();
+  say("Ivo", "Open it.");
+  pass(2 * FLOOR_SPELL_GAME_MINUTES * 1000 - 5000, 1000, () => { if (clock.now % 5_000 === 0) say("Ivo", "Open it now."); });
+  expect(autopilot.holds(otis)).toBe(true);
+  pass(6000, 1000, () => { if (clock.now % 5_000 === 0) say("Ivo", "Open it now."); });
+  expect(autopilot.holds(otis)).toBe(false);
+  expect(autopilot.resting(otis)).toBe(true);
 });

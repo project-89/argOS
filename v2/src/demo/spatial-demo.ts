@@ -62,7 +62,8 @@ import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
 import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
 import { SettlementAutopilot, type Appraisal } from "./spatial-autopilot";
 import { activeOwnIntentions, tendIntentions } from "./settlement-intentions";
-import { requestIntentionReconsideration } from "../cognition/goal-lifecycle";
+import { pendingIntentionReview, requestIntentionReconsideration } from "../cognition/goal-lifecycle";
+import { captureGoalReviewContext, prepareGoalReview } from "../cognition/goal-pursuit";
 import { createSpatialBalance } from "./spatial-balance";
 import { commitPreparedAffectUpdate, prepareAffectUpdate, type FacialExpression } from "../cognition/affect-state";
 import type { Percept } from "../cognition/autopilot-attention";
@@ -1118,11 +1119,15 @@ export class SpatialDemo {
       day: () => Math.floor(this.atSimMs / this.settlementDayMs),
       dayMs: () => this.settlementDayMs,
       campfire: () => [...this.settlementKinds].find(([, k]) => k === "hearth")?.[0],
-      goalsOf: eid => getRelationTargets(w, eid, HasGoal).filter(g => hasComponent(w, g, Goal) && Goal.status[g] === "active"
+      goalsOf: eid => getRelationTargets(w, eid, HasGoal).filter(g => hasComponent(w, g, Goal)
+          // Active, or set aside awaiting their review (they may take it up again).
+          && (Goal.status[g] === "active" || Goal.status[g] === "paused" && !!pendingIntentionReview(w, eid, g))
           // Their own resolve, not the day's routine (the trade and the schedule already run the day).
           && !/^(Keep Saltmere supplied|Raise the town|Follow schedule:|Go to .+ for (work|supper|sleep))/.test(String(Goal.description[g] || "")) && Goal.kind[g] !== "scheduled_activity")
         .sort((a, b) => (Goal.priority[b] || 0) - (Goal.priority[a] || 0))
-        .map(g => ({ id: g, description: String(Goal.description[g] || ""), priority: Goal.priority[g] || 0 })),
+        .map(g => ({ id: g, description: String(Goal.description[g] || ""), priority: Goal.priority[g] || 0, ...(Goal.status[g] === "paused" ? { paused: true } : {}) })),
+      takeUp: (eid, goal) => !!prepareGoalReview(captureGoalReviewContext(w, eid),
+        { goalId: goal, disposition: "retain", reason: "Took it up again of their own accord; nothing about it is claimed done." })?.commit(),
       peopleNear: (eid, metres) => {
         const room = getRoomForEntity(w, eid);
         return this.actors.filter(a => a !== eid && getRoomForEntity(w, a) === room)
@@ -1176,7 +1181,7 @@ export class SpatialDemo {
       if (this.atSimMs - tendedAt < 5_000) return;
       tendedAt = this.atSimMs;
       const hour = this.settlementDayMs / 24;
-      for (const eid of managed) for (const t of tendIntentions(w, eid, { keep: 3, quietAfterMs: 8 * hour, letGoAfterMs: 6 * hour }))
+      for (const eid of managed) for (const t of tendIntentions(w, eid, { keep: 3, quietAfterMs: 8 * hour, letGoAfterMs: 12 * hour }))
         work.log?.(`[${Name.value[eid]}] intention ${t.outcome === "let go" ? "let go" : "up for reconsideration"}: ${t.description.slice(0, 140)}`);
     });
     // Speech arrives word by word: attention hears whole lines (a pause of a second and a half ends one).

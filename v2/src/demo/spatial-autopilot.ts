@@ -14,7 +14,8 @@
  *
  * A floor is not open-ended. Talk runs in real time while the day runs on the
  * game clock, so a standoff that never goes quiet would eat the whole day: after
- * a spell the resident sets it aside and goes back to their work, and for a
+ * a spell the resident sets it aside at the next lull (never later than twice
+ * the spell) and goes back to their work, and for a
  * while after that only what must be answered (the operator) wakes them — the
  * rest is still felt, remembered and kept as a concern. Night ends every floor
  * once the resident is free of it, and they are left to sleep till dawn. */
@@ -62,8 +63,11 @@ export type AutopilotHost = {
   /** Must this be answered even while they have set things aside (the operator speaking to them)? */
   alwaysWakes?(eid: number, percept: Percept): boolean;
 };
-/** How long a floor may run before it is set aside, and how long they keep to their work after, in game minutes. */
+/** How long a floor runs before it may be set aside (at the next lull), and how long they keep to their work after, in game minutes.
+ * Past twice the spell it is set aside even mid-exchange. */
 export const FLOOR_SPELL_GAME_MINUTES = 90, SET_ASIDE_GAME_MINUTES = 60;
+/** A lull: this long (real ms) with nothing salient reaching them. An accusation is answered before they walk away. */
+export const LULL_MS = 12_000;
 
 type Floor = { since: number; lastSalientAt: number; reason: string };
 const QUIET_MS = 45_000, GLANCE_GAP_MS = 90_000, RECENT_MIND_MS = 10 * 60_000;
@@ -206,7 +210,8 @@ export class SettlementAutopilot {
       this.lastAwake.set(eid, now);
       if (this.host.engaged(eid)) continue;
       // Night: bed, not more talk. A long spell: set it aside and get back to work.
-      if (night || now - floor.since >= this.gameMs(FLOOR_SPELL_GAME_MINUTES)) {
+      const spell = now - floor.since, lull = now - floor.lastSalientAt >= LULL_MS;
+      if (night || spell >= this.gameMs(FLOOR_SPELL_GAME_MINUTES) && lull || spell >= 2 * this.gameMs(FLOOR_SPELL_GAME_MINUTES)) {
         this.floors.delete(eid);
         if (!night) this.setAside.set(eid, now + this.gameMs(SET_ASIDE_GAME_MINUTES));
         this.note(eid, night ? "turns in for the night" : "sets it aside for now and goes back to work");

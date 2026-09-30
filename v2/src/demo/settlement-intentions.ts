@@ -13,6 +13,8 @@
  *   while is retired as let go (explicitly not accomplishment), so paused
  *   intentions never fill the resident's quota for new ones.
  *
+ * Only intentions their mind set in play are tended; the authored ones they
+ * started with (their trade's duty, a personal aim) are theirs to keep.
  * Nothing here claims success; the mind (experience appraisal) or a fast judge
  * may review a paused intention and keep, defer or release it. */
 import { getRelationTargets, hasComponent } from "bitecs";
@@ -38,8 +40,9 @@ export const OVERTAKEN = "Newer resolve has overtaken this intention. Reconsider
 export const WENT_QUIET = "This intention has gone quiet for most of a day. Reconsider whether to keep, defer or release it; quiet is not abandonment.";
 export const LET_GO = "Set aside and never taken up again; let go. This is not accomplishment.";
 
+/** Intentions their own mind set in play — not the authored ones they started with (a trade's duty, a personal aim). */
 const own = (world: World, eid: number) => getRelationTargets(world, eid, HasGoal)
-  .filter(g => hasComponent(world, g, Goal) && isSelfDirectedIntention(world, g) && !isStandingIntention(world, g));
+  .filter(g => hasComponent(world, g, Goal) && isSelfDirectedIntention(world, g) && !isStandingIntention(world, g) && GoalLifecycle.source[g] !== "personal");
 /** When the intention was last set or renewed, in simulation time. */
 const renewedAt = (world: World, g: number) => Math.max(readStampedSimulationTime(world, g, "Goal.createdAt", Goal.createdAt[g]),
   getStampedSimulationTime(world, g, "GoalLifecycle.resumedAt", GoalLifecycle.resumedAt[g]) ?? -Infinity);

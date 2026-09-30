@@ -46,7 +46,9 @@ export type SpatialTradeHost = {
   /** Where supper is: the campfire. */
   campfire?(): number | undefined;
   /** What their own mind wants (active goals, not the day's trade), most pressing first. */
-  goalsOf?(eid: number): Array<{ id: number; description: string; priority: number }>;
+  goalsOf?(eid: number): Array<{ id: number; description: string; priority: number; paused?: boolean }>;
+  /** Take up again an intention that was set aside for review (their choice to retain it; not a claim of progress). */
+  takeUp?(eid: number, goal: number): boolean;
   /** People close by (same place, within a few metres), nearest first. */
   peopleNear?(eid: number, metres: number): Array<{ eid: number; name: string; distance: number }>;
   shelter?(eid: number): number | undefined;
@@ -342,8 +344,10 @@ export class SpatialTradeLife {
     return true;
   }
   /** Pursue one of their own goals: what the habit can do itself (fetch, make, go), it does; the rest wakes the mind for its next step. */
-  private async pursue(goal: { id: number; description: string }): Promise<boolean> {
+  private async pursue(goal: { id: number; description: string; paused?: boolean }): Promise<boolean> {
     this.cool(`goal:${goal.id}`, 5 * 60_000);
+    if (goal.paused && !this.host.takeUp?.(this.eid, goal.id)) return false;
+    if (goal.paused) this.log?.(`[${Name.value[this.eid]}] takes up again: ${goal.description.slice(0, 140)}`);
     const text = goal.description.toLowerCase();
     // Goods named as whole words, not inside a place's name ("the Net House" is not a net).
     const bare = this.host.rooms().reduce((t, r) => t.replaceAll(r.name.toLowerCase(), " ").replaceAll(r.name.toLowerCase().replace(/^the /, ""), " "), text);

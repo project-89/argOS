@@ -4,7 +4,7 @@ jest.unstable_mockModule("ai", () => ({ ...ai, generateText: jest.fn() }));
 const { SpatialDemo } = await import("../spatial-demo");
 const { createSettlementScenario } = await import("../spatial-settlement");
 const { validateSpatialScenario } = await import("../spatial-scenario");
-const { Name, Needs } = await import("../../ecs/components");
+const { Goal, Name, Needs } = await import("../../ecs/components");
 const { executeActions } = await import("../../cognition/cognition-system");
 const { listDirectContents } = await import("../../ecs/location");
 const { isSimulationResourceBusy } = await import("../../runtime/simulation-timeline");
@@ -201,7 +201,16 @@ test("a conversation's resolve outlives it: goals on the menu, errands for the h
     await life.pursue({ id: mystery, description: "Find out who forced the Net House box before Mara does" });
     expect(d.autopilot!.holds(otis)).toBe(true);
     expect(d.autopilot!.log.at(-1)?.what).toMatch(/looks up: You set out to Find out who forced the Net House box/);
+    // A thread set aside for review stays on the menu; pursuing it is taking it up again (retained, not claimed done).
+    const { createGeneratedIntention, requestIntentionReconsideration } = await import("../../cognition/goal-lifecycle");
+    const thread = createGeneratedIntention(w, otis, { description: "Learn what Harlan Pryce wrote to Leon", priority: 7, kind: "social" }, "foreground")!;
+    expect(requestIntentionReconsideration(w, otis, thread, "Reached its review boundary.")).toBe(true);
+    expect(life.menu().map((m: any) => m.label)).toEqual(expect.arrayContaining(["pursue: Learn what Harlan Pryce wrote to Leon"]));
+    await life.pursue({ id: thread, description: "Learn what Harlan Pryce wrote to Leon", paused: true });
+    expect(Goal.status[thread]).toBe("active");
+    (d.autopilot as any).floors.delete(otis);
     // A livelihood presses: hours without turning a hand to the trade send them back to it before any choice.
+    life.cooldown.clear(); // his own loop may have just tried and failed (no model offline)
     life.lastWorkAt = d.atSimMs - (d as any).settlementDayMs; // a day ago
     expect(life.workDue()).toBe(true);
     life.lastWorkAt = d.atSimMs;
