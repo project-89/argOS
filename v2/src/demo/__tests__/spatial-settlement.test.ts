@@ -311,3 +311,24 @@ test("routine choices become habits: after the judge keeps choosing the same and
   expect(await choose([...menu, "pursue: Find out who forced the Net House box"])).toBe(2);
   expect(asked.length).toBe(before + 1);
 });
+
+test("the settlement's stations and goods have their own models, built to each kind's native size", async () => {
+  const { getSpatialAssetEntry, DEFAULT_SPATIAL_ASSET_ROOT } = await import("../spatial-asset-registry");
+  const { SPATIAL_ASSETS } = await import("../spatial-catalog");
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const kinds = ["tent", "market-stall", "campfire", "stump", "stone-pile", "bramble", "flax-patch", "fishing-water", "spring", "workbench", "drying-rack",
+    "axe", "net", "torn-net", "log", "firewood", "planks", "stone", "raw-fish", "cooked-fish", "berries", "flax", "twine", "water"];
+  for (const kind of kinds) {
+    const entry = getSpatialAssetEntry(kind)!;
+    expect(entry.model).toBe(`generated/settlement/${kind}.glb`);
+    expect(entry.growable).toBe(false); // bound to the land's recipes, not offered as furnishings
+    expect(readFileSync(join(DEFAULT_SPATIAL_ASSET_ROOT, entry.model!)).subarray(0, 4).toString("latin1")).toBe("glTF");
+    expect(SPATIAL_ASSETS[kind]).toBeDefined(); // the native kind (size, collider, affordances) is unchanged
+  }
+  d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false });
+  await d.start();
+  const tent = d.snapshot().entities.find(e => e.asset === "tent")!;
+  expect(tent.model).toBe("generated/settlement/tent.glb");
+  expect(tent.size).toEqual(SPATIAL_ASSETS.tent.size);
+});

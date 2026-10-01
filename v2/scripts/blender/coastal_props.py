@@ -75,6 +75,14 @@ def _hex_rgba(hex_colour):
     return tuple(_srgb_to_linear(int(h[i:i + 2], 16) / 255.0) for i in (0, 2, 4)) + (1.0,)
 
 
+def _input(node, *names):
+    """The first of these socket names the node has (Blender renamed several in 4.0)."""
+    for name in names:
+        if name in node.inputs:
+            return node.inputs[name]
+    raise KeyError(f"none of {names} on {node.name}")
+
+
 class Prop:
     """Restricted builder: every part is a closed low-poly primitive with one
     material. `build()` bakes modifiers, joins the parts into one mesh object
@@ -102,9 +110,10 @@ class Prop:
         bsdf.inputs["Base Color"].default_value = _hex_rgba(hex_colour)
         bsdf.inputs["Roughness"].default_value = roughness
         bsdf.inputs["Metallic"].default_value = metallic
-        bsdf.inputs["Specular"].default_value = 0.3
+        # Input names changed in Blender 4 ("Specular IOR Level", "Emission Color"); accept either.
+        _input(bsdf, "Specular", "Specular IOR Level").default_value = 0.3
         if emission:
-            bsdf.inputs["Emission"].default_value = _hex_rgba(PALETTE.get(emission, emission))
+            _input(bsdf, "Emission", "Emission Color").default_value = _hex_rgba(PALETTE.get(emission, emission))
             bsdf.inputs["Emission Strength"].default_value = 1.0
         m.diffuse_color = _hex_rgba(hex_colour)
         m.use_backface_culling = not double_sided  # glTF doubleSided = not culling
@@ -585,12 +594,15 @@ def export_glb(ob, path):
         other.select_set(False)
     ob.select_set(True)
     bpy.context.view_layer.objects.active = ob
-    bpy.ops.export_scene.gltf(
+    options = dict(
         filepath=path, export_format="GLB", use_selection=True, export_apply=True, export_yup=True,
         export_texcoords=False, export_normals=True, export_materials="EXPORT", export_colors=False,
         export_cameras=False, export_lights=False, export_extras=False, export_animations=False,
         export_copyright="Argos-authored, CC0-1.0",
     )
+    # The exporter's options drift between Blender versions: pass only those this one has.
+    accepted = {prop.identifier for prop in bpy.ops.export_scene.gltf.get_rna_type().properties}
+    bpy.ops.export_scene.gltf(**{k: v for k, v in options.items() if k in accepted})
 
 
 def parse_args():

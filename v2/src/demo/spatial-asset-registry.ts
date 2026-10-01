@@ -60,7 +60,32 @@ const BUILTIN: Record<string, Omit<SpatialAssetEntry, "id" | "builtin" | "solid"
   lamp: { name: "Floor lamp", description: "A standing lamp for reading by.", tags: ["light", "indoor"], model: "furniture/lampRoundFloor.glb", growable: true, placement: { indoor: true, outdoor: false }, license: KENNEY },
   "supply-box": { name: "Lidded box", description: "A wooden box with a lid, for storing or hiding things.", tags: ["storage", "container"], growable: true, placement: { indoor: true, outdoor: true }, license: AUTHORED },
   sofa: { name: "Sofa", description: "A long upholstered sofa.", tags: ["furniture", "indoor"], model: "furniture/loungeSofa.glb", growable: true, placement: { indoor: true, outdoor: false }, license: KENNEY },
+  ...SETTLEMENT_BUILTINS(),
 };
+
+/** The walkable settlement's stations and goods: models from scripts/blender/settlement_props.py, built to each
+ * kind's native size. Bound to the land's recipes, not offered as furnishings (growable: false). */
+function SETTLEMENT_BUILTINS(): Record<string, Omit<SpatialAssetEntry, "id" | "builtin" | "solid" | "portable">> {
+  const license = { source: "Argos-authored (Blender procedural, scripts/blender/settlement_props.py)", license: "CC0-1.0" };
+  const rows: Array<[string, string, string, string[]]> = [
+    ["tent", "Canvas tent", "An A-frame canvas tent pegged to the ground.", ["shelter", "outdoor"]],
+    ["market-stall", "Market stall", "A plank counter under a striped awning.", ["trade", "outdoor"]],
+    ["campfire", "Campfire", "A ring of stones around a low fire.", ["hearth", "outdoor"]],
+    ["stump", "Chopping stump", "A broad stump for splitting wood.", ["work", "outdoor"]],
+    ["stone-pile", "Loose stone", "A heap of quarried stone.", ["source", "outdoor"]],
+    ["bramble", "Bramble", "A bramble thicket heavy with berries.", ["source", "outdoor"]],
+    ["flax-patch", "Flax field", "Ridged rows of flax in flower.", ["source", "outdoor"]],
+    ["fishing-water", "Fishing water", "The shallows where the fish run.", ["source", "outdoor"]],
+    ["spring", "Well spring", "A stone ring around cold spring water.", ["source", "outdoor"]],
+    ["workbench", "Workbench", "A plank bench with a vise and tools.", ["work"]],
+    ["drying-rack", "Drying rack", "An A-frame rack for nets and fish.", ["work", "outdoor"]],
+    ...([["axe", "Axe"], ["net", "Net"], ["torn-net", "Torn net"], ["log", "Log"], ["firewood", "Firewood"], ["planks", "Planks"],
+      ["stone", "Stone"], ["raw-fish", "Fish"], ["cooked-fish", "Cooked fish"], ["berries", "Berries"], ["flax", "Flax"],
+      ["twine", "Twine"], ["water", "Water"]] as const).map(([id, name]): [string, string, string, string[]] => [id, name, `${name}, carried by hand.`, ["goods"]]),
+  ];
+  return Object.fromEntries(rows.map(([id, name, description, tags]) => [id, { name, description, tags: ["settlement", ...tags],
+    model: `generated/settlement/${id}.glb`, growable: false, placement: { indoor: tags[0] === "goods" || tags[0] === "work", outdoor: true }, license }]));
+}
 
 /** Kenney models the client already ships but the engine never registered. */
 const SHIPPED: SpatialAssetManifest[] = [
