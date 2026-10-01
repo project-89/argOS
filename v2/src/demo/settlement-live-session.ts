@@ -96,6 +96,7 @@ for (const a of d.actors) {
 summary.push(`built ${JSON.stringify(d.recipes!.builtCount())}; made ${JSON.stringify(d.recipes!.tally.made)}; eaten ${JSON.stringify(d.recipes!.tally.eaten)}`);
 summary.push(`Jev ${JSON.stringify(jev.stats)}; planner ${JSON.stringify(plannerStats)}; leaves ${JSON.stringify(getDecisionStats(w))}`);
 summary.push(`Gemini, all uses ${JSON.stringify(gemini)}`);
+summary.push(`surveyor ${JSON.stringify(d.surveyStats)}; land: trades ${d.settlementLand.trades.map(t => t.role).join(", ")}; conditions ${(d.settlementLand.conditions ?? []).map(c => c.kind).join(", ") || "none"}; wear ${d.settlementLand.wear.map(w => `${w.tool}→${w.becomes}`).join(", ")}`);
 const passing = (d.autopilot?.log ?? []).filter(l => l.what.startsWith("answers in passing"));
 summary.push(`habits ${habits.count()} written (${JSON.stringify(habits.stats)}); answered in passing ${passing.length} (${passing.filter(l => /by habit/.test(l.what)).length} by habit); God triage ${JSON.stringify(d.godTriage)}`);
 if (ATTRIBUTE) summary.push("Gemini by caller:\n" + [...byCaller].sort((a, b) => b[1].tokensIn - a[1].tokensIn).slice(0, 25)
