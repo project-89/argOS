@@ -86,6 +86,22 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
   }
 
   return {
+    /** The material state of the town, by entity (the host keys it by name to carry it across sessions). */
+    exportState() {
+      return { treasury, coins: new Map(coins), builtCount: { ...builtCount }, plotParts: new Map([...plotParts].map(([e, parts]) => [e, [...parts]] as const)),
+        homes: new Map(homes), uses: new Map(uses), wear: new Map(wear) };
+    },
+    /** Restore what an earlier session left (only the given entries; the rest stays as installed). */
+    importState(state: { treasury?: number; coins?: Map<number, number>; builtCount?: Record<string, number>; plotParts?: Map<number, string[]>;
+      homes?: Map<number, number>; uses?: Map<number, number>; wear?: Map<number, number> }) {
+      if (state.treasury !== undefined && Number.isFinite(state.treasury)) treasury = Math.max(0, state.treasury);
+      for (const [e, n] of state.coins ?? []) coins.set(e, Math.max(0, n));
+      for (const [k, n] of Object.entries(state.builtCount ?? {})) builtCount[k] = n;
+      for (const [e, parts] of state.plotParts ?? []) if (parts.length) plotParts.set(e, [...parts]);
+      for (const [actor, home] of state.homes ?? []) homes.set(actor, home);
+      for (const [e, n] of state.uses ?? []) if (uses.has(e)) uses.set(e, Math.max(0, n));
+      for (const [e, n] of state.wear ?? []) wear.set(e, n);
+    },
     /** Install a limited source's uses (from the land data). */
     installSource(eid: number, thingUses: number | undefined) { if (thingUses !== undefined) uses.set(eid, thingUses); },
     coinsOf, treasury: () => treasury, builtCount: () => ({ ...builtCount }),

@@ -2,6 +2,8 @@ import "dotenv/config";
 import { randomBytes } from "node:crypto";
 import * as nodeFs from "node:fs";
 const require_fs = () => nodeFs;
+import * as townModule from "./demo/settlement-town";
+const require_town = () => townModule;
 import { appendFile, mkdir, mkdtemp } from "node:fs/promises";
 import { getRunningTaskNames } from "./runtime/async-task-queue";
 import { resolve } from "node:path";
@@ -35,6 +37,8 @@ const skillLibraryPath = skillsFlag >= 0 ? skillsArg ?? process.env.ARGOS_SKILL_
 /** Trade skill graphs (e.g. from `npm run settlement -- --graphs <path>`); with --live, Gemini fills gaps. */
 let settlementSkills: Map<string, import("./learning/skill-graph").SkillGraph> | undefined;
 let settlementHabits: import("./cognition/habit-book").HabitBook | undefined;
+/** --fresh-town starts the settlement over (tents and bare plots); otherwise the town carries on from its last session. */
+const freshTown = process.argv.includes("--fresh-town");
 /** Habits live beside the skills file (residents' routines, by name). */
 const habitsPath = (skills: string) => skills.replace(/(\.json)?$/, ".habits.json");
 async function settlementWork() {
@@ -48,10 +52,13 @@ async function settlementWork() {
   const habits = settlementHabits = settlementGraphs && existsSync(habitsPath(settlementGraphs))
     ? HabitBook.fromJson(JSON.parse(readFileSync(habitsPath(settlementGraphs), "utf8"))) : new HabitBook();
   if (habits.count()) console.log(`[Settlement] ${habits.count()} habits carried over`);
-  if (!live) return { graphs, habits };
+  const { readSettlementTown, townPathFor } = townModule;
+  const town = !freshTown && settlementGraphs ? readSettlementTown(townPathFor(settlementGraphs)) : undefined;
+  console.log(`[Settlement] ${town ? `the town carries on: day ${town.days + 1}, built ${JSON.stringify(town.builtCount)}` : "a fresh town: tents and bare plots"}`);
+  if (!live) return { graphs, habits, ...(town ? { town } : {}) };
   const { geminiPlanner } = await import("./learning/homestead/planners");
   const stats = { calls: 0, tokensIn: 0, tokensOut: 0, malformed: 0 };
-  return { graphs, habits, planner: (trade: string) => geminiPlanner(stats, { persona: `You plan practical steps for a ${trade} in a small coastal town that must feed and build itself. Be brief and exact.`,
+  return { graphs, habits, ...(town ? { town } : {}), planner: (trade: string) => geminiPlanner(stats, { persona: `You plan practical steps for a ${trade} in a small coastal town that must feed and build itself. Be brief and exact.`,
     verbs: "buy <item> / sell <item> at the Market stall (target the stall, arg the item), " }) };
 }
 const token = randomBytes(24).toString("hex"), port = Number(process.env.ARGOS_SPATIAL_PORT ?? 0);
@@ -79,6 +86,8 @@ if (settlementSkills) {
       writeFileSync(target, JSON.stringify(Object.fromEntries([...settlementSkills!].map(([trade, g]) => [trade, g.toJson()])), null, 1) + "\n");
       console.log(`[Settlement] trade skills saved to ${target}: ${[...settlementSkills!].map(([t, g]) => `${t} ${g.skills.size}`).join(", ")}`);
       if (settlementHabits) { writeFileSync(habitsPath(target), JSON.stringify(settlementHabits.toJson(), null, 1) + "\n"); console.log(`[Settlement] ${settlementHabits.count()} habits saved`); }
+      const town = demo.settlementTown();
+      if (town) { const { writeSettlementTown, townPathFor } = require_town(); writeSettlementTown(townPathFor(target), town); console.log(`[Settlement] the town is saved (day ${town.days})`); }
     } catch (error) { console.warn(`[Settlement] could not save trade skills: ${error instanceof Error ? error.message : error}`); }
   });
 }

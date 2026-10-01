@@ -57,7 +57,10 @@ import { createSpatialTownGrowth, townGrowthSites, TOWN_GROWTH_ATTEMPTS, type To
 import { createSpatialTownLife, townEvolutionConfig } from "./spatial-town-life";
 import { createStoryTownScenario } from "./spatial-town-story";
 import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSaltmereAuthorCast, SALTMERE_SCENARIO_TERMS } from "./spatial-lovecraft-town";
-import { createSettlementScenario } from "./spatial-settlement";
+import { createSettlementScenario, SETTLEMENT_SCENARIO_ID } from "./spatial-settlement";
+import { settlementTownSchema, type SettlementTown } from "./settlement-town";
+import type { WovenPatch } from "../spirits/recipe-weaver";
+import type { LandStructure } from "../learning/settlement/saltmere-land";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
 import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
 import { SettlementAutopilot, type Appraisal } from "./spatial-autopilot";
@@ -148,7 +151,9 @@ type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; sce
     /** Jev judges attention and memory (default: from TYPESAFE_API_KEY when set; false turns it off). */
     jev?: JevClient | false;
     /** Habits the residents have formed (carried across sessions by name); a fresh book when omitted. */
-    habits?: HabitBook };
+    habits?: HabitBook;
+    /** The town an earlier session left (what stands, what is owed, what people hold); a fresh town when omitted. */
+    town?: SettlementTown };
   /** One explicitly operator-approved generated mechanic; not broad engineering. */
   weatherMechanic?: { directory: string; backend?: "codex" | "gemini" };
   /** Explicit broader engineering profile; not implied by viewing a town. */
@@ -1107,8 +1112,10 @@ export class SpatialDemo {
   /** Hand residents what they carry (a fisher's net, a woodcutter's axe) and, if
    * asked, start their trades by habit. */
   private startSettlementWork() {
-    const w = this.sim.world;
-    for (const r of SALTMERE_LAND.residents) {
+    const w = this.sim.world, town = this.options.settlementWork?.town;
+    // A town carried over brings back what stands and what people hold; a fresh one hands out the starting tools.
+    if (town) this.restoreTown(town);
+    else for (const r of SALTMERE_LAND.residents) {
       const actor = this.actors.find(a => Name.value[a] === r.name);
       if (actor !== undefined) for (const kind of r.carries ?? []) this.spawnSettlementItem(actor, kind);
     }
@@ -1241,9 +1248,11 @@ export class SpatialDemo {
     for (const r of SALTMERE_LAND.residents) {
       const actor = this.actors.find(a => Name.value[a] === r.name);
       if (actor === undefined) continue;
-      let graph = work.graphs.get(r.trade);
-      if (!graph) { graph = new SkillGraph(); work.graphs.set(r.trade, graph); }
-      const life = new SpatialTradeLife(host, actor, r.trade, graph, work.planner?.(r.trade) ?? noPlanner, work.log, autopilot,
+      // The trade they had when the town last slept (the Steward may have moved them).
+      const trade = town?.residents[r.name]?.trade ?? r.trade;
+      let graph = work.graphs.get(trade);
+      if (!graph) { graph = new SkillGraph(); work.graphs.set(trade, graph); }
+      const life = new SpatialTradeLife(host, actor, trade, graph, work.planner?.(trade) ?? noPlanner, work.log, autopilot,
         jev ? (eid, menu) => this.chooseByHabitOrJev(jev, eid, menu) : undefined);
       this.tradeLives.push(life);
       void life.live().catch(error => console.warn(`[Settlement] ${r.name} stopped working: ${error instanceof Error ? error.message : error}`));
@@ -1270,12 +1279,7 @@ export class SpatialDemo {
       placeKinds: () => [...new Set(land.places.map(p => p.kind))],
       thingKinds: () => [...new Set(kinds().filter(([e]) => !PhysicalObject.portable[e]).map(([, k]) => k))],
       obtainableKinds: () => [...new Set([...kinds().filter(([e]) => PhysicalObject.portable[e]).map(([, k]) => k), ...land.recipes.flatMap(rc => Object.keys(rc.gives)), ...land.wear.map(x => x.becomes)])],
-      apply: patch => {
-        for (const rc of patch.recipes) land.recipes.push({ ...rc });
-        for (const thing of patch.things) this.spawnSettlementThing(thing.name, thing.kind, thing.placeKind, thing.uses, !!thing.portable);
-        for (const k of patch.recipes.flatMap(rc => Object.keys(rc.gives))) land.prices[k] ??= 2;
-        this.record("world", `The land changes: ${patch.reason}`);
-      },
+      apply: patch => this.applyWovenPatch(patch, true),
       regrowing: () => kinds().flatMap(([eid, kind]) => { const t = SALTMERE_LAND.things.find(x => x.kind === kind && x.name === Name.value[eid]); return t?.regrow ? [{ eid, regrow: t.regrow, cap: t.uses }] : []; }),
       record: line => this.record("world", line) }, { weave: this.live ? "gemini" : undefined });
     this.tickListeners.add(() => balance.tick(this.settlementNight()));
@@ -1434,7 +1438,7 @@ export class SpatialDemo {
         ...(unit(answers.arousal?.score) !== undefined ? { arousal: unit(answers.arousal?.score) } : {}), ...(response ? { response } : {}) };
     } catch { return undefined; }
   }
-  private spawnSettlementItem(actor: number, kind: string): number | undefined {
+  private spawnSettlementItem(actor: number, kind: string, loose = false): number | undefined {
     const w = this.sim.world;
         const number = ++this.settlementItems, asset = SPATIAL_ASSETS[kind] ?? SPATIAL_ASSETS.trinket;
         const item = new ObjectManager(w).spawn("object", { name: `${kind.split("-").map(p => p[0].toUpperCase() + p.slice(1)).join(" ")} ${number}`,
@@ -1445,6 +1449,7 @@ export class SpatialDemo {
         this.sim.god.registry.byName.set(Name.value[item], item); this.sim.god.registry.byId.set(item, Name.value[item]);
         this.visuals.set(item, { key: this.key(item), asset: asset.id, size: asset.size, color: asset.color, lift: 0 });
         this.propAnchors.set(item, [{ x: 0, y: 0 }]); this.spatial.registerTarget(item, { anchors: [{ x: 0, y: 0 }] });
+        if (loose) return item; // placed by the caller (the stall's stock)
         if (!tryAddToInventory(w, actor, item).success) {
           // Nowhere to put it: nothing was made (never an orphan lying about).
           this.settlementSink ??= createRoomEntity(w, { name: "(used up)", description: "Consumed materials." });
@@ -1457,6 +1462,83 @@ export class SpatialDemo {
 
   /** Plots a building was raised on (by structure kind): drawn as the finished building. */
   private readonly raisedPlots = new Map<number, string>();
+  /** A raised plot's name before it became "House 1" (the town is saved by the land's names). */
+  private readonly plotOrigin = new Map<number, string>();
+  /** What the Weaver grew this town (saved and replayed with it). */
+  private readonly grownPatches: WovenPatch[] = [];
+  private raiseBuilding(plot: number, structure: LandStructure, count: number, announce: boolean) {
+    if (!this.plotOrigin.has(plot)) this.plotOrigin.set(plot, Name.value[plot]);
+    this.raisedPlots.set(plot, structure.kind); this.settlementKinds.set(plot, structure.becomes);
+    const asset = SPATIAL_ASSETS[structure.becomes === "house" ? "cabin" : structure.becomes] ?? SPATIAL_ASSETS.cabin;
+    const view = this.visuals.get(plot);
+    if (view) Object.assign(view, { asset: asset.id, size: asset.size, color: asset.color });
+    Name.value[plot] = `${structure.name} ${count}`;
+    this.sim.god.registry.byName.set(Name.value[plot], plot);
+    if (announce) this.announcePhysicalChange(plot, `${Name.value[plot]} now stands here.`, "new building");
+  }
+  private applyWovenPatch(patch: WovenPatch, announce: boolean) {
+    const land = this.settlementLand;
+    for (const rc of patch.recipes) land.recipes.push({ ...rc });
+    for (const thing of patch.things) this.spawnSettlementThing(thing.name, thing.kind, thing.placeKind, thing.uses, !!thing.portable);
+    for (const k of patch.recipes.flatMap(rc => Object.keys(rc.gives))) land.prices[k] ??= 2;
+    this.grownPatches.push(structuredClone(patch));
+    if (announce) this.record("world", `The land changes: ${patch.reason}`);
+  }
+  /** The town as it stands, keyed by the land's names, to carry into the next session (opening at dawn). */
+  settlementTown(): SettlementTown | undefined {
+    const recipes = this.recipes; if (!recipes) return undefined;
+    const w = this.sim.world, state = recipes.exportState(), land = this.settlementLand, prior = this.options.settlementWork?.town;
+    const plotKinds = new Set(land.structures.map(s => s.plot));
+    const nameOf = (eid: number) => this.plotOrigin.get(eid) ?? Name.value[eid];
+    const plots = [...this.settlementKinds].filter(([e, k]) => plotKinds.has(k) || this.raisedPlots.has(e))
+      .map(([e]) => ({ name: nameOf(e), parts: [...recipes.partsOn(e)], ...(this.raisedPlots.has(e) ? { raised: this.raisedPlots.get(e)! } : {}) }));
+    const stall = [...this.settlementKinds].find(([, k]) => k === "stall")?.[0];
+    const residents = Object.fromEntries(SALTMERE_LAND.residents.flatMap(r => {
+      const actor = this.actors.find(a => Name.value[a] === r.name); if (actor === undefined) return [];
+      const home = recipes.homeOf(actor);
+      return [[r.name, { trade: this.tradeLives.find(l => l.eid === actor)?.trade ?? r.trade, coins: recipes.coinsOf(actor),
+        hunger: Math.round(Math.max(0, Math.min(100, Needs.hunger[actor] ?? 0))), ...(home !== undefined ? { home: nameOf(home) } : {}),
+        holding: listDirectContents(w, actor).flatMap(e => { const kind = this.settlementKinds.get(e); return kind ? [{ kind, ...(state.wear.has(e) ? { wear: Math.max(0, state.wear.get(e)!) } : {}) }] : []; }) }]];
+    }));
+    return { version: 1, scenario: SETTLEMENT_SCENARIO_ID, savedAt: new Date().toISOString(),
+      days: (prior?.days ?? 0) + Math.floor(this.atSimMs / this.settlementDayMs) + 1,
+      treasury: state.treasury, prices: { ...land.prices }, dailyShare: land.dailyShare, builtCount: state.builtCount, plots,
+      sources: Object.fromEntries([...state.uses].filter(([e]) => entityExists(w, e)).map(([e, n]) => [Name.value[e], n])),
+      residents, stall: stall === undefined ? [] : listDirectContents(w, stall).flatMap(e => this.settlementKinds.get(e) ?? []),
+      grown: structuredClone(this.grownPatches) };
+  }
+  /** Bring back what an earlier session left, before anyone starts work (no announcements: it was already so). */
+  private restoreTown(input: SettlementTown) {
+    const town = settlementTownSchema.parse(input) as SettlementTown;
+    if (town.scenario !== SETTLEMENT_SCENARIO_ID) throw new Error(`A ${town.scenario} town cannot be restored into ${SETTLEMENT_SCENARIO_ID}`);
+    const recipes = this.recipes!, land = this.settlementLand;
+    for (const patch of town.grown) this.applyWovenPatch(patch, false);
+    Object.assign(land.prices, town.prices); land.dailyShare = town.dailyShare;
+    const thing = (name: string) => [...this.settlementKinds.keys()].find(e => Name.value[e] === name || this.plotOrigin.get(e) === name);
+    const person = (name: string) => this.actors.find(a => Name.value[a] === name);
+    const plotParts = new Map<number, string[]>(), homes = new Map<number, number>(), coins = new Map<number, number>(), uses = new Map<number, number>(), wear = new Map<number, number>();
+    const raisedCount: Record<string, number> = {};
+    for (const plot of town.plots) {
+      const e = thing(plot.name); if (e === undefined) continue;
+      const structure = plot.raised ? land.structures.find(s => s.kind === plot.raised) : undefined;
+      if (structure) { raisedCount[structure.kind] = (raisedCount[structure.kind] ?? 0) + 1; this.raiseBuilding(e, structure, raisedCount[structure.kind], false); }
+      else if (plot.parts.length) plotParts.set(e, plot.parts);
+    }
+    for (const [name, n] of Object.entries(town.sources)) { const e = thing(name); if (e !== undefined) uses.set(e, n); }
+    const stall = [...this.settlementKinds].find(([, k]) => k === "stall")?.[0];
+    for (const [name, r] of Object.entries(town.residents)) {
+      const actor = person(name); if (actor === undefined) continue;
+      coins.set(actor, r.coins); Needs.hunger[actor] = r.hunger;
+      const home = r.home ? thing(r.home) : undefined; if (home !== undefined) homes.set(actor, home);
+      for (const held of r.holding) { const item = this.spawnSettlementItem(actor, held.kind); if (item !== undefined && held.wear !== undefined) wear.set(item, held.wear); }
+    }
+    if (stall !== undefined) for (const kind of town.stall) {
+      const item = this.spawnSettlementItem(stall, kind, true);
+      if (item !== undefined) { setLocatedIn(this.sim.world, item, stall); this.position(item, Position.x[stall], Position.y[stall]); const v = this.visuals.get(item); if (v) v.lift = 1; }
+    }
+    recipes.importState({ treasury: town.treasury, coins, builtCount: town.builtCount, plotParts, homes, uses, wear });
+    this.record("session", `Saltmere wakes to its day ${town.days + 1}: ${Object.entries(town.builtCount).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing built yet"}.`);
+  }
   /** A plot's building as the viewer draws it: the parts in order, how many stand, whether someone is at work on it. */
   private constructionOf(eid: number): SpatialViewEntity["construction"] {
     if (!this.recipes) return undefined;
@@ -1482,15 +1564,7 @@ export class SpatialDemo {
       },
       stock: (item, stall) => { setLocatedIn(w, item, stall); this.position(item, Position.x[stall], Position.y[stall]); const v = this.visuals.get(item); if (v) v.lift = 1; },
       handOver: (item, actor) => { const ok = tryAddToInventory(w, actor, item).success; if (ok) tryHoldCarriedItem(w, actor, item); return ok; },
-      raised: (plot, structure, count) => {
-        this.raisedPlots.set(plot, structure.kind);
-        const asset = SPATIAL_ASSETS[structure.becomes === "house" ? "cabin" : structure.becomes] ?? SPATIAL_ASSETS.cabin;
-        const view = this.visuals.get(plot);
-        if (view) Object.assign(view, { asset: asset.id, size: asset.size, color: asset.color });
-        Name.value[plot] = `${structure.name} ${count}`;
-        this.sim.god.registry.byName.set(Name.value[plot], plot);
-        this.announcePhysicalChange(plot, `${Name.value[plot]} now stands here.`, "new building");
-      },
+      raised: (plot, structure, count) => this.raiseBuilding(plot, structure, count, true),
       record: line => this.record("world", line),
       shelterOf: actor => { const home = recipes.homeOf(actor); if (home !== undefined) return home;
         const i = SALTMERE_LAND.residents.findIndex(r => r.name === Name.value[actor]);

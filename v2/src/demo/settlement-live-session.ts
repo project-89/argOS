@@ -10,6 +10,7 @@ import { runSettlementLife } from "../learning/settlement/run-settlement";
 import { SkillGraph } from "../learning/skill-graph";
 import { JevClient } from "../llm/jev";
 import { HabitBook } from "../cognition/habit-book";
+import { readSettlementTown, townPathFor, writeSettlementTown } from "./settlement-town";
 import { geminiPlanner } from "../learning/homestead/planners";
 import { Goal, Name, Needs } from "../ecs/components";
 import { HasGoal } from "../ecs/relations";
@@ -29,6 +30,8 @@ if (existsSync(SKILLS)) for (const [t, j] of Object.entries(JSON.parse(readFileS
 else { await runSettlementLife({ days: 3, life: 1, graphs, planner: "manual" }); }
 const HABITS = SKILLS.replace(/(\.json)?$/, ".habits.json");
 const habits = existsSync(HABITS) ? HabitBook.fromJson(JSON.parse(readFileSync(HABITS, "utf8"))) : new HabitBook();
+// The town carries on from its last session unless ARGOS_FRESH_TOWN=1 starts it over.
+const TOWN = townPathFor(SKILLS), town = process.env.ARGOS_FRESH_TOWN === "1" ? undefined : readSettlementTown(TOWN);
 const jev = JevClient.fromEnv(); if (!jev) { quiet("no TYPESAFE key"); process.exit(1); }
 const plannerStats = { calls: 0, tokensIn: 0, tokensOut: 0, malformed: 0 };
 // Every Gemini request (minds, decision leaves, planner, Weaver) passes through global fetch: count them all.
@@ -56,7 +59,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   return response;
 }) as typeof fetch;
 const d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: true, seconds: MINUTES * 60 + 120,
-  settlementWork: { graphs, jev, habits, log: (l: string) => { if (/chooses|plan for|learned|intention|habit|pressed|takes up|gap:/.test(l)) out(`${stamp()} ${l}`); },
+  settlementWork: { graphs, jev, habits, ...(town ? { town } : {}), log: (l: string) => { if (/chooses|plan for|learned|intention|habit|pressed|takes up|gap:/.test(l)) out(`${stamp()} ${l}`); },
     planner: (trade: string) => geminiPlanner(plannerStats, { persona: `You plan practical steps for a ${trade} in a small coastal town rebuilding after the sea took it. Be brief and exact.`,
       verbs: "buy <item> / sell <item> at the Market stall (target the stall, arg the item), " }) } } as any);
 const stamp = () => `[${(d.atSimMs / 60000).toFixed(1)}m ${d.settlementHour().toFixed(1)}h]`;
@@ -84,7 +87,7 @@ while (Date.now() - started < MINUTES * 60_000) {
 }
 flush(true);
 const w = d.sim.world;
-const summary: string[] = [`== ${MINUTES} min live, game ${d.settlementHour().toFixed(1)}h ==`];
+const summary: string[] = [`== ${MINUTES} min live, game ${d.settlementHour().toFixed(1)}h · town day ${(town?.days ?? 0) + 1}${town ? " (carried on)" : " (fresh)"} ==`];
 for (const a of d.actors) {
   const goals = getRelationTargets(w, a, HasGoal).filter(g => hasComponent(w, g, Goal) && Goal.status[g] === "active").map(g => `${Goal.description[g]} (${Goal.priority[g]})`);
   const f = snapshotAffect(w, a);
@@ -100,5 +103,6 @@ if (ATTRIBUTE) summary.push("Gemini by caller:\n" + [...byCaller].sort((a, b) =>
 summary.push(`skills ${[...graphs].map(([t, g]) => `${t} ${g.skills.size}`).join(", ")}`);
 writeFileSync(SKILLS, JSON.stringify(Object.fromEntries([...graphs].map(([t, g]) => [t, g.toJson()])), null, 1));
 writeFileSync(HABITS, JSON.stringify(habits.toJson(), null, 1));
+const after = d.settlementTown(); if (after) writeSettlementTown(TOWN, after);
 out(summary.join("\n")); quiet(summary.join("\n"));
 d.stop(); process.exit(0);

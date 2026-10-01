@@ -332,3 +332,54 @@ test("the settlement's stations and goods have their own models, built to each k
   expect(tent.model).toBe("generated/settlement/tent.glb");
   expect(tent.size).toEqual(SPATIAL_ASSETS.tent.size);
 });
+
+test("the town carries into the next session: what stands, what is owed, what people hold, who works which trade", async () => {
+  const { settlementTownSchema } = await import("../settlement-town");
+  const fresh = { scenario: "town" as const, story: "settlement" as const, evolving: true, live: false, automaticClock: false };
+  d = await SpatialDemo.create({ ...fresh, settlementWork: { graphs: new Map(), jev: false } });
+  await d.start();
+  const kinds = (demo: typeof d) => [...(demo as any).settlementKinds] as Array<[number, string]>;
+  const byName = (demo: typeof d, name: string) => demo!.actors.find(a => Name.value[a] === name)!;
+  const recipes = d.recipes!, land = d.settlementLand;
+  const workshop = land.structures.find(s => s.kind === "workshop")!, house = land.structures.find(s => s.kind === "house")!;
+  const op = (actor: number, target: number, extra: object) => ({ actor, actorKey: "", target, targetKey: "", verb: "build", argument: "", gives: {}, took: [], tools: [], ...extra });
+  const workshopPlot = kinds(d).find(([, k]) => k === "workshop-plot")![0], housePlot = kinds(d).find(([, k]) => k === "house-plot")![0];
+  const ivo = byName(d, "Ivo"), otis = byName(d, "Otis"), eli = byName(d, "Eli");
+  for (const part of workshop.parts) recipes.commit(op(ivo, workshopPlot, { build: { structure: workshop, part: part.part } }) as any);
+  recipes.commit(op(ivo, housePlot, { build: { structure: house, part: house.parts[0].part } }) as any);
+  const birch = kinds(d).find(([e, k]) => k === "tree" && recipes.usable(e))![0];
+  const birchUsesBefore = recipes.sourceReserves().tree.left;
+  recipes.commit(op(eli, birch, { verb: "chop", gives: { log: 1 } }) as any);
+  (d.tradeLives.find(l => l.eid === otis) as any).changeTrade("net-mender", new (await import("../../learning/skill-graph")).SkillGraph());
+  recipes.grant(ivo, 7); Needs.hunger[otis] = 61;
+  land.prices["net"] = 9; land.dailyShare = 14;
+  const stall = kinds(d).find(([, k]) => k === "stall")![0];
+  recipes.commit({ ...op(otis, stall, {}), verb: "sell", trade: { kind: "raw-fish", price: 2, item: (d as any).spawnSettlementItem(otis, "raw-fish") } } as any);
+  const town = d.settlementTown()!;
+  expect(() => settlementTownSchema.parse(JSON.parse(JSON.stringify(town)))).not.toThrow();
+  expect(town.builtCount).toEqual({ workshop: 1 });
+  expect(town.plots).toEqual(expect.arrayContaining([{ name: "Workshop plot 1", parts: [], raised: "workshop" }, { name: Name.value[housePlot], parts: [house.parts[0].part] }]));
+  d.stop(); d = undefined;
+
+  // The next session: the same town at dawn.
+  d = await SpatialDemo.create({ ...fresh, settlementWork: { graphs: new Map(), jev: false, town: JSON.parse(JSON.stringify(town)) } });
+  await d.start();
+  const r2 = d.recipes!;
+  const workshop2 = kinds(d).find(([e]) => Name.value[e] === "Workshop 1")?.[0];
+  expect(workshop2).toBeDefined();
+  expect(d.snapshot().entities.find(e => e.id === workshop2)!.construction).toMatchObject({ structure: "workshop", standing: workshop.parts.length });
+  expect(r2.builtCount()).toEqual({ workshop: 1 });
+  const house2 = kinds(d).find(([e]) => Name.value[e] === town.plots.find(p => p.parts.length)!.name)![0];
+  expect(r2.partsOn(house2)).toEqual([house.parts[0].part]);
+  expect(r2.sourceReserves().tree.left).toBe(birchUsesBefore - 1);
+  expect(r2.coinsOf(byName(d, "Ivo"))).toBe(town.residents.Ivo.coins);
+  expect(r2.treasury()).toBe(town.treasury);
+  expect(d.tradeLives.find(l => l.eid === byName(d!, "Otis"))!.trade).toBe("net-mender");
+  expect(Needs.hunger[byName(d, "Otis")]).toBe(61);
+  expect(d.settlementLand.prices.net).toBe(9); expect(d.settlementLand.dailyShare).toBe(14);
+  const stall2 = kinds(d).find(([, k]) => k === "stall")![0];
+  expect(listDirectContents(d.sim.world, stall2).map(e => (d as any).settlementKinds.get(e))).toEqual(["raw-fish"]);
+  // What they held, they hold (Ivo and Mara's starting axes came back from the save, not handed out again).
+  const held = (name: string) => listDirectContents(d!.sim.world, byName(d!, name)).map(e => (d as any).settlementKinds.get(e)).sort();
+  expect(held("Ivo")).toEqual(town.residents.Ivo.holding.map(h => h.kind).sort());
+}, 180_000);
