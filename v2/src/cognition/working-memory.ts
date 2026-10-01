@@ -127,13 +127,43 @@ function copyFact(f: WorkingMemoryFactInput): WorkingMemoryFactInput {
     ...(f.slot === undefined ? {} : { slot: f.slot }), value: f.value, ...(f.valueLabel === undefined ? {} : { valueLabel: f.valueLabel }) };
 }
 
-/** Returns detached values and performs no mutation, even for malformed saves. */
-export function getWorkingMemory(world: World, eid: number): ActorWorkingMemory {
+/** Parsed, validated and ordered memory, kept per actor while its stored text is unchanged. Reads vastly
+ * outnumber writes (every observation reads; few change anything), and re-parsing the whole memory on each read
+ * slowed a busy town's every tick — worse as memories filled. Entries are frozen: shared, never mutated. */
+type ParsedMemory = { factsJson: string; receiptsJson: string; facts: readonly WorkingMemoryFact[]; receipts: readonly WorkingMemoryReceipt[] };
+const parsedMemories = new WeakMap<World, Map<number, ParsedMemory>>();
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) { Object.freeze(value); for (const v of Object.values(value)) deepFreeze(v); }
+  return value;
+}
+function parsedMemory(world: World, eid: number): ParsedMemory {
+  const factsJson = WorkingMemory.factsJson[eid] || "[]", receiptsJson = WorkingMemory.receiptsJson[eid] || "[]";
+  let byActor = parsedMemories.get(world); if (!byActor) parsedMemories.set(world, byActor = new Map());
+  const hit = byActor.get(eid);
+  if (hit && hit.factsJson === factsJson && hit.receiptsJson === receiptsJson) return hit;
+  const parsed: ParsedMemory = { factsJson, receiptsJson,
+    facts: deepFreeze(array(factsJson).filter(validStoredFact).sort(factOrder).slice(-WORKING_MEMORY_LIMITS.facts)),
+    receipts: deepFreeze(array(receiptsJson).filter(validEvidence).sort(order).slice(-WORKING_MEMORY_LIMITS.receipts)) };
+  byActor.set(eid, parsed);
+  return parsed;
+}
+
+const copyStoredFact = (f: WorkingMemoryFact): WorkingMemoryFact => ({ ...f });
+const copyReceipt = (r: WorkingMemoryReceipt): WorkingMemoryReceipt => ({ ...r, facts: r.facts.map(f => ({ ...f })),
+  ...(r.action ? { action: { ...r.action } } : {}),
+  ...(r.executionContext ? { executionContext: { ...r.executionContext, ...(r.executionContext.intention ? { intention: { ...r.executionContext.intention } } : {}) } } : {}) });
+/** The shared, frozen read (no copy): for this module's own read-only use. */
+function readMemory(world: World, eid: number): { facts: readonly WorkingMemoryFact[]; receipts: readonly WorkingMemoryReceipt[]; revision: number; evidenceFloorMs: number } {
   if (!ownsMemory(world, eid)) return { facts: [], receipts: [], revision: 0, evidenceFloorMs: -1 };
-  const facts = array(WorkingMemory.factsJson[eid]).filter(validStoredFact).sort(factOrder).slice(-WORKING_MEMORY_LIMITS.facts);
-  const receipts = array(WorkingMemory.receiptsJson[eid]).filter(validEvidence).sort(order).slice(-WORKING_MEMORY_LIMITS.receipts);
+  const { facts, receipts } = parsedMemory(world, eid);
   return { facts, receipts, revision: integer(WorkingMemory.revision[eid]) ? WorkingMemory.revision[eid] : 0,
     evidenceFloorMs: timestamp(WorkingMemory.evidenceFloorMs[eid]) ? WorkingMemory.evidenceFloorMs[eid] : -1 };
+}
+
+/** Returns detached values (copies a caller may change) and performs no mutation, even for malformed saves. */
+export function getWorkingMemory(world: World, eid: number): ActorWorkingMemory {
+  const memory = readMemory(world, eid);
+  return { facts: memory.facts.map(copyStoredFact), receipts: memory.receipts.map(copyReceipt), revision: memory.revision, evidenceFloorMs: memory.evidenceFloorMs };
 }
 export function getWorkingMemoryRevision(world: World, eid: number): number {
   return ownsMemory(world, eid) && integer(WorkingMemory.revision[eid]) ? WorkingMemory.revision[eid] : 0;
@@ -154,7 +184,7 @@ function initialize(world: World, eid: number) {
 export function recordWorkingMemoryEvidence(world: World, observerEid: number, input: WorkingMemoryEvidence): boolean {
   assertSimulationTaskActive();
   if (!actor(world, observerEid) || !validEvidence(input)) return false;
-  const previous = getWorkingMemory(world, observerEid);
+  const previous = readMemory(world, observerEid); // read-only here: no copy
   if (input.atMs <= previous.evidenceFloorMs
     || previous.receipts.some(r => r.id === input.id) || previous.facts.some(f => f.sourceId === input.id)) return false;
   // Duplicate slots within one event are ambiguous rather than independent proof.
