@@ -65,7 +65,7 @@ def build(p):
 
 export function workshopPrompt(request: AssetRequest, refusal?: string): string {
   return `Make: ${request.name} — ${request.description}
-Size: ${request.size.x} m wide (X) x ${request.size.z} m deep (Y) x ${request.size.y} m tall (Z). Main colour ${request.color}.${request.portable ? " It is a small thing carried by hand, shown lying down." : ""}${refusal ? `\nYour last version was refused: ${refusal}. Fix that.` : ""}`;
+Size: ${request.size.x} m wide (X) x ${request.size.z} m deep (Y) x ${request.size.y} m tall (Z). Choose colours that suit what it is and what it is made of (iron is grey, coals glow, wood is brown).${request.portable ? " It is a small thing carried by hand, shown lying down." : ""}${refusal ? `\nYour last version was refused: ${refusal}. Fix that.` : ""}`;
 }
 
 /** The first Python code block (or the whole answer if it is bare code). */
