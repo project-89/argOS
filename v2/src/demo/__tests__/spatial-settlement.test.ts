@@ -36,6 +36,9 @@ test("resuming a house walks past the parts already standing (no surprise), and 
   const env = (d.tradeLives.find(l => l.eid === ivo) as any).env;
   expect(env.have()[`house.${house.parts[0].part}`]).toBe(1);
   expect(recipes.progress()).toEqual({ [`house.${house.parts[0].part}`]: 1 });
+  // The viewer is told how far the house has come: its parts in order and how many stand.
+  const view = () => d!.snapshot().entities.find(e => e.id === plot)!;
+  expect(view().construction).toEqual({ structure: "house", stages: house.parts.map(p => p.part), standing: 1, building: false });
   const again = recipes.prepare(ivo, plot, "build", house.parts[0].part);
   expect(again.ok).toBe(true);
   if (again.ok) expect(recipes.commit(again.operation)).toEqual({ success: true, detail: `The ${house.parts[0].part} already stands.` });

@@ -39,57 +39,55 @@ export function confirmedPhoneHolder(entity, entities) {
   return entities.find(candidate => candidate.kind === 'actor' && candidate.id === entity.heldBy);
 }
 
-/** A small arrival-cadence buffer for committed positions, not a prediction of
- * movement. Simulation deltas can alternate 200/300ms under a 250ms poll; using
- * them as animation durations creates an artificial stop on every short sample.
- * A duplicate cannot snap, restart, or extend a track. A missing update can only
- * finish the already-confirmed displacement (within 550ms), then hold still. */
-export function createConfirmedMotionPlayback({ reducedMotion = false } = {}) {
-  const tracks = new Map();
-  let source, sourceAt = null, receivedAt = null, cadenceMs = 250;
-  const samePosition = (a, b) => a.x === b.x && a.y === b.y && a.z === b.z;
+/** Playback of committed positions, a little in the past. Each entity keeps a
+ * short history of confirmed positions stamped with simulation time; the view
+ * shows the world `delayMs` behind its best estimate of "now", interpolating
+ * between the two confirmed samples around that moment. A late or irregular
+ * poll is absorbed by the buffer instead of stopping everyone at once; only a
+ * gap longer than the buffer holds an entity at its newest confirmed position.
+ * Every shown position lies on a segment between two committed samples: no
+ * prediction, no extrapolation. Stop and reduced motion settle to the newest. */
+export const PLAYBACK_DELAY_MS = 800;
+export function createConfirmedMotionPlayback({ reducedMotion = false, delayMs = PLAYBACK_DELAY_MS } = {}) {
+  const tracks = new Map(), HISTORY_MS = 5000;
+  let source, latestSim = null, running = false, offsets = [];
+  const shortestYaw = (from, to, t) => from + Math.atan2(Math.sin(to - from), Math.cos(to - from)) * t;
+  const copy = p => ({ x: p.x, y: p.y, z: p.z });
   const sample = (key, wallNow) => {
     const track = tracks.get(key); if (!track) return null;
-    const fraction = track.duration ? Math.min(1, Math.max(0, (wallNow - track.receivedAt) / track.duration)) : 1;
-    const yawDelta = Math.atan2(Math.sin(track.toYaw - track.fromYaw), Math.cos(track.toYaw - track.fromYaw));
-    return { position: interpolateConfirmedPosition(track.from, track.to, fraction), yaw: track.fromYaw + yawDelta * fraction,
-      moving: fraction < 1 && Math.hypot(track.to.x - track.from.x, track.to.z - track.from.z) > .001 };
+    const samples = track.samples, last = samples[samples.length - 1];
+    if (reducedMotion || !running || samples.length === 1 || !offsets.length) return { position: copy(last.p), yaw: last.yaw, moving: false };
+    // Best estimate of simulation "now": the least-delayed recent arrival.
+    const renderSim = wallNow + Math.max(...offsets.map(o => o.value)) - delayMs;
+    if (renderSim >= last.t) return { position: copy(last.p), yaw: last.yaw, moving: false };
+    if (renderSim <= samples[0].t) return { position: copy(samples[0].p), yaw: samples[0].yaw, moving: false };
+    let i = samples.length - 2; while (i > 0 && samples[i].t > renderSim) i--;
+    const a = samples[i], b = samples[i + 1], t = (renderSim - a.t) / (b.t - a.t);
+    return { position: interpolateConfirmedPosition(a.p, b.p, t), yaw: shortestYaw(a.yaw, b.yaw, Math.min(1, Math.max(0, t))),
+      moving: Math.hypot(b.p.x - a.p.x, b.p.z - a.p.z) > .001 };
   };
   return {
     sync(snapshot, wallNow) {
       if (!Number.isFinite(wallNow) || !Number.isFinite(snapshot.atSimMs)) throw new Error('Invalid playback timestamp');
-      const reset = source !== snapshot.sourceId;
-      if (!reset && sourceAt !== null && snapshot.atSimMs < sourceAt) return;
-      if (reset) { tracks.clear(); source = snapshot.sourceId; sourceAt = null; receivedAt = null; cadenceMs = 250; }
-      const advanced = sourceAt !== null && snapshot.atSimMs > sourceAt;
-      // The regular poll waits 250ms; action receipts can refresh sooner. Those
-      // extra samples must not collapse the next regular interpolation window.
-      if (advanced && receivedAt !== null && wallNow > receivedAt) cadenceMs = Math.min(500, Math.max(250, wallNow - receivedAt));
-      // Stop and reduced motion explicitly settle to the newest committed state.
-      const duration = !reducedMotion && snapshot.running && sourceAt !== null
-        ? Math.min(550, cadenceMs + Math.min(50, cadenceMs * .2)) : 0;
+      if (source !== snapshot.sourceId) { tracks.clear(); source = snapshot.sourceId; latestSim = null; offsets = []; }
+      if (latestSim !== null && snapshot.atSimMs < latestSim) return; // a stale poll cannot rewind the view
+      const advanced = latestSim === null || snapshot.atSimMs > latestSim;
+      running = !!snapshot.running; latestSim = snapshot.atSimMs;
+      if (advanced) { offsets.push({ wall: wallNow, value: snapshot.atSimMs - wallNow }); offsets = offsets.filter(o => wallNow - o.wall <= HISTORY_MS); }
       const present = new Set(snapshot.entities.map(entity => entity.key));
       for (const key of tracks.keys()) if (!present.has(key)) tracks.delete(key);
       for (const entity of snapshot.entities) {
         const target = entity.position;
         if (![target.x, target.y, target.z].every(Number.isFinite)) throw new Error('Invalid committed position');
         let track = tracks.get(entity.key);
-        if (!track) {
-          const yaw = entity.rotationY ?? 0;
-          track = { from: { ...target }, to: { ...target }, fromYaw: yaw, toYaw: yaw, receivedAt: wallNow, duration: 0 };
-          tracks.set(entity.key, track);
-        } else if (!samePosition(target, track.to)) {
-          const shown = sample(entity.key, wallNow), dx = target.x - shown.position.x, dz = target.z - shown.position.z;
-          track.from = shown.position; track.to = { ...target }; track.fromYaw = shown.yaw;
-          track.toYaw = entity.rotationY ?? (entity.kind === 'actor' && Math.hypot(dx, dz) > .001 ? Math.atan2(dx, dz) : track.toYaw);
-          track.receivedAt = wallNow; track.duration = duration;
-        } else if (entity.rotationY !== undefined && entity.rotationY !== track.toYaw) {
-          track.fromYaw = sample(entity.key, wallNow).yaw; track.toYaw = entity.rotationY;
-        }
-        if (!duration) { track.from = { ...target }; track.to = { ...target }; track.fromYaw = track.toYaw; track.duration = 0; }
+        if (!track) { tracks.set(entity.key, { samples: [{ t: snapshot.atSimMs, p: copy(target), yaw: entity.rotationY ?? 0 }] }); continue; }
+        const samples = track.samples, last = samples[samples.length - 1];
+        if (snapshot.atSimMs <= last.t) continue; // a duplicate adds nothing
+        const dx = target.x - last.p.x, dz = target.z - last.p.z;
+        const yaw = entity.rotationY ?? (entity.kind === 'actor' && Math.hypot(dx, dz) > .001 ? Math.atan2(dx, dz) : last.yaw);
+        samples.push({ t: snapshot.atSimMs, p: copy(target), yaw });
+        while (samples.length > 2 && samples[1].t < snapshot.atSimMs - HISTORY_MS) samples.shift();
       }
-      if (sourceAt === null || advanced) receivedAt = wallNow;
-      sourceAt = snapshot.atSimMs;
     },
     sample,
   };
@@ -238,4 +236,23 @@ export function createSceneCueTracker() {
     },
     visible(wallNow) { return [...seen.values()].filter(row => row.until > wallNow).map(row => row.cue); },
   };
+}
+
+/** A building plot as drawn: each part standing, the next one (a faint outline, the plan), or still to come.
+ * Scaffolding stands while someone is building. Presentation of confirmed ECS progress only. */
+export function constructionStages(construction) {
+  if (!construction || !Array.isArray(construction.stages)) return null;
+  const standing = Math.max(0, Math.min(construction.stages.length, construction.standing | 0));
+  const finished = standing === construction.stages.length;
+  return {
+    finished, scaffold: !!construction.building && !finished,
+    parts: construction.stages.map((part, i) => ({ part, state: i < standing ? 'standing' : i === standing ? 'next' : 'planned' })),
+  };
+}
+
+/** How far along a timed craft is (0..1), from its confirmed due time; null when nothing timed is under way. */
+export function workProgress(activity, atSimMs) {
+  const work = activity?.status === 'pending' ? activity.work : undefined;
+  if (!work || !(work.durationMs > 0) || !Number.isFinite(work.dueAtSimMs) || !Number.isFinite(atSimMs)) return null;
+  return Math.max(0, Math.min(1, 1 - (work.dueAtSimMs - atSimMs) / work.durationMs));
 }

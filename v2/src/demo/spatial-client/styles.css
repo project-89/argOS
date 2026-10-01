@@ -190,6 +190,8 @@ button.quiet:hover { color: var(--ink); background: rgba(255, 255, 255, .06); }
 }
 .actor-label.selected { color: #eefbd9; border-color: rgba(200, 227, 157, .5); background: rgba(33, 52, 38, .9); }
 .actor-label.controlled { color: #1e2b1f; background: var(--accent); border-color: var(--accent); }
+.actor-label .work-ring { display: inline-block; width: 10px; height: 10px; margin-left: 7px; vertical-align: -1px; border-radius: 50%;
+  background: conic-gradient(var(--accent) var(--work, 0%), rgba(255, 255, 255, .18) 0); -webkit-mask: radial-gradient(circle, transparent 2.5px, #000 3px); mask: radial-gradient(circle, transparent 2.5px, #000 3px); }
 .actor-label .label-dot { display: inline-block; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
 .actor-label[data-condition]:not([data-condition=""])::after { content: attr(data-condition); display: inline-block; margin-left: 7px; padding-left: 7px; border-left: 1px solid rgba(189, 217, 228, .3); font-size: 10.5px; font-weight: 400; color: #b8d8e5; }
 .room-label { font-size: 10px; color: rgba(214, 224, 220, .7); letter-spacing: .18em; text-transform: uppercase; transform: translate(-50%, 0); text-shadow: 0 1px 5px #000; }

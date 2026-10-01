@@ -1455,6 +1455,17 @@ export class SpatialDemo {
         return item;
       }
 
+  /** Plots a building was raised on (by structure kind): drawn as the finished building. */
+  private readonly raisedPlots = new Map<number, string>();
+  /** A plot's building as the viewer draws it: the parts in order, how many stand, whether someone is at work on it. */
+  private constructionOf(eid: number): SpatialViewEntity["construction"] {
+    if (!this.recipes) return undefined;
+    const land = this.settlementLand, raised = this.raisedPlots.get(eid);
+    const structure = raised ? land.structures.find(s => s.kind === raised) : land.structures.find(s => s.plot === this.settlementKinds.get(eid));
+    if (!structure) return undefined;
+    const stages = structure.parts.map(p => p.part);
+    return { structure: structure.kind, stages, standing: raised ? stages.length : this.recipes.partsOn(eid).length, building: !raised && this.recipes.busyOn(eid) };
+  }
   /** The settlement's crafts: kinds, sources, items made in hand, the stall, raised buildings. */
   private installSettlement() {
     const w = this.sim.world;
@@ -1472,6 +1483,7 @@ export class SpatialDemo {
       stock: (item, stall) => { setLocatedIn(w, item, stall); this.position(item, Position.x[stall], Position.y[stall]); const v = this.visuals.get(item); if (v) v.lift = 1; },
       handOver: (item, actor) => { const ok = tryAddToInventory(w, actor, item).success; if (ok) tryHoldCarriedItem(w, actor, item); return ok; },
       raised: (plot, structure, count) => {
+        this.raisedPlots.set(plot, structure.kind);
         const asset = SPATIAL_ASSETS[structure.becomes === "house" ? "cabin" : structure.becomes] ?? SPATIAL_ASSETS.cabin;
         const view = this.visuals.get(plot);
         if (view) Object.assign(view, { asset: asset.id, size: asset.size, color: asset.color });
@@ -1530,8 +1542,13 @@ export class SpatialDemo {
         eat: "munch munch", sit: "settles in", open: "click · opened", close: "thunk · closed",
         read_phone: "checks phone", reply: "tap tap · sent", move: "arrived",
         inspect: "checks the panel", isolate: "click · isolated", install: "clack · fitted", power_on: "click · power restored", clear_branches: "rustle · branches cleared",
-        read: "reads", give: "hands it over", show: "shows it", put: "tap · set down", hide: "tucks it away", write_note: "scribbles a note" };
-      if (captions[p.verb]) this.cue(p.actorKey, "action", captions[p.verb], 3000, `action:${p.actorKey}:${p.action.executionId}`);
+        read: "reads", give: "hands it over", show: "shows it", put: "tap · set down", hide: "tucks it away", write_note: "scribbles a note",
+        // The settlement's crafts, as they sound when done.
+        chop: "thock · thock · a log", split: "crack · firewood", gather: "clack · stone", pick: "rustle · berries", pull: "tug · flax",
+        spin: "whirr · twine", cook: "sizzle · supper's on", catch: "splash · a catch", mend: "knot · knot · mended", knot: "knot · knot · a net",
+        saw: "rasp · planks", draw: "slosh · water", sell: "clink · sold", buy: "clink · bought", sleep: "yawns · up with the dawn" };
+      const caption = p.recipe?.build ? `hammering · the ${p.recipe.build.part} goes up` : p.recipe?.standing ? undefined : captions[p.verb];
+      if (caption) this.cue(p.actorKey, "action", caption, 3000, `action:${p.actorKey}:${p.action.executionId}`);
     }
   }
   private integrate() {
@@ -2165,8 +2182,9 @@ export class SpatialDemo {
         ...(this.weatherMechanic?.getWetness(id) !== undefined ? { wetness: this.weatherMechanic.getWetness(id) } : {}),
         ...(this.options.development ? { details: this.developmentDetails(id) } : {}),
         ...(held ? { heldBy: holder } : {}), state: this.actors.includes(id) && getRelationTargets(w, id, SittingOn).length ? "sitting" : ObjectState.current[id] || "",
-        ...(body ? { activity: { executionId: p?.action.executionId, action: body.kind === "moving" ? "walking" : body.operation ?? body.kind,
-          status: "pending" as const, targetId: body.targetEid, startedAtSimMs: p?.startedAt } }
+        ...((c => c ? { construction: c } : {})(this.actors.includes(id) ? undefined : this.constructionOf(id))),
+        ...(body ? { activity: { executionId: p?.action.executionId, action: body.kind === "moving" ? "walking" : p?.recipe ? p.verb : body.operation ?? body.kind,
+          status: "pending" as const, targetId: body.targetEid, startedAtSimMs: p?.startedAt, ...(p?.due !== undefined && p.recipe && p.durationMs ? { work: { dueAtSimMs: p.due, durationMs: p.durationMs } } : {}) } }
           : getRelationTargets(w, id, SittingOn).length ? { activity: { action: "sitting", status: "succeeded" as const, targetId: getRelationTargets(w, id, SittingOn)[0] } } : {}) }];
     });
     const actors: SpatialOperatorActor[] = this.actors.filter(id => this.current(id, this.visuals.get(id)?.key ?? "") && hasComponent(w, id, Agent)).map(id => {

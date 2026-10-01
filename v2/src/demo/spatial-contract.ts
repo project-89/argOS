@@ -12,7 +12,11 @@ export interface SpatialViewEntity {
   /** Newly installed public scalar mechanics; presentation, not action authority. */
   details?: Array<{ component: string; field: string; value: number | boolean }>;
   activity?: { executionId?: string; action: string; status: "pending" | "succeeded" | "failed";
-    targetId?: number; startedAtSimMs?: number; completedAtSimMs?: number };
+    targetId?: number; startedAtSimMs?: number; completedAtSimMs?: number;
+    /** A timed craft under way: when it is due and how long it takes (presentation: how far along it is). */
+    work?: { dueAtSimMs: number; durationMs: number } };
+  /** A building plot (or a building raised on one): its parts in order, how many stand, and whether someone is building now. */
+  construction?: { structure: string; stages: string[]; standing: number; building: boolean };
 }
 export interface SpatialViewRoom {
   id: number; key: string; name: string; bounds: { x: number; z: number; width: number; depth: number };

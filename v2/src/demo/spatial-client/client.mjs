@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
-import { animationFor, setPresentationAnimation, createConfirmedMotionPlayback, latestNativeOutcome, operatorActionTargets, confirmedPhoneHolder, createSceneCueTracker, nativeNeeds, treeStatePresentation, townLifePresentation, weatherPresentation } from './view-model.mjs';
+import { constructionStages, workProgress, animationFor, setPresentationAnimation, createConfirmedMotionPlayback, latestNativeOutcome, operatorActionTargets, confirmedPhoneHolder, createSceneCueTracker, nativeNeeds, treeStatePresentation, townLifePresentation, weatherPresentation } from './view-model.mjs';
 import { scenarioLighting, allowsAuthoredCafe, passageFrameParts, worldPresentation } from './scenario-view.mjs';
 import { worldControlAvailability, worldCommandReceipt, isCurrentWorldCommand } from './world-control-view.mjs';
 import { roomExtents, roomViewSignature, shouldInitializeOverview, overviewFrame, applyOverviewFrame, actorAccent, isProjectedPointVisible } from './framing-view.mjs';
@@ -376,7 +376,48 @@ function box(size, color, position = [0, 0, 0], options) {
 function disposeTree(root) {
   root.traverse(obj => { obj.geometry?.dispose(); if (obj.material) for (const m of Array.isArray(obj.material) ? obj.material : [obj.material]) { m.map?.dispose(); m.dispose(); } });
 }
+/** A building going up on its plot: what stands is solid, the next part a faint outline, scaffolding while someone works. */
+function construction(entity) {
+  const group = new THREE.Group(), stages = constructionStages(entity.construction);
+  const size = entity.size ?? { x: 6, y: .05, z: 6 }, W = Math.max(2.4, Math.min(size.x, 6) * .8), D = Math.max(2.4, Math.min(size.z, 6) * .8);
+  group.add(box([W + 1, .05, D + 1], '#8a7356', [0, .025, 0]));
+  if (!stages) return group;
+  const ghost = { transparent: true, opacity: .16, depthWrite: false };
+  const has = name => stages.parts.some(p => p.part === name && p.state !== 'planned');
+  const base = has('foundation') ? .35 : 0, H = entity.construction.structure === 'net-rack' ? 1.6 : 2.6;
+  const layer = (part, look) => {
+    const g = new THREE.Group();
+    if (part === 'foundation') g.add(box([W, .35, D], '#8d8a83', [0, .175, 0], look));
+    else if (part === 'frame' || part === 'posts') {
+      const xs = W > 4 ? [-W / 2, 0, W / 2] : [-W / 2, W / 2];
+      for (const x of xs) for (const z of [-D / 2, D / 2]) g.add(box([.16, H, .16], '#7a5a3a', [x, base + H / 2, z], look));
+      for (const z of [-D / 2, D / 2]) g.add(box([W + .16, .14, .14], '#6e5034', [0, base + H, z], look));
+      for (const x of [-W / 2, W / 2]) g.add(box([.14, .14, D + .16], '#6e5034', [x, base + H, 0], look));
+    } else if (part === 'walls') {
+      const t = .12, h = H - .1, door = Math.min(1, W / 4);
+      g.add(box([W, h, t], '#a77d52', [0, base + h / 2, -D / 2], look));
+      for (const x of [-W / 2, W / 2]) g.add(box([t, h, D], '#a77d52', [x, base + h / 2, 0], look));
+      const side = (W - door) / 2;
+      for (const x of [-(door + side) / 2, (door + side) / 2]) g.add(box([side, h, t], '#a77d52', [x, base + h / 2, D / 2], look));
+      g.add(box([door, h - 2, t], '#a77d52', [0, base + h - (h - 2) / 2, D / 2], look));
+    } else if (part === 'roof') {
+      const rise = D * .3, slope = Math.hypot(D / 2 + .3, rise), angle = Math.atan2(rise, D / 2 + .3);
+      for (const sideSign of [-1, 1]) {
+        const slab = box([W + .5, .12, slope], '#5b3b2a', [0, base + H + rise / 2, sideSign * (D / 4 + .15)], look);
+        slab.rotation.x = sideSign * angle; g.add(slab);
+      }
+    } else g.add(box([W * .9, .4, D * .9], '#9a8a70', [0, base + .2, 0], look));
+    return g;
+  };
+  for (const { part, state } of stages.parts) if (state !== 'planned') group.add(layer(part, state === 'standing' ? undefined : ghost));
+  if (stages.scaffold) {
+    for (const x of [-W / 2 - .45, W / 2 + .45]) for (const z of [-D / 2 - .45, D / 2 + .45]) group.add(box([.06, H + base + .6, .06], '#cdb68a', [x, (H + base + .6) / 2, z]));
+    for (const y of [1, 2]) group.add(box([.06, .06, D + .9], '#cdb68a', [W / 2 + .45, base + y, 0]));
+  }
+  return group;
+}
 function fallback(entity) {
+  if (entity.construction) return construction(entity);
   const group = new THREE.Group(), size = entity.size ?? (entity.kind === 'actor' ? { x: .48, y: 1.55, z: .38 } : { x: .6, y: .7, z: .6 });
   const color = entity.color || '#81918a';
   if (entity.kind === 'actor') {
@@ -520,14 +561,16 @@ function ensureEntity(entity) {
       root.add(node.lampLight);
     }
     const generation = node;
-    void loadAsset(entity.asset, entity.model).then(gltf => {
+    // A building on its plot is drawn from its parts, not a stand-in model.
+    if (!entity.construction) void loadAsset(entity.asset, entity.model).then(gltf => {
       if (!gltf || nodes.get(entity.key) !== generation) return;
       const loaded = cloneAsset(gltf, generation.entity); generation.root.remove(generation.view); disposeTree(generation.view);
       generation.root.add(loaded.group); generation.view = loaded.group; generation.mixer = loaded.mixer; generation.clips = loaded.clips; generation.handAnchor = loaded.handAnchor; generation.loaded = true;
       setAnimation(generation, 'idle');
     });
   }
-  if (['door', 'supply-box', 'tree'].includes(entity.asset) && node.entity.state !== entity.state) {
+  if (['door', 'supply-box', 'tree'].includes(entity.asset) && node.entity.state !== entity.state
+    || JSON.stringify(node.entity.construction ?? null) !== JSON.stringify(entity.construction ?? null)) {
     node.root.remove(node.view); disposeTree(node.view); node.view = fallback(entity); node.root.add(node.view);
   }
   node.entity = entity;
@@ -597,6 +640,17 @@ function syncWorld(next) {
   environmentClock.sync(next, receivedAt); treeIncidents.sync(next);
   for (const entity of next.entities) {
     const node = ensureEntity(entity);
+    // A timed craft under way: a small ring by the name fills as it nears done.
+    const ringLabel = labels.get(entity.key);
+    if (ringLabel) {
+      const progress = workProgress(entity.activity, next.atSimMs);
+      let ring = ringLabel.querySelector('.work-ring');
+      if (progress === null) ring?.remove();
+      else {
+        if (!ring) { ring = document.createElement('span'); ring.className = 'work-ring'; ringLabel.append(ring); }
+        ring.style.setProperty('--work', `${Math.round(progress * 100)}%`); ring.title = `${entity.activity.action} · ${Math.round(progress * 100)}%`;
+      }
+    }
     node.root.visible = !outdoorPassage(entity, next.rooms);
     const shown = motionPlayback.sample(entity.key, receivedAt);
     node.root.position.set(shown.position.x, shown.position.y, shown.position.z); node.root.rotation.y = shown.yaw;

@@ -89,6 +89,8 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
     /** Install a limited source's uses (from the land data). */
     installSource(eid: number, thingUses: number | undefined) { if (thingUses !== undefined) uses.set(eid, thingUses); },
     coinsOf, treasury: () => treasury, builtCount: () => ({ ...builtCount }),
+    /** Someone is building on this plot right now. */
+    busyOn: (plot: number): boolean => plotBusy.has(plot),
     /** Parts standing on a plot (a foundation, a frame). */
     partsOn: (plot: number): readonly string[] => plotParts.get(plot) ?? [],
     /** Building progress as stock, as the headless town counts it: the parts standing on the most advanced

@@ -260,78 +260,55 @@ test('interpolation stays within confirmed endpoints; late playback never predic
 });
 const motionFixture = (atSimMs, x, extra = {}) => ({ sourceId: 'world-a', atSimMs, running: true,
   entities: [{ key: 'mara', kind: 'actor', position: { x, y: 0, z: 0 }, activity: { action: 'walking', status: 'pending' } }], ...extra });
-test('arrival-cadence playback stays moving through alternating 200/300ms source samples', () => {
+/** A walk at 1.25 m/s sampled every 100ms of simulation, polls arriving at the given wall gaps (sim keeps pace with wall). */
+function walkWithArrivals(gaps) {
+  const playback = createConfirmedMotionPlayback(); let wall = 0;
+  playback.sync(motionFixture(0, 0), 0);
+  const arrivals = [];
+  for (const gap of gaps) { wall += gap; const sim = Math.floor(wall / 100) * 100; arrivals.push({ wall, sim }); playback.sync(motionFixture(sim, sim * 1.25 / 1000), wall); }
+  return { playback, arrivals, end: wall };
+}
+test('irregular polls do not stop a walker: the buffer absorbs late arrivals, and the shown walk never reverses or runs ahead', () => {
   const playback = createConfirmedMotionPlayback(); playback.sync(motionFixture(0, 0), 0);
-  let priorX = 0;
-  for (let receipt = 250; receipt <= 2500; receipt += 250) {
-    const sourceMs = Math.floor(receipt / 100) * 100, committedX = sourceMs * 1.25 / 1000;
-    playback.sync(motionFixture(sourceMs, committedX), receipt);
-    for (let elapsed = 0; elapsed < 250; elapsed += 10) {
-      const shown = playback.sample('mara', receipt + elapsed);
-      assert.equal(shown.moving, true, `no artificial stop at ${receipt + elapsed}ms`);
-      assert.ok(shown.position.x >= priorX && shown.position.x <= committedX, 'never reverses or predicts past a committed endpoint');
+  let wall = 0, priorX = 0, latestX = 0;
+  for (const gap of [250, 300, 520, 250, 260, 580, 250, 300, 250, 540, 250, 250]) {
+    for (let t = wall; t < wall + gap; t += 10) {
+      const shown = playback.sample('mara', t);
+      if (t >= 1100) assert.equal(shown.moving, true, `no stop at ${t}ms`);
+      assert.ok(shown.position.x >= priorX - 1e-9, 'never reverses');
+      assert.ok(shown.position.x <= latestX + 1e-9, 'never shows an unconfirmed position');
       priorX = shown.position.x;
     }
+    wall += gap; const sim = Math.floor(wall / 100) * 100; latestX = sim * 1.25 / 1000;
+    playback.sync(motionFixture(sim, latestX), wall);
   }
 });
-test('small arrival jitter is absorbed without moving ahead of the source', () => {
-  const playback = createConfirmedMotionPlayback(); playback.sync(motionFixture(0, 0), 0);
-  let wall = 0, source = 0;
-  for (const span of [250, 275, 230, 260, 240, 280, 250]) {
-    wall += span; source += 200;
-    playback.sync(motionFixture(source, source / 1000), wall);
-    const shown = playback.sample('mara', wall + 249);
-    assert.equal(shown.moving, true);
-    assert.ok(shown.position.x <= source / 1000);
-  }
+test('a gap longer than the buffer holds at the newest confirmed position, then resumes from it without a jump back', () => {
+  const { playback, end } = walkWithArrivals([250, 250, 250, 250]);
+  const held = playback.sample('mara', end + 2000);
+  assert.equal(held.moving, false);
+  assert.equal(held.position.x, 1.25);
+  playback.sync(motionFixture(3000, 3.75), end + 2000);
+  const resumed = playback.sample('mara', end + 2001);
+  assert.ok(resumed.position.x >= 1.25, 'resumes forward from where it held');
 });
-test('duplicate polls neither snap an in-flight displacement nor renew it or corrupt cadence', () => {
-  const playback = createConfirmedMotionPlayback(), reference = createConfirmedMotionPlayback();
-  for (const player of [playback, reference]) { player.sync(motionFixture(0, 0), 0); player.sync(motionFixture(200, .25), 250); }
-  for (const wall of [270, 300, 400, 450]) {
-    playback.sync(motionFixture(200, .25), wall);
-    assert.deepEqual(playback.sample('mara', wall), reference.sample('mara', wall));
-  }
-  for (const player of [playback, reference]) player.sync(motionFixture(500, .625), 500);
-  assert.deepEqual(playback.sample('mara', 600), reference.sample('mara', 600));
-  for (const wall of [900, 1200, 9000]) {
-    playback.sync(motionFixture(500, .625), wall);
-    assert.equal(playback.sample('mara', wall).moving, false);
-    assert.equal(playback.sample('mara', wall).position.x, .625);
-  }
+test('duplicate polls add nothing; a stale poll cannot rewind the view', () => {
+  const { playback, end } = walkWithArrivals([250, 250, 250, 250]);
+  const before = playback.sample('mara', end + 100);
+  playback.sync(motionFixture(1000, 1.25), end + 50); playback.sync(motionFixture(500, 99), end + 60);
+  assert.deepEqual(playback.sample('mara', end + 100), before);
 });
-test('an extra action refresh cannot collapse smoothing before the next regular poll', () => {
-  const playback = createConfirmedMotionPlayback(); playback.sync(motionFixture(0, 0), 0);
-  playback.sync(motionFixture(200, .25), 250);
-  playback.sync(motionFixture(300, .375), 310);
-  assert.equal(playback.sample('mara', 499).moving, true);
-  assert.ok(playback.sample('mara', 499).position.x <= .375);
-  playback.sync(motionFixture(500, .625), 500);
-  assert.equal(playback.sample('mara', 749).moving, true);
-});
-test('a slow or disconnected stream settles within 550ms and never fabricates walking progress', () => {
-  const playback = createConfirmedMotionPlayback(); playback.sync(motionFixture(0, 0), 0);
-  playback.sync(motionFixture(100, .125), 2500);
-  assert.equal(playback.sample('mara', 3000).moving, true);
-  assert.deepEqual(playback.sample('mara', 3050).position, { x: .125, y: 0, z: 0 });
-  assert.equal(playback.sample('mara', 3050).moving, false);
-  assert.deepEqual(playback.sample('mara', 90000).position, { x: .125, y: 0, z: 0 });
-});
-test('a physically stationary actor drains its confirmed motion instead of walking in place', () => {
-  const playback = createConfirmedMotionPlayback(); playback.sync(motionFixture(0, 0), 0);
-  playback.sync(motionFixture(200, .25), 250);
-  const stopped = motionFixture(500, .25); delete stopped.entities[0].activity;
-  playback.sync(stopped, 500);
-  assert.equal(playback.sample('mara', 540).moving, true, 'finishes only the confirmed visual displacement');
-  assert.equal(playback.sample('mara', 550).moving, false);
-  playback.sync(motionFixture(800, .25), 750);
-  assert.equal(playback.sample('mara', 751).moving, false, 'an admitted walk cannot manufacture progress');
+test('a stationary actor is shown still once the view has passed its last movement', () => {
+  const { playback, end } = walkWithArrivals([250, 250, 250, 250]);
+  for (let i = 1; i <= 6; i++) playback.sync(motionFixture(1000 + i * 250, 1.25), end + i * 250);
+  assert.equal(playback.sample('mara', end + 1500).moving, false);
+  assert.equal(playback.sample('mara', end + 1500).position.x, 1.25);
 });
 test('source replacement, removed/reintroduced identities and stop discard old motion', () => {
   const playback = createConfirmedMotionPlayback(); playback.sync(motionFixture(0, 0), 0);
   playback.sync(motionFixture(200, 1), 250);
-  playback.sync(motionFixture(200, 1, { running: false }), 300);
-  assert.deepEqual(playback.sample('mara', 300).position, { x: 1, y: 0, z: 0 });
+  playback.sync(motionFixture(300, 1.1, { running: false }), 300);
+  assert.deepEqual(playback.sample('mara', 300).position, { x: 1.1, y: 0, z: 0 });
   assert.equal(playback.sample('mara', 300).moving, false);
   playback.sync(motionFixture(0, 50, { sourceId: 'world-b' }), 310);
   assert.equal(playback.sample('mara', 310).position.x, 50);
@@ -342,7 +319,7 @@ test('source replacement, removed/reintroduced identities and stop discard old m
   assert.equal(playback.sample('mara', 600).position.x, 70);
   assert.equal(playback.sample('mara', 600).moving, false);
 });
-test('stale source time is ignored, reduced motion snaps, and committed inputs are immutable', () => {
+test('reduced motion snaps, and committed inputs are immutable', () => {
   const playback = createConfirmedMotionPlayback({ reducedMotion: true });
   const state = motionFixture(200, 1); Object.freeze(state.entities[0].position); Object.freeze(state.entities[0]); Object.freeze(state.entities);
   playback.sync(motionFixture(0, 0), 0); playback.sync(state, 250);
@@ -447,4 +424,27 @@ test('every selected asset matches its checked-in provenance manifest', () => {
     assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), file.sha256);
   }
   assert.ok(manifest.totalBytes < 500_000);
+});
+
+test('a building goes up part by part: what stands, the next part as an outline, scaffolding only while someone builds', async () => {
+  const { constructionStages } = await import('./view-model.mjs');
+  assert.equal(constructionStages(undefined), null);
+  const house = { structure: 'house', stages: ['foundation', 'frame', 'walls', 'roof'], standing: 1, building: true };
+  assert.deepEqual(constructionStages(house), { finished: false, scaffold: true, parts: [
+    { part: 'foundation', state: 'standing' }, { part: 'frame', state: 'next' }, { part: 'walls', state: 'planned' }, { part: 'roof', state: 'planned' }] });
+  assert.equal(constructionStages({ ...house, building: false }).scaffold, false);
+  const done = constructionStages({ ...house, standing: 4, building: true });
+  assert.equal(done.finished, true); assert.equal(done.scaffold, false);
+  assert.ok(done.parts.every(p => p.state === 'standing'));
+  assert.equal(constructionStages({ ...house, standing: 99 }).finished, true); // clamped
+});
+
+test('a timed craft fills its ring from the confirmed due time; nothing timed, no ring', async () => {
+  const { workProgress } = await import('./view-model.mjs');
+  const chopping = { action: 'chop', status: 'pending', work: { dueAtSimMs: 10_000, durationMs: 4_000 } };
+  assert.equal(workProgress(chopping, 6_000), 0);
+  assert.equal(workProgress(chopping, 8_000), .5);
+  assert.equal(workProgress(chopping, 12_000), 1);
+  assert.equal(workProgress({ action: 'walking', status: 'pending' }, 8_000), null);
+  assert.equal(workProgress({ ...chopping, status: 'succeeded' }, 8_000), null);
 });
