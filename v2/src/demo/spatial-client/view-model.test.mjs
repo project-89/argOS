@@ -448,3 +448,31 @@ test('a timed craft fills its ring from the confirmed due time; nothing timed, n
   assert.equal(workProgress({ action: 'walking', status: 'pending' }, 8_000), null);
   assert.equal(workProgress({ ...chopping, status: 'succeeded' }, 8_000), null);
 });
+
+test('a craft under way plays its own work motion, looped at its pace; it ends with the work', async () => {
+  const { WORK_CLIPS } = await import('./view-model.mjs');
+  const chopping = { activity: { action: 'chop', status: 'pending' } };
+  assert.equal(animationFor(chopping, false), 'work:chop');
+  assert.equal(animationFor(chopping, true), 'walk'); // walking to the tree is walking
+  assert.equal(animationFor({ activity: { action: 'chop', status: 'succeeded' } }, false), 'idle');
+  assert.equal(animationFor({ activity: { action: 'build', status: 'pending' } }, false), 'work:build');
+  const modes = { loopOnce: LoopOnce, loopRepeat: LoopRepeat };
+  const clips = ['idle', 'walk', 'attack-melee-right', 'pick-up', 'holding-both', 'interact-left', 'interact-right'].map(name =>
+    new AnimationClip(name, 1, [new NumberKeyframeTrack('.rotation[x]', [0, .5, 1], [0, .4, 0])]));
+  const rig = new Group(), node = { mixer: new AnimationMixer(rig), clips };
+  setPresentationAnimation(node, 'work:chop', modes);
+  assert.equal(node.action.getClip().name, 'attack-melee-right');
+  assert.equal(node.action.timeScale, WORK_CLIPS.chop.speed);
+  assert.equal(node.action.loop, LoopRepeat);
+  setPresentationAnimation(node, 'work:gather', modes); // gathering repeats the stoop, it does not stop after one
+  assert.equal(node.action.getClip().name, 'pick-up');
+  assert.equal(node.action.loop, LoopRepeat);
+  setPresentationAnimation(node, 'idle', modes);
+  assert.equal(node.action.timeScale, 1);
+  // Every work motion is a clip the shipped characters actually carry.
+  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), 'assets', 'characters');
+  for (const file of ['character-a.glb', 'character-b.glb', 'character-f.glb']) {
+    const glb = fs.readFileSync(path.join(root, file)).toString('latin1');
+    for (const { clip } of Object.values(WORK_CLIPS)) assert.ok(glb.includes(`"name":"${clip}"`), `${file} carries ${clip}`);
+  }
+});

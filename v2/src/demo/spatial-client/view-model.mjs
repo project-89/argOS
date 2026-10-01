@@ -6,11 +6,24 @@ export function interpolateConfirmedPosition(from, to, fraction) {
   return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t, z: from.z + (to.z - from.z) * t };
 }
 
+/** How each settlement craft looks while it is under way: a clip the characters
+ * already carry, looped, at a pace that suits the work (an axe swing is slower
+ * than a hammer's). Presentation of a confirmed pending act only. */
+export const WORK_CLIPS = {
+  chop: { clip: 'attack-melee-right', speed: .75 }, split: { clip: 'attack-melee-right', speed: .9 },
+  build: { clip: 'attack-melee-right', speed: 1.5 }, saw: { clip: 'interact-right', speed: 1.6 },
+  catch: { clip: 'holding-both', speed: .6 }, cook: { clip: 'interact-left', speed: .8 },
+  pick: { clip: 'pick-up', speed: .9 }, pull: { clip: 'pick-up', speed: 1.1 }, gather: { clip: 'pick-up', speed: .8 }, draw: { clip: 'pick-up', speed: .7 },
+  spin: { clip: 'interact-left', speed: 1.4 }, knot: { clip: 'interact-right', speed: 1.2 }, mend: { clip: 'interact-left', speed: 1.1 },
+  sell: { clip: 'interact-right', speed: 1 }, buy: { clip: 'interact-right', speed: 1 },
+};
+
 /** Clips only depict source evidence; an admitted move is not evidence of progress. */
 export function animationFor(entity, confirmedMoving) {
   if (/^(sitting|seated)$/i.test(entity.state ?? '')) return 'sit';
   if (confirmedMoving) return 'walk';
   const action = entity.activity?.status === 'pending' ? entity.activity.action : '';
+  if (WORK_CLIPS[action]) return `work:${action}`;
   if (/pickup|pick.up/.test(action)) return 'pick-up';
   if (/read|type|typing|phone|interact|use/.test(action)) return 'interact-right';
   return 'idle';
@@ -20,7 +33,10 @@ export function animationFor(entity, confirmedMoving) {
  * repeatedly planting the same first foot when a snapshot arrives late. */
 export function setPresentationAnimation(node, name, { loopOnce, loopRepeat }) {
   if (!node.mixer || node.animation === name) return;
-  const clip = node.clips.find(candidate => candidate.name === name) || node.clips.find(candidate => candidate.name === 'idle');
+  // A craft ("work:chop") plays its clip on a loop at the work's own pace.
+  const work = name.startsWith('work:') ? WORK_CLIPS[name.slice(5)] : undefined;
+  const clipName = work?.clip ?? name;
+  const clip = node.clips.find(candidate => candidate.name === clipName) || node.clips.find(candidate => candidate.name === 'idle');
   if (!clip) return;
   node.action?.fadeOut(.16);
   const next = node.mixer.clipAction(clip);
@@ -29,6 +45,7 @@ export function setPresentationAnimation(node, name, { loopOnce, loopRepeat }) {
   next.fadeIn(.16).play();
   if (name === 'pick-up') { next.setLoop(loopOnce, 1); next.clampWhenFinished = true; }
   else next.setLoop(loopRepeat, Infinity);
+  next.timeScale = work?.speed ?? 1;
   node.action = next; node.animation = name;
 }
 
