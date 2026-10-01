@@ -383,3 +383,24 @@ test("the town carries into the next session: what stands, what is owed, what pe
   const held = (name: string) => listDirectContents(d!.sim.world, byName(d!, name)).map(e => (d as any).settlementKinds.get(e)).sort();
   expect(held("Ivo")).toEqual(town.residents.Ivo.holding.map(h => h.kind).sort());
 }, 180_000);
+
+test("what the Weaver grows is drawn: a new kind gets a model from the workshop, and the thing takes on its look", async () => {
+  const { AssetWorkshop } = await import("../spatial-asset-workshop");
+  const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const kind = `wild-strawberries-${Math.random().toString(36).slice(2, 7)}`;
+  const assets = new AssetWorkshop({ assetRoot: mkdtempSync(join(tmpdir(), "argos-assets-")), generate: async () => ({ text: "def build(p):\n    p.box((1, 1, 1), (0, 0, .5), p.material('#c0392b'))\n" }),
+    run: async (_spec, out) => { mkdirSync(dirname(out), { recursive: true }); writeFileSync(out, Buffer.concat([Buffer.from("glTF"), Buffer.alloc(64)])); return { ok: true, tris: 12, width: 1, depth: 1, height: 1 }; } });
+  d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, settlementWork: { graphs: new Map(), jev: false, assets } });
+  await d.start();
+  (d as any).applyWovenPatch({ item: "berries", reason: "Wild strawberries grow in the sunny clearings.", recipes: [{ verb: "pick", at: kind, gives: { berries: 2 } }],
+    things: [{ name: "Strawberry patch", kind, placeKind: "woods", uses: 6 }] }, true);
+  for (let i = 0; i < 20 && !d.snapshot().entities.some(e => e.asset === kind); i++) await new Promise(r => setTimeout(r, 10));
+  const patch = d.snapshot().entities.find(e => e.name === "Strawberry patch")!;
+  expect(patch.asset).toBe(kind);
+  expect(patch.model).toBe(`generated/grown/${kind}.glb`);
+  expect(d.snapshot().events.some(e => /Strawberry patch takes on its own look/.test(e.text))).toBe(true);
+  // And it is part of the town that carries on.
+  expect(d.settlementTown()!.grown.map(g => g.things[0].kind)).toEqual([kind]);
+});

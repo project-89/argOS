@@ -59,6 +59,7 @@ import { createStoryTownScenario } from "./spatial-town-story";
 import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSaltmereAuthorCast, SALTMERE_SCENARIO_TERMS } from "./spatial-lovecraft-town";
 import { createSettlementScenario, SETTLEMENT_SCENARIO_ID } from "./spatial-settlement";
 import { settlementTownSchema, type SettlementTown } from "./settlement-town";
+import { AssetWorkshop, findBlender } from "./spatial-asset-workshop";
 import type { WovenPatch } from "../spirits/recipe-weaver";
 import type { LandStructure } from "../learning/settlement/saltmere-land";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
@@ -153,7 +154,9 @@ type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; sce
     /** Habits the residents have formed (carried across sessions by name); a fresh book when omitted. */
     habits?: HabitBook;
     /** The town an earlier session left (what stands, what is owed, what people hold); a fresh town when omitted. */
-    town?: SettlementTown };
+    town?: SettlementTown;
+    /** Draws models for kinds the world grows (default: live sessions, when Blender is installed; false: never). */
+    assets?: AssetWorkshop | false };
   /** One explicitly operator-approved generated mechanic; not broad engineering. */
   weatherMechanic?: { directory: string; backend?: "codex" | "gemini" };
   /** Explicit broader engineering profile; not implied by viewing a town. */
@@ -1483,6 +1486,30 @@ export class SpatialDemo {
     for (const k of patch.recipes.flatMap(rc => Object.keys(rc.gives))) land.prices[k] ??= 2;
     this.grownPatches.push(structuredClone(patch));
     if (announce) this.record("world", `The land changes: ${patch.reason}`);
+    // A kind nobody has drawn yet gets its own model (meanwhile it borrows a stand-in's look).
+    for (const thing of patch.things) if (!getSpatialAssetEntry(thing.kind)?.model) this.drawGrownKind(thing, patch.reason);
+  }
+  /** The asset workshop: live sessions with Blender installed, unless turned off. */
+  private get assetWorkshop(): AssetWorkshop | undefined {
+    const configured = this.options.settlementWork?.assets;
+    if (configured === false) return undefined;
+    return this.workshopInstance ??= configured ?? (this.live && findBlender() ? new AssetWorkshop() : undefined);
+  }
+  private workshopInstance?: AssetWorkshop;
+  private drawGrownKind(thing: WovenPatch["things"][number], reason: string) {
+    const workshop = this.assetWorkshop; if (!workshop) return;
+    const size = thing.portable ? { x: .3, y: .15, z: .3 } : { x: 1.6, y: 1.1, z: 1.6 };
+    void workshop.build({ id: thing.kind, name: thing.name, description: `${thing.name}, a new ${thing.portable ? "thing to carry" : "source"} in a coastal town. ${reason}`,
+      size, color: "#7a8a5c", portable: !!thing.portable, tags: ["settlement"] }).then(result => {
+      if (!result.ok || this.stopped) { if (!result.ok) this.record("engineering", `No model for ${thing.name} yet: ${result.reason}`); return; }
+      const asset = SPATIAL_ASSETS[thing.kind]; if (!asset) return;
+      for (const [eid, kind] of this.settlementKinds) {
+        if (kind !== thing.kind) continue;
+        const view = this.visuals.get(eid);
+        if (view) Object.assign(view, { asset: asset.id, size: asset.size, color: asset.color });
+      }
+      this.record("world", `${thing.name} takes on its own look.`);
+    }).catch(() => undefined);
   }
   /** The town as it stands, keyed by the land's names, to carry into the next session (opening at dawn). */
   settlementTown(): SettlementTown | undefined {
