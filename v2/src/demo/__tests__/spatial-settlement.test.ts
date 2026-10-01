@@ -438,3 +438,39 @@ test("ale goes to the head: drinking raises a condition the world enforces — s
     expect(d.snapshot().events.some(e => e.text === "Ivo has come back to themselves.")).toBe(true);
   } finally { if (previous === undefined) delete process.env.ARGOS_SETTLEMENT_DAY_MINUTES; else process.env.ARGOS_SETTLEMENT_DAY_MINUTES = previous; }
 }, 120_000);
+
+test("the Surveyor's day: a rowing boat is drawn and drawn up on the shingle, and blacksmithing comes to the town — both carry on", async () => {
+  const { AssetWorkshop } = await import("../spatial-asset-workshop");
+  const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const boat = `rowing-boat-${Array.from({ length: 5 }, () => "abcdefghijklmnopqrstuvwxyz"[Math.floor(Math.random() * 26)]).join("")}`; // kinds are letters and hyphens
+  const assets = new AssetWorkshop({ assetRoot: mkdtempSync(join(tmpdir(), "argos-assets-")), generate: async () => ({ text: "def build(p):\n    p.box((1.4, 4, .8), (0, 0, .4), p.material('#7a5a3a'))\n" }),
+    run: async (_spec, out) => { mkdirSync(dirname(out), { recursive: true }); writeFileSync(out, Buffer.concat([Buffer.from("glTF"), Buffer.alloc(64)])); return { ok: true, tris: 12, width: 1.4, depth: 4, height: .8 }; } });
+  const opportunities = { opportunities: [
+    { lane: "model", subject: "Rowing boat", why: "The fishers wade the shallows; a boat on the shingle would let them go out.", kind: boat, placeKind: "shore", size: { x: 1.4, y: .8, z: 4 } },
+    { lane: "craft", subject: "Blacksmithing", why: "Nobody can make or mend an axe.", item: "axe" },
+    { lane: "condition", subject: "Ale", why: "A drink at the fire.", item: "ale" } ] };
+  const smithing = { reason: "A forge on the common lets a smith mend blunted axes and make new ones.", things: [{ name: "Forge", kind: "forge", placeKind: "square" }],
+    recipes: [{ verb: "smith", at: "forge", product: "axe", needs: { stone: 2, log: 1, firewood: 2 }, gives: { axe: 1 }, durationS: 600 },
+      { verb: "mend", at: "forge", product: "axe", needs: { "blunt-axe": 1, firewood: 1 }, gives: { axe: 1 }, durationS: 240 }],
+    wear: [{ tool: "axe", uses: 20, becomes: "blunt-axe" }], trade: { role: "smith", duties: [{ item: "axe", stock: 2 }] } };
+  const asked: string[] = [];
+  d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, settlementWork: { graphs: new Map(), jev: false, assets,
+    surveyor: { generate: async () => ({ text: JSON.stringify(opportunities) }), weave: async ({ prompt }) => { asked.push(prompt); return { text: JSON.stringify(smithing) }; } } } });
+  await d.start();
+  const done: string[] = await (d as any).surveyTown();
+  expect(done).toEqual([`Rowing boat now stands at the shore: ${opportunities.opportunities[0].why}`, `Blacksmithing: ${smithing.reason}`]); // one model, one design a day: the ale waits
+  const view = d.snapshot().entities.find(e => e.name === "Rowing boat")!;
+  expect(view.model).toBe(`generated/grown/${boat}.glb`);
+  expect(d.snapshot().rooms.find(r => r.id === view.roomId)!.name).toBe("The Shingle");
+  expect(asked[0]).toMatch(/Wanted: axe\. Blacksmithing: Nobody can make or mend an axe/);
+  expect(d.settlementLand.trades.map(t => t.role)).toContain("smith");
+  expect(d.settlementLand.wear).toEqual(expect.arrayContaining([{ tool: "axe", uses: 20, becomes: "blunt-axe" }]));
+  expect(d.snapshot().entities.some(e => e.name === "Forge")).toBe(true);
+  // Taken up, and carried with the town: tomorrow's survey is told so, and the next session keeps the boat and the forge.
+  expect(d.surveyFacts().taken).toEqual(["Rowing boat", "Blacksmithing"]);
+  const town = d.settlementTown()!;
+  expect(town.surveyed).toEqual(["Rowing boat", "Blacksmithing"]);
+  expect(town.grown.flatMap(g => g.things.map(t => t.name))).toEqual(expect.arrayContaining(["Rowing boat", "Forge"]));
+});

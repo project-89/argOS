@@ -45,7 +45,7 @@ export type Reading = { day: number; alive: number; foodIndex: number; stockouts
   /** Structure parts raised yesterday, by structure kind. */
   parts?: Stock;
   reserveDays: Record<string, number>; treasury: number; treasuryRunwayDays: number; idleByTrade: Record<string, number> };
-export type Intervention = { day: number; spirit: "Watcher" | "Lawgiver" | "Steward" | "Weaver"; what: string };
+export type Intervention = { day: number; spirit: "Watcher" | "Lawgiver" | "Steward" | "Weaver" | "Surveyor"; what: string };
 
 const FOOD_TRADES: Record<string, string> = { "raw-fish": "fisher", "cooked-fish": "cook", berries: "forager" };
 const AWAKE_S = 16 * 3600;
@@ -68,6 +68,8 @@ export class BalanceSpirits {
       reserves: Object.fromEntries(Object.entries(this.town.sourceReserves()).map(([k, v]) => [k, v.left])) };
   }
   private note(day: number, spirit: Intervention["spirit"], what: string) { this.interventions.push({ day, spirit, what }); }
+  /** Another spirit's act, kept in the same record (the Surveyor's). */
+  record(day: number, spirit: Intervention["spirit"], what: string): void { this.note(day, spirit, what); }
 
   /** Yesterday, as the Watcher sees it. */
   read(day: number): Reading {

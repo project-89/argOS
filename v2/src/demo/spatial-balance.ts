@@ -34,7 +34,9 @@ export type SpatialBalanceHost = {
   record(line: string): void;
 };
 
-export function createSpatialBalance(host: SpatialBalanceHost, options: { weave?: "gemini" | { generate: WeaverGenerator }; weaverStats?: WeaverStats } = {}) {
+export function createSpatialBalance(host: SpatialBalanceHost, options: { weave?: "gemini" | { generate: WeaverGenerator }; weaverStats?: WeaverStats;
+  /** After the dawn reading: another spirit's turn (the Surveyor). Its acts join the record. */
+  afterDawn?: (day: number) => Promise<string[]> } = {}) {
   const gameSeconds = (realMs: number) => realMs / 1000 * 86_400_000 / host.dayMs();
   const residentOf = (life: SpatialTradeLife): BalanceResident => ({
     eid: life.eid, get trade() { return life.trade; }, get hunger() { return Needs.hunger[life.eid] ?? 0; },
@@ -69,8 +71,10 @@ export function createSpatialBalance(host: SpatialBalanceHost, options: { weave?
         for (const life of host.lives()) host.recipes.grant(life.eid, host.land.dailyShare);
         host.recipes.regrow(host.regrowing());
         busy = true;
-        void spirits.dawn(day).then(done => { for (const i of done.filter(x => x.spirit !== "Watcher")) host.record(`${i.spirit}: ${i.what}`); })
-          .catch(() => undefined).finally(() => { busy = false; });
+        void spirits.dawn(day).then(async done => {
+          for (const i of done.filter(x => x.spirit !== "Watcher")) host.record(`${i.spirit}: ${i.what}`);
+          for (const what of await options.afterDawn?.(day) ?? []) { spirits.record(day, "Surveyor", what); host.record(`Surveyor: ${what}`); }
+        }).catch(() => undefined).finally(() => { busy = false; });
         return;
       }
       if (watch > lastWatch) {

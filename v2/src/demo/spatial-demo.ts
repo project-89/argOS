@@ -61,7 +61,8 @@ import { createSettlementScenario, SETTLEMENT_SCENARIO_ID } from "./spatial-sett
 import { settlementTownSchema, type SettlementTown } from "./settlement-town";
 import { AssetWorkshop, findBlender } from "./spatial-asset-workshop";
 import { ConditionTracker, type ConditionCrossing } from "../learning/settlement/conditions";
-import type { WovenPatch } from "../spirits/recipe-weaver";
+import { weaveForGap, type RecipeWorld, type WeaverGenerator, type WovenPatch } from "../spirits/recipe-weaver";
+import { normalizeSubject, surveyOpportunities, type SurveyFacts, type SurveyGenerator, type SurveyStats } from "../spirits/surveyor-spirit";
 import type { LandStructure } from "../learning/settlement/saltmere-land";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
 import { SpatialTradeLife, type SpatialTradeHost } from "./spatial-trade-life";
@@ -157,7 +158,9 @@ type Options = { live?: boolean; seconds?: number; automaticClock?: boolean; sce
     /** The town an earlier session left (what stands, what is owed, what people hold); a fresh town when omitted. */
     town?: SettlementTown;
     /** Draws models for kinds the world grows (default: live sessions, when Blender is installed; false: never). */
-    assets?: AssetWorkshop | false };
+    assets?: AssetWorkshop | false;
+    /** The Surveyor looks for where the town is thin, once a day (default: live sessions; false: never). */
+    surveyor?: false | { generate?: SurveyGenerator; weave?: WeaverGenerator } };
   /** One explicitly operator-approved generated mechanic; not broad engineering. */
   weatherMechanic?: { directory: string; backend?: "codex" | "gemini" };
   /** Explicit broader engineering profile; not implied by viewing a town. */
@@ -1294,8 +1297,66 @@ export class SpatialDemo {
       obtainableKinds: () => [...new Set([...kinds().filter(([e]) => PhysicalObject.portable[e]).map(([, k]) => k), ...land.recipes.flatMap(rc => Object.keys(rc.gives)), ...land.wear.map(x => x.becomes)])],
       apply: patch => this.applyWovenPatch(patch, true),
       regrowing: () => kinds().flatMap(([eid, kind]) => { const t = SALTMERE_LAND.things.find(x => x.kind === kind && x.name === Name.value[eid]); return t?.regrow ? [{ eid, regrow: t.regrow, cap: t.uses }] : []; }),
-      record: line => this.record("world", line) }, { weave: this.live ? "gemini" : undefined });
+      record: line => this.record("world", line) }, { weave: this.live ? "gemini" : undefined, afterDawn: () => this.surveyTown() });
     this.tickListeners.add(() => balance.tick(this.settlementNight()));
+  }
+  /** What the Surveyor has taken up (carried with the town), and its spend. */
+  private readonly surveyed: string[] = [];
+  readonly surveyStats: SurveyStats = { surveys: 0, proposed: 0, refused: [], tokensIn: 0, tokensOut: 0 };
+  /** The town as a world the Weaver can grow (the same view the balance spirits use). */
+  private recipeWorld(): RecipeWorld {
+    const land = this.settlementLand, kinds = () => [...this.settlementKinds];
+    return { manual: () => land.recipes.map(rc => `${rc.verb}${rc.product ? ` ${rc.product}` : ""} at a ${rc.at}`),
+      conditionKinds: () => (land.conditions ?? []).map(c => c.kind), placeKinds: () => [...new Set(land.places.map(p => p.kind))],
+      thingKinds: () => [...new Set(kinds().filter(([e]) => !PhysicalObject.portable[e]).map(([, k]) => k))],
+      obtainableKinds: () => [...new Set([...kinds().filter(([e]) => PhysicalObject.portable[e]).map(([, k]) => k), ...land.recipes.flatMap(rc => Object.keys(rc.gives)), ...land.wear.map(x => x.becomes)])],
+      apply: patch => this.applyWovenPatch(patch, true) };
+  }
+  /** What the Surveyor reads: the town's own state, words and failures. */
+  surveyFacts(): SurveyFacts {
+    const w = this.sim.world, land = this.settlementLand, recipes = this.recipes!;
+    const kinds = [...new Set([...this.settlementKinds].filter(([e]) => !this.actors.includes(e)).map(([, k]) => k))];
+    const routine = /^(Keep Saltmere supplied|Raise the town|Follow schedule:|Go to .+ for (work|supper|sleep))/;
+    return {
+      trades: land.trades.map(t => `${t.role} (keeps ${t.duties.map(d => d.item).join(", ")})`),
+      stations: [...new Set([...this.settlementKinds].filter(([e]) => !PhysicalObject.portable[e] && !this.actors.includes(e)).map(([, k]) => k))],
+      goods: Object.keys(land.prices),
+      drawn: kinds.filter(k => !!getSpatialAssetEntry(k)?.model), standIns: kinds.filter(k => !getSpatialAssetEntry(k)?.model),
+      places: land.places.map(p => ({ name: p.name, kind: p.kind })), conditions: (land.conditions ?? []).map(c => c.name),
+      talk: this.events.filter(e => e.kind === "speech").slice(-12).map(e => e.text),
+      intentions: this.actors.flatMap(a => getRelationTargets(w, a, HasGoal).filter(g => hasComponent(w, g, Goal) && Goal.status[g] === "active" && !routine.test(String(Goal.description[g] || "")))
+        .slice(0, 2).map(g => `${Name.value[a]}: ${Goal.description[g]}`)),
+      lacking: Object.entries(recipes.tally.lacking).flatMap(([trade, items]) => Object.keys(items).map(item => `${item} (${trade}s)`)),
+      taken: [...this.surveyed],
+    };
+  }
+  /** The Surveyor's day: find where the town is thin, and hand each opportunity to the builder who can make it real. */
+  private async surveyTown(): Promise<string[]> {
+    const config = this.options.settlementWork?.surveyor;
+    if (config === false || !config && !this.live || this.stopped) return [];
+    const found = await surveyOpportunities(this.surveyFacts(), { generate: config?.generate, stats: this.surveyStats });
+    const done: string[] = [];
+    let models = 0, designs = 0;
+    for (const o of found) {
+      if (this.stopped) break;
+      if (o.lane === "model") {
+        if (models++) continue;
+        const workshop = this.assetWorkshop;
+        if (!workshop) { done.push(`${o.subject} would suit the ${o.placeKind} (${o.why}); nobody can draw it yet`); continue; }
+        const drawn = await workshop.build({ id: o.kind, name: o.subject, description: o.why, size: o.size, color: "#8a7a5c", tags: ["settlement"] });
+        if (!drawn.ok) { done.push(`${o.subject} could not be drawn: ${drawn.reason}`); continue; }
+        // Placed as a grown thing: it stands, it can be examined, and it carries on with the town.
+        this.applyWovenPatch({ item: o.kind, reason: o.why, things: [{ name: o.subject, kind: o.kind, placeKind: o.placeKind }], recipes: [] }, false);
+        this.surveyed.push(o.subject);
+        done.push(`${o.subject} now stands at the ${o.placeKind}: ${o.why}`);
+      } else {
+        if (designs++) continue;
+        const woven = await weaveForGap(o.item, `${o.subject}: ${o.why}`, this.recipeWorld(), { ...(config?.weave ? { generate: config.weave } : {}) });
+        if (woven.ok) { this.surveyed.push(o.subject); done.push(`${o.subject}: ${woven.patch.reason}`); }
+        else done.push(`${o.subject}: the Weaver could not make it hold (${woven.reason})`);
+      }
+    }
+    return done;
   }
   /** The balance spirits of the walkable settlement. */
   settlementBalance?: ReturnType<typeof createSpatialBalance>;
@@ -1563,7 +1624,7 @@ export class SpatialDemo {
       treasury: state.treasury, prices: { ...land.prices }, dailyShare: land.dailyShare, builtCount: state.builtCount, plots,
       sources: Object.fromEntries([...state.uses].filter(([e]) => entityExists(w, e)).map(([e, n]) => [Name.value[e], n])),
       residents, stall: stall === undefined ? [] : listDirectContents(w, stall).flatMap(e => this.settlementKinds.get(e) ?? []),
-      grown: structuredClone(this.grownPatches) };
+      grown: structuredClone(this.grownPatches), surveyed: [...new Set([...(prior?.surveyed ?? []), ...this.surveyed])] };
   }
   /** Bring back what an earlier session left, before anyone starts work (no announcements: it was already so). */
   private restoreTown(input: SettlementTown) {
@@ -1571,6 +1632,7 @@ export class SpatialDemo {
     if (town.scenario !== SETTLEMENT_SCENARIO_ID) throw new Error(`A ${town.scenario} town cannot be restored into ${SETTLEMENT_SCENARIO_ID}`);
     const recipes = this.recipes!, land = this.settlementLand;
     for (const patch of town.grown) this.applyWovenPatch(patch, false);
+    for (const subject of town.surveyed ?? []) if (!this.surveyed.some(s => normalizeSubject(s) === normalizeSubject(subject))) this.surveyed.push(subject);
     Object.assign(land.prices, town.prices); land.dailyShare = town.dailyShare;
     const thing = (name: string) => [...this.settlementKinds.keys()].find(e => Name.value[e] === name || this.plotOrigin.get(e) === name);
     const person = (name: string) => this.actors.find(a => Name.value[a] === name);
