@@ -24,7 +24,18 @@ mkdirSync(DIR, { recursive: true });
 const LOG = `${DIR}/session.log`, SKILLS = process.argv[3] ? resolve(process.argv[3]) : resolve("recordings", "settlement-skills.json");
 writeFileSync(LOG, "");
 const out = (line: string) => appendFileSync(LOG, line + "\n");
-const quiet = console.log; console.log = () => {}; console.warn = () => {}; console.error = () => {};
+const quiet = console.log; console.log = () => {};
+// Errors and warnings are kept (deduplicated, the first 30): a failing system must not freeze the world unseen.
+const consoleSeen = new Set<string>();
+const keep = (level: string) => (...args: unknown[]) => {
+  const line = args.map(a => a instanceof Error ? `${a.message} ${a.stack?.split("\n").slice(1, 4).join(" | ") ?? ""}` : String(a)).join(" ").replace(/\s+/g, " ").slice(0, 600);
+  const key = line.slice(0, 160);
+  if (consoleSeen.has(key) || consoleSeen.size >= 30) return;
+  consoleSeen.add(key);
+  let at = "[start]"; try { at = stamp(); } catch { /* before the demo exists */ }
+  out(`${at} console.${level}: ${line}`);
+};
+console.warn = keep("warn"); console.error = keep("error");
 const graphs = new Map<string, SkillGraph>();
 if (existsSync(SKILLS)) for (const [t, j] of Object.entries(JSON.parse(readFileSync(SKILLS, "utf8")))) graphs.set(t, SkillGraph.fromJson(j as any));
 else { await runSettlementLife({ days: 3, life: 1, graphs, planner: "manual" }); }
@@ -81,9 +92,13 @@ const flush = (final = false) => {
 await d.start();
 const started = Date.now();
 quiet(`live settlement running for ${MINUTES} min; log ${LOG}`);
+let clockAt = -1;
 while (Date.now() - started < MINUTES * 60_000) {
   await new Promise(r => setTimeout(r, 15_000));
   try { flush(); } catch (e) { out(`flush error ${e}`); }
+  // The world clock must move: a stall means something is failing every tick.
+  if (d.atSimMs === clockAt) out(`${stamp()} WATCHDOG: the world clock has not moved for 15 s`);
+  clockAt = d.atSimMs;
 }
 flush(true);
 const w = d.sim.world;
