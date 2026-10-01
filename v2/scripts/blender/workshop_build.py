@@ -32,6 +32,8 @@ TRI_BUDGET = 2000
 MAX_PARTS = 300
 MAX_SOURCE = 8000
 KIT = {"box", "box_between", "cylinder", "lathe", "tube", "ring", "sheet", "material"}
+# Harmless list methods on the build's own variables (points.append(...)); nothing reaches into kit objects.
+LIST_METHODS = {"append", "extend", "insert", "pop", "reverse", "index", "count"}
 MATH = {"pi", "tau", "sin", "cos", "tan", "atan2", "sqrt", "radians", "degrees", "hypot", "floor", "ceil", "fabs"}
 BUILTINS = {"range": range, "len": len, "abs": abs, "min": min, "max": max, "enumerate": enumerate, "zip": zip,
             "round": round, "float": float, "int": int, "list": list, "tuple": tuple, "sum": sum}
@@ -65,8 +67,9 @@ def check_source(source):
             return f"function {node.name}: no decorators or private names"
         if isinstance(node, ast.Attribute):
             owner = node.value.id if isinstance(node.value, ast.Name) else None
-            if not ((owner == "p" and node.attr in KIT) or (owner == "math" and node.attr in MATH)):
-                return f"attribute {owner or '?'}.{node.attr} is not allowed (only p.<kit> and math.<fn>)"
+            list_method = owner not in (None, "p", "math") and node.attr in LIST_METHODS
+            if not ((owner == "p" and node.attr in KIT) or (owner == "math" and node.attr in MATH) or list_method):
+                return f"attribute {owner or '?'}.{node.attr} is not allowed (only p.<kit>, math.<fn>, and list methods on your own variables)"
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and len(node.value) > 40:
             return "long string constants are not allowed"
     return None

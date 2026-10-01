@@ -73,6 +73,9 @@ const blender = findBlender();
   const built = await good.build(request(id));
   expect(built.ok).toBe(true);
   expect(readFileSync(join(root, "generated", "grown", `${id}.glb`)).subarray(0, 4).toString("latin1")).toBe("glTF");
+  // Building up a list of points is ordinary kit code (a live boat design needed it).
+  const listy = new AssetWorkshop({ assetRoot: root, blender, generate: async () => ({ text: "def build(p):\n    wood = p.material('#7a5a3a')\n    pts = []\n    for i in range(5):\n        pts.append((-0.7 + 0.35 * i, 0, 0.2))\n    p.tube(pts, 0.05, wood)\n    for x, y, z in pts:\n        p.box((0.1, 0.1, 0.4), (x, y, 0.2), wood)\n" }) });
+  expect((await listy.build({ ...request(unique("rail")), size: { x: 1.5, y: .4, z: .1 } })).ok).toBe(true);
   const sneaky = new AssetWorkshop({ assetRoot: root, blender, generate: async () => ({ text: "def build(p):\n    p.box.__globals__['os'].system('touch /tmp/argos-pwned')\n" }) });
   const refused = await sneaky.build(request(unique("sneaky")));
   expect(refused.ok).toBe(false);
