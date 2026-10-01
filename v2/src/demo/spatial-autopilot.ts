@@ -92,6 +92,8 @@ export const LULL_MS = 12_000;
 type Floor = { since: number; lastSalientAt: number; reason: string; nextThoughtAt: number };
 /** Real ms a mind with the floor waits after a decision when nothing new has reached it. */
 export const THINK_GAP_MS = 15_000;
+/** Simulated ms between a habit-driven resident's fast steps while their mind is not awake. */
+export const AUTOPILOT_FAST_CADENCE_MS = 1000;
 /** Background minds (goal-forming, appraisal, reflection, planning) run while the floor is held and for a short digest after:
  * left open for ten minutes, a town woken every few minutes formed goals twice a minute per resident (a third of all spend). */
 const QUIET_MS = 45_000, GLANCE_GAP_MS = 90_000, RECENT_MIND_MS = 2 * 60_000;
@@ -130,6 +132,8 @@ export class SettlementAutopilot {
     foreground: eid => { if (!this.host.managed().includes(eid)) return true; const floor = this.floors.get(eid); return !!floor && this.host.now() >= floor.nextThoughtAt; },
     background: eid => !this.host.managed().includes(eid) || this.floors.has(eid) || this.host.now() - (this.lastAwake.get(eid) ?? -Infinity) < RECENT_MIND_MS,
     foregroundTurn: eid => { const floor = this.floors.get(eid); if (floor) floor.nextThoughtAt = this.host.now() + THINK_GAP_MS; },
+    // Habits run the day: a resident whose mind is not awake observes about once a second, not every tick.
+    fastCadenceMs: eid => this.host.managed().includes(eid) && !this.floors.has(eid) ? AUTOPILOT_FAST_CADENCE_MS : undefined,
   };
 
   /** What the resident means to act on (newest last); taken when the habit chooses. */

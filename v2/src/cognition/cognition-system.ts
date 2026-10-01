@@ -124,6 +124,7 @@ import { assertSimulationTaskActive, getSimulationTaskSignal, withSimulationTask
 import { trackGoalAction } from "./goal-learning";
 import { registerAsyncAction } from "./async-action-evidence";
 import { addEntity as bitAddEntity } from "bitecs";
+import { fastStepDue } from "../runtime/attention";
 
 export { getAvailableAffordances };
 export { queueStimulus, queueStimulusForAgent, broadcastToRoom };
@@ -1497,6 +1498,8 @@ export function runActorControlStep(world: World, eid: number, registry: SystemR
     { hasQueuedStimuli: events.some(event => deservesForegroundAttention(world, event)),
       hasPendingStimuli: events.some(event => deservesForegroundAttention(world, event)) || hasUnintegratedAttention(world, eid, false),
       hasDueAttention: hasDueAttentionSignal(world, eid) })) return false;
+  // A host may pace this (a habit-driven resident whose mind is not awake): stimuli above still arrive every tick.
+  if (!fastStepDue(world, eid)) return false;
   expireStaleGoals(world, eid); maintainGoalLifecycles(world, eid);
   const observation = captureWorkingMemoryObservation(world, eid);
   reconcileCoordinationGoals(world, eid, observation);

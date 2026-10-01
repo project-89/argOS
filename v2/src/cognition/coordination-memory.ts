@@ -14,7 +14,7 @@ import { computeGoalSignature, type GoalKind } from "./goal-contract";
 import { getSocialDialogue, getSocialExchanges, type SocialDialogueTurn } from "./social-memory";
 import { getPrivateCommunications, isPrivateCommunicationReceipt, type PrivateCommunicationReceipt } from "./communication-memory";
 type CoordinationSource = SocialDialogueTurn | PrivateCommunicationReceipt;
-import { getWorkingMemory, workingMemoryEntityRef, type WorkingMemoryFact, type WorkingMemoryReceipt } from "./working-memory";
+import { getWorkingMemory, readWorkingMemory, workingMemoryEntityRef, type WorkingMemoryFact, type WorkingMemoryReceipt } from "./working-memory";
 import { actorKnowsGoalCondition, copyActorGoalCondition, type ActorGoalCondition } from "./actor-goal-evidence";
 import { consumeWorkingMemoryObservation, type WorkingMemoryObservationSnapshot } from "./working-memory-observation";
 import { getPreparedIntentionGoalRef, isStandingIntention, type PreparedGeneratedIntention } from "./goal-lifecycle";
@@ -494,8 +494,11 @@ export function recordCoordinationAction(world: World, eid: number, issuance: Co
 export function reconcileCoordinationGoals(world: World, eid: number, observation?: WorkingMemoryObservationSnapshot): number {
   assertSimulationTaskActive();
   if (!actor(world, eid)) return 0;
-  const memory = getCoordinationMemory(world, eid), physical = getWorkingMemory(world, eid); let changed = 0;
+  const memory = getCoordinationMemory(world, eid); let changed = 0;
   const fresh = consumeWorkingMemoryObservation(world, eid, observation);
+  // Nothing of theirs to reconcile (most people, most of the time): skip building the evidence map.
+  if (!memory.items.some(item => item.own && item.goal && !["verified_done", "released"].includes(item.localStatus || ""))) return 0;
+  const physical = readWorkingMemory(world, eid); // read-only: the shared parse, no copy
   const evidence = new Map<string, { atMs: number; fact?: WorkingMemoryFact }>();
   for (const fact of [...physical.facts, ...fresh]) {
     const key = JSON.stringify([fact.subject, fact.predicate, fact.slot || ""]), previous = evidence.get(key);

@@ -152,7 +152,9 @@ const copyStoredFact = (f: WorkingMemoryFact): WorkingMemoryFact => ({ ...f });
 const copyReceipt = (r: WorkingMemoryReceipt): WorkingMemoryReceipt => ({ ...r, facts: r.facts.map(f => ({ ...f })),
   ...(r.action ? { action: { ...r.action } } : {}),
   ...(r.executionContext ? { executionContext: { ...r.executionContext, ...(r.executionContext.intention ? { intention: { ...r.executionContext.intention } } : {}) } } : {}) });
-/** The shared, frozen read (no copy): for this module's own read-only use. */
+/** The shared, frozen read (no copy). For hot read-only callers (observation, reconciliation): never mutate it;
+ * anything that might, takes getWorkingMemory's detached copy instead. */
+export function readWorkingMemory(world: World, eid: number) { return readMemory(world, eid); }
 function readMemory(world: World, eid: number): { facts: readonly WorkingMemoryFact[]; receipts: readonly WorkingMemoryReceipt[]; revision: number; evidenceFloorMs: number } {
   if (!ownsMemory(world, eid)) return { facts: [], receipts: [], revision: 0, evidenceFloorMs: -1 };
   const { facts, receipts } = parsedMemory(world, eid);

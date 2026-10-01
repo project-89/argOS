@@ -147,3 +147,20 @@ test("background minds run with the floor and for a short digest after, not for 
   pass(2 * 60_000);
   expect(autopilot.gate.background(otis)).toBe(false);
 });
+
+test("a habit-driven resident whose mind is not awake takes its fast step about once a second; awake, every tick", async () => {
+  const { setMindGate, fastStepDue } = await import("../../runtime/attention");
+  const { advanceSimulationTime } = await import("../../ecs/simulation-time");
+  const { AUTOPILOT_FAST_CADENCE_MS } = await import("../spatial-autopilot");
+  const { autopilot, otis, ivo, say } = fixture();
+  expect(autopilot.gate.fastCadenceMs!(otis)).toBe(AUTOPILOT_FAST_CADENCE_MS);
+  expect(autopilot.gate.fastCadenceMs!(ivo)).toBeUndefined(); // not on autopilot: unaffected
+  const world = (autopilot as any).host.world;
+  setMindGate(world, autopilot.gate);
+  let tick = 0;
+  const steps = () => { let due = 0; for (let i = 0; i < 20; i++) { advanceSimulationTime(world, ++tick, 100); if (fastStepDue(world, otis)) due++; } return due; };
+  expect(steps()).toBe(2); // two seconds of ticks: twice
+  say("Ivo", "Otis, a word."); // his mind takes the floor
+  expect(autopilot.gate.fastCadenceMs!(otis)).toBeUndefined();
+  expect(steps()).toBe(20); // every tick while awake
+});

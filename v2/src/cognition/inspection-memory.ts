@@ -10,7 +10,7 @@ import { getAvailableAffordances } from "../world/affordance-availability";
 import { isStructuralGeometry } from "../world/structural-geometry";
 import { getAgentSensoryCapabilities } from "./sensory-capabilities";
 import { getAgentVisualEntities, getObservedPublicActivity, isPublicContainerOpen } from "./world-capabilities";
-import { getWorkingMemory, recordWorkingMemoryEvidence, workingMemoryEntityRef,
+import { readWorkingMemory, getWorkingMemory, recordWorkingMemoryEvidence, workingMemoryEntityRef,
   WORKING_MEMORY_LIMITS, type WorkingMemoryFactInput } from "./working-memory";
 
 export interface InspectionMemory {
@@ -187,7 +187,7 @@ export function getCurrentInspection(world: World, actor: number, target: string
  * memory in another room leaves it historical rather than omniscient. */
 export function refreshKnownInspectionEvidence(world: World, actor: number): void {
   if (!readableActor(world, actor)) return;
-  const previous = getWorkingMemory(world, actor);
+  const previous = readWorkingMemory(world, actor); // read-only: the shared parse, no copy
   const checked = previous.facts.filter(f => f.predicate === "state" && f.slot === slots.result);
   if (!checked.length) return;
   const room = getRoomForEntity(world, actor);

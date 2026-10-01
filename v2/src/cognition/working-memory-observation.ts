@@ -16,7 +16,7 @@ import { snapshotActorContinuation } from "./actor-continuation";
 import { snapshotOngoingActivity } from "./ongoing-activity";
 import { refreshKnownInspectionEvidence } from "./inspection-memory";
 import { getAccessibleDocumentStatus } from "../world/productive-work";
-import { getWorkingMemory, recordWorkingMemoryEvidence, workingMemoryEntityRef,
+import { readWorkingMemory, getWorkingMemory, recordWorkingMemoryEvidence, workingMemoryEntityRef,
   WORKING_MEMORY_LIMITS, type WorkingMemoryFact, type WorkingMemoryFactInput, type WorkingMemoryProvenance, type WorkingMemoryActionContext } from "./working-memory";
 
 type Ref = { key: string; label: string };
@@ -110,7 +110,7 @@ export function captureWorkingMemoryObservation(world: World, eid: number): Work
     if (hasComponent(world, room!, Room)) selfFacts.push({ subject: roomRef.key, subjectLabel: roomRef.label,
       predicate: "state", slot: "Entity.kind", value: "room" });
   }
-  const prior = getWorkingMemory(world, eid);
+  const prior = readWorkingMemory(world, eid); // read-only: the shared parse, no copy
   for (const fact of prior.facts) {
     if (fact.predicate === "location" && fact.value === actor.key && !ownRefs.some(ref => ref.key === fact.subject)) {
       selfFacts.push({ subject: fact.subject, subjectLabel: fact.subjectLabel, predicate: "location",
