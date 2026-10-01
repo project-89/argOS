@@ -16,12 +16,15 @@ export type LandRecipe = Omit<WovenRecipe, "hint"> & { hint?: string; durationS?
 export type LandStructure = { kind: string; name: string; plot: string; becomes: string; parts: Array<{ part: string; needs: Stock; durationS: number }> };
 /** What a tool turns into when worn out, and after how many uses. */
 export type Wear = { tool: string; uses: number; becomes: string };
-export type Food = { kind: string; hunger?: number; thirst?: number; durationS: number };
+/** Something eaten or drunk; it may raise body conditions (conditions.ts), by amount 0..1. */
+export type Food = { kind: string; hunger?: number; thirst?: number; durationS: number; conditions?: Record<string, number> };
 export type Duty = { item: string; stock: number };
 export type Trade = { role: string; duties: Duty[] };
 export type Resident = { name: string; trade: string; start: string; coins: number; carries?: string[] };
 export type LandDef = {
   id: string; places: LandPlace[]; things: LandThing[]; recipes: LandRecipe[]; structures: LandStructure[]; wear: Wear[]; foods: Food[];
+  /** Body conditions food or drink can bring on (none at first; the Weaver may add them). */
+  conditions?: import("./conditions").LandCondition[];
   /** Market prices (the stall buys at price, sells at price). */
   prices: Stock; stallCap: number; treasury: number; buildPay: number;
   /** Each morning the treasury gives every living resident this share. */

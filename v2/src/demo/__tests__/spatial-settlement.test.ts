@@ -404,3 +404,37 @@ test("what the Weaver grows is drawn: a new kind gets a model from the workshop,
   // And it is part of the town that carries on.
   expect(d.settlementTown()!.grown.map(g => g.things[0].kind)).toEqual([kind]);
 });
+
+test("ale goes to the head: drinking raises a condition the world enforces — slower hands and feet, a label, a feeling — and it wears off", async () => {
+  const DRUNK = { kind: "drunk", name: "Drink", wearsOffPerHour: .15, effects: { work: -.5, walk: -.3, attention: .4 }, labels: { mild: "tipsy", strong: "drunk" },
+    feels: { mild: "The ale warms you; the edges of things soften.", strong: "Your head swims.", gone: "Your head is clear again." } };
+  const { getAgentPerceptions } = await import("../../cognition/agent-mind");
+  const { Perception } = await import("../../ecs/components");
+  const previous = process.env.ARGOS_SETTLEMENT_DAY_MINUTES;
+  process.env.ARGOS_SETTLEMENT_DAY_MINUTES = "6";
+  try {
+    d = await SpatialDemo.create({ scenario: "town", story: "settlement", evolving: true, live: false, automaticClock: false, settlementWork: { graphs: new Map(), jev: false } });
+    d.settlementLand.conditions = [DRUNK];
+    d.settlementLand.foods.push({ kind: "ale", thirst: 20, durationS: 60, conditions: { drunk: .45 } });
+    await d.start();
+    const ivo = d.actors.find(a => Name.value[a] === "Ivo")!, recipes = d.recipes!;
+    const flaxPatch = [...(d as any).settlementKinds].find(([, k]: [number, string]) => k === "flax-patch")[0] as number;
+    const soberPull = recipes.prepare(ivo, flaxPatch, "pull", "flax");
+    const ale = (d as any).spawnSettlementItem(ivo, "ale");
+    const drink = recipes.prepare(ivo, ale, "drink", "");
+    expect(drink.ok).toBe(true);
+    if (drink.ok) recipes.commit(drink.operation);
+    expect(d.conditions.labelOf(ivo)).toBe("tipsy");
+    expect(d.snapshot().entities.find(e => e.id === ivo)!.condition).toBe("tipsy");
+    expect(d.snapshot().events.some(e => e.text === "Ivo is tipsy.")).toBe(true);
+    expect(getAgentPerceptions(d.sim.world, ivo).map(id => Perception.content[id])).toContain("The ale warms you; the edges of things soften."); // felt: a perception, not a prompt
+    // His hands are slower: the same craft takes longer than its sober time.
+    const drunkPull = recipes.prepare(ivo, flaxPatch, "pull", "flax");
+    expect(soberPull.ok && drunkPull.ok).toBe(true);
+    if (soberPull.ok && drunkPull.ok) expect(drunkPull.durationMs).toBeCloseTo(soberPull.durationMs / (1 - .5 * .45), 0);
+    // Most of a game day later it has worn off, and he is told so.
+    for (let i = 0; i < 60; i++) { d.advance(5000); await new Promise(r => setImmediate(r)); }
+    expect(d.conditions.labelOf(ivo)).toBeUndefined();
+    expect(d.snapshot().events.some(e => e.text === "Ivo has come back to themselves.")).toBe(true);
+  } finally { if (previous === undefined) delete process.env.ARGOS_SETTLEMENT_DAY_MINUTES; else process.env.ARGOS_SETTLEMENT_DAY_MINUTES = previous; }
+}, 120_000);

@@ -29,7 +29,7 @@
  * once the resident is free of it, and they are left to sleep till dawn. */
 import { Name } from "../ecs/components";
 import type { World } from "../ecs/world";
-import { AttentionFilter, touchesCue, type Percept } from "../cognition/autopilot-attention";
+import { AttentionFilter, DEFAULT_ATTENTION, touchesCue, type AttentionVerdict, type Percept } from "../cognition/autopilot-attention";
 import { requestDecision } from "../cognition/decision-leaves";
 import type { MindGate } from "../runtime/attention";
 import type { HabitBook } from "../cognition/habit-book";
@@ -76,6 +76,8 @@ export type AutopilotHost = {
   /** A routine situation for being spoken to (who, where, when), or undefined when it touches what they care about or hide. */
   situationOf?(eid: number, percept: Percept): string | undefined;
   habits?: HabitBook;
+  /** How readily this resident looks up now (1 = as usual; a drink makes them quicker to turn, a sleepy tea slower). */
+  attentionBias?(eid: number): number;
 };
 /** The habit-book choices for being spoken to. */
 export const IN_PASSING = "answer in passing", LOOK_UP = "look up";
@@ -147,7 +149,11 @@ export class SettlementAutopilot {
       }
       this.filter(eid).perceive(percept); return;
     }
-    const verdict = this.filter(eid).perceive(percept);
+    const raw = this.filter(eid).perceive(percept), bias = this.host.attentionBias?.(eid) ?? 1;
+    // What they are under shifts how readily things reach them; the filter's bookkeeping is unchanged.
+    const scaled = raw.score * bias;
+    const verdict: AttentionVerdict = bias === 1 ? raw : { ...raw, score: +scaled.toFixed(3),
+      level: scaled >= DEFAULT_ATTENTION.wake ? "wake" : scaled >= DEFAULT_ATTENTION.glance ? "glance" : "notice" };
     // Set aside: still felt and remembered (the judge reads it), not answered — unless it must be.
     if (this.resting(eid) && !this.host.alwaysWakes?.(eid, percept)) {
       // By day, someone who has set the talk aside still answers when spoken to — in passing, without taking it up again.

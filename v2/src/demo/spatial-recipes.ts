@@ -31,6 +31,10 @@ export type SpatialRecipeHost = {
   spawnInHand(actor: number, kind: string): number | undefined;
   /** Free hands (inventory slots) this actor has left. */
   freeHands?(actor: number): number;
+  /** Body conditions (drink going to the head): raised by what is consumed, slowing or quickening work. */
+  conditions?: import("../learning/settlement/conditions").ConditionTracker;
+  /** A condition crossed a stage (mild, strong, gone): the person feels it. */
+  onCondition?(crossing: import("../learning/settlement/conditions").ConditionCrossing): void;
   /** Take an item out of the world (used up). */
   consume(item: number): void;
   /** Put an item on the stall. */
@@ -65,6 +69,8 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
   /** Houses by resident, and how rested last night left them (work goes at this speed). */
   const homes = new Map<number, number>(), rest = new Map<number, number>();
   const restOf = (actor: number) => rest.get(actor) ?? 1;
+  /** Work pace: last night's rest, and whatever they are under (a drink slows the hands). */
+  const paceOf = (actor: number) => restOf(actor) * (host.conditions?.factor(actor, "work") ?? 1);
   /** A craft's game seconds as real milliseconds (never under a second and a half). */
   const realMs = (gameS: number) => Math.max(1500, gameS * 1000 / (host.gameSpeed?.() ?? 10));
   const shelterRest = (kind: string | undefined) => land.shelter.find(x => x.kind === kind)?.rest ?? 1;
@@ -204,7 +210,7 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
         if (lack) return { ok: false, reason: `The ${part.part} needs ${lack.count} more ${lack.kind}.` };
         for (const [k, n] of Object.entries(part.needs)) op.took.push(...held(actor, k).slice(0, n));
         op.build = { structure, part: part.part };
-        return { ok: true, operation: op, durationMs: realMs(part.durationS) / restOf(actor) };
+        return { ok: true, operation: op, durationMs: realMs(part.durationS) / paceOf(actor) };
       }
       const recipe: LandRecipe | undefined = recipesAt(kind).find(r => r.verb === verb && (!r.product || !arg || r.product === arg || Object.keys(r.gives).includes(arg)));
       if (!recipe) {
@@ -220,7 +226,7 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
       for (const [k, n] of Object.entries(recipe.needs ?? {})) op.took.push(...held(actor, k).slice(0, n));
       op.gives = { ...recipe.gives }; op.tools = [...(recipe.tools ?? [])];
       // Game time: a recipe's minutes pass ten times faster than the land's accounting.
-      return { ok: true, operation: op, durationMs: realMs(recipe.durationS ?? 120) / restOf(actor) };
+      return { ok: true, operation: op, durationMs: realMs(recipe.durationS ?? 120) / paceOf(actor) };
     },
 
     /** Still possible at completion? (materials still in hand, source not taken meanwhile) */
@@ -243,6 +249,10 @@ export function createSpatialRecipes(host: SpatialRecipeHost) {
         for (const e of op.took) host.consume(e);
         add(tally.eaten, op.food.kind);
         if (hasComponent(w, op.actor, Needs) && op.food.hunger) Needs.hunger[op.actor] = Math.max(0, (Needs.hunger[op.actor] ?? 0) - op.food.hunger);
+        for (const [condition, amount] of Object.entries(op.food.conditions ?? {})) {
+          const crossing = host.conditions?.add(op.actor, condition, amount);
+          if (crossing) host.onCondition?.(crossing);
+        }
         return { success: true, detail: `You ${op.verb === "drink" ? "drank" : "ate"} the ${op.food.kind.replace(/-/g, " ")}.` };
       }
       if (op.trade) {

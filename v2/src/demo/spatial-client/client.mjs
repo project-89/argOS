@@ -576,7 +576,7 @@ function ensureEntity(entity) {
   node.entity = entity;
   const wetness = wetnessPresentation(entity);
   const actorLabel = labels.get(entity.key);
-  if (actorLabel) { actorLabel.lastChild.textContent = entity.name; actorLabel.dataset.condition = wetness?.label ?? ''; }
+  if (actorLabel) { actorLabel.children[1].textContent = entity.name; /* [dot, name, work ring?] */ actorLabel.dataset.condition = entity.condition ?? wetness?.label ?? ''; }
   if (entity.kind !== 'actor' && wetness?.label && !propStateLabels.has(entity.key)) {
     const label = document.createElement('div'); label.className = 'prop-state-label'; el('scene-labels').append(label); propStateLabels.set(entity.key, label);
   }

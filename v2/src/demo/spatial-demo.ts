@@ -60,6 +60,7 @@ import { createLovecraftTownScenario, createLovecraftWorldSpecification, getSalt
 import { createSettlementScenario, SETTLEMENT_SCENARIO_ID } from "./spatial-settlement";
 import { settlementTownSchema, type SettlementTown } from "./settlement-town";
 import { AssetWorkshop, findBlender } from "./spatial-asset-workshop";
+import { ConditionTracker, type ConditionCrossing } from "../learning/settlement/conditions";
 import type { WovenPatch } from "../spirits/recipe-weaver";
 import type { LandStructure } from "../learning/settlement/saltmere-land";
 import { createSpatialRecipes, type RecipeOperation } from "./spatial-recipes";
@@ -1187,6 +1188,7 @@ export class SpatialDemo {
       mindAvailable: () => w.meta.aiEnabled !== false,
       gameMinutes: minutes => minutes * this.settlementDayMs / 1440,
       isNight: () => this.settlementNight(),
+      attentionBias: eid => this.conditions.factor(eid, "attention"),
       // The operator is always answered, even by someone who has set the day's talk aside.
       alwaysWakes: (_eid, percept) => { const body = this.controlledBody(); return body !== undefined && percept.source === Name.value[body]; },
       habits,
@@ -1219,6 +1221,13 @@ export class SpatialDemo {
       record: line => this.record("world", line) });
     setMindGate(w, autopilot.gate);
     this.tickListeners.add(() => autopilot.tick());
+    // Conditions wear off by the game hour.
+    let conditionsAt = this.atSimMs;
+    this.tickListeners.add(() => {
+      if (this.atSimMs - conditionsAt < 1000) return;
+      const gameHours = (this.atSimMs - conditionsAt) / this.settlementDayMs * 24; conditionsAt = this.atSimMs;
+      for (const crossing of this.conditions.wearOff(gameHours)) this.feelCondition(crossing);
+    });
     // Their own resolve is tended on the settlement clock: newer overtakes older, quiet resolve is reconsidered, the unreviewed let go.
     let tendedAt = -Infinity;
     this.tickListeners.add(() => {
@@ -1465,6 +1474,17 @@ export class SpatialDemo {
 
   /** Plots a building was raised on (by structure kind): drawn as the finished building. */
   private readonly raisedPlots = new Map<number, string>();
+  /** Body conditions (drink going to the head), by the land's own definitions. */
+  readonly conditions = new ConditionTracker(() => this.settlementLand.conditions ?? []);
+  /** A condition crossed a stage: their walk changes, they feel it, and the town may notice. */
+  private feelCondition(c: ConditionCrossing) {
+    if (!entityExists(this.sim.world, c.actor)) return;
+    const walk = this.conditions.factor(c.actor, "walk");
+    this.spatial.setActorSpeed(c.actor, walk === 1 ? undefined : 1.25 * walk);
+    const feeling = this.conditions.feeling(c), label = this.conditions.labelOf(c.actor);
+    if (feeling) this.tell(c.actor, "your body", feeling, "observation");
+    this.record("world", c.to === "none" ? `${Name.value[c.actor]} has come back to themselves.` : `${Name.value[c.actor]} is ${label ?? c.to}.`);
+  }
   /** A raised plot's name before it became "House 1" (the town is saved by the land's names). */
   private readonly plotOrigin = new Map<number, string>();
   /** What the Weaver grew this town (saved and replayed with it). */
@@ -1525,7 +1545,8 @@ export class SpatialDemo {
       const home = recipes.homeOf(actor);
       return [[r.name, { trade: this.tradeLives.find(l => l.eid === actor)?.trade ?? r.trade, coins: recipes.coinsOf(actor),
         hunger: Math.round(Math.max(0, Math.min(100, Needs.hunger[actor] ?? 0))), ...(home !== undefined ? { home: nameOf(home) } : {}),
-        holding: listDirectContents(w, actor).flatMap(e => { const kind = this.settlementKinds.get(e); return kind ? [{ kind, ...(state.wear.has(e) ? { wear: Math.max(0, state.wear.get(e)!) } : {}) }] : []; }) }]];
+        holding: listDirectContents(w, actor).flatMap(e => { const kind = this.settlementKinds.get(e); return kind ? [{ kind, ...(state.wear.has(e) ? { wear: Math.max(0, state.wear.get(e)!) } : {}) }] : []; }),
+        ...(Object.keys(this.conditions.of(actor)).length ? { conditions: this.conditions.of(actor) } : {}) }]];
     }));
     return { version: 1, scenario: SETTLEMENT_SCENARIO_ID, savedAt: new Date().toISOString(),
       days: (prior?.days ?? 0) + Math.floor(this.atSimMs / this.settlementDayMs) + 1,
@@ -1556,6 +1577,7 @@ export class SpatialDemo {
     for (const [name, r] of Object.entries(town.residents)) {
       const actor = person(name); if (actor === undefined) continue;
       coins.set(actor, r.coins); Needs.hunger[actor] = r.hunger;
+      if (r.conditions) { this.conditions.restore(actor, r.conditions); const walk = this.conditions.factor(actor, "walk"); if (walk !== 1) this.spatial.setActorSpeed(actor, 1.25 * walk); }
       const home = r.home ? thing(r.home) : undefined; if (home !== undefined) homes.set(actor, home);
       for (const held of r.holding) { const item = this.spawnSettlementItem(actor, held.kind); if (item !== undefined && held.wear !== undefined) wear.set(item, held.wear); }
     }
@@ -1583,6 +1605,7 @@ export class SpatialDemo {
       setKind: (eid, kind) => { this.settlementKinds.set(eid, kind); },
       key: eid => this.key(eid),
       spawnInHand: (actor, kind) => this.spawnSettlementItem(actor, kind),
+      conditions: this.conditions, onCondition: c => this.feelCondition(c),
       freeHands: actor => Math.max(0, (Inventory.maxSlots[actor] ?? 0) - getInventoryItems(w, actor).length),
       consume: item => {
         // Used up: out of the world (kept as an entity in a sink, not recycled mid-session).
@@ -2284,6 +2307,7 @@ export class SpatialDemo {
         ...(this.options.development ? { details: this.developmentDetails(id) } : {}),
         ...(held ? { heldBy: holder } : {}), state: this.actors.includes(id) && getRelationTargets(w, id, SittingOn).length ? "sitting" : ObjectState.current[id] || "",
         ...((c => c ? { construction: c } : {})(this.actors.includes(id) ? undefined : this.constructionOf(id))),
+        ...((label => label ? { condition: label } : {})(this.actors.includes(id) ? this.conditions.labelOf(id) : undefined)),
         ...(body ? { activity: { executionId: p?.action.executionId, action: body.kind === "moving" ? "walking" : p?.recipe ? p.verb : body.operation ?? body.kind,
           status: "pending" as const, targetId: body.targetEid, startedAtSimMs: p?.startedAt, ...(p?.due !== undefined && p.recipe && p.durationMs ? { work: { dueAtSimMs: p.due, durationMs: p.durationMs } } : {}) } }
           : getRelationTargets(w, id, SittingOn).length ? { activity: { action: "sitting", status: "succeeded" as const, targetId: getRelationTargets(w, id, SittingOn)[0] } } : {}) }];

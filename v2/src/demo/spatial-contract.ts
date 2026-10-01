@@ -15,6 +15,8 @@ export interface SpatialViewEntity {
     targetId?: number; startedAtSimMs?: number; completedAtSimMs?: number;
     /** A timed craft under way: when it is due and how long it takes (presentation: how far along it is). */
     work?: { dueAtSimMs: number; durationMs: number } };
+  /** What a person is visibly under ("tipsy"), from a body condition the world tracks. */
+  condition?: string;
   /** A building plot (or a building raised on one): its parts in order, how many stand, and whether someone is building now. */
   construction?: { structure: string; stages: string[]; standing: number; building: boolean };
 }

@@ -27,10 +27,14 @@ export const settlementTownSchema = z.object({
   residents: z.record(name, z.object({
     trade: name, coins: z.number().finite().min(0), hunger: z.number().finite().min(0).max(100), home: name.optional(),
     holding: z.array(z.object({ kind: name, wear: count.optional() }).strict()).max(32),
+    /** Body conditions still on them (a drink not yet slept off), 0..1 by kind. */
+    conditions: z.record(name, z.number().finite().min(0).max(1)).optional(),
   }).strict()),
   stall: z.array(name).max(200),
   /** What the Weaver grew (replayed on load: the land keeps its new recipes and sources). */
   grown: z.array(z.unknown()).max(64),
+  /** Opportunities the Surveyor has already taken up (not proposed again). */
+  surveyed: z.array(z.string().max(120)).max(200).optional(),
 }).strict();
 export type SettlementTown = Omit<z.infer<typeof settlementTownSchema>, "grown"> & { grown: WovenPatch[] };
 
