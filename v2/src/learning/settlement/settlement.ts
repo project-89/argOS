@@ -169,7 +169,12 @@ export class Settlement implements RecipeWorld {
     for (const r of patch.recipes) this.recipes.push({ ...r });
     for (const [k, n] of Object.entries(patch.recipes.flatMap(r => Object.keys(r.gives)).reduce((m, k) => ({ ...m, [k]: 2 }), {} as Stock)))
       if (this.def.prices[k] === undefined) this.def.prices[k] = n; // new goods can be traded
+    for (const food of patch.foods ?? []) if (!this.def.foods.some(f => f.kind === food.kind)) this.def.foods.push({ ...food });
+    for (const condition of patch.conditions ?? []) if (!(this.def.conditions ??= []).some(c => c.kind === condition.kind)) this.def.conditions.push(structuredClone(condition));
+    for (const rule of patch.wear ?? []) if (!this.def.wear.some(r => r.tool === rule.tool)) this.def.wear.push({ ...rule });
+    if (patch.trade && !this.def.trades.some(t => t.role === patch.trade!.role)) this.def.trades.push(structuredClone(patch.trade));
   }
+  conditionKinds(): string[] { return (this.def.conditions ?? []).map(c => c.kind); }
 
   // -------------------------------------------------------------------------
   // What a resident can read

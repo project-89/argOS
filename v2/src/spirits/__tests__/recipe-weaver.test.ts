@@ -56,3 +56,44 @@ describe("the Weaver's recipe craft", () => {
     expect(reports[4].plannerCalls).toBe(0);
   });
 });
+
+describe("the Weaver adds crafts, drink and trades, not only sources", () => {
+  const town = (conditions: string[] = []) => ({ manual: () => ["chop log at a tree (hold axe)"], placeKinds: () => ["common", "woods", "quarry"],
+    thingKinds: () => ["tree", "workbench", "campfire", "stump"], obtainableKinds: () => ["axe", "log", "stone", "firewood", "berries", "water"],
+    conditionKinds: () => conditions, apply: () => {} });
+  const SMITHING = { reason: "A forge on the common lets a smith mend blunted axes and make new ones.",
+    things: [{ name: "Forge", kind: "forge", placeKind: "common" }],
+    recipes: [{ verb: "smith", at: "forge", product: "axe", needs: { stone: 2, log: 1, firewood: 2 }, gives: { axe: 1 }, durationS: 600 },
+      { verb: "mend", at: "forge", product: "axe", needs: { "blunt-axe": 1, firewood: 1 }, gives: { axe: 1 }, durationS: 240 }],
+    wear: [{ tool: "axe", uses: 20, becomes: "blunt-axe" }],
+    trade: { role: "smith", duties: [{ item: "axe", stock: 2 }] } };
+  const ALE = { reason: "Berries and spring water ferment into a rough ale.",
+    recipes: [{ verb: "brew", at: "campfire", product: "ale", needs: { berries: 3, water: 1 }, gives: { ale: 2 }, durationS: 900 }],
+    foods: [{ kind: "ale", thirst: 20, durationS: 60, conditions: { drunk: .3 } }],
+    conditions: [{ kind: "drunk", name: "Drink", wearsOffPerHour: .15, effects: { work: -.4, walk: -.3, attention: .4 }, labels: { mild: "tipsy", strong: "drunk" },
+      feels: { mild: "The ale warms you.", strong: "Your head swims.", gone: "Your head is clear again." } }] };
+
+  test("blacksmithing: a forge, smithing and mending, axes that wear, and a smith's trade", () => {
+    const r = validatePatch(SMITHING, "axe", town());
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.patch.wear).toEqual([{ tool: "axe", uses: 20, becomes: "blunt-axe" }]);
+      expect(r.patch.trade).toEqual({ role: "smith", duties: [{ item: "axe", stock: 2 }] });
+      expect(r.patch.recipes.map(x => x.hint)).toContain("mend axe at a forge: 1 blunt-axe + 1 firewood → 1 axe");
+    }
+  });
+  test("drink: ale brewed from what the town has, a condition with bounded effects, and how it feels", () => {
+    const r = validatePatch(ALE, "ale", town());
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.patch.foods).toEqual([{ kind: "ale", thirst: 20, durationS: 60, conditions: { drunk: .3 } }]);
+  });
+  test("refused: effects outside the vocabulary, drink raising a condition nobody defined, a trade for goods nobody makes, wear on a tool nobody has", () => {
+    const bad = (patch: unknown, item: string) => { const r = validatePatch(patch, item, town()); return r.ok ? "ok" : r.reason; };
+    expect(bad({ ...ALE, conditions: [{ ...ALE.conditions[0], effects: { flight: .5 } }] }, "ale")).toMatch(/unknown effect "flight"/);
+    expect(bad({ ...ALE, conditions: [] }, "ale")).toMatch(/raises "drunk", which is no condition here/);
+    expect(bad({ ...SMITHING, trade: { role: "smith", duties: [{ item: "sword", stock: 2 }] } }, "axe")).toMatch(/duty sword must be something made here/);
+    expect(bad({ ...SMITHING, wear: [{ tool: "pickaxe", uses: 20, becomes: "blunt-pickaxe" }, SMITHING.wear[0]] }, "axe")).toMatch(/"pickaxe" is not a tool/);
+    // A condition the town already has may be raised by a new drink without redefining it.
+    expect(validatePatch({ ...ALE, conditions: [] }, "ale", town(["drunk"])).ok).toBe(true);
+  });
+});

@@ -28,6 +28,7 @@ export type SpatialBalanceHost = {
   equip(eid: number, trade: string): string[];
   /** Weaver hooks (the walkable world as a RecipeWorld). */
   manual(): string[]; placeKinds(): string[]; thingKinds(): string[]; obtainableKinds(): string[]; apply(patch: WovenPatch): void;
+  conditionKinds?(): string[];
   /** Sources that grow back each morning. */
   regrowing(): Array<{ eid: number; regrow?: number; cap?: number }>;
   record(line: string): void;
@@ -48,6 +49,7 @@ export function createSpatialBalance(host: SpatialBalanceHost, options: { weave?
     get residents() { return residents(); }, alive: () => residents(),
     sourceReserves: () => host.recipes.sourceReserves(), equip: host.equip,
     manual: host.manual, placeKinds: host.placeKinds, thingKinds: host.thingKinds, obtainableKinds: host.obtainableKinds, apply: host.apply,
+    ...(host.conditionKinds ? { conditionKinds: host.conditionKinds } : {}),
   };
   const lives = (): BalanceLife[] => host.lives().map(life => ({ me: { eid: life.eid, get trade() { return life.trade; }, name: Name.value[life.eid] },
     changeTrade: (trade: string) => life.changeTrade(trade, host.graphFor(trade)),

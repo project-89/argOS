@@ -18,11 +18,19 @@ import type { World } from "../ecs/world";
 import { spiritModel } from "../llm/config";
 import { extractJSON } from "../llm/json-extract";
 import { getObservationsByCategory, reportGapObservation } from "./observation-aggregator";
+import { validateCondition, type LandCondition } from "../learning/settlement/conditions";
 
 export type WovenThing = { name: string; kind: string; placeKind: string; uses?: number; portable?: boolean };
 export type WovenRecipe = { verb: string; at: string; product?: string; needs?: Record<string, number>; tools?: string[];
   gives: Record<string, number>; spends?: boolean; durationS?: number; hint: string };
-export type WovenPatch = { item: string; reason: string; things: WovenThing[]; recipes: WovenRecipe[] };
+/** Something made that is eaten or drunk (it may bring on a condition). */
+export type WovenFood = { kind: string; hunger?: number; thirst?: number; durationS: number; conditions?: Record<string, number> };
+/** A tool wearing out into something else (an axe going blunt): what makes a mending trade worth having. */
+export type WovenWear = { tool: string; uses: number; becomes: string };
+/** A new trade: a role and the goods it keeps the stall stocked with (the Steward can move hands into it). */
+export type WovenTrade = { role: string; duties: Array<{ item: string; stock: number }> };
+export type WovenPatch = { item: string; reason: string; things: WovenThing[]; recipes: WovenRecipe[];
+  foods?: WovenFood[]; conditions?: LandCondition[]; wear?: WovenWear[]; trade?: WovenTrade };
 
 /** What a world tells the Weaver about itself, and how it grows. */
 export interface RecipeWorld {
@@ -33,6 +41,8 @@ export interface RecipeWorld {
   /** Kinds residents can already come to hold (lying about, or given by a recipe). */
   obtainableKinds(): string[];
   apply(patch: WovenPatch): void;
+  /** Body conditions that already exist (a patch may raise them with a new drink). */
+  conditionKinds?(): string[];
 }
 
 export type WeaverGenerator = (input: { system: string; prompt: string }) => Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number } }>;
@@ -108,6 +118,8 @@ export function validatePatch(raw: unknown, item: string, world: RecipeWorld): {
       gives, ...(fromNothing ? { spends: true } : {}), ...(durationS ? { durationS } : {}) };
     outRecipes.push({ ...recipe, hint: recipeHint(recipe) });
   }
+  // A tool wearing out provides its worn kind (a blunt axe to mend): count it as obtainable (the rule itself is checked below).
+  for (const r of (Array.isArray(value.wear) ? value.wear : []) as any[]) { const worn = String(r?.becomes ?? "").trim().toLowerCase(); if (KIND.test(worn)) obtainable.add(worn); }
   // Inputs must be obtainable: already, or from this patch (in an order that works).
   const given = new Set(obtainable);
   for (let pass = 0; pass < 4; pass++) for (const r of outRecipes)
@@ -116,24 +128,78 @@ export function validatePatch(raw: unknown, item: string, world: RecipeWorld): {
     if (!given.has(k)) return { ok: false, reason: `"${r.verb}" needs ${k}, which nothing provides` };
   if (!given.has(item) || !outRecipes.some(r => (r.gives[item] ?? 0) > 0) && !outThings.some(t => t.kind === item && t.portable))
     return { ok: false, reason: `the patch does not give ${item}` };
-  return { ok: true, patch: { item, reason: String(value.reason ?? "").slice(0, 300), things: outThings, recipes: outRecipes } };
+  // A new body condition (at most one): effects only from the vocabulary, within bounds.
+  const conditions: LandCondition[] = [];
+  for (const c of (Array.isArray(value.conditions) ? value.conditions : []).slice(0, 2)) {
+    if (conditions.length) return { ok: false, reason: "at most one new condition per patch" };
+    const checked = validateCondition(c);
+    if (!checked.ok) return { ok: false, reason: `condition: ${checked.reason}` };
+    conditions.push(checked.condition);
+  }
+  const knownConditions = new Set([...(world.conditionKinds?.() ?? []), ...conditions.map(c => c.kind)]);
+  // Foods and drinks: things the world now provides, raising only conditions that exist.
+  const foods: WovenFood[] = [];
+  for (const f of (Array.isArray(value.foods) ? value.foods : []) as any[]) {
+    if (foods.length >= 2) return { ok: false, reason: "at most two foods or drinks per patch" };
+    const kind = String(f?.kind ?? "").trim().toLowerCase();
+    if (!KIND.test(kind) || !given.has(kind)) return { ok: false, reason: `food "${kind}" is not something residents can get` };
+    const hunger = f.hunger === undefined ? undefined : Math.round(Number(f.hunger)), thirst = f.thirst === undefined ? undefined : Math.round(Number(f.thirst));
+    if (hunger !== undefined && !(hunger >= 0 && hunger <= 60) || thirst !== undefined && !(thirst >= 0 && thirst <= 80)) return { ok: false, reason: `food ${kind}: hunger 0–60, thirst 0–80` };
+    const raises: Record<string, number> = {};
+    for (const [condition, amount] of Object.entries(f.conditions ?? {})) {
+      const n = Number(amount);
+      if (!knownConditions.has(condition)) return { ok: false, reason: `food ${kind} raises "${condition}", which is no condition here` };
+      if (!(n >= .05 && n <= .6)) return { ok: false, reason: `food ${kind} raises ${condition} by 0.05–0.6` };
+      raises[condition] = n;
+    }
+    if (!hunger && !thirst && !Object.keys(raises).length) return { ok: false, reason: `food ${kind} must feed, quench or bring something on` };
+    foods.push({ kind, ...(hunger ? { hunger } : {}), ...(thirst ? { thirst } : {}), durationS: Math.max(10, Math.min(600, Math.round(Number(f.durationS)) || 60)),
+      ...(Object.keys(raises).length ? { conditions: raises } : {}) });
+  }
+  // Tools wearing out (at most two rules): a tool people can get becomes something else after some uses.
+  const wear: WovenWear[] = [];
+  for (const r of (Array.isArray(value.wear) ? value.wear : []) as any[]) {
+    if (wear.length >= 2) return { ok: false, reason: "at most two wear rules per patch" };
+    const tool = String(r?.tool ?? "").trim().toLowerCase(), becomes = String(r?.becomes ?? "").trim().toLowerCase(), uses = Math.round(Number(r?.uses));
+    if (!KIND.test(tool) || !given.has(tool)) return { ok: false, reason: `wear: "${tool}" is not a tool residents can get` };
+    if (!KIND.test(becomes) || becomes === tool || !(uses >= 3 && uses <= 60)) return { ok: false, reason: `wear: ${tool} wears into another kind after 3–60 uses` };
+    wear.push({ tool, uses, becomes });
+  }
+  // A new trade (at most one): its duties must be goods the world now makes.
+  let trade: WovenTrade | undefined;
+  if (value.trade) {
+    const role = String(value.trade.role ?? "").trim().toLowerCase();
+    const duties = (Array.isArray(value.trade.duties) ? value.trade.duties : []).slice(0, 3).map((d: any) => ({ item: String(d?.item ?? "").trim().toLowerCase(), stock: Math.round(Number(d?.stock)) }));
+    if (!KIND.test(role) || !duties.length) return { ok: false, reason: "a trade has a role (one word) and 1–3 duties" };
+    for (const d of duties) if (!given.has(d.item) || !(d.stock >= 1 && d.stock <= 12)) return { ok: false, reason: `trade ${role}: duty ${d.item} must be something made here, stock 1–12` };
+    trade = { role, duties };
+  }
+  return { ok: true, patch: { item, reason: String(value.reason ?? "").slice(0, 300), things: outThings, recipes: outRecipes,
+    ...(foods.length ? { foods } : {}), ...(conditions.length ? { conditions } : {}), ...(wear.length ? { wear } : {}), ...(trade ? { trade } : {}) } };
 }
 
 function weaverPrompt(item: string, detail: string, world: RecipeWorld, previous?: string) {
   return {
     system: "You are the Weaver, the spirit who grows the world's mechanics. You add what a small, believable world would have: natural sources and the crafts that work them. Answer with JSON only.",
-    prompt: `Residents keep lacking: ${item}. ${detail}
+    prompt: `Wanted: ${item}. ${detail}
 
 How things are made here now: ${world.manual().join("; ")}.
 Kinds of place: ${world.placeKinds().join(", ")}.
 Standing things (sources, stations): ${world.thingKinds().join(", ")}.
 Things residents can already get: ${world.obtainableKinds().join(", ")}.
+Body conditions that exist: ${world.conditionKinds?.().join(", ") || "none yet"}.
 ${previous ? `Your last design was refused: ${previous}\n` : ""}
 Design how this world could provide ${item}: at most 3 new standing things or portable finds, and 1–3 recipes. Keep it grounded in what already exists;
 reuse existing stations where they fit. Nothing comes from nothing: a recipe with no inputs must be done at a new source with limited "uses" (1–30).
 Every input must be something residents can already get or that your recipes give. Verbs are one lowercase word (not move/pickup/build/sell/buy/eat/drink).
 JSON: {"reason":"one sentence","things":[{"name":"Flax patch","kind":"flax-patch","placeKind":"<a kind of place>","uses":8}],
-"recipes":[{"verb":"gather","at":"flax-patch","gives":{"flax":1},"durationS":60},{"verb":"craft","at":"workbench","product":"rope","needs":{"flax":2},"gives":{"rope":1}}]}`,
+"recipes":[{"verb":"gather","at":"flax-patch","gives":{"flax":1},"durationS":60},{"verb":"craft","at":"workbench","product":"rope","needs":{"flax":2},"gives":{"rope":1}}]}
+Optional, only when the wanted thing calls for them:
+- "foods": up to 2 things your recipes give that are eaten or drunk: {"kind":"ale","thirst":20,"durationS":60,"conditions":{"drunk":0.3}} (hunger 0–60, thirst 0–80; conditions raise a body condition by 0.05–0.6).
+- "conditions": at most 1 new body condition: {"kind":"drunk","name":"Drink","wearsOffPerHour":0.15,"effects":{"work":-0.4,"walk":-0.3,"attention":0.4},
+  "labels":{"mild":"tipsy","strong":"drunk"},"feels":{"mild":"how it feels, second person","strong":"…","gone":"…"}} — effects only work, walk (−0.6…0.3) and attention (−0.6…0.6).
+- "wear": up to 2 tools wearing out: {"tool":"axe","uses":20,"becomes":"blunt-axe"} — so a mending or smithing trade has work to do.
+- "trade": one new trade when the work deserves a person: {"role":"smith","duties":[{"item":"axe","stock":2}]} (duties: goods your recipes make, kept on the stall).`,
   };
 }
 

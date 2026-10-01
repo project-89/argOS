@@ -1288,6 +1288,7 @@ export class SpatialDemo {
         return given;
       },
       manual: () => land.recipes.map(rc => `${rc.verb}${rc.product ? ` ${rc.product}` : ""} at a ${rc.at}`),
+      conditionKinds: () => (land.conditions ?? []).map(c => c.kind),
       placeKinds: () => [...new Set(land.places.map(p => p.kind))],
       thingKinds: () => [...new Set(kinds().filter(([e]) => !PhysicalObject.portable[e]).map(([, k]) => k))],
       obtainableKinds: () => [...new Set([...kinds().filter(([e]) => PhysicalObject.portable[e]).map(([, k]) => k), ...land.recipes.flatMap(rc => Object.keys(rc.gives)), ...land.wear.map(x => x.becomes)])],
@@ -1504,10 +1505,19 @@ export class SpatialDemo {
     for (const rc of patch.recipes) land.recipes.push({ ...rc });
     for (const thing of patch.things) this.spawnSettlementThing(thing.name, thing.kind, thing.placeKind, thing.uses, !!thing.portable);
     for (const k of patch.recipes.flatMap(rc => Object.keys(rc.gives))) land.prices[k] ??= 2;
+    // Drink and food, body conditions, tools that wear: data the world now enforces.
+    for (const food of patch.foods ?? []) if (!land.foods.some(f => f.kind === food.kind)) land.foods.push({ ...food });
+    for (const condition of patch.conditions ?? []) if (!(land.conditions ??= []).some(c => c.kind === condition.kind)) land.conditions.push(structuredClone(condition));
+    for (const rule of patch.wear ?? []) if (!land.wear.some(r => r.tool === rule.tool)) { land.wear.push({ ...rule }); land.prices[rule.becomes] ??= 1; }
+    if (patch.trade && !land.trades.some(t => t.role === patch.trade!.role)) land.trades.push(structuredClone(patch.trade));
     this.grownPatches.push(structuredClone(patch));
     if (announce) this.record("world", `The land changes: ${patch.reason}`);
     // A kind nobody has drawn yet gets its own model (meanwhile it borrows a stand-in's look).
     for (const thing of patch.things) if (!getSpatialAssetEntry(thing.kind)?.model) this.drawGrownKind(thing, patch.reason);
+    // New goods (ale, a blunt axe) are carried by hand: they get a small model too.
+    const goods = new Set([...patch.recipes.flatMap(rc => Object.keys(rc.gives)), ...(patch.wear ?? []).map(r => r.becomes)]);
+    for (const kind of goods) if (!getSpatialAssetEntry(kind)?.model && !patch.things.some(t => t.kind === kind))
+      this.drawGrownKind({ name: kind.split("-").map(w => w[0].toUpperCase() + w.slice(1)).join(" "), kind, placeKind: "", portable: true }, patch.reason);
   }
   /** The asset workshop: live sessions with Blender installed, unless turned off. */
   private get assetWorkshop(): AssetWorkshop | undefined {
