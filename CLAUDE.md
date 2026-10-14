@@ -8,7 +8,9 @@ Read and follow:
 2. [Argos v2 agent guidance](v2/AGENTS.md).
 3. [Argos v2 README](v2/README.md) for commands, source owners and current status.
 4. The [current checkpoint](v2/src/demo/TICK-AND-NARRATOR-DELIVERY-CHECKPOINT.md)
-   and any newer task-specific record relevant to the user's request.
+   and any newer task-specific record relevant to the user's request — for the
+   Saltmere Settlement (habits, spirits, growth, live sessions and their cost),
+   the [settlement checkpoint](v2/src/demo/SETTLEMENT-CHECKPOINT.md).
 
 [CANON](CANON.md) states architectural intent; current implementation and
 validation are documented separately. Historical goal files do not authorize

@@ -16,6 +16,10 @@ coverage/
 .claude/
 
 # Runtime state and generated simulation artifacts
+# Models the asset workshop draws during a session belong to that world (like recordings/)
+src/demo/spatial-client/assets/generated/grown/
+src/demo/spatial-client/assets/catalog/grown-*.json
+__pycache__/
 saves/
 simulations/
 stress-test-output/

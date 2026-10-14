@@ -11,6 +11,7 @@ rules, begin with the [v2 README](../../README.md). Demos use the existing
 | [Spatial world](SPATIAL-WORLD.md) | Local 3D viewer, physical interactions and limitations |
 | [Town foundation](TOWN-MILESTONE.md) | Authored homes, public places and ten residents |
 | [Saltmere](SALTMERE.md) | Coastal mystery using the existing town/assets |
+| [Saltmere Settlement](SETTLEMENT-CHECKPOINT.md) | Tents on bare land: habits, spirits, growth, the town carried between sessions |
 | [World development](WORLD-DEVELOPMENT.md) | Broader God chat, spirit review and managed coding profile |
 | [Rendering and assets](SPATIAL-RENDERING-AND-ASSET-PIPELINE.md) | Art direction, asset contracts and proposed VR work |
 | [Aureum and builder plan](AUREUM-INTEGRATION-AND-IN-WORLD-BUILDER-PLAN.md) | Proposed integration, not a shipped second world-state owner |

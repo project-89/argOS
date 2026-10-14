@@ -19,6 +19,7 @@ because the components exist.
 | [Cognitive architecture](COGNITIVE_ARCHITECTURE.md) | Implemented cognition and source map |
 | [Actor controller](src/cognition/ACTOR-CONTROLLER.md) | Current ownership, selection, admission and handoffs |
 | [Current checkpoint](src/demo/TICK-AND-NARRATOR-DELIVERY-CHECKPOINT.md) | Latest indexed evidence, corrections, remaining work |
+| [Settlement checkpoint](src/demo/SETTLEMENT-CHECKPOINT.md) | Saltmere Settlement: run commands, spend, owners, carried state, open work |
 | [Demo index](src/demo/README.md) | Current spatial profiles and older experiments |
 
 CANON's older supersession language does not turn its target design into an
